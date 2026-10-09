@@ -1,0 +1,28 @@
+{
+  "status": "V1_NOT_FROZEN_NOT_LAUNCHED_REVIEW_FINDINGS_ACCEPTED",
+  "reviews": {
+    "group": "db1bd25b59f14b11",
+    "research": "921ee4ad9e1d4315",
+    "engineering": "a0e8326f5f694f44"
+  },
+  "accepted": [
+    "fixed middle-vs-edge assignment confounds treatment; randomize assignment prospectively",
+    "independent unit is native process pair/quad, not each of64 queries",
+    "qualify baseline and direct separately; no pooled cancellation",
+    "uncertainty required for queryCPU, whole-processCPU and medianquerywall",
+    "GNU time component truncation interval is [reported,reported+0.01)",
+    "negative terminal must specifically prove config SHA mismatch and stage config with zeroqueries/noGT/noseal/zerocharges",
+    "restore per-call UTC started/finished",
+    "all resource documents must agree before freeze"
+  ],
+  "root_disagreement": {
+    "research_throttling": "one allowed CPU does not establish zero quota throttling for every descendant; continue to record actual cpu.stat, do not assume zero",
+    "resource_correction": "engineering is correct: fail-fast means accumulated kill grace for16calls is unreachable; earlier correction rationale is superseded; retain separate explicit pincheck/cleanup allowance when choosing finaldeadline",
+    "native_process_CPU": "native field excludes terminal sync/println/startup; retain OSwholeprocessCPU gate, nativefield only crosscheck"
+  },
+  "minimal_next_design": "prospectively frozen randomized adjacent matched process pairs, equal workloads, separate per-arm cluster uncertainty bounds; select finite replication count and caps from observed closed-input call noise before launch; no automatic extension",
+  "historical_admission_status": "UNCHANGED_VALID_SEMANTIC_RESOURCE_ADMISSION",
+  "performance_or_vendor_claim": false,
+  "previous_mock_checks": "valid only for superseded stage and verifier arithmetic; final protocol requires rerun of affected bounded checks",
+  "paid_jobs_launched": 0
+}

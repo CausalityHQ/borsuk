@@ -1,0 +1,22 @@
+{
+  "status": "SYNTHETIC_ONLY",
+  "cases": [
+    {
+      "case": "go",
+      "status": "OVERHEAD_GO"
+    },
+    {
+      "case": "cpu",
+      "status": "OVERHEAD_FAIL"
+    },
+    {
+      "case": "wall",
+      "status": "OVERHEAD_FAIL"
+    },
+    {
+      "case": "noise",
+      "status": "INCONCLUSIVE"
+    }
+  ],
+  "native_evidence": false
+}

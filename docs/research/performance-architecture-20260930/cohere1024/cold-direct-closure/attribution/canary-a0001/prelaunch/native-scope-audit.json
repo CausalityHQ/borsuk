@@ -1,0 +1,13 @@
+{
+  "status": "EXACT_SOURCE_SCOPE_AUDIT",
+  "revision": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "source_sha256": "626a2bf769db801a1444cb1c7db527d119aa0051ea0f3b43342bd54731ebec30",
+  "wrong_sha": "config error propagates before bound_inputs/query; identity can still authenticate executable; INVALID terminal must independently prove zero completed queries/truthfalse/sealfalse/zero payload charges",
+  "native_process_cpu_scope": "starts after output creation; ends before terminal serialization/sync/println/exit; not whole OS process CPU",
+  "whole_process_cpu_gate": "retain GNU time user+system with conservative rounding interval to include terminal and process startup overhead",
+  "needs_final_verifier": [
+    "negative exit2 alone insufficient",
+    "validate negative native JSON terminal and zero charges before accepting canary",
+    "all16 positive canonical semantics/seals checked before any overhead decision"
+  ]
+}

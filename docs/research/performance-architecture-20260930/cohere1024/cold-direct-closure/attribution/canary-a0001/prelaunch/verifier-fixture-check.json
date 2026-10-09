@@ -1,0 +1,12 @@
+{
+  "status": "CLOSED_REPLAY_FIXTURE_CHECK_ONLY",
+  "cases": [
+    {
+      "case": "valid-replay",
+      "exit": 0,
+      "fixture_only": true
+    }
+  ],
+  "native_runs": 0,
+  "performance_evidence": false
+}

@@ -1,0 +1,24 @@
+{
+  "status": "PROSPECTIVE_CLOSED_INPUT_COST_ADMISSION",
+  "price_source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-central-1/index.json",
+  "price_list_sha256": "45ab76fa16a9ec1d427afa9a12f4638d28b99e3e95fb16848520a0967521cb6e",
+  "publication_date": "2026-09-28T23:04:16Z",
+  "usd_per_S3_GET_or_Tier2_request": "4.300E-7",
+  "predicted_query_GETs_from_closed_admission": 743104,
+  "predicted_all_native_dispatches_conservative_billing_as_GET": 747456,
+  "predicted_authenticated_payload_bytes": 553850740736,
+  "observed_dispatches_not_billed_wire_claim": true,
+  "allowances_usd": {
+    "request_allowance_800000_at_frankfurt_rate": 0.344,
+    "PUT_and_misc_requests": 0.01,
+    "EBS": 0.1,
+    "retained_artifact_storage_allowance": 0.05,
+    "max2GiB_export_allowance": 0.2
+  },
+  "ancillary_allowance_sum": 0.704,
+  "ancillary_cap_usd": 0.75,
+  "compute_bid_deadline_cap_usd": 1.2,
+  "total_cap_usd": 1.95,
+  "same_region_payload_transfer": "EC2 and S3 eu-central-1; no payload export to devbox; only<=2GiB closed evidence export",
+  "paid_launch": false
+}

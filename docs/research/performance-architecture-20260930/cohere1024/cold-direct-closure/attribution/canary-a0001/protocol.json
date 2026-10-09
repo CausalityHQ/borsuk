@@ -1,0 +1,2965 @@
+{
+  "schema": "borsuk-sq8-attribution-overhead-canary-proposal-v2",
+  "status": "FROZEN_OVERHEAD_CANARY",
+  "supersedes": "unlaunched fixed16-call v1",
+  "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "binary_sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836",
+  "assignment_seed_hex": "645a18584de8d9c6e09cba12b7016d49765011c2e6cc9561191b1b40e43bc8eb",
+  "assignment_algorithm": "SHA256(seed || quad_u32_le)[0] & 1 selects ABBA/BAAB independently before launch",
+  "quads": [
+    {
+      "quad": 0,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 0
+    },
+    {
+      "quad": 1,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 0
+    },
+    {
+      "quad": 2,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 0
+    },
+    {
+      "quad": 3,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 0
+    },
+    {
+      "quad": 4,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 1
+    },
+    {
+      "quad": 5,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 1
+    },
+    {
+      "quad": 6,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 1
+    },
+    {
+      "quad": 7,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 1
+    },
+    {
+      "quad": 8,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 2
+    },
+    {
+      "quad": 9,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 2
+    },
+    {
+      "quad": 10,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 2
+    },
+    {
+      "quad": 11,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 2
+    },
+    {
+      "quad": 12,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 3
+    },
+    {
+      "quad": 13,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 3
+    },
+    {
+      "quad": 14,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 3
+    },
+    {
+      "quad": 15,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 3
+    },
+    {
+      "quad": 16,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 4
+    },
+    {
+      "quad": 17,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 4
+    },
+    {
+      "quad": 18,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 4
+    },
+    {
+      "quad": 19,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 4
+    },
+    {
+      "quad": 20,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 5
+    },
+    {
+      "quad": 21,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 5
+    },
+    {
+      "quad": 22,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 5
+    },
+    {
+      "quad": 23,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 5
+    },
+    {
+      "quad": 24,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 6
+    },
+    {
+      "quad": 25,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 6
+    },
+    {
+      "quad": 26,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 6
+    },
+    {
+      "quad": 27,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 6
+    },
+    {
+      "quad": 28,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 7
+    },
+    {
+      "quad": 29,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 7
+    },
+    {
+      "quad": 30,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 7
+    },
+    {
+      "quad": 31,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 7
+    },
+    {
+      "quad": 32,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 8
+    },
+    {
+      "quad": 33,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 8
+    },
+    {
+      "quad": 34,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 8
+    },
+    {
+      "quad": 35,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 8
+    },
+    {
+      "quad": 36,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 9
+    },
+    {
+      "quad": 37,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 9
+    },
+    {
+      "quad": 38,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 9
+    },
+    {
+      "quad": 39,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 9
+    },
+    {
+      "quad": 40,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 10
+    },
+    {
+      "quad": 41,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 10
+    },
+    {
+      "quad": 42,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 10
+    },
+    {
+      "quad": 43,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 10
+    },
+    {
+      "quad": 44,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 11
+    },
+    {
+      "quad": 45,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 11
+    },
+    {
+      "quad": 46,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 11
+    },
+    {
+      "quad": 47,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 11
+    },
+    {
+      "quad": 48,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 12
+    },
+    {
+      "quad": 49,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 12
+    },
+    {
+      "quad": 50,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 12
+    },
+    {
+      "quad": 51,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 12
+    },
+    {
+      "quad": 52,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 13
+    },
+    {
+      "quad": 53,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 13
+    },
+    {
+      "quad": 54,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 13
+    },
+    {
+      "quad": 55,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 13
+    },
+    {
+      "quad": 56,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 14
+    },
+    {
+      "quad": 57,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 14
+    },
+    {
+      "quad": 58,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "BAAB",
+      "cycle": 14
+    },
+    {
+      "quad": 59,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 14
+    },
+    {
+      "quad": 60,
+      "block": "A_first",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 15
+    },
+    {
+      "quad": 61,
+      "block": "B_first",
+      "arm": "B",
+      "orientation": "BAAB",
+      "cycle": 15
+    },
+    {
+      "quad": 62,
+      "block": "A_last",
+      "arm": "A",
+      "orientation": "ABBA",
+      "cycle": 15
+    },
+    {
+      "quad": 63,
+      "block": "B_last",
+      "arm": "B",
+      "orientation": "ABBA",
+      "cycle": 15
+    }
+  ],
+  "order": [
+    {
+      "quad": 0,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q00-1.jsonl"
+    },
+    {
+      "quad": 0,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q00-2.jsonl"
+    },
+    {
+      "quad": 0,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q00-3.jsonl"
+    },
+    {
+      "quad": 0,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q00-4.jsonl"
+    },
+    {
+      "quad": 1,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q01-1.jsonl"
+    },
+    {
+      "quad": 1,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q01-2.jsonl"
+    },
+    {
+      "quad": 1,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q01-3.jsonl"
+    },
+    {
+      "quad": 1,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q01-4.jsonl"
+    },
+    {
+      "quad": 2,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q02-1.jsonl"
+    },
+    {
+      "quad": 2,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q02-2.jsonl"
+    },
+    {
+      "quad": 2,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q02-3.jsonl"
+    },
+    {
+      "quad": 2,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q02-4.jsonl"
+    },
+    {
+      "quad": 3,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q03-1.jsonl"
+    },
+    {
+      "quad": 3,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q03-2.jsonl"
+    },
+    {
+      "quad": 3,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q03-3.jsonl"
+    },
+    {
+      "quad": 3,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q03-4.jsonl"
+    },
+    {
+      "quad": 4,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q04-1.jsonl"
+    },
+    {
+      "quad": 4,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q04-2.jsonl"
+    },
+    {
+      "quad": 4,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q04-3.jsonl"
+    },
+    {
+      "quad": 4,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q04-4.jsonl"
+    },
+    {
+      "quad": 5,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q05-1.jsonl"
+    },
+    {
+      "quad": 5,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q05-2.jsonl"
+    },
+    {
+      "quad": 5,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q05-3.jsonl"
+    },
+    {
+      "quad": 5,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q05-4.jsonl"
+    },
+    {
+      "quad": 6,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q06-1.jsonl"
+    },
+    {
+      "quad": 6,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q06-2.jsonl"
+    },
+    {
+      "quad": 6,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q06-3.jsonl"
+    },
+    {
+      "quad": 6,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q06-4.jsonl"
+    },
+    {
+      "quad": 7,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q07-1.jsonl"
+    },
+    {
+      "quad": 7,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q07-2.jsonl"
+    },
+    {
+      "quad": 7,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q07-3.jsonl"
+    },
+    {
+      "quad": 7,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q07-4.jsonl"
+    },
+    {
+      "quad": 8,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q08-1.jsonl"
+    },
+    {
+      "quad": 8,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q08-2.jsonl"
+    },
+    {
+      "quad": 8,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q08-3.jsonl"
+    },
+    {
+      "quad": 8,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q08-4.jsonl"
+    },
+    {
+      "quad": 9,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q09-1.jsonl"
+    },
+    {
+      "quad": 9,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q09-2.jsonl"
+    },
+    {
+      "quad": 9,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q09-3.jsonl"
+    },
+    {
+      "quad": 9,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q09-4.jsonl"
+    },
+    {
+      "quad": 10,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q10-1.jsonl"
+    },
+    {
+      "quad": 10,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q10-2.jsonl"
+    },
+    {
+      "quad": 10,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q10-3.jsonl"
+    },
+    {
+      "quad": 10,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q10-4.jsonl"
+    },
+    {
+      "quad": 11,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q11-1.jsonl"
+    },
+    {
+      "quad": 11,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q11-2.jsonl"
+    },
+    {
+      "quad": 11,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q11-3.jsonl"
+    },
+    {
+      "quad": 11,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q11-4.jsonl"
+    },
+    {
+      "quad": 12,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q12-1.jsonl"
+    },
+    {
+      "quad": 12,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q12-2.jsonl"
+    },
+    {
+      "quad": 12,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q12-3.jsonl"
+    },
+    {
+      "quad": 12,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q12-4.jsonl"
+    },
+    {
+      "quad": 13,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q13-1.jsonl"
+    },
+    {
+      "quad": 13,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q13-2.jsonl"
+    },
+    {
+      "quad": 13,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q13-3.jsonl"
+    },
+    {
+      "quad": 13,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q13-4.jsonl"
+    },
+    {
+      "quad": 14,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q14-1.jsonl"
+    },
+    {
+      "quad": 14,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q14-2.jsonl"
+    },
+    {
+      "quad": 14,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q14-3.jsonl"
+    },
+    {
+      "quad": 14,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q14-4.jsonl"
+    },
+    {
+      "quad": 15,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q15-1.jsonl"
+    },
+    {
+      "quad": 15,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q15-2.jsonl"
+    },
+    {
+      "quad": 15,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q15-3.jsonl"
+    },
+    {
+      "quad": 15,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q15-4.jsonl"
+    },
+    {
+      "quad": 16,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q16-1.jsonl"
+    },
+    {
+      "quad": 16,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q16-2.jsonl"
+    },
+    {
+      "quad": 16,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q16-3.jsonl"
+    },
+    {
+      "quad": 16,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q16-4.jsonl"
+    },
+    {
+      "quad": 17,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q17-1.jsonl"
+    },
+    {
+      "quad": 17,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q17-2.jsonl"
+    },
+    {
+      "quad": 17,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q17-3.jsonl"
+    },
+    {
+      "quad": 17,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q17-4.jsonl"
+    },
+    {
+      "quad": 18,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q18-1.jsonl"
+    },
+    {
+      "quad": 18,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q18-2.jsonl"
+    },
+    {
+      "quad": 18,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q18-3.jsonl"
+    },
+    {
+      "quad": 18,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q18-4.jsonl"
+    },
+    {
+      "quad": 19,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q19-1.jsonl"
+    },
+    {
+      "quad": 19,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q19-2.jsonl"
+    },
+    {
+      "quad": 19,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q19-3.jsonl"
+    },
+    {
+      "quad": 19,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q19-4.jsonl"
+    },
+    {
+      "quad": 20,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q20-1.jsonl"
+    },
+    {
+      "quad": 20,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q20-2.jsonl"
+    },
+    {
+      "quad": 20,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q20-3.jsonl"
+    },
+    {
+      "quad": 20,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q20-4.jsonl"
+    },
+    {
+      "quad": 21,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q21-1.jsonl"
+    },
+    {
+      "quad": 21,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q21-2.jsonl"
+    },
+    {
+      "quad": 21,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q21-3.jsonl"
+    },
+    {
+      "quad": 21,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q21-4.jsonl"
+    },
+    {
+      "quad": 22,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q22-1.jsonl"
+    },
+    {
+      "quad": 22,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q22-2.jsonl"
+    },
+    {
+      "quad": 22,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q22-3.jsonl"
+    },
+    {
+      "quad": 22,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q22-4.jsonl"
+    },
+    {
+      "quad": 23,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q23-1.jsonl"
+    },
+    {
+      "quad": 23,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q23-2.jsonl"
+    },
+    {
+      "quad": 23,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q23-3.jsonl"
+    },
+    {
+      "quad": 23,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q23-4.jsonl"
+    },
+    {
+      "quad": 24,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q24-1.jsonl"
+    },
+    {
+      "quad": 24,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q24-2.jsonl"
+    },
+    {
+      "quad": 24,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q24-3.jsonl"
+    },
+    {
+      "quad": 24,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q24-4.jsonl"
+    },
+    {
+      "quad": 25,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q25-1.jsonl"
+    },
+    {
+      "quad": 25,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q25-2.jsonl"
+    },
+    {
+      "quad": 25,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q25-3.jsonl"
+    },
+    {
+      "quad": 25,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q25-4.jsonl"
+    },
+    {
+      "quad": 26,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q26-1.jsonl"
+    },
+    {
+      "quad": 26,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q26-2.jsonl"
+    },
+    {
+      "quad": 26,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q26-3.jsonl"
+    },
+    {
+      "quad": 26,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q26-4.jsonl"
+    },
+    {
+      "quad": 27,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q27-1.jsonl"
+    },
+    {
+      "quad": 27,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q27-2.jsonl"
+    },
+    {
+      "quad": 27,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q27-3.jsonl"
+    },
+    {
+      "quad": 27,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q27-4.jsonl"
+    },
+    {
+      "quad": 28,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q28-1.jsonl"
+    },
+    {
+      "quad": 28,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q28-2.jsonl"
+    },
+    {
+      "quad": 28,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q28-3.jsonl"
+    },
+    {
+      "quad": 28,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q28-4.jsonl"
+    },
+    {
+      "quad": 29,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q29-1.jsonl"
+    },
+    {
+      "quad": 29,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q29-2.jsonl"
+    },
+    {
+      "quad": 29,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q29-3.jsonl"
+    },
+    {
+      "quad": 29,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q29-4.jsonl"
+    },
+    {
+      "quad": 30,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q30-1.jsonl"
+    },
+    {
+      "quad": 30,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q30-2.jsonl"
+    },
+    {
+      "quad": 30,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q30-3.jsonl"
+    },
+    {
+      "quad": 30,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q30-4.jsonl"
+    },
+    {
+      "quad": 31,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q31-1.jsonl"
+    },
+    {
+      "quad": 31,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q31-2.jsonl"
+    },
+    {
+      "quad": 31,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q31-3.jsonl"
+    },
+    {
+      "quad": 31,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q31-4.jsonl"
+    },
+    {
+      "quad": 32,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q32-1.jsonl"
+    },
+    {
+      "quad": 32,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q32-2.jsonl"
+    },
+    {
+      "quad": 32,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q32-3.jsonl"
+    },
+    {
+      "quad": 32,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q32-4.jsonl"
+    },
+    {
+      "quad": 33,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q33-1.jsonl"
+    },
+    {
+      "quad": 33,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q33-2.jsonl"
+    },
+    {
+      "quad": 33,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q33-3.jsonl"
+    },
+    {
+      "quad": 33,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q33-4.jsonl"
+    },
+    {
+      "quad": 34,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q34-1.jsonl"
+    },
+    {
+      "quad": 34,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q34-2.jsonl"
+    },
+    {
+      "quad": 34,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q34-3.jsonl"
+    },
+    {
+      "quad": 34,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q34-4.jsonl"
+    },
+    {
+      "quad": 35,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q35-1.jsonl"
+    },
+    {
+      "quad": 35,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q35-2.jsonl"
+    },
+    {
+      "quad": 35,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q35-3.jsonl"
+    },
+    {
+      "quad": 35,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q35-4.jsonl"
+    },
+    {
+      "quad": 36,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q36-1.jsonl"
+    },
+    {
+      "quad": 36,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q36-2.jsonl"
+    },
+    {
+      "quad": 36,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q36-3.jsonl"
+    },
+    {
+      "quad": 36,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q36-4.jsonl"
+    },
+    {
+      "quad": 37,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q37-1.jsonl"
+    },
+    {
+      "quad": 37,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q37-2.jsonl"
+    },
+    {
+      "quad": 37,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q37-3.jsonl"
+    },
+    {
+      "quad": 37,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q37-4.jsonl"
+    },
+    {
+      "quad": 38,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q38-1.jsonl"
+    },
+    {
+      "quad": 38,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q38-2.jsonl"
+    },
+    {
+      "quad": 38,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q38-3.jsonl"
+    },
+    {
+      "quad": 38,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q38-4.jsonl"
+    },
+    {
+      "quad": 39,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q39-1.jsonl"
+    },
+    {
+      "quad": 39,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q39-2.jsonl"
+    },
+    {
+      "quad": 39,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q39-3.jsonl"
+    },
+    {
+      "quad": 39,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q39-4.jsonl"
+    },
+    {
+      "quad": 40,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q40-1.jsonl"
+    },
+    {
+      "quad": 40,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q40-2.jsonl"
+    },
+    {
+      "quad": 40,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q40-3.jsonl"
+    },
+    {
+      "quad": 40,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q40-4.jsonl"
+    },
+    {
+      "quad": 41,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q41-1.jsonl"
+    },
+    {
+      "quad": 41,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q41-2.jsonl"
+    },
+    {
+      "quad": 41,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q41-3.jsonl"
+    },
+    {
+      "quad": 41,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q41-4.jsonl"
+    },
+    {
+      "quad": 42,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q42-1.jsonl"
+    },
+    {
+      "quad": 42,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q42-2.jsonl"
+    },
+    {
+      "quad": 42,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q42-3.jsonl"
+    },
+    {
+      "quad": 42,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q42-4.jsonl"
+    },
+    {
+      "quad": 43,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q43-1.jsonl"
+    },
+    {
+      "quad": 43,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q43-2.jsonl"
+    },
+    {
+      "quad": 43,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q43-3.jsonl"
+    },
+    {
+      "quad": 43,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q43-4.jsonl"
+    },
+    {
+      "quad": 44,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q44-1.jsonl"
+    },
+    {
+      "quad": 44,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q44-2.jsonl"
+    },
+    {
+      "quad": 44,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q44-3.jsonl"
+    },
+    {
+      "quad": 44,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q44-4.jsonl"
+    },
+    {
+      "quad": 45,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q45-1.jsonl"
+    },
+    {
+      "quad": 45,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q45-2.jsonl"
+    },
+    {
+      "quad": 45,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q45-3.jsonl"
+    },
+    {
+      "quad": 45,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q45-4.jsonl"
+    },
+    {
+      "quad": 46,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q46-1.jsonl"
+    },
+    {
+      "quad": 46,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q46-2.jsonl"
+    },
+    {
+      "quad": 46,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q46-3.jsonl"
+    },
+    {
+      "quad": 46,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q46-4.jsonl"
+    },
+    {
+      "quad": 47,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q47-1.jsonl"
+    },
+    {
+      "quad": 47,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q47-2.jsonl"
+    },
+    {
+      "quad": 47,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q47-3.jsonl"
+    },
+    {
+      "quad": 47,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q47-4.jsonl"
+    },
+    {
+      "quad": 48,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q48-1.jsonl"
+    },
+    {
+      "quad": 48,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q48-2.jsonl"
+    },
+    {
+      "quad": 48,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q48-3.jsonl"
+    },
+    {
+      "quad": 48,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q48-4.jsonl"
+    },
+    {
+      "quad": 49,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q49-1.jsonl"
+    },
+    {
+      "quad": 49,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q49-2.jsonl"
+    },
+    {
+      "quad": 49,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q49-3.jsonl"
+    },
+    {
+      "quad": 49,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q49-4.jsonl"
+    },
+    {
+      "quad": 50,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q50-1.jsonl"
+    },
+    {
+      "quad": 50,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q50-2.jsonl"
+    },
+    {
+      "quad": 50,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q50-3.jsonl"
+    },
+    {
+      "quad": 50,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q50-4.jsonl"
+    },
+    {
+      "quad": 51,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q51-1.jsonl"
+    },
+    {
+      "quad": 51,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q51-2.jsonl"
+    },
+    {
+      "quad": 51,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q51-3.jsonl"
+    },
+    {
+      "quad": 51,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q51-4.jsonl"
+    },
+    {
+      "quad": 52,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q52-1.jsonl"
+    },
+    {
+      "quad": 52,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q52-2.jsonl"
+    },
+    {
+      "quad": 52,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q52-3.jsonl"
+    },
+    {
+      "quad": 52,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q52-4.jsonl"
+    },
+    {
+      "quad": 53,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q53-1.jsonl"
+    },
+    {
+      "quad": 53,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q53-2.jsonl"
+    },
+    {
+      "quad": 53,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q53-3.jsonl"
+    },
+    {
+      "quad": 53,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q53-4.jsonl"
+    },
+    {
+      "quad": 54,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q54-1.jsonl"
+    },
+    {
+      "quad": 54,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q54-2.jsonl"
+    },
+    {
+      "quad": 54,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q54-3.jsonl"
+    },
+    {
+      "quad": 54,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q54-4.jsonl"
+    },
+    {
+      "quad": 55,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q55-1.jsonl"
+    },
+    {
+      "quad": 55,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q55-2.jsonl"
+    },
+    {
+      "quad": 55,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q55-3.jsonl"
+    },
+    {
+      "quad": 55,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q55-4.jsonl"
+    },
+    {
+      "quad": 56,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q56-1.jsonl"
+    },
+    {
+      "quad": 56,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q56-2.jsonl"
+    },
+    {
+      "quad": 56,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q56-3.jsonl"
+    },
+    {
+      "quad": 56,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q56-4.jsonl"
+    },
+    {
+      "quad": 57,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q57-1.jsonl"
+    },
+    {
+      "quad": 57,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q57-2.jsonl"
+    },
+    {
+      "quad": 57,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q57-3.jsonl"
+    },
+    {
+      "quad": 57,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q57-4.jsonl"
+    },
+    {
+      "quad": 58,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q58-1.jsonl"
+    },
+    {
+      "quad": 58,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q58-2.jsonl"
+    },
+    {
+      "quad": 58,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q58-3.jsonl"
+    },
+    {
+      "quad": 58,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q58-4.jsonl"
+    },
+    {
+      "quad": 59,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q59-1.jsonl"
+    },
+    {
+      "quad": 59,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q59-2.jsonl"
+    },
+    {
+      "quad": 59,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q59-3.jsonl"
+    },
+    {
+      "quad": 59,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q59-4.jsonl"
+    },
+    {
+      "quad": 60,
+      "block": "A_first",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q60-1.jsonl"
+    },
+    {
+      "quad": 60,
+      "block": "A_first",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q60-2.jsonl"
+    },
+    {
+      "quad": 60,
+      "block": "A_first",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_first-trace.config.json",
+      "output": "q60-3.jsonl"
+    },
+    {
+      "quad": 60,
+      "block": "A_first",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_first-untraced.config.json",
+      "output": "q60-4.jsonl"
+    },
+    {
+      "quad": 61,
+      "block": "B_first",
+      "arm": "B",
+      "position": 1,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q61-1.jsonl"
+    },
+    {
+      "quad": 61,
+      "block": "B_first",
+      "arm": "B",
+      "position": 2,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q61-2.jsonl"
+    },
+    {
+      "quad": 61,
+      "block": "B_first",
+      "arm": "B",
+      "position": 3,
+      "trace": false,
+      "config": "B_first-untraced.config.json",
+      "output": "q61-3.jsonl"
+    },
+    {
+      "quad": 61,
+      "block": "B_first",
+      "arm": "B",
+      "position": 4,
+      "trace": true,
+      "config": "B_first-trace.config.json",
+      "output": "q61-4.jsonl"
+    },
+    {
+      "quad": 62,
+      "block": "A_last",
+      "arm": "A",
+      "position": 1,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q62-1.jsonl"
+    },
+    {
+      "quad": 62,
+      "block": "A_last",
+      "arm": "A",
+      "position": 2,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q62-2.jsonl"
+    },
+    {
+      "quad": 62,
+      "block": "A_last",
+      "arm": "A",
+      "position": 3,
+      "trace": true,
+      "config": "A_last-trace.config.json",
+      "output": "q62-3.jsonl"
+    },
+    {
+      "quad": 62,
+      "block": "A_last",
+      "arm": "A",
+      "position": 4,
+      "trace": false,
+      "config": "A_last-untraced.config.json",
+      "output": "q62-4.jsonl"
+    },
+    {
+      "quad": 63,
+      "block": "B_last",
+      "arm": "B",
+      "position": 1,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q63-1.jsonl"
+    },
+    {
+      "quad": 63,
+      "block": "B_last",
+      "arm": "B",
+      "position": 2,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q63-2.jsonl"
+    },
+    {
+      "quad": 63,
+      "block": "B_last",
+      "arm": "B",
+      "position": 3,
+      "trace": true,
+      "config": "B_last-trace.config.json",
+      "output": "q63-3.jsonl"
+    },
+    {
+      "quad": 63,
+      "block": "B_last",
+      "arm": "B",
+      "position": 4,
+      "trace": false,
+      "config": "B_last-untraced.config.json",
+      "output": "q63-4.jsonl"
+    }
+  ],
+  "positive_calls": 256,
+  "searches": 16384,
+  "unique_original_ordinals": 128,
+  "per_arm": {
+    "quads": 32,
+    "calls_off": 64,
+    "calls_on": 64,
+    "independent_units": "randomized process quad; 64queries within a call are NOT independent timing trials"
+  },
+  "gates": {
+    "apply_separately_to": [
+      "baseline",
+      "direct_closure"
+    ],
+    "cpu_scopes": [
+      "summed query processCPU",
+      "whole OS process user+system incl timeout wrapper"
+    ],
+    "maximum_cpu_ratio": 1.02,
+    "cpu_uncertainty": "ratio-of-aggregate on/off quad totals; paired quad residual on-R*off; upper/lower delta-method bounds with 3 * sample SE across32quad residuals / meanoff; approximate Student-based interval, assumptions disclosed",
+    "os_time_component_interval": "[reported,reported+0.01 seconds); upper on totals use upper endpoint, off lower endpoint; lower bound reverse",
+    "latency_observation": "each quad: median over64 original ordinals of mean(two on walls)-mean(two off walls), nanoseconds",
+    "latency_estimate": "median of32quad observations, perarm",
+    "latency_upper": "24th sorted quad observation (1-based), distribution-free median bound under independent quads; binomial coverage computed beforefreeze",
+    "maximum_latency_upper_ns": 1000000,
+    "decision": "GO only if all six per-arm upper bounds meet thresholds; FAIL if a lower bound exceeds limit; else INCONCLUSIVE",
+    "limitations": "CPU confidence approximate and depends on independent stable quad errors; randomized orientation spreads position effects but does not control S3 backend; no universal/population/vendor claim",
+    "no_extension": true
+  },
+  "resources": {
+    "cpus": 1,
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 256,
+    "scratch_bytes": 67108864,
+    "call_seconds": 30,
+    "unit_seconds": 8100,
+    "machine_seconds": 9600,
+    "bootstrap_max_seconds": 900,
+    "closeout_seconds": 250,
+    "fail_fast_worst_call_seconds": 7720,
+    "remaining_stage_allowance_seconds": 380,
+    "terminal_uncompressed_evidence_cap_bytes": 2147483648
+  },
+  "cost_caps_usd": {
+    "compute": 1.2,
+    "ancillary": 0.75
+  },
+  "spot_bid_usd_per_hour": 0.45,
+  "negative_cli": "exact config SHA mismatch terminal/stageconfig/zeroqueries/zerocharges/noseal/noGT plus expectedexit2; existing/missing/unrelated output invalidates canary",
+  "utc_stamps": "before/after every native call outside timed process",
+  "semantic_gate": "all results equal corresponding immutable historical canonical fields; original ordinals and native recall unchanged; allresults sealed before truth",
+  "application_payload_cache": "off",
+  "backend_cache": "uncontrolled",
+  "reviews": "db1bd25b59f14b11 both full results reconciled; no new native algorithm change",
+  "vendor_win_claim": false,
+  "population_percentile_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001",
+  "binary": {
+    "bytes": 16843992,
+    "sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836"
+  },
+  "qualification": {
+    "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+    "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+    "instance_id": "i-0e7d720533f3b43a6",
+    "terminated": true,
+    "source_file_count": 425,
+    "native_source_identity_sha256": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+    "full_source_before_after_root_match": true,
+    "stages": [
+      {
+        "name": "range-inventory",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "rank-inventory",
+        "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "lib-inventory",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "bin-inventory",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --list",
+        "exit": 0
+      },
+      {
+        "name": "affected-ranges",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-ranking",
+        "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "range-layout",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --nocapture --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-lib",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-bin",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "release",
+        "command": "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline",
+        "exit": 0
+      },
+      {
+        "name": "clippy",
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "exit": 0
+      },
+      {
+        "name": "test-build",
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+        "exit": 0
+      }
+    ],
+    "test_counts": {
+      "ranges": 18,
+      "ranking": 6,
+      "generation": 30,
+      "bin": 26
+    },
+    "binary": {
+      "bytes": 16843992,
+      "sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836"
+    },
+    "ann_run": false,
+    "performance_claim": false,
+    "quality_claim": false
+  },
+  "integration_commit": "4f054171125768fdfc6f2bf0ba6c7c8f4b310118",
+  "inputs": {
+    "stage.sh": {
+      "bytes": 169318,
+      "sha256": "2f63e2812acfcf39770986b0b07ea36e883ad056821d7f4f136ca259ad048aca"
+    },
+    "A_last-untraced.config.json": {
+      "bytes": 2675,
+      "sha256": "b7b5588566b00dad5118dc94a5c56ddf5edaa48e04a3db3ddbc81e0352be52b0"
+    },
+    "B_first-untraced.config.json": {
+      "bytes": 2722,
+      "sha256": "587654bb92844486bbc3de3d1add19a6d618605efef52c1629277700c72a501f"
+    },
+    "A_first-trace.config.json": {
+      "bytes": 2657,
+      "sha256": "97f977bf2cd6d1da508d7ef800c8385529b656d4c9032c4693beda862d14b936"
+    },
+    "B_last-trace.config.json": {
+      "bytes": 2732,
+      "sha256": "9b8f9639d6e6cd4feec8bdb94ce82f197dd5e6e696165b451c78ce5a13403c8d"
+    },
+    "A_last-trace.config.json": {
+      "bytes": 2671,
+      "sha256": "7230ecb8f274ea38073f6eb4e4078399a5a729067dbfeb1fcf508a84a7870425"
+    },
+    "B_first-trace.config.json": {
+      "bytes": 2718,
+      "sha256": "dbcc24fc0a21ebf96c257d2927ce6931146c6add3d56f3e6b840c10fa74d4411"
+    },
+    "B_last-untraced.config.json": {
+      "bytes": 2736,
+      "sha256": "3c889cb1a9a269b015d1f813fe2a67879f491ddcb6bdc8fe5507aacc0967a3fc"
+    },
+    "A_first-untraced.config.json": {
+      "bytes": 2661,
+      "sha256": "2febc7205e3fb4a78c8e125572d9e26a3ca6421968fe7bd4d3f659711db020f3"
+    }
+  },
+  "panel": {
+    "path": "/data/target/borsuk-cold-membership-native/sq8-attribution-panel-pending/preselected-panel.json",
+    "sha256": "533b02e57a737ec26c48e4f106ff806550ace1642977512010243f81ced631bb"
+  },
+  "decision_sha256": "0c8719275614d49ae55060bf15c9b9214f343af2b6c42ccb03d896b2aeff86b9",
+  "verifier_sha256": "d069598d7413cc8d4d83e53ade8a854cea5b40506ec8819793dd5d4448b81ae8",
+  "userdata": {
+    "bytes": 10362,
+    "sha256": "f5065a6298736685e314b371d6b85488cf805f405a81465dac413164b3a92de2"
+  },
+  "terminal_uncompressed_evidence_cap_bytes": 2147483648,
+  "failure_policy": "environment/config/transport INVALID; semantic mismatch invalidates observation; overhead FAIL or INCONCLUSIVE only after complete valid fixed run; no automatic extension",
+  "frozen_at": "2026-10-09T01:31:10.358610+00:00",
+  "performance_claim": false
+}
