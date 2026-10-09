@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-sq8-attribution-native-qualification-closed-v1",
+  "instance_id": "i-0e7d720533f3b43a6",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": 0,
+  "source_commit": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "native_source_file_count": 425,
+  "native_source_identity_sha256": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+  "source_archive_sha256": "a8f4bd100dc71ead09f907dd40deefccdeab35be40ebad92bdfb398a4ff27f8b",
+  "evidence": {
+    "bytes": 838316,
+    "sha256": "5bfa9af58648c8743b2b833b74ec46bc2759877908df8a956c05694ca28c0ed0"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

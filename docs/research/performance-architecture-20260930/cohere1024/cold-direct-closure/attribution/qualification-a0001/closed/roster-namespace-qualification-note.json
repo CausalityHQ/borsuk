@@ -1,0 +1,11 @@
+{
+  "status": "EXACT_SOURCE_NAMESPACE_MAPPING",
+  "group": "bin",
+  "frozen_roster": "unqualified functions in mod tests",
+  "cargo_inventory": "tests:: plus same function",
+  "allowed_normalization": "remove exactly one tests:: prefix from bin inventory/pass lines only; refuse other namespaces",
+  "source_unchanged": true,
+  "running_commands_unchanged": true,
+  "frozen_inputs_preserved": true,
+  "native_rerun": false
+}

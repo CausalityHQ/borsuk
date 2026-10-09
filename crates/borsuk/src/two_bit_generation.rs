@@ -1,5 +1,7 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
 use crate::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
+#[cfg(test)]
+use crate::sq8_s3_range::rank_verified_sq8_pages_inner;
 use crate::{
     budgeted_page_rank::{
         BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse, cover_pages,
@@ -11,8 +13,8 @@ use crate::{
     rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{
-        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8ReadStats, VerifiedRange,
-        fetch_verified_ranges_inner, rank_verified_sq8_pages_inner,
+        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats, VerifiedRange,
+        fetch_verified_ranges_inner, rank_verified_sq8_pages_traced,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -2109,6 +2111,7 @@ impl TwoBitGeneration {
                 top_k.min(self.pages.rows()),
                 Some(mutations.excluded_ids()),
                 None,
+                None,
             )
             .await?;
         let candidates = mutations
@@ -2163,7 +2166,7 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
     ) -> Result<TwoBitSearchResult> {
-        self.search_store_unadmitted(reader.store(), query, top_k, excluded_ids, None)
+        self.search_store_unadmitted(reader.store(), query, top_k, excluded_ids, None, None)
             .await
     }
 
@@ -2193,7 +2196,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        self.search_store_unadmitted(store, query, top_k, excluded_ids, None)
+        self.search_store_unadmitted(store, query, top_k, excluded_ids, None, None)
             .await
     }
 
@@ -2215,9 +2218,75 @@ impl TwoBitGeneration {
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let mut trace = TwoBitPlanTrace::default();
         let result = self
-            .search_store_unadmitted(store, query, top_k, None, Some(&mut trace))
+            .search_store_unadmitted(store, query, top_k, None, Some(&mut trace), None)
             .await?;
         Ok((result, trace))
+    }
+
+    /// `diagnostic_search_with_store` plus opt-in SQ8 range diagnostics written to the
+    /// caller's trace, which keeps every span even when the query fails. The trace's
+    /// memory and range capacity are admitted before the query slot, any allocation
+    /// or any GET; results, plans, charges and GETs are exactly the untraced ones.
+    #[doc(hidden)]
+    pub async fn diagnostic_search_with_store_traced(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        range_trace: &mut Sq8RangeTrace,
+    ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
+        // Before every early return: a reused trace must not show a previous query as this one.
+        range_trace.refuse();
+        if top_k == 0 || top_k > self.rows() {
+            return Err(TwoBitGenerationError::Invalid("search admission"));
+        }
+        self.admit_range_trace(
+            range_trace,
+            self.limits.max_query_gets,
+            self.modeled_memory_bytes,
+        )?;
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .search_store_unadmitted(
+                store,
+                query,
+                top_k,
+                None,
+                Some(&mut trace),
+                Some(range_trace),
+            )
+            .await?;
+        Ok((result, trace))
+    }
+
+    // Diagnostic memory is modeled per active query on top of the admitted total, and
+    // the span buffer must hold every GET this query may issue. Non-resource refusal:
+    // checked before the slot, any allocation or any request. This is the ONE place the trace's
+    // cumulative peak is charged: a caller must not also include it in `already_pinned_bytes`
+    // (the check would then count it twice), only the buffers it holds itself.
+    fn admit_range_trace(
+        &self,
+        trace: &Sq8RangeTrace,
+        max_gets: usize,
+        admitted_total: u64,
+    ) -> Result<()> {
+        let bad = TwoBitGenerationError::Invalid;
+        if trace.capacity() < max_gets {
+            return Err(bad("diagnostic range capacity"));
+        }
+        let bytes = (trace.reserved_bytes(self.limits.max_parallel_gets) as u64)
+            .checked_mul(self.limits.max_active_queries as u64)
+            .and_then(|n| n.checked_add(admitted_total))
+            .ok_or(bad("diagnostic memory"))?;
+        if bytes > self.limits.max_memory_bytes {
+            return Err(bad("diagnostic memory"));
+        }
+        Ok(())
     }
 
     async fn search_store_unadmitted(
@@ -2227,8 +2296,12 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
         trace: Option<&mut TwoBitPlanTrace>,
+        mut range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<TwoBitSearchResult> {
         let started = std::time::Instant::now();
+        if let Some(range_trace) = range_trace.as_deref_mut() {
+            range_trace.begin(started);
+        }
         let mut stages = QueryStages::default();
         let result = self
             .search_store_measured(
@@ -2239,6 +2312,7 @@ impl TwoBitGeneration {
                 trace,
                 &mut stages,
                 started,
+                range_trace,
             )
             .await;
         Self::close_open_stages(&mut stages, started);
@@ -2253,6 +2327,7 @@ impl TwoBitGeneration {
             }),
         }
     }
+    #[allow(clippy::too_many_arguments)]
     async fn search_store_measured(
         &self,
         store: &dyn ObjectStore,
@@ -2262,6 +2337,7 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
+        range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<TwoBitSearchResult> {
         let (plan, normalized, source_stats, router_stats) = if self.source.is_some() {
             self.plan_paged_measured(store, query, trace, stages, started)
@@ -2286,7 +2362,7 @@ impl TwoBitGeneration {
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
         stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
-        let ranked = rank_verified_sq8_pages_inner(
+        let ranked = rank_verified_sq8_pages_traced(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2300,6 +2376,7 @@ impl TwoBitGeneration {
             self.limits.max_query_bytes,
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
+            range_trace,
         )
         .await;
         stages.sq8.end_ns = started.elapsed().as_nanos();
@@ -2390,6 +2467,7 @@ impl TwoBitGeneration {
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
         traced: bool,
+        range_trace: Option<&Sq8RangeTrace>,
     ) -> Result<()> {
         let bad = TwoBitGenerationError::Invalid;
         if query.len() != self.pages.dimensions() {
@@ -2430,6 +2508,11 @@ impl TwoBitGeneration {
         let memory = self.direct_closure_memory(limits)?;
         if memory.total_bytes > memory.cap_bytes {
             return Err(bad(DIRECT_MEMORY_CAP));
+        }
+        // Opt-in range diagnostics are a separate, non-resource charge on top of the
+        // unchanged direct model: refused here, before the slot or any request.
+        if let Some(range_trace) = range_trace {
+            self.admit_range_trace(range_trace, limits.max_sq8_gets, memory.total_bytes)?;
         }
         Ok(())
     }
@@ -2477,6 +2560,7 @@ impl TwoBitGeneration {
 
     // The shared authenticated scorer under the caller's explicit direct caps. The
     // historical (clamped) `max_query_*` limits are deliberately not consulted.
+    #[allow(clippy::too_many_arguments)]
     async fn direct_closure_rank(
         &self,
         store: &dyn ObjectStore,
@@ -2485,6 +2569,7 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
+        range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<RankedSq8> {
         let page_bytes = 256 * (self.pages.dimensions() + 12);
         let ranges = plan
@@ -2492,7 +2577,7 @@ impl TwoBitGeneration {
             .iter()
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
-        let ranked = rank_verified_sq8_pages_inner(
+        let ranked = rank_verified_sq8_pages_traced(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2506,6 +2591,7 @@ impl TwoBitGeneration {
             limits.max_sq8_bytes,
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
+            range_trace,
         )
         .await
         .map_err(|sq8| TwoBitGenerationError::charged_read(Sq8ReadStats::default(), sq8))?;
@@ -2534,6 +2620,7 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
+        range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<TwoBitSearchResult> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
         let discovered = normalize_two_bit_diagnostic_query(query).and_then(|normalized| {
@@ -2555,6 +2642,7 @@ impl TwoBitGeneration {
                 top_k,
                 excluded_ids,
                 limits,
+                range_trace,
             )
             .await;
         stages.sq8.end_ns = started.elapsed().as_nanos();
@@ -2568,6 +2656,7 @@ impl TwoBitGeneration {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn direct_closure_search_inner(
         &self,
         store: &dyn ObjectStore,
@@ -2576,8 +2665,16 @@ impl TwoBitGeneration {
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
         trace: Option<&mut TwoBitPlanTrace>,
+        mut range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<TwoBitSearchResult> {
-        self.admit_direct_closure(query, top_k, excluded_ids, limits, trace.is_some())?;
+        self.admit_direct_closure(
+            query,
+            top_k,
+            excluded_ids,
+            limits,
+            trace.is_some(),
+            range_trace.as_deref(),
+        )?;
         // The one query slot spans discovery, cover, every drained GET and scoring,
         // on success and on every failure, exactly like the historical search.
         let _permit = self
@@ -2586,6 +2683,9 @@ impl TwoBitGeneration {
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let started = std::time::Instant::now();
+        if let Some(range_trace) = range_trace.as_deref_mut() {
+            range_trace.begin(started);
+        }
         let mut stages = QueryStages::default();
         let result = self
             .direct_closure_measured(
@@ -2597,6 +2697,7 @@ impl TwoBitGeneration {
                 trace,
                 &mut stages,
                 started,
+                range_trace,
             )
             .await;
         Self::close_open_stages(&mut stages, started);
@@ -2631,7 +2732,7 @@ impl TwoBitGeneration {
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
     ) -> Result<TwoBitSearchResult> {
-        self.direct_closure_search_inner(store, query, top_k, excluded_ids, limits, None)
+        self.direct_closure_search_inner(store, query, top_k, excluded_ids, limits, None, None)
             .await
     }
 
@@ -2648,7 +2749,37 @@ impl TwoBitGeneration {
     ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
         let mut trace = TwoBitPlanTrace::default();
         let result = self
-            .direct_closure_search_inner(store, query, top_k, None, limits, Some(&mut trace))
+            .direct_closure_search_inner(store, query, top_k, None, limits, Some(&mut trace), None)
+            .await?;
+        Ok((result, trace))
+    }
+
+    /// `diagnostic_direct_closure_search_with_store` plus opt-in SQ8 range diagnostics in
+    /// the caller's trace. The trace's modeled memory is checked right after the unchanged
+    /// direct memory classification, and its capacity must cover `limits.max_sq8_gets`;
+    /// both refuse (non-resource) before the slot or any request.
+    #[doc(hidden)]
+    pub async fn diagnostic_direct_closure_search_with_store_traced(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        limits: DirectClosureLimits,
+        range_trace: &mut Sq8RangeTrace,
+    ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
+        // Before every early return inside admission, for the same reason as the baseline entry.
+        range_trace.refuse();
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .direct_closure_search_inner(
+                store,
+                query,
+                top_k,
+                None,
+                limits,
+                Some(&mut trace),
+                Some(range_trace),
+            )
             .await?;
         Ok((result, trace))
     }
@@ -7863,7 +7994,15 @@ mod source_walk_tests {
                 }
                 let ranked = run_direct_http(
                     &fixture,
-                    generation.direct_closure_rank(store, &normalized, &plan, 20, None, dlimits),
+                    generation.direct_closure_rank(
+                        store,
+                        &normalized,
+                        &plan,
+                        20,
+                        None,
+                        dlimits,
+                        None,
+                    ),
                 )
                 .await
                 .unwrap();
@@ -8634,6 +8773,649 @@ mod source_walk_tests {
                 .is_err()
             );
         }
+    }
+
+    fn tiny_query(dimensions: usize) -> Vec<f32> {
+        (0..dimensions)
+            .map(|d| 0.75 + 0.25 * ((d * 5) % 7) as f32 - if d % 3 == 0 { 1. } else { 0. })
+            .collect()
+    }
+
+    fn ranking_bits(result: &TwoBitSearchResult) -> Vec<(usize, i64, u32)> {
+        result
+            .ranked
+            .candidates
+            .iter()
+            .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct() {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let ClassFixture {
+                temp,
+                root_sha,
+                prefix,
+                objects,
+                limits,
+                rows,
+                dimensions,
+                ..
+            } = class_fixture(32);
+            let row_bytes = dimensions + 12;
+            let fixture = DirectHttp::new(objects, deadline);
+            let generation = TwoBitGeneration::open_remote(
+                fixture.reader.store(),
+                &prefix,
+                &root_sha,
+                limits,
+                temp.path(),
+            )
+            .await
+            .unwrap();
+            let store = fixture.reader.store();
+            let query = class_query(dimensions);
+            let dlimits = DirectClosureLimits {
+                max_sq8_bytes: rows * row_bytes,
+                max_sq8_gets: 32,
+            };
+            let wire = |fixture: &DirectHttp| {
+                let mut requests = fixture.snapshot().requests;
+                requests.sort();
+                requests
+            };
+
+            // Baseline: tracing changes no GET, byte, plan, charge, plan trace or ranking bit.
+            let (plain, plain_plan) = run_source_and_sq8_http(
+                &fixture,
+                generation.diagnostic_search_with_store(store, &query, 10),
+            )
+            .await
+            .unwrap();
+            let plain_wire = wire(&fixture);
+            let mut trace = Sq8RangeTrace::new(32).unwrap();
+            let (traced, traced_plan) = run_source_and_sq8_http(
+                &fixture,
+                generation.diagnostic_search_with_store_traced(store, &query, 10, &mut trace),
+            )
+            .await
+            .unwrap();
+            assert_eq!(wire(&fixture), plain_wire);
+            assert_eq!(traced.plan, plain.plan);
+            assert_eq!(traced.ranked.stats, plain.ranked.stats);
+            assert_eq!(traced.source_stats, plain.source_stats);
+            assert_eq!(ranking_bits(&traced), ranking_bits(&plain));
+            assert_eq!(
+                serde_json::to_value(&traced_plan).unwrap(),
+                serde_json::to_value(&plain_plan).unwrap()
+            );
+            // Only the SQ8 wave is traced; SOURCE reads stay untraced and unchanged.
+            assert_eq!(trace.ranges().len(), traced.plan.ranges.len());
+            for (span, range) in trace.ranges().iter().zip(&traced.plan.ranges) {
+                assert_eq!(
+                    (span.start_byte, span.end_byte),
+                    (range.start as u64, range.end as u64)
+                );
+                assert_eq!(span.outcome, "ok");
+            }
+            assert_eq!(trace.outcome, "ranked");
+            assert_eq!(generation.slots.available_permits(), 1);
+
+            // Direct: two bodies are held in flight at once, then released.
+            let mut direct_trace = Sq8RangeTrace::new(32).unwrap();
+            fixture.arm(None);
+            let work = generation.diagnostic_direct_closure_search_with_store_traced(
+                store,
+                &query,
+                10,
+                dlimits,
+                &mut direct_trace,
+            );
+            let (direct, ()) = tokio::join!(work, async {
+                fixture.wait(|state| state.active[1] >= 2).await;
+                // The traced query owns the one slot for its whole drain.
+                assert_eq!(generation.slots.available_permits(), 0);
+                fixture.release(1);
+            });
+            let (direct, _) = direct.unwrap();
+            let direct_wire = wire(&fixture);
+            assert!(fixture.snapshot().peak[1] >= 2);
+            assert_eq!(generation.slots.available_permits(), 1);
+            let (plain_direct, _) = run_direct_http(
+                &fixture,
+                generation.diagnostic_direct_closure_search_with_store(store, &query, 10, dlimits),
+            )
+            .await
+            .unwrap();
+            assert_eq!(wire(&fixture), direct_wire);
+            assert_eq!(direct.plan, plain_direct.plan);
+            assert_eq!(direct.ranked.stats, plain_direct.ranked.stats);
+            assert_eq!(ranking_bits(&direct), ranking_bits(&plain_direct));
+            assert_eq!(direct.source_stats, plain_direct.source_stats);
+            assert!(direct.source_nomination_skipped);
+
+            let cover = &direct.plan.ranges;
+            assert!(cover.len() > 2);
+            assert_eq!(direct_trace.outcome, "ranked");
+            assert_eq!(direct_trace.planned_ranges as usize, cover.len());
+            assert_eq!(direct_trace.planned_bytes, direct.plan.planned_bytes as u64);
+            assert_eq!(direct_trace.dropped_ranges, 0);
+            let spans = direct_trace.ranges();
+            assert_eq!(spans.len(), cover.len());
+            for (span, range) in spans.iter().zip(cover) {
+                assert_eq!(
+                    (span.start_byte, span.end_byte),
+                    (range.start as u64, range.end as u64)
+                );
+                let chain = [
+                    span.first_poll_ns,
+                    span.request_ns,
+                    span.headers_ns,
+                    span.metadata_ns,
+                    span.first_chunk_ns,
+                    span.last_chunk_ns,
+                    span.eof_ns,
+                    span.auth_start_ns,
+                    span.auth_end_ns,
+                    span.complete_ns,
+                ]
+                .map(Option::unwrap);
+                assert!(chain.windows(2).all(|w| w[0] <= w[1]), "{chain:?}");
+                assert_eq!(span.outcome, "ok");
+                assert_eq!(span.body_bytes, span.end_byte - span.start_byte);
+                assert_eq!(span.copy_count, span.chunks);
+            }
+            // At least two ranges were in flight together: neither finished before the other began.
+            assert!(spans.iter().enumerate().any(|(i, a)| {
+                spans[i + 1..].iter().any(|b| {
+                    a.first_poll_ns.unwrap() < b.complete_ns.unwrap()
+                        && b.first_poll_ns.unwrap() < a.complete_ns.unwrap()
+                })
+            }));
+            // Authentication of every range precedes the barrier, and ranking follows it.
+            let all = direct_trace.all_ranges_complete_ns.unwrap();
+            assert!(spans.iter().all(|span| span.complete_ns.unwrap() <= all));
+            let (rank_start, rank_end) = (
+                direct_trace.rank_start_ns.unwrap(),
+                direct_trace.rank_end_ns.unwrap(),
+            );
+            assert!(all <= rank_start && rank_start <= rank_end);
+            // The payload is released after ranking, still inside the SQ8 stage.
+            let release_end = direct_trace.release_end_ns.unwrap();
+            assert!(rank_end <= release_end);
+            let phases = direct_trace.rank.unwrap();
+            assert_eq!(phases.ranges as usize, cover.len());
+            assert_eq!(
+                phases.rows as usize,
+                cover.iter().map(|r| r.len() / row_bytes).sum::<usize>()
+            );
+            // The trace shares the stage origin: it sits inside the SQ8 stage.
+            let stage = direct.stages.sq8;
+            assert!(stage.start_ns <= u128::from(direct_trace.fetch_start_ns.unwrap()));
+            assert!(u128::from(release_end) <= stage.end_ns);
+            fixture.finish();
+        })
+        .await
+        .expect("whole range trace fixture deadline");
+    }
+
+    #[tokio::test]
+    async fn native_sq8_range_trace_memory_and_capacity_are_refused_before_slot_or_any_get() {
+        let (rows, dimensions) = (513, 24);
+        let tiny = tiny_direct(rows, dimensions).await;
+        let object_bytes = rows * (dimensions + 12);
+        let mut generation = TwoBitGeneration::open_remote(
+            &tiny.store,
+            &tiny.prefix,
+            &tiny.root_sha,
+            tiny.limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let reads = &tiny.store.inner.reads;
+        let dlimits = DirectClosureLimits {
+            max_sq8_bytes: object_bytes,
+            max_sq8_gets: 1,
+        };
+        let query = tiny_query(dimensions);
+        let mut trace = Sq8RangeTrace::new(1).unwrap();
+        let charge = |trace: &Sq8RangeTrace, generation: &TwoBitGeneration| {
+            trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+                * generation.limits.max_active_queries as u64
+        };
+        let direct_charge = charge(&trace, &generation);
+        let memory = generation.direct_closure_memory(dlimits).unwrap();
+        // One byte short of the modeled diagnostic state: a non-resource refusal with no I/O.
+        reads.lock().unwrap().clear();
+        generation.limits.max_memory_bytes = memory.total_bytes + direct_charge - 1;
+        let error = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                dlimits,
+                &mut trace,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, TwoBitGenerationError::Invalid("diagnostic memory")),
+            "{error:?}"
+        );
+        assert_eq!(error.direct_resource_rejection(), None);
+        assert!(error.stages().is_none());
+        assert!(reads.lock().unwrap().is_empty());
+        assert_eq!(generation.slots.available_permits(), 1);
+        assert_eq!(trace.outcome, "admission_refused");
+        // The direct model itself is unchanged: the same cap still admits untraced search.
+        generation
+            .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
+            .await
+            .unwrap();
+        // The exact modeled total admits and traces.
+        reads.lock().unwrap().clear();
+        generation.limits.max_memory_bytes = memory.total_bytes + direct_charge;
+        let (result, _) = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                dlimits,
+                &mut trace,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.ranked.stats.submitted_gets, 1);
+        assert_eq!((trace.outcome, trace.ranges().len()), ("ranked", 1));
+        // A buffer smaller than the GET cap is refused first, before any request.
+        reads.lock().unwrap().clear();
+        let mut narrow = Sq8RangeTrace::new(1).unwrap();
+        let wide = DirectClosureLimits {
+            max_sq8_gets: 2,
+            ..dlimits
+        };
+        let error = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                wide,
+                &mut narrow,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            TwoBitGenerationError::Invalid("diagnostic range capacity")
+        ));
+        assert!(reads.lock().unwrap().is_empty());
+        // Direct resource classification comes first and keeps its machine-readable reason.
+        generation.limits.max_memory_bytes = memory.total_bytes - 1;
+        let error = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                dlimits,
+                &mut trace,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.direct_resource_rejection(),
+            Some(DirectClosureRejection::ModeledMemory)
+        );
+        assert!(reads.lock().unwrap().is_empty());
+        // Baseline traced search has the same two refusals, ahead of the slot.
+        generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
+        let mut one = Sq8RangeTrace::new(1).unwrap();
+        let error = generation
+            .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut one)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            TwoBitGenerationError::Invalid("diagnostic range capacity")
+        ));
+        let mut full = Sq8RangeTrace::new(32).unwrap();
+        generation.limits.max_memory_bytes =
+            generation.modeled_memory_bytes() + charge(&full, &generation) - 1;
+        let error = generation
+            .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut full)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(
+            error,
+            TwoBitGenerationError::Invalid("diagnostic memory")
+        ));
+        assert_eq!(full.outcome, "admission_refused");
+        assert!(reads.lock().unwrap().is_empty());
+        assert_eq!(generation.slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn native_sq8_range_trace_early_refusal_never_exposes_a_reused_trace_for_baseline_and_direct()
+     {
+        let (rows, dimensions) = (513, 24);
+        let tiny = tiny_direct(rows, dimensions).await;
+        let object_bytes = rows * (dimensions + 12);
+        let mut generation = TwoBitGeneration::open_remote(
+            &tiny.store,
+            &tiny.prefix,
+            &tiny.root_sha,
+            tiny.limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let reads = &tiny.store.inner.reads;
+        let dlimits = DirectClosureLimits {
+            max_sq8_bytes: object_bytes,
+            max_sq8_gets: 1,
+        };
+        let query = tiny_query(dimensions);
+        // A successful traced query leaves real evidence in the trace.
+        async fn dirty(
+            generation: &TwoBitGeneration,
+            store: &SqFaultStore,
+            query: &[f32],
+            limits: DirectClosureLimits,
+            trace: &mut Sq8RangeTrace,
+        ) {
+            generation
+                .diagnostic_direct_closure_search_with_store_traced(store, query, 10, limits, trace)
+                .await
+                .unwrap();
+            assert_eq!((trace.outcome, trace.ranges().len()), ("ranked", 1));
+            assert!(trace.rank.is_some() && trace.all_ranges_complete_ns.is_some());
+        }
+        let pristine = |trace: &Sq8RangeTrace, outcome: &str, case: &str| {
+            assert_eq!(trace.outcome, outcome, "{case}");
+            assert!(trace.ranges().is_empty(), "{case}");
+            assert_eq!(
+                (
+                    trace.planned_ranges,
+                    trace.planned_bytes,
+                    trace.max_parallel,
+                    trace.dropped_ranges
+                ),
+                (0, 0, 0, 0),
+                "{case}"
+            );
+            assert_eq!(
+                (
+                    trace.fetch_start_ns,
+                    trace.all_ranges_complete_ns,
+                    trace.rank_start_ns,
+                    trace.rank_end_ns
+                ),
+                (None, None, None, None),
+                "{case}"
+            );
+            assert_eq!(trace.release_end_ns, None, "{case}");
+            assert_eq!(trace.rank, None, "{case}");
+        };
+        let mut trace = Sq8RangeTrace::new(32).unwrap();
+        let mut narrow = Sq8RangeTrace::new(1).unwrap();
+        let memory = generation.direct_closure_memory(dlimits).unwrap();
+        let direct_charge = trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+            * generation.limits.max_active_queries as u64;
+        let wide = DirectClosureLimits {
+            max_sq8_gets: 2,
+            ..dlimits
+        };
+        let short_query = &query[1..];
+
+        // Direct entry: every refusal that precedes the query leaves an explicit refused
+        // state, never the previous query's spans, and keeps its typed native error.
+        let cases: [(&str, bool, usize, usize, bool); 5] = [
+            ("direct top_k zero", false, 0, 0, false),
+            ("direct short query", false, 10, 0, true),
+            ("direct narrow capacity", true, 10, 0, false),
+            ("direct diagnostic memory", false, 10, 1, false),
+            ("direct modeled memory", false, 10, 2, false),
+        ];
+        for (case, use_narrow, top_k, memory_case, short) in cases {
+            let target = if use_narrow { &mut narrow } else { &mut trace };
+            dirty(&generation, &tiny.store, &query, dlimits, target).await;
+            reads.lock().unwrap().clear();
+            generation.limits.max_memory_bytes = match memory_case {
+                1 => memory.total_bytes + direct_charge - 1,
+                2 => memory.total_bytes - 1,
+                _ => tiny.limits.max_memory_bytes,
+            };
+            let limits = if use_narrow { wide } else { dlimits };
+            let error = generation
+                .diagnostic_direct_closure_search_with_store_traced(
+                    &tiny.store,
+                    if short { short_query } else { &query[..] },
+                    top_k,
+                    limits,
+                    target,
+                )
+                .await
+                .err()
+                .unwrap();
+            generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
+            match case {
+                "direct top_k zero" | "direct short query" => assert!(
+                    matches!(error, TwoBitGenerationError::Invalid("search admission")),
+                    "{case}: {error:?}"
+                ),
+                "direct narrow capacity" => assert!(
+                    matches!(
+                        error,
+                        TwoBitGenerationError::Invalid("diagnostic range capacity")
+                    ),
+                    "{case}: {error:?}"
+                ),
+                "direct diagnostic memory" => assert!(
+                    matches!(error, TwoBitGenerationError::Invalid("diagnostic memory")),
+                    "{case}: {error:?}"
+                ),
+                _ => assert_eq!(
+                    error.direct_resource_rejection(),
+                    Some(DirectClosureRejection::ModeledMemory),
+                    "{case}"
+                ),
+            }
+            assert!(reads.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(generation.slots.available_permits(), 1, "{case}");
+            pristine(target, "admission_refused", case);
+        }
+
+        // Refused after the query began (planned bytes) is a started query with no spans.
+        dirty(&generation, &tiny.store, &query, dlimits, &mut trace).await;
+        reads.lock().unwrap().clear();
+        let error = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                DirectClosureLimits {
+                    max_sq8_bytes: object_bytes - 1,
+                    ..dlimits
+                },
+                &mut trace,
+            )
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.direct_resource_rejection(),
+            Some(DirectClosureRejection::PlannedBytes)
+        );
+        assert!(reads.lock().unwrap().is_empty());
+        pristine(&trace, "started", "direct planned bytes");
+
+        // Baseline entry: the same guarantee for its three early refusals.
+        let baseline_charge = trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+            * generation.limits.max_active_queries as u64;
+        let cases: [(&str, bool, usize, bool); 3] = [
+            ("baseline top_k zero", false, 0, false),
+            ("baseline narrow capacity", true, 10, false),
+            ("baseline diagnostic memory", false, 10, true),
+        ];
+        for (case, use_narrow, top_k, memory_case) in cases {
+            let target = if use_narrow { &mut narrow } else { &mut trace };
+            dirty(&generation, &tiny.store, &query, dlimits, target).await;
+            reads.lock().unwrap().clear();
+            if memory_case {
+                generation.limits.max_memory_bytes =
+                    generation.modeled_memory_bytes() + baseline_charge - 1;
+            }
+            let error = generation
+                .diagnostic_search_with_store_traced(&tiny.store, &query, top_k, target)
+                .await
+                .err()
+                .unwrap();
+            generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
+            let reason = match case {
+                "baseline top_k zero" => "search admission",
+                "baseline narrow capacity" => "diagnostic range capacity",
+                _ => "diagnostic memory",
+            };
+            assert!(
+                matches!(error, TwoBitGenerationError::Invalid(found) if found == reason),
+                "{case}: {error:?}"
+            );
+            assert!(reads.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(generation.slots.available_permits(), 1, "{case}");
+            pristine(target, "admission_refused", case);
+        }
+        // The refused state does not poison the trace: the next query is fully traced again.
+        dirty(&generation, &tiny.store, &query, dlimits, &mut trace).await;
+    }
+
+    #[tokio::test]
+    async fn native_sq8_range_trace_failure_outcomes_are_truthful_and_leave_ranking_unstarted() {
+        let (rows, dimensions) = (513, 24);
+        let tiny = tiny_direct(rows, dimensions).await;
+        let object_bytes = rows * (dimensions + 12);
+        let generation = TwoBitGeneration::open_remote(
+            &tiny.store,
+            &tiny.prefix,
+            &tiny.root_sha,
+            tiny.limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let dlimits = DirectClosureLimits {
+            max_sq8_bytes: object_bytes,
+            max_sq8_gets: 1,
+        };
+        let query = tiny_query(dimensions);
+        let mut trace = Sq8RangeTrace::new(1).unwrap();
+        let failed = Sq8ReadStats {
+            submitted_gets: 1,
+            verified_bytes: 0,
+            failed_gets: 1,
+        };
+        // (fault, outcome, headers, metadata, eof, authentication started, body bytes)
+        for (fault, outcome, headers, metadata, eof, auth, body) in [
+            (
+                "precondition",
+                "store_headers",
+                false,
+                false,
+                false,
+                false,
+                0,
+            ),
+            ("etag", "metadata", true, false, false, false, 0),
+            ("size", "metadata", true, false, false, false, 0),
+            ("range", "metadata", true, false, false, false, 0),
+            ("corrupt", "page_auth", true, true, true, true, object_bytes),
+            (
+                "short",
+                "page_auth",
+                true,
+                true,
+                true,
+                true,
+                object_bytes - 1,
+            ),
+            (
+                "long",
+                "overlong",
+                true,
+                true,
+                false,
+                false,
+                object_bytes + 1,
+            ),
+        ] {
+            *tiny.store.fault.lock().unwrap() = fault;
+            let error = generation
+                .diagnostic_direct_closure_search_with_store_traced(
+                    &tiny.store,
+                    &query,
+                    10,
+                    dlimits,
+                    &mut trace,
+                )
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.read_stats().1, failed, "{fault}");
+            assert_eq!(generation.slots.available_permits(), 1, "{fault}");
+            assert_eq!(trace.outcome, "fetch_failed", "{fault}");
+            assert_eq!(trace.ranges().len(), 1, "{fault}");
+            let span = trace.ranges()[0];
+            assert_eq!(span.outcome, outcome, "{fault}");
+            assert_eq!(
+                (span.start_byte, span.end_byte),
+                (0, object_bytes as u64),
+                "{fault}"
+            );
+            assert!(
+                span.first_poll_ns.is_some() && span.request_ns.is_some(),
+                "{fault}"
+            );
+            assert!(span.complete_ns.is_some(), "{fault}");
+            assert_eq!(span.headers_ns.is_some(), headers, "{fault}");
+            assert_eq!(span.metadata_ns.is_some(), metadata, "{fault}");
+            assert_eq!(span.eof_ns.is_some(), eof, "{fault}");
+            assert_eq!(span.auth_start_ns.is_some(), auth, "{fault}");
+            assert_eq!(span.auth_end_ns.is_some(), auth, "{fault}");
+            assert_eq!(span.body_bytes, body as u64, "{fault}");
+            // The drain completed before the failure was reported; ranking never started.
+            assert!(trace.all_ranges_complete_ns.is_some(), "{fault}");
+            assert_eq!(
+                (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
+                (None, None, None)
+            );
+            assert_eq!(trace.rank, None);
+        }
+        *tiny.store.fault.lock().unwrap() = "ok";
+        let (traced, _) = generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                dlimits,
+                &mut trace,
+            )
+            .await
+            .unwrap();
+        let (plain, _) = generation
+            .diagnostic_direct_closure_search_with_store(&tiny.store, &query, 10, dlimits)
+            .await
+            .unwrap();
+        assert_eq!(traced.plan, plain.plan);
+        assert_eq!(traced.ranked.stats, plain.ranked.stats);
+        assert_eq!(ranking_bits(&traced), ranking_bits(&plain));
+        assert_eq!((trace.outcome, trace.ranges()[0].outcome), ("ranked", "ok"));
+        assert_eq!(generation.slots.available_permits(), 1);
     }
 
     #[test]

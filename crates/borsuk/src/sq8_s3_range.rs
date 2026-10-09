@@ -3,7 +3,7 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
-    returned_sq8::{ReturnedRange, rank_returned_ranges_excluding},
+    returned_sq8::{RankPhases, ReturnedRange, rank_returned_ranges_excluding_traced},
 };
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
@@ -17,6 +17,7 @@ use object_store::{
     GetOptions, GetResultPayload, ObjectStore, RetryConfig, path::Path, prefix::PrefixStore,
 };
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum RangeFetchError {
@@ -459,10 +460,51 @@ pub(crate) async fn rank_verified_sq8_pages_inner(
     max_parallel: usize,
     excluded_ids: &[i64],
 ) -> Result<RankedSq8, RankedSq8Failure> {
+    rank_verified_sq8_pages_traced(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        query,
+        low,
+        step,
+        top_k,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        excluded_ids,
+        None,
+    )
+    .await
+}
+
+/// The same fetch, authentication, scoring and ranking as the ordinary path.
+/// `trace` only observes: ordinary callers pass `None` and read no clock.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn rank_verified_sq8_pages_traced(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    excluded_ids: &[i64],
+    mut trace: Option<&mut Sq8RangeTrace>,
+) -> Result<RankedSq8, RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
         stats: Sq8ReadStats::default(),
     };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.outcome = "rejected_before_io";
+    }
     if excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidRoster)));
     }
@@ -485,7 +527,7 @@ pub(crate) async fn rank_verified_sq8_pages_inner(
     {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidQuery)));
     }
-    let (verified, stats) = fetch_verified_ranges_inner(
+    let (verified, stats) = fetch_verified_ranges_traced(
         store,
         location,
         authority,
@@ -494,8 +536,12 @@ pub(crate) async fn rank_verified_sq8_pages_inner(
         max_gets,
         max_bytes,
         max_parallel,
+        trace.as_deref_mut(),
     )
     .await?;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.rank_start_ns = Some(trace.now_ns());
+    }
     let returned = verified
         .iter()
         .map(|range| ReturnedRange {
@@ -503,7 +549,8 @@ pub(crate) async fn rank_verified_sq8_pages_inner(
             bytes: &range.bytes,
         })
         .collect::<Vec<_>>();
-    let candidates = rank_returned_ranges_excluding(
+    let mut phases = trace.is_some().then(RankPhases::default);
+    let ranked = rank_returned_ranges_excluding_traced(
         Sq8Geometry {
             rows: authority.rows(),
             dimensions: authority.dimensions(),
@@ -515,8 +562,26 @@ pub(crate) async fn rank_verified_sq8_pages_inner(
         top_k,
         max_bytes,
         excluded_ids,
-    )
-    .map_err(|error| RankedSq8Failure {
+        phases.as_mut(),
+    );
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.rank_end_ns = Some(trace.now_ns());
+    }
+    // The payload is freed here, in the order the end of the function always freed it (the
+    // views, then the verified buffers): earlier than the return on both the success and the
+    // error path, never later. A traced query stamps the boundary; nothing else changes.
+    drop(returned);
+    drop(verified);
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.release_end_ns = Some(trace.now_ns());
+        trace.rank = phases;
+        trace.outcome = if ranked.is_ok() {
+            "ranked"
+        } else {
+            "rank_failed"
+        };
+    }
+    let candidates = ranked.map_err(|error| RankedSq8Failure {
         error: RangeFetchError::Score(error),
         stats,
     })?;
@@ -535,11 +600,52 @@ pub(crate) async fn fetch_verified_ranges_inner(
     max_bytes: usize,
     max_parallel: usize,
 ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_verified_ranges_traced(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        None,
+    )
+    .await
+}
+
+/// `fetch_verified_ranges_inner` plus opt-in diagnostics. Every range future is
+/// the production one, polled by the same ordered `buffered` combinator; spans are
+/// returned by value from each future, so no shared state is touched while
+/// requests are in flight. All requests drain before any outcome is examined.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_verified_ranges_traced(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    mut trace: Option<&mut Sq8RangeTrace>,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
         stats: Sq8ReadStats::default(),
     };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.outcome = "rejected_before_io";
+    }
     if ranges.is_empty() || ranges.len() > max_gets || max_parallel == 0 || etag.is_empty() {
+        return Err(fail(RangeFetchError::UnexpectedMetadata));
+    }
+    // A trace holds a fixed number of spans and the memory model charges exactly that many
+    // probes: a plan it cannot hold is refused before any future exists, never partly traced.
+    if trace
+        .as_deref()
+        .is_some_and(|trace| ranges.len() > trace.capacity)
+    {
         return Err(fail(RangeFetchError::UnexpectedMetadata));
     }
     let mut planned_bytes = 0usize;
@@ -559,19 +665,46 @@ pub(crate) async fn fetch_verified_ranges_inner(
         }
         previous_last = Some(last);
     }
-    let outcomes = stream::iter(ranges.iter().copied().map(|(first, last)| async move {
-        fetch_verified_pages_inner(store, location, authority, first, last, etag, max_bytes).await
-    }))
+    let origin = trace.as_deref_mut().map(|trace| {
+        trace.outcome = "fetching";
+        trace.planned_ranges = u32::try_from(ranges.len()).unwrap_or(u32::MAX);
+        trace.planned_bytes = u64::try_from(planned_bytes).unwrap_or(u64::MAX);
+        trace.max_parallel = u32::try_from(max_parallel.min(ranges.len())).unwrap_or(u32::MAX);
+        trace.fetch_start_ns = Some(trace.now_ns());
+        trace.origin
+    });
+    // The buffered element is the named `fetch_verified_pages_traced` future itself, with no
+    // extra async block around it, so a test can measure exactly the type `buffered` holds.
+    let outcomes = stream::iter(ranges.iter().copied().enumerate().map(
+        |(index, (first, last))| {
+            fetch_verified_pages_traced(
+                store,
+                location,
+                authority,
+                first,
+                last,
+                etag,
+                max_bytes,
+                origin.map(|origin| (origin, index)),
+            )
+        },
+    ))
     .buffered(max_parallel.min(ranges.len()))
     .collect::<Vec<_>>()
     .await;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.all_ranges_complete_ns = Some(trace.now_ns());
+    }
     let mut stats = Sq8ReadStats {
         submitted_gets: ranges.len(),
         ..Sq8ReadStats::default()
     };
     let mut verified = Vec::with_capacity(ranges.len());
     let mut first_error = None;
-    for outcome in outcomes {
+    for (outcome, probe) in outcomes {
+        if let (Some(trace), Some(probe)) = (trace.as_deref_mut(), probe) {
+            trace.push(probe.span);
+        }
         match outcome {
             Ok(value) => {
                 stats.verified_bytes += value.bytes.len();
@@ -582,6 +715,13 @@ pub(crate) async fn fetch_verified_ranges_inner(
                 first_error.get_or_insert(error);
             }
         }
+    }
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.outcome = if first_error.is_some() {
+            "fetch_failed"
+        } else {
+            "fetched"
+        };
     }
     if let Some(error) = first_error {
         return Err(RankedSq8Failure { error, stats });
@@ -602,6 +742,70 @@ async fn fetch_verified_pages_inner(
     etag: &str,
     max_bytes: usize,
 ) -> Result<VerifiedRange, RangeFetchError> {
+    fetch_verified_pages_core(
+        store, location, authority, first_page, last_page, etag, max_bytes, None,
+    )
+    .await
+}
+
+/// One range with an optional probe. The probe is boxed, allocated only when
+/// tracing, and handed back with the result: an ordinary range future holds one
+/// null pointer where a traced one holds its diagnostic record. Its boxed record
+/// stays alive until every range has drained and the caller has collected it.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_pages_traced(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    first_page: usize,
+    last_page: usize,
+    etag: &str,
+    max_bytes: usize,
+    probe: Option<(Instant, usize)>,
+) -> RangeOutcome {
+    let mut probe = probe.map(|(origin, index)| {
+        Box::new(Probe {
+            origin,
+            span: RangeSpan::new(
+                index,
+                first_page,
+                last_page,
+                authority.byte_range(first_page, last_page).ok(),
+            ),
+        })
+    });
+    let result = fetch_verified_pages_core(
+        store,
+        location,
+        authority,
+        first_page,
+        last_page,
+        etag,
+        max_bytes,
+        probe.as_deref_mut(),
+    )
+    .await;
+    if let Some(probe) = probe.as_deref_mut() {
+        probe.span.complete_ns = Some(probe.now_ns());
+    }
+    (result, probe)
+}
+
+/// A finished range: its result and, only when tracing, its diagnostic record.
+type RangeOutcome = (Result<VerifiedRange, RangeFetchError>, Option<Box<Probe>>);
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_pages_core(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    first_page: usize,
+    last_page: usize,
+    etag: &str,
+    max_bytes: usize,
+    mut probe: Option<&mut Probe>,
+) -> Result<VerifiedRange, RangeFetchError> {
+    stamp(&mut probe, |span, ns| span.first_poll_ns = Some(ns));
     if etag.is_empty() {
         return Err(RangeFetchError::UnexpectedMetadata);
     }
@@ -617,10 +821,18 @@ async fn fetch_verified_pages_inner(
     let options = GetOptions::new()
         .with_range(Some(start..stop))
         .with_if_match(Some(etag.to_owned()));
+    stamp(&mut probe, |span, ns| {
+        span.request_ns = Some(ns);
+        span.outcome = "store_headers";
+    });
     let result = store
         .get_opts(location, options)
         .await
         .map_err(RangeFetchError::Store)?;
+    stamp(&mut probe, |span, ns| {
+        span.headers_ns = Some(ns);
+        span.outcome = "metadata";
+    });
     if result.range != (start..stop)
         || result.meta.size
             != u64::try_from(authority.object_bytes())
@@ -633,26 +845,422 @@ async fn fetch_verified_pages_inner(
         GetResultPayload::Stream(stream) => stream,
         GetResultPayload::File(..) => return Err(RangeFetchError::UnexpectedMetadata),
     };
+    stamp(&mut probe, |span, ns| {
+        span.metadata_ns = Some(ns);
+        span.outcome = "store_body";
+    });
     let mut collected = BytesMut::with_capacity(expected_len);
-    while let Some(next) = stream.next().await {
+    loop {
+        let waited_from = probe.as_deref().map(Probe::now_ns);
+        let next = stream.next().await;
+        if let (Some(probe), Some(from)) = (probe.as_deref_mut(), waited_from) {
+            let now = probe.now_ns();
+            probe.span.note_wait(from, now);
+        }
+        let Some(next) = next else {
+            stamp(&mut probe, |span, ns| span.eof_ns = Some(ns));
+            break;
+        };
         let chunk = next.map_err(RangeFetchError::Store)?;
+        stamp(&mut probe, |span, ns| span.note_chunk(ns, chunk.len()));
         let new_len = collected
             .len()
             .checked_add(chunk.len())
             .ok_or(RangeFetchError::UnexpectedMetadata)?;
         if new_len > expected_len {
+            stamp(&mut probe, |span, _| span.outcome = "overlong");
             return Err(RangeFetchError::UnexpectedMetadata);
         }
+        let copied_from = probe.as_deref().map(Probe::now_ns);
         collected.extend_from_slice(&chunk);
+        if let (Some(probe), Some(from)) = (probe.as_deref_mut(), copied_from) {
+            let now = probe.now_ns();
+            probe.span.note_copy(from, now);
+        }
     }
     let bytes = collected.freeze();
-    authority
-        .verify_payload(first_page, last_page, &bytes)
-        .map_err(RangeFetchError::Page)?;
+    stamp(&mut probe, |span, ns| {
+        span.auth_start_ns = Some(ns);
+        span.outcome = "page_auth";
+    });
+    let authenticated = authority.verify_payload(first_page, last_page, &bytes);
+    stamp(&mut probe, |span, ns| {
+        span.auth_end_ns = Some(ns);
+        if authenticated.is_ok() {
+            span.outcome = "ok";
+        }
+    });
+    authenticated.map_err(RangeFetchError::Page)?;
     Ok(VerifiedRange {
         start: expected.start,
         bytes,
     })
+}
+
+/// A range's diagnostic state while its future runs: private to that future.
+struct Probe {
+    origin: Instant,
+    span: RangeSpan,
+}
+
+impl Probe {
+    fn now_ns(&self) -> u64 {
+        ns_since(self.origin)
+    }
+}
+
+fn ns_since(origin: Instant) -> u64 {
+    u64::try_from(origin.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// Observe one boundary. With no probe this is a single `None` check: no clock.
+fn stamp(probe: &mut Option<&mut Probe>, set: impl FnOnce(&mut RangeSpan, u64)) {
+    if let Some(probe) = probe.as_deref_mut() {
+        let ns = probe.now_ns();
+        set(&mut probe.span, ns);
+    }
+}
+
+/// Upper bounds for one query's opt-in range diagnostics.
+pub const SQ8_TRACE_MAX_RANGES: usize = 128;
+pub const SQ8_TRACE_MAX_BYTES: usize = 1 << 20;
+/// Preregistered allowance for ONE pending range, whether or not tracing is on: the
+/// instrumentable future (`fetch_verified_pages_traced`, the exact element `buffered`
+/// holds), plus its executor node (`BUFFERED_NODE_ALLOWANCE_BYTES`) and the allocation
+/// header. A test fails if the compiled future grows past `RANGE_FUTURE_ALLOWANCE_BYTES -
+/// BUFFERED_NODE_ALLOWANCE_BYTES - ALLOCATION_ALLOWANCE_BYTES`.
+pub const RANGE_FUTURE_ALLOWANCE_BYTES: usize = 2048;
+/// `buffered` keeps each future in `OrderWrapper<Task<Fut>>` inside an `Arc`: by the
+/// futures-util 0.3 layout a task adds its future-cell, five pointer-sized links, a
+/// weak queue pointer and two flags (about 56 bytes), the Arc counters 16, the order
+/// index 8 and the allocator header up to 16 - roughly 100 bytes. 256 leaves room for a
+/// layout change; it is an estimate of library internals, not a measurement.
+pub const BUFFERED_NODE_ALLOWANCE_BYTES: usize = 256;
+/// Per-allocation header and rounding allowance for each boxed probe and node.
+const ALLOCATION_ALLOWANCE_BYTES: usize = 32;
+/// `collect` grows its vector by doubling: a growth step briefly holds the old and the new
+/// buffer, at most three times the final length.
+const OUTCOME_VECTOR_GROWTH_FACTOR: usize = 3;
+
+/// One physical range, in plan order. Offsets are nanoseconds from the owning
+/// trace's origin. `None` means the boundary was never reached, never zero.
+/// Ranges overlap in time: never sum their intervals. The headers interval
+/// (`request_ns` to `headers_ns`) is `get_opts` as a whole: client queue,
+/// connect, TLS and server combined. Body gaps are application-observed waits
+/// inside `stream.next()` (including executor scheduling), not packet arrival.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RangeSpan {
+    /// Position in the sorted range plan.
+    pub index: u32,
+    /// Inclusive first and last page of the planned range.
+    pub first_page: u64,
+    pub last_page: u64,
+    /// Planned physical half-open byte range; zero when the page range is invalid.
+    pub start_byte: u64,
+    pub end_byte: u64,
+    /// First poll of this range's future: when `buffered` admitted it.
+    pub first_poll_ns: Option<u64>,
+    /// Immediately before `get_opts` is called.
+    pub request_ns: Option<u64>,
+    /// `get_opts` returned a response: status, range, ETag and size are known.
+    pub headers_ns: Option<u64>,
+    /// The response range, size and ETag matched the plan and the pinned object.
+    pub metadata_ns: Option<u64>,
+    /// First and last body frame handed to the collector.
+    pub first_chunk_ns: Option<u64>,
+    pub last_chunk_ns: Option<u64>,
+    /// The body stream reported its end.
+    pub eof_ns: Option<u64>,
+    /// Page-digest verification of the collected body, inline on the executor thread.
+    pub auth_start_ns: Option<u64>,
+    pub auth_end_ns: Option<u64>,
+    /// The range future is about to return, success or failure.
+    pub complete_ns: Option<u64>,
+    /// Body frames received and their total bytes, including any overlong frame.
+    pub chunks: u32,
+    pub body_bytes: u64,
+    /// Longest single wait for the next body frame, and when that wait ended.
+    pub max_body_gap_ns: u64,
+    pub max_body_gap_end_ns: Option<u64>,
+    /// Aggregate time and count of the inline body copies into the collector.
+    pub copy_ns: u64,
+    pub copy_count: u32,
+    /// Where the range stopped: invalid_request, store_headers, metadata, store_body,
+    /// overlong, page_auth or ok. Empty only before the range was ever polled.
+    pub outcome: &'static str,
+}
+
+impl RangeSpan {
+    /// Serialized column order of a span (see the `Serialize` impl).
+    pub const FIELDS: [&str; 22] = [
+        "index",
+        "first_page",
+        "last_page",
+        "start_byte",
+        "end_byte",
+        "first_poll_ns",
+        "request_ns",
+        "headers_ns",
+        "metadata_ns",
+        "first_chunk_ns",
+        "last_chunk_ns",
+        "eof_ns",
+        "auth_start_ns",
+        "auth_end_ns",
+        "complete_ns",
+        "chunks",
+        "body_bytes",
+        "max_body_gap_ns",
+        "max_body_gap_end_ns",
+        "copy_ns",
+        "copy_count",
+        "outcome",
+    ];
+
+    fn new(
+        index: usize,
+        first_page: usize,
+        last_page: usize,
+        bytes: Option<std::ops::Range<usize>>,
+    ) -> Self {
+        let bytes = bytes.unwrap_or(0..0);
+        Self {
+            index: u32::try_from(index).unwrap_or(u32::MAX),
+            first_page: u64::try_from(first_page).unwrap_or(u64::MAX),
+            last_page: u64::try_from(last_page).unwrap_or(u64::MAX),
+            start_byte: u64::try_from(bytes.start).unwrap_or(u64::MAX),
+            end_byte: u64::try_from(bytes.end).unwrap_or(u64::MAX),
+            outcome: "invalid_request",
+            ..Self::default()
+        }
+    }
+
+    fn note_chunk(&mut self, ns: u64, len: usize) {
+        self.first_chunk_ns.get_or_insert(ns);
+        self.last_chunk_ns = Some(ns);
+        self.chunks = self.chunks.saturating_add(1);
+        self.body_bytes = self
+            .body_bytes
+            .saturating_add(u64::try_from(len).unwrap_or(u64::MAX));
+    }
+
+    fn note_wait(&mut self, from: u64, to: u64) {
+        let gap = to.saturating_sub(from);
+        if gap > self.max_body_gap_ns {
+            self.max_body_gap_ns = gap;
+            self.max_body_gap_end_ns = Some(to);
+        }
+    }
+
+    fn note_copy(&mut self, from: u64, to: u64) {
+        self.copy_ns = self.copy_ns.saturating_add(to.saturating_sub(from));
+        self.copy_count = self.copy_count.saturating_add(1);
+    }
+}
+
+/// Compact row form: values follow `RangeSpan::FIELDS`, `null` = never reached.
+impl serde::Serialize for RangeSpan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let mut row = serializer.serialize_tuple(Self::FIELDS.len())?;
+        row.serialize_element(&self.index)?;
+        row.serialize_element(&self.first_page)?;
+        row.serialize_element(&self.last_page)?;
+        row.serialize_element(&self.start_byte)?;
+        row.serialize_element(&self.end_byte)?;
+        row.serialize_element(&self.first_poll_ns)?;
+        row.serialize_element(&self.request_ns)?;
+        row.serialize_element(&self.headers_ns)?;
+        row.serialize_element(&self.metadata_ns)?;
+        row.serialize_element(&self.first_chunk_ns)?;
+        row.serialize_element(&self.last_chunk_ns)?;
+        row.serialize_element(&self.eof_ns)?;
+        row.serialize_element(&self.auth_start_ns)?;
+        row.serialize_element(&self.auth_end_ns)?;
+        row.serialize_element(&self.complete_ns)?;
+        row.serialize_element(&self.chunks)?;
+        row.serialize_element(&self.body_bytes)?;
+        row.serialize_element(&self.max_body_gap_ns)?;
+        row.serialize_element(&self.max_body_gap_end_ns)?;
+        row.serialize_element(&self.copy_ns)?;
+        row.serialize_element(&self.copy_count)?;
+        row.serialize_element(&self.outcome)?;
+        row.end()
+    }
+}
+
+/// Opt-in diagnostics for one query, owned by the caller so a failed query still
+/// returns every span. Capacity is fixed and admitted before any request: a plan with
+/// more ranges than the capacity is refused before any future or GET exists (the
+/// generation also checks it at admission), so no range is silently left untraced and
+/// `dropped_ranges` stays zero. Offsets share the origin passed to `begin`, which the
+/// generation sets to its stage origin.
+///
+/// There is deliberately no `Clone` (a clone would copy the advertised capacity but not the
+/// reservation, so the next `push` would allocate during a drain) and the span vector is
+/// private and read-only through `ranges()`, so nothing outside this module can replace,
+/// shrink or grow the reservation the admission model charged.
+#[derive(Debug, serde::Serialize)]
+pub struct Sq8RangeTrace {
+    #[serde(skip)]
+    origin: Instant,
+    #[serde(skip)]
+    capacity: usize,
+    /// Column names of every row in `ranges`.
+    pub range_fields: &'static [&'static str],
+    /// not_started, admission_refused, started, rejected_before_io, fetching, fetch_failed,
+    /// fetched, rank_failed or ranked.
+    pub outcome: &'static str,
+    pub planned_ranges: u32,
+    pub planned_bytes: u64,
+    pub max_parallel: u32,
+    /// Defensive counter of `push` refusals: zero in practice, because a plan larger than the
+    /// capacity is refused before any future exists.
+    pub dropped_ranges: u32,
+    /// Plan validated; futures are about to be created and polled.
+    pub fetch_start_ns: Option<u64>,
+    /// Every range future has finished, success or failure: the barrier.
+    pub all_ranges_complete_ns: Option<u64>,
+    pub rank_start_ns: Option<u64>,
+    /// Ranking returned (its scoring scratch is already released inside the finish phase).
+    pub rank_end_ns: Option<u64>,
+    /// The fetched payload (`returned` views, then the verified buffers) has been freed: the
+    /// last boundary of the SQ8 stage. None whenever ranking was never reached.
+    pub release_end_ns: Option<u64>,
+    pub rank: Option<RankPhases>,
+    /// Private so the reservation made by `new` cannot be swapped out; read through `ranges()`.
+    ranges: Vec<RangeSpan>,
+}
+
+impl Sq8RangeTrace {
+    /// Allocates the whole span buffer once; refuses capacities that would exceed
+    /// `SQ8_TRACE_MAX_RANGES` or, at the worst parallelism, `SQ8_TRACE_MAX_BYTES`
+    /// of modeled state, before allocating anything.
+    pub fn new(capacity: usize) -> Result<Self, &'static str> {
+        if capacity == 0
+            || capacity > SQ8_TRACE_MAX_RANGES
+            || Self::modeled_bytes(capacity, capacity) > SQ8_TRACE_MAX_BYTES
+        {
+            return Err("SQ8 range trace capacity");
+        }
+        Ok(Self {
+            origin: Instant::now(),
+            capacity,
+            range_fields: &RangeSpan::FIELDS,
+            outcome: "not_started",
+            planned_ranges: 0,
+            planned_bytes: 0,
+            max_parallel: 0,
+            dropped_ranges: 0,
+            fetch_start_ns: None,
+            all_ranges_complete_ns: None,
+            rank_start_ns: None,
+            rank_end_ns: None,
+            release_end_ns: None,
+            rank: None,
+            ranges: Vec::with_capacity(capacity),
+        })
+    }
+
+    /// RETAINED bytes: what one trace holds between queries - the struct and its
+    /// preallocated span buffer, allocated once by `new`.
+    pub fn retained_bytes(capacity: usize) -> usize {
+        capacity
+            .saturating_mul(std::mem::size_of::<RangeSpan>())
+            .saturating_add(std::mem::size_of::<Self>())
+    }
+
+    /// CUMULATIVE PEAK bytes while one query drains with `capacity` planned ranges and at most
+    /// `max_parallel` pending: the retained trace, plus everything that coexists with it until
+    /// the full drain is collected. That is every completed range's boxed probe (with
+    /// allocator overhead) and `pending_futures_bytes`. Not an average and not the retained
+    /// size; admission charges this figure.
+    pub fn modeled_bytes(capacity: usize, max_parallel: usize) -> usize {
+        let probes = capacity.saturating_mul(
+            std::mem::size_of::<Probe>().saturating_add(ALLOCATION_ALLOWANCE_BYTES),
+        );
+        Self::retained_bytes(capacity)
+            .saturating_add(probes)
+            .saturating_add(Self::pending_futures_bytes(capacity, max_parallel))
+    }
+
+    /// Peak range-drain state that exists with tracing ON OR OFF, as a conservative bound
+    /// rather than a delta: each of at most `max_parallel` pending ranges is charged its
+    /// whole `RANGE_FUTURE_ALLOWANCE_BYTES` (future, executor node, allocation), the ordered
+    /// queue may hold that many finished-but-unyielded outcomes, and the collected outcome
+    /// vector is charged at its growth peak. Every outcome includes the pointer-sized probe
+    /// slot. The tracing-off DELTA against the pre-change layout is only a part of this
+    /// (one extra async layer, one probe pointer per future, one pointer per outcome). It is
+    /// NOT measured by the layout test, which prints the current futures only: the
+    /// pre-change future no longer exists in the tree. Until a remote run builds the same
+    /// fixture on the base commit it is an unmeasured estimate of a few hundred bytes per
+    /// pending range, inside the allowance charged above.
+    pub fn pending_futures_bytes(ranges: usize, max_parallel: usize) -> usize {
+        let outcome = std::mem::size_of::<RangeOutcome>();
+        let pending = ranges.min(max_parallel);
+        pending
+            .saturating_mul(RANGE_FUTURE_ALLOWANCE_BYTES)
+            .saturating_add(pending.saturating_mul(outcome.saturating_add(8)))
+            .saturating_add(
+                ranges
+                    .saturating_mul(outcome)
+                    .saturating_mul(OUTCOME_VECTOR_GROWTH_FACTOR),
+            )
+    }
+
+    pub fn reserved_bytes(&self, max_parallel: usize) -> usize {
+        Self::modeled_bytes(self.capacity, max_parallel)
+    }
+
+    /// The recorded spans in plan order (read-only).
+    pub fn ranges(&self) -> &[RangeSpan] {
+        &self.ranges
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Reuse for the next query: nothing is reallocated, every stamp is unset.
+    pub fn begin(&mut self, origin: Instant) {
+        self.origin = origin;
+        self.clear("started");
+    }
+
+    /// Called by a traced entry point BEFORE any early return, so a reused trace can never
+    /// show a previous query's spans, stamps or phases as the evidence of a refused one.
+    /// Clears like `begin` but reads no clock and allocates nothing; a query that actually
+    /// starts replaces this state through `begin`. The typed error stays the caller's.
+    pub fn refuse(&mut self) {
+        self.clear("admission_refused");
+    }
+
+    fn clear(&mut self, outcome: &'static str) {
+        self.outcome = outcome;
+        self.planned_ranges = 0;
+        self.planned_bytes = 0;
+        self.max_parallel = 0;
+        self.dropped_ranges = 0;
+        self.fetch_start_ns = None;
+        self.all_ranges_complete_ns = None;
+        self.rank_start_ns = None;
+        self.rank_end_ns = None;
+        self.release_end_ns = None;
+        self.rank = None;
+        self.ranges.clear();
+    }
+
+    fn now_ns(&self) -> u64 {
+        ns_since(self.origin)
+    }
+
+    fn push(&mut self, span: RangeSpan) {
+        if self.ranges.len() < self.capacity {
+            self.ranges.push(span);
+        } else {
+            self.dropped_ranges = self.dropped_ranges.saturating_add(1);
+        }
+    }
 }
 
 // Real HTTP body barriers for the generation scheduling regression. Kept here
@@ -2365,6 +2973,666 @@ mod tests {
             fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13).await,
             Err(RangeFetchError::Store(_))
         ));
+    }
+
+    fn unique_sq8_object(rows: usize) -> Vec<u8> {
+        let mut object = Vec::new();
+        for id in 0..rows as i64 {
+            object.extend_from_slice(&id.to_le_bytes());
+            object.extend_from_slice(&(id as f32).to_le_bytes());
+            object.push(0);
+        }
+        object
+    }
+
+    fn sq8_authority(object: &[u8], rows: usize) -> PageAuthority {
+        let sidecar = object
+            .chunks(256 * 13)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":rows, "dimensions":1, "page_rows":256,
+            "object_sha256":format!("{:x}", Sha256::digest(object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn traced_range_query_future_is_send() {
+        fn require_send<T: Send>(_: T) {}
+        let store = InMemory::new();
+        let location = Path::from("sq8.bin");
+        let (authority, _) = short_tail_authority();
+        let mut trace = Sq8RangeTrace::new(1).unwrap();
+        require_send(rank_verified_sq8_pages_traced(
+            &store,
+            &location,
+            &authority,
+            &[(0, 0)],
+            "etag",
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            1,
+            3328,
+            1,
+            &[],
+            Some(&mut trace),
+        ));
+    }
+
+    #[test]
+    fn range_future_and_outcome_layout_stay_within_the_modeled_allowance() {
+        use std::mem::{size_of, size_of_val};
+        let store = InMemory::new();
+        let location = Path::from("sq8.bin");
+        let (authority, _) = short_tail_authority();
+        // The exact element type `buffered` holds in production, the body it wraps with no
+        // probe, and the plain entry point used outside batches. Unpolled futures report
+        // their whole state, so this is the full per-range footprint.
+        let production =
+            fetch_verified_pages_traced(&store, &location, &authority, 0, 0, "etag", 3328, None);
+        let body =
+            fetch_verified_pages_core(&store, &location, &authority, 0, 0, "etag", 3328, None);
+        let plain = fetch_verified_pages_inner(&store, &location, &authority, 0, 0, "etag", 3328);
+        let (production_bytes, body_bytes, plain_bytes) = (
+            size_of_val(&production),
+            size_of_val(&body),
+            size_of_val(&plain),
+        );
+        let outcome = size_of::<RangeOutcome>();
+        let result = size_of::<Result<VerifiedRange, RangeFetchError>>();
+        // Run with --nocapture to record the measured layout next to the preregistered allowances.
+        println!(
+            "range_layout production_future={production_bytes} body_future={body_bytes} plain_future={plain_bytes} \
+             node_allowance={BUFFERED_NODE_ALLOWANCE_BYTES} alloc_allowance={ALLOCATION_ALLOWANCE_BYTES} \
+             per_range_allowance={RANGE_FUTURE_ALLOWANCE_BYTES} outcome={outcome} result={result} \
+             range_span={} probe={} trace_struct={} probe_slot={}",
+            size_of::<RangeSpan>(),
+            size_of::<Probe>(),
+            size_of::<Sq8RangeTrace>(),
+            size_of::<Option<Box<Probe>>>(),
+        );
+        // FAILS if the compiled instrumentable future, plus its buffered node and allocation
+        // header, outgrows the preregistered per-range allowance that admission charges.
+        assert!(
+            production_bytes + BUFFERED_NODE_ALLOWANCE_BYTES + ALLOCATION_ALLOWANCE_BYTES
+                <= RANGE_FUTURE_ALLOWANCE_BYTES,
+            "production future {production_bytes} body {body_bytes} plain {plain_bytes}"
+        );
+        // The instrumentable layer is the only addition over the body, and it stays small.
+        assert!(body_bytes <= production_bytes);
+        assert!(
+            production_bytes - body_bytes <= 512,
+            "{production_bytes} {body_bytes}"
+        );
+        // With tracing off the probe slot, its borrow and the returned record are one pointer each,
+        // and an outcome carries exactly one pointer more than the bare result.
+        assert_eq!(size_of::<Option<Box<Probe>>>(), size_of::<usize>());
+        assert_eq!(size_of::<Option<&mut Probe>>(), size_of::<usize>());
+        assert!(outcome <= result + size_of::<usize>());
+        // Retained trace bytes, cumulative drain peak and the on/off-path state are distinct figures.
+        let (capacity, parallel) = (32, 16);
+        let retained = Sq8RangeTrace::retained_bytes(capacity);
+        let peak = Sq8RangeTrace::modeled_bytes(capacity, parallel);
+        let both_paths = Sq8RangeTrace::pending_futures_bytes(capacity, parallel);
+        assert_eq!(
+            retained,
+            capacity * size_of::<RangeSpan>() + size_of::<Sq8RangeTrace>()
+        );
+        assert_eq!(
+            peak,
+            retained + capacity * (size_of::<Probe>() + ALLOCATION_ALLOWANCE_BYTES) + both_paths
+        );
+        assert!(
+            both_paths
+                >= parallel * RANGE_FUTURE_ALLOWANCE_BYTES
+                    + parallel * (outcome + 8)
+                    + OUTCOME_VECTOR_GROWTH_FACTOR * capacity * outcome
+        );
+        assert!(retained < peak && both_paths < peak);
+        // Parallelism above the range count never charges futures that cannot exist.
+        assert_eq!(
+            Sq8RangeTrace::pending_futures_bytes(4, 64),
+            Sq8RangeTrace::pending_futures_bytes(4, 4)
+        );
+        let trace = Sq8RangeTrace::new(capacity).unwrap();
+        assert_eq!(trace.reserved_bytes(parallel), peak);
+        assert_eq!(trace.capacity(), capacity);
+        assert!(
+            Sq8RangeTrace::modeled_bytes(SQ8_TRACE_MAX_RANGES, SQ8_TRACE_MAX_RANGES)
+                <= SQ8_TRACE_MAX_BYTES
+        );
+        assert!(Sq8RangeTrace::new(SQ8_TRACE_MAX_RANGES).is_ok());
+        assert!(Sq8RangeTrace::new(0).is_err());
+        assert!(Sq8RangeTrace::new(SQ8_TRACE_MAX_RANGES + 1).is_err());
+        assert!(Sq8RangeTrace::new(usize::MAX).is_err());
+        assert_eq!(trace.ranges.capacity(), capacity);
+    }
+
+    #[test]
+    fn refused_trace_clears_every_stamp_without_reallocating_or_reading_a_clock() {
+        let mut trace = Sq8RangeTrace::new(4).unwrap();
+        trace.begin(Instant::now());
+        for index in 0..4 {
+            let mut span = RangeSpan::new(index, index, index, Some(0..13));
+            span.first_poll_ns = Some(1);
+            span.complete_ns = Some(2);
+            span.outcome = "ok";
+            trace.push(span);
+        }
+        trace.push(RangeSpan::default());
+        assert_eq!((trace.ranges.len(), trace.dropped_ranges), (4, 1));
+        trace.planned_ranges = 4;
+        trace.planned_bytes = 52;
+        trace.max_parallel = 2;
+        trace.fetch_start_ns = Some(1);
+        trace.all_ranges_complete_ns = Some(2);
+        trace.rank_start_ns = Some(3);
+        trace.rank_end_ns = Some(4);
+        trace.release_end_ns = Some(5);
+        trace.rank = Some(RankPhases {
+            ranges: 4,
+            rows: 4,
+            ..RankPhases::default()
+        });
+        trace.outcome = "ranked";
+        let (pointer, capacity) = (trace.ranges.as_ptr(), trace.ranges.capacity());
+        trace.refuse();
+        assert_eq!(trace.outcome, "admission_refused");
+        assert!(trace.ranges.is_empty());
+        assert_eq!(
+            (
+                trace.planned_ranges,
+                trace.planned_bytes,
+                trace.max_parallel,
+                trace.dropped_ranges
+            ),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            (
+                trace.fetch_start_ns,
+                trace.all_ranges_complete_ns,
+                trace.rank_start_ns,
+                trace.rank_end_ns
+            ),
+            (None, None, None, None)
+        );
+        assert_eq!((trace.rank, trace.release_end_ns), (None, None));
+        assert_eq!(
+            (trace.ranges.as_ptr(), trace.ranges.capacity()),
+            (pointer, capacity)
+        );
+        // A query that does start replaces the refused state.
+        trace.begin(Instant::now());
+        assert_eq!(trace.outcome, "started");
+    }
+
+    #[tokio::test]
+    async fn traced_ranking_matches_untraced_and_leaves_unreached_stamps_unset() {
+        let store = InMemory::new();
+        let location = Path::from("sq8.bin");
+        let object = unique_sq8_object(273);
+        let authority = sq8_authority(&object, 273);
+        store
+            .put(&location, PutPayload::from(object.clone()))
+            .await
+            .unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+        let mut trace = Sq8RangeTrace::new(2).unwrap();
+        // Success: same candidates, bits and charges; every stamp is set and ordered.
+        let mut ok = Sq8RangeTrace::new(2).unwrap();
+        ok.begin(Instant::now());
+        let ranges = [(0, 0), (1, 1)];
+        let traced = rank_verified_sq8_pages_traced(
+            &store,
+            &location,
+            &authority,
+            &ranges,
+            &etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            2,
+            object.len(),
+            2,
+            &[],
+            Some(&mut ok),
+        )
+        .await;
+        let plain = rank_verified_sq8_pages_inner(
+            &store,
+            &location,
+            &authority,
+            &ranges,
+            &etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            2,
+            object.len(),
+            2,
+            &[],
+        )
+        .await;
+        let (traced, plain) = (traced.unwrap(), plain.unwrap());
+        assert_eq!(traced.stats, plain.stats);
+        assert_eq!(
+            traced
+                .candidates
+                .iter()
+                .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                .collect::<Vec<_>>(),
+            plain
+                .candidates
+                .iter()
+                .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(ok.outcome, "ranked");
+        let (start, end, release) = (
+            ok.rank_start_ns.unwrap(),
+            ok.rank_end_ns.unwrap(),
+            ok.release_end_ns.unwrap(),
+        );
+        assert!(ok.all_ranges_complete_ns.unwrap() <= start && start <= end && end <= release);
+        assert_eq!((ok.planned_ranges, ok.ranges.len()), (2, 2));
+        assert_eq!(ok.planned_bytes, object.len() as u64);
+        assert!(ok.ranges.iter().all(|span| span.outcome == "ok"));
+        // Rejected before any I/O: no span, no stamp, no fabricated zero.
+        for (name, ranges, gets, bytes, parallel, excluded) in [
+            (
+                "overlap",
+                &[(1, 1), (1, 1)][..],
+                2,
+                object.len(),
+                2,
+                &[][..],
+            ),
+            ("bytes", &[(0, 1)][..], 2, 17 * 13, 2, &[][..]),
+            ("gets", &[(0, 0), (1, 1)][..], 1, object.len(), 2, &[][..]),
+            ("parallel", &[(0, 0)][..], 2, object.len(), 0, &[][..]),
+            ("roster", &[(0, 0)][..], 2, object.len(), 2, &[5, 4][..]),
+        ] {
+            let mut rejected = Sq8RangeTrace::new(2).unwrap();
+            rejected.begin(Instant::now());
+            let failure = rank_verified_sq8_pages_traced(
+                &store,
+                &location,
+                &authority,
+                ranges,
+                &etag,
+                &[1.0],
+                &[0.0],
+                &[1.0],
+                1,
+                gets,
+                bytes,
+                parallel,
+                excluded,
+                Some(&mut rejected),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(failure.stats, Sq8ReadStats::default(), "{name}");
+            assert_eq!(rejected.outcome, "rejected_before_io", "{name}");
+            assert!(rejected.ranges.is_empty(), "{name}");
+            assert_eq!(
+                (rejected.fetch_start_ns, rejected.all_ranges_complete_ns),
+                (None, None),
+                "{name}"
+            );
+            assert_eq!(
+                (
+                    rejected.rank_start_ns,
+                    rejected.rank_end_ns,
+                    rejected.release_end_ns
+                ),
+                (None, None, None)
+            );
+            assert_eq!(rejected.rank, None);
+            assert_eq!((rejected.planned_ranges, rejected.planned_bytes), (0, 0));
+        }
+        // A failed request keeps a truthful partial span: polled and requested, never answered.
+        store
+            .put(&location, PutPayload::from(vec![8u8; object.len()]))
+            .await
+            .unwrap();
+        trace.begin(Instant::now());
+        let failure = rank_verified_sq8_pages_traced(
+            &store,
+            &location,
+            &authority,
+            &[(1, 1)],
+            &etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            2,
+            object.len(),
+            2,
+            &[],
+            Some(&mut trace),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.stats.failed_gets, 1);
+        assert_eq!(trace.outcome, "fetch_failed");
+        assert_eq!(trace.ranges.len(), 1);
+        let span = trace.ranges[0];
+        assert_eq!(span.outcome, "store_headers");
+        assert!(span.first_poll_ns.is_some() && span.request_ns.is_some());
+        assert!(span.complete_ns.is_some());
+        assert_eq!(
+            (
+                span.headers_ns,
+                span.metadata_ns,
+                span.first_chunk_ns,
+                span.eof_ns,
+                span.auth_start_ns,
+                span.auth_end_ns
+            ),
+            (None, None, None, None, None, None)
+        );
+        assert_eq!((span.chunks, span.body_bytes, span.copy_count), (0, 0, 0));
+        assert!(trace.all_ranges_complete_ns.is_some());
+        assert_eq!(
+            (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
+            (None, None, None)
+        );
+        // A trace never silently omits a range: a plan larger than its fixed capacity is refused
+        // before any future or GET exists, while the same plan runs untraced.
+        let mut small = Sq8RangeTrace::new(1).unwrap();
+        small.begin(Instant::now());
+        store
+            .put(&location, PutPayload::from(object.clone()))
+            .await
+            .unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+        let wide = [(0, 0), (1, 1)];
+        let refusal = rank_verified_sq8_pages_traced(
+            &store,
+            &location,
+            &authority,
+            &wide,
+            &etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            2,
+            object.len(),
+            2,
+            &[],
+            Some(&mut small),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(refusal.error, RangeFetchError::UnexpectedMetadata));
+        assert_eq!(refusal.stats, Sq8ReadStats::default());
+        assert_eq!(small.outcome, "rejected_before_io");
+        assert_eq!((small.ranges.len(), small.dropped_ranges), (0, 0));
+        assert_eq!(small.ranges.capacity(), 1);
+        assert_eq!(small.fetch_start_ns, None);
+        rank_verified_sq8_pages_inner(
+            &store,
+            &location,
+            &authority,
+            &wide,
+            &etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            2,
+            object.len(),
+            2,
+            &[],
+        )
+        .await
+        .unwrap();
+        // Ranking that fails after a complete fetch still stamps ranking and the payload release.
+        let (dup_authority, dup_object) = short_tail_authority();
+        let dup_store = InMemory::new();
+        dup_store
+            .put(&location, PutPayload::from(dup_object))
+            .await
+            .unwrap();
+        let dup_etag = dup_store.head(&location).await.unwrap().e_tag.unwrap();
+        let mut failed = Sq8RangeTrace::new(1).unwrap();
+        failed.begin(Instant::now());
+        let failure = rank_verified_sq8_pages_traced(
+            &dup_store,
+            &location,
+            &dup_authority,
+            &[(0, 0)],
+            &dup_etag,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            1,
+            1,
+            256 * 13,
+            1,
+            &[],
+            Some(&mut failed),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(failure.error, RangeFetchError::Score(_)));
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: 256 * 13,
+                failed_gets: 0
+            }
+        );
+        assert_eq!(failed.outcome, "rank_failed");
+        let (start, end, release) = (
+            failed.rank_start_ns.unwrap(),
+            failed.rank_end_ns.unwrap(),
+            failed.release_end_ns.unwrap(),
+        );
+        assert!(failed.all_ranges_complete_ns.unwrap() <= start && start <= end && end <= release);
+        assert!(failed.rank.is_some());
+        assert_eq!(failed.ranges[0].outcome, "ok");
+    }
+
+    #[tokio::test]
+    async fn traced_ranges_overlap_in_flight_and_order_boundaries_before_rank() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let key = "gen/objects/sq8";
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            deadline,
+        );
+        // Stage-1 bodies hold their final byte until released.
+        fixture.arm(None);
+        let location = Path::from(key);
+        let mut trace = Sq8RangeTrace::new(2).unwrap();
+        trace.begin(Instant::now());
+        let work = rank_verified_sq8_pages_traced(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 0), (2, 2)],
+            ETAG,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            3,
+            2,
+            object.len(),
+            2,
+            &[],
+            Some(&mut trace),
+        );
+        let (ranked, ()) = tokio::join!(work, async {
+            fixture.wait(|state| state.active[1] >= 2).await;
+            fixture.release(1);
+        });
+        let ranked = ranked.unwrap();
+        assert_eq!(ranked.candidates.len(), 3);
+        assert_eq!(ranked.stats.submitted_gets, 2);
+        assert_eq!(trace.outcome, "ranked");
+        assert_eq!(
+            (
+                trace.planned_ranges,
+                trace.dropped_ranges,
+                trace.ranges.len()
+            ),
+            (2, 0, 2)
+        );
+        assert!(fixture.snapshot().peak[1] >= 2);
+        let (a, b) = (trace.ranges[0], trace.ranges[1]);
+        assert_eq!(
+            (a.start_byte, a.end_byte, b.start_byte, b.end_byte),
+            (0, 3328, 6656, 7800)
+        );
+        // Neither range can finish before the other has started: they overlap in flight.
+        assert!(a.first_poll_ns.unwrap() < b.complete_ns.unwrap());
+        assert!(b.first_poll_ns.unwrap() < a.complete_ns.unwrap());
+        for span in &trace.ranges {
+            let chain = [
+                span.first_poll_ns,
+                span.request_ns,
+                span.headers_ns,
+                span.metadata_ns,
+                span.first_chunk_ns,
+                span.last_chunk_ns,
+                span.eof_ns,
+                span.auth_start_ns,
+                span.auth_end_ns,
+                span.complete_ns,
+            ]
+            .map(Option::unwrap);
+            assert!(chain.windows(2).all(|w| w[0] <= w[1]), "{chain:?}");
+            assert_eq!(span.outcome, "ok");
+            assert_eq!(span.body_bytes, span.end_byte - span.start_byte);
+            assert!(span.chunks >= 1 && span.copy_count == span.chunks);
+            assert!(span.max_body_gap_end_ns.is_some());
+        }
+        let all = trace.all_ranges_complete_ns.unwrap();
+        let latest = a.complete_ns.unwrap().max(b.complete_ns.unwrap());
+        assert!(
+            trace.fetch_start_ns.unwrap() <= a.first_poll_ns.unwrap().min(b.first_poll_ns.unwrap())
+        );
+        // Authentication of every range precedes the barrier; ranking starts after it.
+        assert!(latest <= all && all <= trace.rank_start_ns.unwrap());
+        assert!(trace.rank_start_ns.unwrap() <= trace.rank_end_ns.unwrap());
+        assert!(trace.rank_end_ns.unwrap() <= trace.release_end_ns.unwrap());
+        let phases = trace.rank.unwrap();
+        assert_eq!((phases.ranges, phases.rows), (2, 256 + 88));
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn traced_failures_report_truthful_partial_spans_through_the_full_drain() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let key = "gen/objects/sq8";
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            deadline,
+        );
+        let location = Path::from(key);
+        // Range 0: clean EOF one byte short after the sibling failure; range 1: flipped
+        // final byte (digest failure) at once; range 2: a held, valid sibling.
+        let starts = [0, 3328, 6656];
+        fixture.arm(Some((1, starts)));
+        let mut trace = Sq8RangeTrace::new(3).unwrap();
+        trace.begin(Instant::now());
+        let work = rank_verified_sq8_pages_traced(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 0), (1, 1), (2, 2)],
+            ETAG,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            3,
+            3,
+            object.len(),
+            3,
+            &[],
+            Some(&mut trace),
+        );
+        let (result, ()) = tokio::join!(work, async {
+            fixture
+                .wait(|state| state.finished[1].contains(&starts[1]) && state.active[1] >= 2)
+                .await;
+            fixture.release_error();
+            fixture
+                .wait(|state| state.finished[1].contains(&starts[0]))
+                .await;
+            fixture.release_sibling();
+        });
+        let failure = result.unwrap_err();
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                verified_bytes: 1144,
+                failed_gets: 2
+            }
+        );
+        // The drain finished every GET, in the order the fixture released them.
+        let state = fixture.snapshot();
+        assert_eq!(state.finished[1], vec![starts[1], starts[0], starts[2]]);
+        assert_eq!(trace.outcome, "fetch_failed");
+        assert_eq!(trace.ranges.len(), 3);
+        let [stream, digest, sibling] = [trace.ranges[0], trace.ranges[1], trace.ranges[2]];
+        assert_eq!(stream.outcome, "store_body");
+        assert!(stream.headers_ns.is_some() && stream.metadata_ns.is_some());
+        assert!(stream.body_bytes < stream.end_byte - stream.start_byte);
+        assert_eq!(
+            (stream.eof_ns, stream.auth_start_ns, stream.auth_end_ns),
+            (None, None, None)
+        );
+        assert_eq!(digest.outcome, "page_auth");
+        assert!(digest.eof_ns.is_some() && digest.auth_end_ns.is_some());
+        assert_eq!(
+            digest.body_bytes,
+            digest.end_byte - digest.start_byte,
+            "the whole corrupt body was still received"
+        );
+        assert_eq!(sibling.outcome, "ok");
+        for span in &trace.ranges {
+            assert!(span.complete_ns.is_some());
+        }
+        let all = trace.all_ranges_complete_ns.unwrap();
+        assert!(
+            trace
+                .ranges
+                .iter()
+                .all(|span| span.complete_ns.unwrap() <= all)
+        );
+        // Failed fetch: ranking never started and the payload release is unreached.
+        assert_eq!(
+            (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
+            (None, None, None)
+        );
+        fixture.finish();
     }
 
     #[tokio::test]

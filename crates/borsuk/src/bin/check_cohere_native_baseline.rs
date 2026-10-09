@@ -2,7 +2,7 @@
 use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
-    sq8_s3_range::{NativeTransportStats, OneAttemptS3, Sq8ReadStats},
+    sq8_s3_range::{NativeTransportStats, OneAttemptS3, Sq8RangeTrace, Sq8ReadStats},
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
         TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     error::Error,
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -39,9 +40,23 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-// v3 adds the required explicit `serving` mode; v2 and older configs refuse.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v3";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v3";
+// v4 adds the required explicit `execution` (full or diagnostic panel); v3 and older refuse.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v4";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v4";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v1";
+// Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
+// below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
+const PANEL_MAX_ORDINALS: usize = 128;
+const PANEL_LINE_CAP: usize = 65_536;
+const PANEL_ERROR_CHARS: usize = 2048;
+// Per active query: range trace, host snapshot buffers and serialization together.
+const DIAGNOSTIC_CAP: usize = 1 << 20;
+const HOST_READ_CAP: usize = 128 * 1024;
+const HOST_JSON_BYTES: usize = 8 * 1024;
+// A failed diagnostic query also materializes one JSON tree of its diagnostic object.
+const FAILURE_VALUE_BYTES: usize = 256 * 1024;
+const BASELINE_QUERY_GETS: usize = 32;
+const BASELINE_SOURCE_GETS: usize = 128;
 // One 256-row SQ8 page at the fixed D1024 width, for reporting covered/bridge pages.
 const SQ8_PAGE_BYTES: usize = 256 * (D + 12);
 
@@ -70,6 +85,26 @@ impl Serving {
                 max_sq8_gets,
             }),
         }
+    }
+}
+
+/// Which queries run. Required in every config: there is no default.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+enum Execution {
+    /// All `count` original ordinals: the population run.
+    Full {},
+    /// Diagnostic only: exactly these original ordinals, once each, sorted and unique.
+    /// Never population percentiles and never full-cohort qualification. `trace` turns on
+    /// the opt-in SQ8 range diagnostics and the outside-the-window host counter snapshots.
+    DiagnosticPanel { ordinals: Vec<usize>, trace: bool },
+}
+impl Execution {
+    fn panel(&self) -> bool {
+        matches!(self, Self::DiagnosticPanel { .. })
+    }
+    fn trace(&self) -> bool {
+        matches!(self, Self::DiagnosticPanel { trace: true, .. })
     }
 }
 
@@ -209,6 +244,20 @@ struct Config {
     #[serde(default = "default_fetch_parallelism")]
     fetch_parallelism: usize,
     serving: Serving,
+    execution: Execution,
+}
+fn selected_len(c: &Config) -> usize {
+    match &c.execution {
+        Execution::Full {} => c.count,
+        Execution::DiagnosticPanel { ordinals, .. } => ordinals.len(),
+    }
+}
+// The ORIGINAL ordinal of the `slot`-th executed query; request and truth rows are indexed by it.
+fn ordinal_at(c: &Config, slot: usize) -> usize {
+    match &c.execution {
+        Execution::Full {} => slot,
+        Execution::DiagnosticPanel { ordinals, .. } => ordinals[slot],
+    }
 }
 
 fn default_fetch_parallelism() -> usize {
@@ -368,8 +417,16 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     )?;
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v3; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v4; older formats refuse",
     )?;
+    if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
+        require(
+            (1..=PANEL_MAX_ORDINALS).contains(&ordinals.len())
+                && ordinals.windows(2).all(|pair| pair[0] < pair[1])
+                && ordinals.last().is_some_and(|last| *last < c.count),
+            "diagnostic panel needs 1..=128 sorted unique original ordinals below count",
+        )?;
+    }
     if let Some(direct) = c.serving.direct() {
         // Sanity bounds only; the library admits the real envelope (modeled memory and
         // the planned cover) before any query allocation or I/O.
@@ -663,6 +720,10 @@ fn caller_bytes(c: &Config) -> usize {
             .map(|p| p.capacity())
             .sum::<usize>()
         + 2 * backend
+        + match &c.execution {
+            Execution::Full {} => 0,
+            Execution::DiagnosticPanel { ordinals, .. } => ordinals.capacity() * size_of::<usize>(),
+        }
         + size_of::<Reader>();
     // Returned trace/result remain caller-owned while streaming, then drop before the next query.
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
@@ -686,18 +747,107 @@ fn caller_bytes(c: &Config) -> usize {
     };
     descriptors + transport + size_of::<Progress>() + 5 * CONFIG_CAP + BLOCK + query.max(reduction)
 }
+const ACTIVE_QUERIES: usize = 1;
+// SQ8 ranges one traced query can plan: the baseline SQ8 cap or the explicit direct cap.
+fn trace_ranges(c: &Config) -> usize {
+    c.serving
+        .direct()
+        .map_or(BASELINE_QUERY_GETS, |direct| direct.max_sq8_gets)
+}
+// Most range futures any phase of a query can plan; baseline SOURCE batches are the largest.
+fn plan_ranges(c: &Config) -> usize {
+    c.serving
+        .direct()
+        .map_or(BASELINE_SOURCE_GETS.max(BASELINE_QUERY_GETS), |direct| {
+            direct.max_sq8_gets
+        })
+}
+// Bytes one active diagnostic query holds on top of the production model, charged before
+// any query payload opens: bounded line scratch and its coexisting record tree for every
+// panel; for trace additionally the range trace with its pending-future, outcome and
+// completed-probe state, both host snapshots with the bounded /proc read buffer, the host
+// delta map, and the one JSON tree a failed query builds of its diagnostic object.
+fn diagnostic_bytes(c: &Config) -> Result<usize> {
+    let bytes = match &c.execution {
+        Execution::Full {} => return Ok(0),
+        Execution::DiagnosticPanel { trace, .. } => {
+            let lines = 2 * PANEL_LINE_CAP;
+            if *trace {
+                lines
+                    + trace_peak_bytes(c)
+                    + size_of::<HostSampler>()
+                    + HOST_READ_CAP
+                    + 1
+                    + HOST_JSON_BYTES
+                    + FAILURE_VALUE_BYTES
+            } else {
+                lines
+            }
+        }
+    };
+    require(
+        bytes <= DIAGNOSTIC_CAP,
+        "diagnostic budget exceeds 1 MiB per active query",
+    )?;
+    Ok(bytes)
+}
+// The trace's cumulative peak (zero with trace off). The library charges exactly this when a
+// traced query is admitted, before its slot or any GET, so the runner must not pin it too.
+fn trace_peak_bytes(c: &Config) -> usize {
+    if c.execution.trace() {
+        Sq8RangeTrace::modeled_bytes(trace_ranges(c), c.fetch_parallelism)
+    } else {
+        0
+    }
+}
+// Every diagnostic byte the runner itself holds: `diagnostic_bytes` minus the trace peak.
+fn diagnostic_pinned_bytes(c: &Config) -> Result<usize> {
+    Ok(diagnostic_bytes(c)? - trace_peak_bytes(c))
+}
+// Range-drain state (pending futures, executor nodes, outcomes) the runner pins before the
+// generation opens. Tracing off: the whole worst-case phase. Tracing on: the library's trace
+// reservation already contains this state for the SQ8 phase (`trace_ranges`), and the SOURCE
+// and SQ8 phases never coexist (SOURCE bodies are released before the SQ8 wave starts), so
+// the peak is max(SOURCE, SQ8) = `plan_ranges` and only the excess of the larger phase over
+// the SQ8 share is pinned here. `pending_futures_bytes` is monotone in the range count and
+// `trace_ranges <= plan_ranges` (32 <= 128 baseline, equal direct), so the excess is exact:
+// pinned + library share = pending(plan_ranges), counted once.
+fn ordinary_range_state_pinned(c: &Config) -> usize {
+    let plan = Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism);
+    if c.execution.trace() {
+        plan.saturating_sub(Sq8RangeTrace::pending_futures_bytes(
+            trace_ranges(c),
+            c.fetch_parallelism,
+        ))
+    } else {
+        plan
+    }
+}
+// What a full (uninstrumented) run pins: the production model plus the worst-case range state.
+fn uninstrumented_pinned_bytes(c: &Config) -> u64 {
+    (caller_bytes(c) + Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism))
+        as u64
+}
+// The production model plus the range state above, then the runner's own diagnostic bytes, all
+// multiplied across admitted active queries. The trace's reservation is NOT here: the library
+// charges it once at traced admission, so the complete figure (`diagnostic_bytes`, checked
+// against 1 MiB) is charged in non-overlapping parts.
+fn pinned_bytes(c: &Config) -> Result<u64> {
+    let ordinary = caller_bytes(c) + ordinary_range_state_pinned(c);
+    Ok(ordinary as u64 + (diagnostic_pinned_bytes(c)? as u64) * ACTIVE_QUERIES as u64)
+}
 fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
         max_memory_bytes: MEMORY_CAP,
-        max_active_queries: 1,
+        max_active_queries: ACTIVE_QUERIES,
         max_query_bytes: 16_773_120,
-        max_query_gets: 32,
+        max_query_gets: BASELINE_QUERY_GETS,
         max_parallel_gets: c.fetch_parallelism,
         max_source_bytes: 64 * 1024 * 1024,
-        max_source_gets: 128,
+        max_source_gets: BASELINE_SOURCE_GETS,
         max_parallel_source_gets: c.fetch_parallelism,
         max_query_scratch_bytes: scratch_bytes(c.rows)?,
-        already_pinned_bytes: caller_bytes(c) as u64,
+        already_pinned_bytes: pinned_bytes(c)?,
     })
 }
 fn cpu_ns() -> i128 {
@@ -731,6 +881,334 @@ fn peak_bytes() -> Option<u64> {
         })
 }
 
+// ===== Opt-in host counters: bounded, named, read OUTSIDE the timed query window =====
+// Host-wide kernel counters, not per-S3-flow or per-connection evidence. A counter that is
+// missing, unreadable or that moved backwards is reported as null, never as zero.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HostSource {
+    NetStat,
+    Snmp,
+    ProcStat,
+    ThreadSchedstat,
+    ThreadStatus,
+    SelfStat,
+}
+const HOST_SOURCES: [HostSource; 6] = [
+    HostSource::NetStat,
+    HostSource::Snmp,
+    HostSource::ProcStat,
+    HostSource::ThreadSchedstat,
+    HostSource::ThreadStatus,
+    HostSource::SelfStat,
+];
+impl HostSource {
+    fn file(self) -> &'static str {
+        match self {
+            Self::NetStat => "net/netstat",
+            Self::Snmp => "net/snmp",
+            Self::ProcStat => "stat",
+            Self::ThreadSchedstat => "thread-self/schedstat",
+            Self::ThreadStatus => "thread-self/status",
+            Self::SelfStat => "self/stat",
+        }
+    }
+    fn value(self, text: &str, key: &str) -> Option<u64> {
+        match self {
+            Self::NetStat => paired_counter(text, "TcpExt", key),
+            Self::Snmp => paired_counter(text, "Tcp", key),
+            Self::ProcStat => {
+                let (label, field) = key.split_once('.')?;
+                stat_counter(text, label, field)
+            }
+            Self::ThreadSchedstat => schedstat_counter(text, key),
+            Self::ThreadStatus => status_counter(text, key),
+            Self::SelfStat => self_stat_counter(text, key),
+        }
+    }
+}
+// (reported name, source file, key within it). Gauges such as CurrEstab are excluded.
+macro_rules! counter {
+    (netstat $key:literal) => {
+        (concat!("TcpExt.", $key), HostSource::NetStat, $key)
+    };
+    (snmp $key:literal) => {
+        (concat!("Tcp.", $key), HostSource::Snmp, $key)
+    };
+}
+const HOST_COUNTERS: &[(&str, HostSource, &str)] = &[
+    counter!(netstat "TCPTimeouts"),
+    counter!(netstat "TCPLossProbes"),
+    counter!(netstat "TCPFastRetrans"),
+    counter!(netstat "TCPSlowStartRetrans"),
+    counter!(netstat "TCPLostRetransmit"),
+    counter!(netstat "TCPSpuriousRTOs"),
+    counter!(netstat "TCPSynRetrans"),
+    counter!(netstat "TCPRetransFail"),
+    counter!(netstat "TCPOFOQueue"),
+    counter!(netstat "TCPOFODrop"),
+    counter!(netstat "TCPOFOMerge"),
+    counter!(netstat "TCPDSACKOldSent"),
+    counter!(netstat "TCPDSACKOfoSent"),
+    counter!(netstat "TCPDSACKRecv"),
+    counter!(netstat "TCPToZeroWindowAdv"),
+    counter!(netstat "TCPWantZeroWindowAdv"),
+    counter!(netstat "TCPFromZeroWindowAdv"),
+    counter!(netstat "TCPZeroWindowDrop"),
+    counter!(netstat "TCPRcvQDrop"),
+    counter!(netstat "TCPBacklogDrop"),
+    counter!(netstat "TCPRcvCollapsed"),
+    counter!(netstat "RcvPruned"),
+    counter!(netstat "OfoPruned"),
+    counter!(netstat "PruneCalled"),
+    counter!(snmp "ActiveOpens"),
+    counter!(snmp "PassiveOpens"),
+    counter!(snmp "AttemptFails"),
+    counter!(snmp "EstabResets"),
+    counter!(snmp "InSegs"),
+    counter!(snmp "OutSegs"),
+    counter!(snmp "RetransSegs"),
+    counter!(snmp "InErrs"),
+    counter!(snmp "OutRsts"),
+    ("cpu0.user_ticks", HostSource::ProcStat, "cpu0.user"),
+    ("cpu0.system_ticks", HostSource::ProcStat, "cpu0.system"),
+    ("cpu0.irq_ticks", HostSource::ProcStat, "cpu0.irq"),
+    ("cpu0.softirq_ticks", HostSource::ProcStat, "cpu0.softirq"),
+    ("cpu0.steal_ticks", HostSource::ProcStat, "cpu0.steal"),
+    ("cpu.irq_ticks", HostSource::ProcStat, "cpu.irq"),
+    ("cpu.softirq_ticks", HostSource::ProcStat, "cpu.softirq"),
+    ("cpu.steal_ticks", HostSource::ProcStat, "cpu.steal"),
+    ("thread.sched_run_ns", HostSource::ThreadSchedstat, "run_ns"),
+    (
+        "thread.sched_wait_ns",
+        HostSource::ThreadSchedstat,
+        "wait_ns",
+    ),
+    (
+        "thread.sched_timeslices",
+        HostSource::ThreadSchedstat,
+        "timeslices",
+    ),
+    (
+        "thread.voluntary_ctxt_switches",
+        HostSource::ThreadStatus,
+        "voluntary_ctxt_switches",
+    ),
+    (
+        "thread.nonvoluntary_ctxt_switches",
+        HostSource::ThreadStatus,
+        "nonvoluntary_ctxt_switches",
+    ),
+    ("process.minor_faults", HostSource::SelfStat, "minflt"),
+    ("process.major_faults", HostSource::SelfStat, "majflt"),
+];
+// Linux "Prefix: names..." header line followed by its "Prefix: values..." line.
+fn paired_counter(text: &str, prefix: &str, key: &str) -> Option<u64> {
+    let mut lines = text.lines();
+    while let Some(header) = lines.next() {
+        let values = lines.next()?;
+        let (name, columns) = header.split_once(':')?;
+        let (value_name, numbers) = values.split_once(':')?;
+        if name == prefix && value_name == prefix {
+            let at = columns
+                .split_whitespace()
+                .position(|column| column == key)?;
+            return numbers.split_whitespace().nth(at)?.parse().ok();
+        }
+    }
+    None
+}
+fn stat_counter(text: &str, label: &str, field: &str) -> Option<u64> {
+    const FIELDS: [&str; 8] = [
+        "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
+    ];
+    let at = FIELDS.iter().position(|name| *name == field)?;
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        if words.next()? != label {
+            return None;
+        }
+        words.nth(at)?.parse().ok()
+    })
+}
+fn schedstat_counter(text: &str, key: &str) -> Option<u64> {
+    let at = ["run_ns", "wait_ns", "timeslices"]
+        .iter()
+        .position(|name| *name == key)?;
+    text.split_whitespace().nth(at)?.parse().ok()
+}
+fn status_counter(text: &str, key: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        line.strip_prefix(key)?
+            .strip_prefix(':')?
+            .trim()
+            .parse()
+            .ok()
+    })
+}
+// /proc/PID/stat: the fields after the parenthesised command start at field 3 (state).
+fn self_stat_counter(text: &str, key: &str) -> Option<u64> {
+    let at = match key {
+        "minflt" => 7,
+        "majflt" => 9,
+        _ => return None,
+    };
+    text.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(at)?
+        .parse()
+        .ok()
+}
+fn monotonic_ns() -> Option<u64> {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    u64::try_from(t.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000_000)?
+        .checked_add(u64::try_from(t.tv_nsec).ok()?)
+}
+// One bounded read into the reusable buffer; a file over the cap is unavailable, not truncated.
+fn read_bounded<'a>(path: &Path, buffer: &'a mut Vec<u8>) -> Option<&'a str> {
+    buffer.clear();
+    let file = File::open(path).ok()?;
+    Read::take(file, HOST_READ_CAP as u64 + 1)
+        .read_to_end(buffer)
+        .ok()?;
+    if buffer.len() > HOST_READ_CAP {
+        return None;
+    }
+    std::str::from_utf8(buffer).ok()
+}
+#[derive(Clone, Copy)]
+struct HostSnapshot {
+    monotonic_ns: Option<u64>,
+    values: [Option<u64>; HOST_COUNTERS.len()],
+}
+impl HostSnapshot {
+    const EMPTY: Self = Self {
+        monotonic_ns: None,
+        values: [None; HOST_COUNTERS.len()],
+    };
+}
+fn snapshot(root: &Path, buffer: &mut Vec<u8>) -> HostSnapshot {
+    let mut snapshot = HostSnapshot::EMPTY;
+    snapshot.monotonic_ns = monotonic_ns();
+    for source in HOST_SOURCES {
+        let Some(text) = read_bounded(&root.join(source.file()), buffer) else {
+            continue;
+        };
+        for (slot, counter) in HOST_COUNTERS.iter().enumerate() {
+            if counter.1 == source {
+                snapshot.values[slot] = source.value(text, counter.2);
+            }
+        }
+    }
+    snapshot
+}
+#[cfg(test)]
+thread_local! {
+    // Points the sampler at a synthetic /proc tree, so tests are deterministic and portable.
+    static PROC_ROOT: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+}
+fn proc_root() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = PROC_ROOT.with(|root| root.borrow().clone()) {
+        return root;
+    }
+    PathBuf::from("/proc")
+}
+struct HostSampler {
+    root: PathBuf,
+    buffer: Vec<u8>,
+    before: HostSnapshot,
+    after: HostSnapshot,
+}
+impl HostSampler {
+    fn new() -> Self {
+        Self {
+            root: proc_root(),
+            buffer: Vec::with_capacity(HOST_READ_CAP + 1),
+            before: HostSnapshot::EMPTY,
+            after: HostSnapshot::EMPTY,
+        }
+    }
+    fn take_before(&mut self) {
+        self.before = snapshot(&self.root, &mut self.buffer);
+    }
+    fn take_after(&mut self) {
+        self.after = snapshot(&self.root, &mut self.buffer);
+    }
+}
+#[derive(Serialize)]
+struct HostWindow {
+    scope: &'static str,
+    window: &'static str,
+    before_monotonic_ns: Option<u64>,
+    after_monotonic_ns: Option<u64>,
+    unavailable: usize,
+    deltas: BTreeMap<&'static str, Option<u64>>,
+}
+fn host_window(before: &HostSnapshot, after: &HostSnapshot) -> HostWindow {
+    let mut deltas = BTreeMap::new();
+    for (slot, counter) in HOST_COUNTERS.iter().enumerate() {
+        let delta = match (before.values[slot], after.values[slot]) {
+            (Some(b), Some(a)) if a >= b => Some(a - b),
+            _ => None,
+        };
+        deltas.insert(counter.0, delta);
+    }
+    HostWindow {
+        scope: "host_wide_counter_deltas_not_per_flow_or_per_s3_connection",
+        window: "between_untimed_snapshots_that_bracket_the_query_and_include_runner_bookkeeping",
+        before_monotonic_ns: before.monotonic_ns,
+        after_monotonic_ns: after.monotonic_ns,
+        unavailable: deltas.values().filter(|delta| delta.is_none()).count(),
+        deltas,
+    }
+}
+
+/// Opt-in per-query diagnostics, allocated once after admission and before any payload opens.
+struct Diag {
+    trace: Sq8RangeTrace,
+    sampler: HostSampler,
+}
+#[derive(Clone, Copy)]
+struct Anchors {
+    monotonic_start_ns: Option<u64>,
+    monotonic_end_ns: Option<u64>,
+    process_cpu_start_ns: i128,
+    process_cpu_end_ns: i128,
+}
+/// The one new field on query records: existing returned/charges/plan/trace fields are untouched.
+#[derive(Serialize)]
+struct QueryDiagnostic<'a> {
+    schema: &'static str,
+    query_monotonic_start_ns: Option<u64>,
+    query_monotonic_end_ns: Option<u64>,
+    process_cpu_start_ns: i128,
+    process_cpu_end_ns: i128,
+    sq8_range_trace: &'a Sq8RangeTrace,
+    host: HostWindow,
+}
+impl Diag {
+    fn new(c: &Config) -> Result<Self> {
+        Ok(Self {
+            trace: Sq8RangeTrace::new(trace_ranges(c))?,
+            sampler: HostSampler::new(),
+        })
+    }
+    fn query(&self, anchors: &Anchors) -> QueryDiagnostic<'_> {
+        QueryDiagnostic {
+            schema: DIAGNOSTIC_SCHEMA,
+            query_monotonic_start_ns: anchors.monotonic_start_ns,
+            query_monotonic_end_ns: anchors.monotonic_end_ns,
+            process_cpu_start_ns: anchors.process_cpu_start_ns,
+            process_cpu_end_ns: anchors.process_cpu_end_ns,
+            sq8_range_trace: &self.trace,
+            host: host_window(&self.sampler.before, &self.sampler.after),
+        }
+    }
+}
+
 struct Output {
     file: File,
     directory: File,
@@ -739,6 +1217,12 @@ struct Output {
     bytes: u64,
     line_bytes: usize,
     cap: u64,
+    // Diagnostic panels only: every line is serialized whole into this preallocated buffer and
+    // admitted below `panel_cap` before any byte is published.
+    panel: Option<Vec<u8>>,
+    panel_cap: usize,
+    #[cfg(test)]
+    panel_query_cap: Option<usize>,
     #[cfg(test)]
     directory_synced: bool,
     #[cfg(test)]
@@ -790,6 +1274,10 @@ impl Output {
             bytes: 0,
             line_bytes: 0,
             cap: OUTPUT_CAP - TERMINAL_RESERVE,
+            panel: None,
+            panel_cap: PANEL_LINE_CAP,
+            #[cfg(test)]
+            panel_query_cap: None,
             #[cfg(test)]
             directory_synced: false,
             #[cfg(test)]
@@ -798,12 +1286,96 @@ impl Output {
     }
     fn emit(&mut self, value: &impl Serialize) -> Result<()> {
         self.line_bytes = 0;
+        if let Some(mut line) = self.panel.take() {
+            let admitted = bounded_line(&mut line, value, self.panel_cap);
+            let written = admitted.and_then(|()| self.write_all(&line).map_err(Into::into));
+            self.panel = Some(line);
+            return written;
+        }
         serde_json::to_writer(&mut *self, value)?;
         self.write_all(b"\n")?;
         Ok(())
     }
+    // Keeps a smaller cap already installed (tests); otherwise allocates the one buffer.
+    fn admit_panel_lines(&mut self, cap: usize) {
+        if self.panel.is_none() {
+            self.panel = Some(Vec::with_capacity(cap));
+            self.panel_cap = cap;
+        }
+    }
     fn sha(&self) -> String {
         format!("{:x}", self.digest.clone().finalize())
+    }
+}
+/// A diagnostic-panel line whose serialization, newline included, would exceed the cap.
+#[derive(Debug)]
+struct LineCap(usize);
+impl std::fmt::Display for LineCap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "diagnostic panel serialized line exceeds {} bytes",
+            self.0
+        )
+    }
+}
+impl Error for LineCap {}
+// Writer that never grows its Vec past the cap and records that it was asked to.
+struct Capped<'a> {
+    line: &'a mut Vec<u8>,
+    cap: usize,
+    exceeded: &'a mut bool,
+}
+impl Write for Capped<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.cap.saturating_sub(self.line.len()) {
+            *self.exceeded = true;
+            return Err(io::Error::other("diagnostic panel serialized line cap"));
+        }
+        self.line.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+// Serializes `value` plus its newline into `line` iff the whole line is at most `cap` bytes.
+// The buffer is cleared first and is never grown; nothing is published here.
+fn bounded_line(line: &mut Vec<u8>, value: &impl Serialize, cap: usize) -> Result<()> {
+    line.clear();
+    let mut exceeded = false;
+    let written = serde_json::to_writer(
+        Capped {
+            line: &mut *line,
+            cap,
+            exceeded: &mut exceeded,
+        },
+        value,
+    );
+    if exceeded || (written.is_ok() && line.len() >= cap) {
+        return Err(LineCap(cap).into());
+    }
+    written?;
+    line.push(b'\n');
+    Ok(())
+}
+fn bounded_text(text: &str) -> String {
+    text.chars().take(PANEL_ERROR_CHARS).collect()
+}
+// A failed diagnostic query keeps its original error: if its diagnostic object overflows the
+// panel line cap, the same failure is published with the object replaced by an explicit marker.
+fn emit_failure(out: &mut Output, mut record: Value, diagnostic: Option<Value>) -> Result<()> {
+    let Some(diagnostic) = diagnostic else {
+        return out.emit(&record);
+    };
+    record["diagnostic"] = diagnostic;
+    match out.emit(&record) {
+        Err(e) if e.downcast_ref::<LineCap>().is_some() => {
+            record["diagnostic"] =
+                json!({"omitted":"serialized_line_cap","cap_bytes":out.panel_cap});
+            out.emit(&record)
+        }
+        other => other,
     }
 }
 struct Seal {
@@ -955,17 +1527,19 @@ impl Default for Progress {
     }
 }
 fn seal(c: &Config, out: &mut Output, p: &mut Progress, requests: FileIdentity) -> Result<Seal> {
-    require(p.completed == c.count, "cannot seal incomplete query panel")?;
+    require(
+        p.completed == selected_len(c),
+        "cannot seal incomplete query panel",
+    )?;
     p.stage = "seal";
     out.file.sync_all()?;
     let prefix_bytes = out.bytes;
     let prefix_sha256 = out.sha();
-    out.emit(
-        &json!({"phase":"all_queries_sealed","count":p.completed,"truth_opened":false,
+    out.emit(&json!({"phase":"all_queries_sealed","count":p.completed,
+        "selected_count":selected_len(c),"population_count":c.count,"truth_opened":false,
         "prefix_bytes":prefix_bytes,"prefix_sha256":prefix_sha256,
         "requests_sha256":c.requests.sha256,"generation_root_sha256":c.generation_root_sha256,
-        "requires_successful_sync":true,"requires_successful_directory_sync":true}),
-    )?;
+        "requires_successful_sync":true,"requires_successful_directory_sync":true}))?;
     out.file.sync_all()?;
     p.stage = "seal_directory_sync";
     require(
@@ -1011,13 +1585,54 @@ async fn query_and_seal_with(
     reader: impl FnOnce() -> Result<Reader>,
 ) -> Result<Seal> {
     validate_config(c, shape)?;
+    if c.execution.panel() {
+        out.admit_panel_lines(PANEL_LINE_CAP);
+    }
     p.stage = "requests";
     let (requests, request_identity) = checked(&c.requests, c.count * D * 4)?;
-    // Authenticate and validate ALL rows before issuing even the first query.
+    // Authenticate and validate ALL original rows, selected or not, before any heavy open.
     for ordinal in 0..c.count {
         request_row(&requests, ordinal).map_err(|e| format!("request {ordinal}: {e}"))?;
     }
     let admission = limits(c)?;
+    let mut diag = if c.execution.trace() {
+        Some(Diag::new(c)?)
+    } else {
+        None
+    };
+    if c.execution.panel() {
+        let bytes = diagnostic_bytes(c)?;
+        let mut admission_record = json!({"phase":"diagnostic_admission","execution":c.execution,
+            "selected_count":selected_len(c),"population_count":c.count,
+            "trace":c.execution.trace(),"diagnostic_bytes_per_active_query":bytes,
+            "diagnostic_cap_bytes":DIAGNOSTIC_CAP,"max_active_queries":admission.max_active_queries,
+            "charged_in_caller_pinned_bytes":true,"caller_pinned_bytes":admission.already_pinned_bytes,
+            "panel_line_cap_bytes":out.panel_cap,"host_read_cap_bytes":HOST_READ_CAP,
+            "trace_ranges":trace_ranges(c),
+            "population_percentiles_valid":false,"full_cohort_qualification":false,
+            "semantics":{
+                "headers_interval":"get_opts_client_queue_connect_tls_server_combined",
+                "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
+                "ranges":"overlap_in_time_never_sum_intervals",
+                "host_counters":"host_wide_not_per_flow_null_means_unavailable",
+                "unset":"a boundary never reached is null, never a fabricated timestamp"},
+            "truth_opened":false});
+        // Three different figures, never interchangeable: what the trace RETAINS between queries,
+        // the cumulative PEAK while one drains, and the range state both modes carry.
+        let traced = c.execution.trace().then(|| trace_ranges(c));
+        admission_record["trace_retained_bytes"] = json!(traced.map(Sq8RangeTrace::retained_bytes));
+        admission_record["trace_peak_bytes"] =
+            json!(traced.map(|n| Sq8RangeTrace::modeled_bytes(n, c.fetch_parallelism)));
+        admission_record["diagnostic_pinned_bytes"] = json!(diagnostic_pinned_bytes(c)?);
+        admission_record["trace_peak_charged_by_library_at_traced_admission"] =
+            json!(c.execution.trace());
+        admission_record["range_state_pinned_by_runner_bytes"] =
+            json!(ordinary_range_state_pinned(c));
+        admission_record["range_state_both_paths_bytes"] = json!(
+            Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism)
+        );
+        out.emit(&admission_record)?;
+    }
     p.stage = "backend";
     let reader = reader()?;
     let store = reader.store();
@@ -1062,44 +1677,98 @@ async fn query_and_seal_with(
         // whole (no SOURCE credit) and a full direct query budget is added.
         p.stage = "direct_admission";
         let memory = generation.direct_closure_memory(direct)?;
-        let admitted = memory.total_bytes <= memory.cap_bytes;
+        // Two totals. The ALGORITHM total is what this configuration would model with no
+        // instrumentation at all (what a full run pins); only it can be a RESOURCE_REJECT.
+        // The COMPLETE total is what the first query will be admitted against: the model as
+        // pinned plus the library-owned trace reservation it adds at traced admission. A cap
+        // exceeded only by the complete total is a diagnostic error (INVALID) found here,
+        // before any payload opens, never a rejection of the candidate.
+        let diagnostic_pinned = diagnostic_pinned_bytes(c)? as u64 * ACTIVE_QUERIES as u64;
+        let library_trace = trace_peak_bytes(c) as u64 * ACTIVE_QUERIES as u64;
+        let algorithm_total = memory
+            .total_bytes
+            .saturating_sub(admission.already_pinned_bytes)
+            .saturating_add(uninstrumented_pinned_bytes(c));
+        let complete_total = memory.total_bytes.saturating_add(library_trace);
+        let admitted = complete_total <= memory.cap_bytes;
         out.emit(
             &json!({"phase":"direct_admission","limits":c.serving,"memory":memory,
-            "admitted":admitted,"truth_opened":false}),
+            "admitted":admitted,"algorithm_total_bytes":algorithm_total,
+            "complete_total_bytes":complete_total,"library_trace_reservation_bytes":library_trace,
+            "diagnostic_pinned_bytes":diagnostic_pinned,"truth_opened":false}),
         )?;
         p.direct_memory = Some(memory);
-        if !admitted {
+        if algorithm_total > memory.cap_bytes {
             return Err(ResourceReject {
                 reason: DirectClosureRejection::ModeledMemory,
                 message: format!(
                     "modeled {} bytes exceed the {} byte cap before any query",
-                    memory.total_bytes, memory.cap_bytes
+                    algorithm_total, memory.cap_bytes
                 ),
             }
             .into());
         }
+        require(
+            admitted,
+            "diagnostic memory: the algorithm model fits the cap but the instrumented total does not",
+        )?;
     }
-    for ordinal in 0..c.count {
+    for slot in 0..selected_len(c) {
+        // The ORIGINAL ordinal indexes the request row here and the truth row later.
+        let ordinal = ordinal_at(c, slot);
         p.stage = "query";
         let query = request_row(&requests, ordinal)?;
+        // Host counters are read outside the timed window, before and after it. The trace is
+        // cleared here too, so a query refused before it starts can never show a stale one.
+        if let Some(diag) = diag.as_mut() {
+            diag.sampler.take_before();
+            diag.trace.begin(Instant::now());
+        }
         p.transport.begin(&reader, p.stage, Some(ordinal));
+        let monotonic_start = diag.as_ref().and_then(|_| monotonic_ns());
         let wall = Instant::now();
         let cpu = cpu_ns();
-        let result = match c.serving.direct() {
-            None => {
+        let result = match (c.serving.direct(), diag.as_mut()) {
+            (None, None) => {
                 generation
                     .diagnostic_search_with_store(store, &query, K)
                     .await
             }
-            Some(direct) => {
+            (None, Some(diag)) => {
+                generation
+                    .diagnostic_search_with_store_traced(store, &query, K, &mut diag.trace)
+                    .await
+            }
+            (Some(direct), None) => {
                 generation
                     .diagnostic_direct_closure_search_with_store(store, &query, K, direct)
+                    .await
+            }
+            (Some(direct), Some(diag)) => {
+                generation
+                    .diagnostic_direct_closure_search_with_store_traced(
+                        store,
+                        &query,
+                        K,
+                        direct,
+                        &mut diag.trace,
+                    )
                     .await
             }
         };
         let wall_ns = wall.elapsed().as_nanos();
         let cpu_ns = cpu_ns() - cpu;
+        let monotonic_end = diag.as_ref().and_then(|_| monotonic_ns());
         p.transport.finish(&reader);
+        if let Some(diag) = diag.as_mut() {
+            diag.sampler.take_after();
+        }
+        let anchors = Anchors {
+            monotonic_start_ns: monotonic_start,
+            monotonic_end_ns: monotonic_end,
+            process_cpu_start_ns: cpu,
+            process_cpu_end_ns: cpu + cpu_ns,
+        };
         p.query_wall_ns += wall_ns;
         p.query_cpu_ns += cpu_ns;
         let (result, trace) = match result {
@@ -1108,13 +1777,22 @@ async fn query_and_seal_with(
                 let (source, sq8) = e.read_stats();
                 p.charges.add(e.router_stats(), source, sq8)?;
                 let rejection = e.direct_resource_rejection();
-                out.emit(
-                    &json!({"phase":"query_failure","ordinal":ordinal,"error":e.to_string(),
+                // A panel bounds the error text it publishes; full execution keeps the whole text.
+                let error_text = if c.execution.panel() {
+                    bounded_text(&e.to_string())
+                } else {
+                    e.to_string()
+                };
+                let failure = json!({"phase":"query_failure","ordinal":ordinal,"error":error_text,
                     "resource_rejection":rejection,
                     "charges_so_far":p.charges,"sum_so_far":p.charges.sum(),"stages":e.stages(),
                     "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false,
-                    "transport":p.transport}),
-                )?;
+                    "transport":p.transport});
+                let diagnostic = diag
+                    .as_ref()
+                    .map(|diag| serde_json::to_value(diag.query(&anchors)))
+                    .transpose()?;
+                emit_failure(out, failure, diagnostic)?;
                 let message = format!("native query {ordinal}: {e}");
                 return Err(match rejection {
                     Some(reason) => ResourceReject { reason, message }.into(),
@@ -1215,10 +1893,20 @@ async fn query_and_seal_with(
             query_process_cpu_ns: i128,
             trace: &'a TwoBitPlanTrace,
             transport: &'a TransportSpan,
+            // Panels only: where this ordinal sits in the executed sequence.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            selected_slot: Option<usize>,
+            // Opt-in range/host diagnostics live here and nowhere in the fields above.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            diagnostic: Option<QueryDiagnostic<'a>>,
         }
         #[cfg(test)]
         if out.fail_query_output {
             out.cap = out.bytes + 17; // Leave an actual partial query record.
+        }
+        #[cfg(test)]
+        if let Some(cap) = out.panel_query_cap {
+            out.panel_cap = cap; // Only query records and later lines meet the smaller cap.
         }
         out.emit(&Record {
             phase: "query",
@@ -1242,6 +1930,8 @@ async fn query_and_seal_with(
             query_process_cpu_ns: cpu_ns,
             trace: &trace,
             transport: &p.transport,
+            selected_slot: c.execution.panel().then_some(slot),
+            diagnostic: diag.as_ref().map(|diag| diag.query(&anchors)),
         })?;
         p.completed += 1;
         p.underfilled += usize::from(underfill);
@@ -1298,8 +1988,9 @@ fn truth_row(body: &[u8], ordinal: usize, rows: usize) -> Result<[u64; K]> {
     Ok(ids)
 }
 fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result<Value> {
+    let selected = selected_len(c);
     require(
-        p.sealed && p.completed == c.count,
+        p.sealed && p.completed == selected,
         "reduction requires complete durable seal",
     )?;
     p.stage = "reauthentication";
@@ -1344,8 +2035,9 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         if row.phase != "query" {
             continue;
         }
+        let ordinal = (queries < selected).then(|| ordinal_at(c, queries));
         require(
-            queries < c.count && row.ordinal == Some(queries) && row.truth_opened == Some(false),
+            ordinal.is_some() && row.ordinal == ordinal && row.truth_opened == Some(false),
             "sealed query sequence/truth boundary",
         )?;
         let returned = row.returned.ok_or("sealed returned IDs missing")?;
@@ -1354,21 +2046,23 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
             row.returned_count == Some(returned.len()) && row.underfill == Some(returned.len() < K),
             "sealed returned count/underfill",
         )?;
-        let truth_ids = truth_row(&truth, queries, c.rows)?;
+        let truth_ids = truth_row(&truth, ordinal_at(c, queries), c.rows)?;
         let hits = returned
             .iter()
             .filter(|h| truth_ids.contains(&h.id))
             .count();
         total_hits += hits;
-        out.emit(&json!({"phase":"recall","ordinal":queries,"hits10":hits,
+        out.emit(
+            &json!({"phase":"recall","ordinal":ordinal_at(c, queries),"hits10":hits,
             "recall10":hits as f64 / K as f64,"returned_count":returned.len(),
-            "underfill":returned.len() < K}))?;
+            "underfill":returned.len() < K}),
+        )?;
         queries += 1;
     }
     require(
         consumed == seal.prefix_bytes
             && format!("{:x}", digest.finalize()) == seal.prefix_sha256
-            && queries == c.count,
+            && queries == selected,
         "reduction complete bound prefix",
     )?;
     // A replaced path must not detach the published result from the descriptor we wrote.
@@ -1382,10 +2076,9 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         current_id.dev == seal.file.dev && current_id.ino == seal.file.ino,
         "output path replaced during reduction",
     )?;
-    Ok(
-        json!({"status":"MEASURED","complete":true,"queries":queries,"k":K,
-        "total_hits10":total_hits,"recall_numerator":total_hits,"recall_denominator":c.count * K,
-        "mean_recall10":total_hits as f64 / (c.count * K) as f64,"underfilled_queries":p.underfilled,
+    let mut summary = json!({"status":"MEASURED","complete":true,"queries":queries,"k":K,
+        "total_hits10":total_hits,"recall_numerator":total_hits,"recall_denominator":selected * K,
+        "mean_recall10":total_hits as f64 / (selected * K) as f64,"underfilled_queries":p.underfilled,
         "all_queries_sealed":true,"prefix_bytes":seal.prefix_bytes,"prefix_sha256":seal.prefix_sha256,
         "sealed_bytes":seal.sealed_bytes,"sealed_sha256":seal.sealed_sha256,
         "requests_sha256":c.requests.sha256,"truth_sha256":c.truth.sha256,
@@ -1393,8 +2086,23 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         "binding_charge":p.binding_charge,
         "serving":c.serving,"direct_memory":p.direct_memory,
         "query_wall_ns":p.query_wall_ns,"query_process_cpu_ns":p.query_cpu_ns,
-        "physical_s3_measured":false,"external_gate_required":true}),
-    )
+        "physical_s3_measured":false,"external_gate_required":true});
+    // Added after the literal: json! recursion depth grows with the entry count.
+    summary["execution"] = json!(c.execution);
+    summary["selected_count"] = json!(selected);
+    summary["executed_count"] = json!(queries);
+    summary["population_count"] = json!(c.count);
+    summary["diagnostic_panel"] = json!(c.execution.panel());
+    if c.execution.panel() {
+        // A panel measures the selected ordinals only: its denominators and any percentile
+        // over it describe that enriched selection, never the population.
+        summary["population_percentiles_valid"] = json!(false);
+        summary["full_cohort_qualification"] = json!(false);
+        summary["scope_note"] = json!(
+            "diagnostic panel of the selected original ordinals; not population p99, population recall or full-cohort qualification"
+        );
+    }
+    Ok(summary)
 }
 // Test-only conveniences over `execute_paths_status`, which `main` calls directly.
 #[cfg(test)]
@@ -1447,7 +2155,7 @@ fn execute_paths_status(
     let cpu = cpu_ns();
     let result = (|| -> Result<Value> {
         let configured = config(config_path, config_sha, shape);
-        out.emit(&json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
+        let mut identity = json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
             "serving":configured.as_ref().ok().map(|c| c.serving),
             "binary_sha256":executable_sha()?,"runner_source_sha256":hash(include_bytes!("check_cohere_native_baseline.rs")),
@@ -1460,9 +2168,14 @@ fn execute_paths_status(
             "s3_credential_source":"imds_instance_role_only",
             "native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
-            "external_gate_required":true,"truth_opened":false}))?;
+            "external_gate_required":true,"truth_opened":false});
+        // Added after the literal: json! recursion depth grows with the entry count.
+        identity["execution"] = json!(configured.as_ref().ok().map(|c| &c.execution));
+        identity["sq8_range_source_sha256"] = json!(hash(include_bytes!("../sq8_s3_range.rs")));
+        identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
+        out.emit(&identity)?;
         let c = configured?;
-        out.emit(&json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
+        let mut bound = json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
             "fetch_parallelism":c.fetch_parallelism,"source_cache":"off","serving":c.serving,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
@@ -1472,7 +2185,10 @@ fn execute_paths_status(
             "requests_bytes":c.requests.bytes,"requests_sha256":c.requests.sha256,
             "truth_bytes":c.truth.bytes,"truth_sha256":c.truth.sha256,
             "native_source_sha256":c.native_source.source_sha256,"native_sq8_sha256":c.native_source.sq8_sha256,
-            "native_order_sha256":c.native_source.source_order_sha256,"truth_opened":false}))?;
+            "native_order_sha256":c.native_source.source_order_sha256,"truth_opened":false});
+        bound["execution"] = json!(c.execution);
+        bound["selected_count"] = json!(selected_len(&c));
+        out.emit(&bound)?;
         let seal = query(&c, shape, &mut out, &mut p)?;
         let summary = reduce(&c, &mut out, &seal, &mut p)?;
         p.stage = "reduction_sync";
@@ -1583,7 +2299,7 @@ mod tests {
             "truth":{"path":dir.join("truth.u64"),"bytes":shape.count*K*8,"sha256":"c".repeat(64)},
             "native_source":{"source_sha256":"d".repeat(64),"sq8_sha256":"e".repeat(64),
                 "source_order_sha256":"f".repeat(64)},"max_memory_bytes":MEMORY_CAP,
-            "serving":{"mode":"baseline"}})
+            "serving":{"mode":"baseline"},"execution":{"mode":"full"}})
     }
     fn write_config(dir: &Path, value: &Value) -> (PathBuf, String) {
         let path = dir.join("config.json");
@@ -1740,18 +2456,20 @@ mod tests {
         c["generation_root_sha256"] = json!(root_sha);
         c["native_source"] = json!({"source_sha256":raw_sha,"sq8_sha256":sq8_sha,
             "source_order_sha256":native.source_order_sha256});
+        // Row i is a positive multiple of axis i % 2 (3 and 5 for the first two rows), so cosine
+        // truth alternates between the two independent TRUTH_IDS rows however many rows exist.
         let mut requests = Vec::new();
-        for (axis, scale) in [(0, 3_f32), (1, 5_f32)] {
+        for i in 0..shape.count {
             for d in 0..D {
-                requests.extend_from_slice(&(if d == axis { scale } else { 0. }).to_le_bytes());
+                let scale = (3 + 2 * i) as f32;
+                requests.extend_from_slice(&(if d == i % 2 { scale } else { 0. }).to_le_bytes());
             }
         }
         c["requests"] = artifact(&dir.path().join("requests.f32"), &requests);
         // Cosine ignores raw norms: axis hit, eight .75 hits, then ID8 wins the
         // .5 tie over ID9 at the k10 boundary, independently for each query.
-        let truth = TRUTH_IDS
-            .into_iter()
-            .flatten()
+        let truth = (0..shape.count)
+            .flat_map(|i| TRUTH_IDS[i % 2])
             .flat_map(u64::to_le_bytes)
             .collect::<Vec<_>>();
         c["truth"] = artifact(&dir.path().join("truth.u64"), &truth);
@@ -3174,5 +3892,1026 @@ mod tests {
             assert!(terminal["resource_rejection"].is_null(), "{name}");
             assert!(rows.iter().all(|r| r["phase"] != "query"), "{name}");
         }
+    }
+    // ===== Diagnostic panel: selection, bounded lines, host counters, trace parity =====
+    fn with_panel(mut value: Value, ordinals: &[usize], trace: bool) -> Value {
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":ordinals,"trace":trace});
+        value
+    }
+    fn write_proc(root: &Path) {
+        for (name, body) in [
+            (
+                "net/netstat",
+                "TcpExt: SyncookiesSent TCPTimeouts TCPOFOQueue TCPFromZeroWindowAdv\nTcpExt: 0 7 11 13\nIpExt: InNoRoutes InOctets\nIpExt: 1 99\n",
+            ),
+            (
+                "net/snmp",
+                "Ip: Forwarding DefaultTTL\nIp: 1 64\nTcp: RtoAlgorithm ActiveOpens RetransSegs CurrEstab\nTcp: 1 5 17 3\n",
+            ),
+            (
+                "stat",
+                "cpu  100 0 200 3000 40 5 6 70 0 0\ncpu0 10 0 20 300 4 1 2 9 0 0\ncpu1 11 0 21 301 5 2 3 10 0 0\nintr 1 2 3\n",
+            ),
+            ("thread-self/schedstat", "123456 789 42\n"),
+            (
+                "thread-self/status",
+                "Name:\tt\nvoluntary_ctxt_switches:\t21\nnonvoluntary_ctxt_switches:\t4\n",
+            ),
+            (
+                "self/stat",
+                "4242 (we ird)) S 1 2 3 4 5 6 777 8 99 10 0 0\n",
+            ),
+        ] {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+    }
+    fn use_proc(root: Option<&Path>) {
+        PROC_ROOT.with(|cell| *cell.borrow_mut() = root.map(Path::to_path_buf));
+    }
+    fn counter(snapshot: &HostSnapshot, name: &str) -> Option<u64> {
+        let slot = HOST_COUNTERS
+            .iter()
+            .position(|counter| counter.0 == name)
+            .unwrap();
+        snapshot.values[slot]
+    }
+    async fn run_panel(dir: &Path, name: &str, value: &Value, shape: Shape) -> (Vec<Value>, Value) {
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        let output = dir.join(name);
+        let mut out = Output::create(&output).unwrap();
+        let mut p = Progress::default();
+        let seal = query_and_seal(&c, shape, &mut out, &mut p).await.unwrap();
+        assert!(p.sealed && !p.truth_opened);
+        assert!(records(&output).iter().all(|r| r["truth_opened"] != true));
+        let summary = reduce(&c, &mut out, &seal, &mut p).unwrap();
+        (records(&output), summary)
+    }
+
+    #[test]
+    fn execution_selector_is_explicit_strict_sorted_unique_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = config_value(dir.path(), Shape::PRODUCTION);
+        let parsed: Config = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(parsed.execution, Execution::Full {});
+        validate_config(&parsed, Shape::PRODUCTION).unwrap();
+        let mut missing = good.clone();
+        missing.as_object_mut().unwrap().remove("execution");
+        assert!(serde_json::from_value::<Config>(missing).is_err());
+        for bad in [
+            json!({"mode":"full","ordinals":[0]}),
+            json!({"mode":"full","trace":true}),
+            json!({"mode":"diagnostic_panel","ordinals":[0]}),
+            json!({"mode":"diagnostic_panel","trace":false}),
+            json!({"mode":"diagnostic_panel","ordinals":[0],"trace":false,"x":0}),
+            json!({"mode":"diagnostic_panel","ordinals":[-1],"trace":false}),
+            json!({"mode":"diagnostic_panel","ordinals":[1.5],"trace":false}),
+            json!({"mode":"diagnostic_panel","ordinals":"0","trace":false}),
+            json!({"mode":"diagnostic_panel","ordinals":[0],"trace":"yes"}),
+            json!({"mode":"panel","ordinals":[0],"trace":false}),
+            json!({"ordinals":[0],"trace":false}),
+            json!("full"),
+            json!(null),
+        ] {
+            let mut value = good.clone();
+            value["execution"] = bad.clone();
+            assert!(serde_json::from_value::<Config>(value).is_err(), "{bad}");
+        }
+        let exact: Vec<usize> = (872..1000).collect();
+        let over: Vec<usize> = (0..129).collect();
+        for (ordinals, ok) in [
+            (vec![0], true),
+            (vec![999], true),
+            (vec![0, 1, 999], true),
+            (exact, true),
+            (vec![], false),
+            (vec![1000], false),
+            (vec![5, 5], false),
+            (vec![5, 4], false),
+            (vec![0, 1000], false),
+            (over, false),
+            (vec![usize::MAX], false),
+        ] {
+            let c: Config =
+                serde_json::from_value(with_panel(good.clone(), &ordinals, true)).unwrap();
+            assert_eq!(
+                validate_config(&c, Shape::PRODUCTION).is_ok(),
+                ok,
+                "{ordinals:?}"
+            );
+        }
+        for old in [
+            "borsuk-cohere-native-baseline-config-v3",
+            "borsuk-cohere-native-baseline-config-v2",
+        ] {
+            let mut value = with_panel(good.clone(), &[0], false);
+            value["schema"] = json!(old);
+            let c: Config = serde_json::from_value(value).unwrap();
+            let error = validate_config(&c, Shape::PRODUCTION)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("older formats refuse"), "{error}");
+        }
+    }
+
+    #[test]
+    fn diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::PRODUCTION;
+        let layout = |c: &Config| {
+            Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism) as u64
+        };
+        let full: Config = serde_json::from_value(config_value(dir.path(), shape)).unwrap();
+        assert_eq!(diagnostic_bytes(&full).unwrap(), 0);
+        assert_eq!(
+            limits(&full).unwrap().already_pinned_bytes,
+            caller_bytes(&full) as u64 + layout(&full)
+        );
+        for (direct, trace, parallelism) in [
+            (false, false, 16),
+            (false, true, 16),
+            (true, false, 32),
+            (true, true, 32),
+        ] {
+            let mut value = with_panel(config_value(dir.path(), shape), &[1, 5, 999], trace);
+            value["fetch_parallelism"] = json!(parallelism);
+            if direct {
+                value = with_direct(value, 1_000_000, 128);
+            }
+            let c: Config = serde_json::from_value(value).unwrap();
+            validate_config(&c, shape).unwrap();
+            let bytes = diagnostic_bytes(&c).unwrap();
+            assert!(bytes <= DIAGNOSTIC_CAP, "{bytes}");
+            let lines = 2 * PANEL_LINE_CAP;
+            if trace {
+                let ranges = if direct { 128 } else { BASELINE_QUERY_GETS };
+                assert_eq!(trace_ranges(&c), ranges);
+                assert_eq!(
+                    bytes,
+                    lines
+                        + Sq8RangeTrace::modeled_bytes(ranges, parallelism)
+                        + size_of::<HostSampler>()
+                        + HOST_READ_CAP
+                        + 1
+                        + HOST_JSON_BYTES
+                        + FAILURE_VALUE_BYTES
+                );
+            } else {
+                assert_eq!(bytes, lines);
+            }
+            // The complete coexistence figure is charged in two parts that never overlap: the
+            // runner pins everything but the trace peak before the generation opens, and the
+            // library charges the trace peak once when a traced query is admitted.
+            let peak = if trace {
+                Sq8RangeTrace::modeled_bytes(trace_ranges(&c), parallelism)
+            } else {
+                0
+            };
+            assert_eq!(trace_peak_bytes(&c), peak);
+            assert_eq!(diagnostic_pinned_bytes(&c).unwrap(), bytes - peak);
+            let admission = limits(&c).unwrap();
+            assert_eq!(admission.max_active_queries, 1);
+            assert_eq!(
+                admission.already_pinned_bytes,
+                caller_bytes(&c) as u64
+                    + ordinary_range_state_pinned(&c) as u64
+                    + (bytes - peak) as u64 * admission.max_active_queries as u64
+            );
+            // Common range state is counted once: the SOURCE and SQ8 phases never coexist, so
+            // the peak is the larger phase. With a trace the library's reservation holds the
+            // SQ8 share and the runner pins only the excess; without one it pins all of it.
+            assert!(trace_ranges(&c) <= plan_ranges(&c));
+            let library_share = if trace {
+                Sq8RangeTrace::pending_futures_bytes(trace_ranges(&c), parallelism)
+            } else {
+                0
+            };
+            assert_eq!(
+                ordinary_range_state_pinned(&c) + library_share,
+                Sq8RangeTrace::pending_futures_bytes(plan_ranges(&c), parallelism)
+            );
+            assert_eq!(
+                uninstrumented_pinned_bytes(&c),
+                caller_bytes(&c) as u64 + layout(&c)
+            );
+        }
+    }
+
+    #[test]
+    fn worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record() {
+        use borsuk::sq8_s3_range::RangeSpan;
+        let dir = tempfile::tempdir().unwrap();
+        let value = with_direct(
+            with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true),
+            1_000_000,
+            128,
+        );
+        let c: Config = serde_json::from_value(value).unwrap();
+        let mut diag = Diag::new(&c).unwrap();
+        let max = Some(u64::MAX);
+        let span = RangeSpan {
+            index: u32::MAX,
+            first_page: u64::MAX,
+            last_page: u64::MAX,
+            start_byte: u64::MAX,
+            end_byte: u64::MAX,
+            first_poll_ns: max,
+            request_ns: max,
+            headers_ns: max,
+            metadata_ns: max,
+            first_chunk_ns: max,
+            last_chunk_ns: max,
+            eof_ns: max,
+            auth_start_ns: max,
+            auth_end_ns: max,
+            complete_ns: max,
+            chunks: u32::MAX,
+            body_bytes: u64::MAX,
+            max_body_gap_ns: u64::MAX,
+            max_body_gap_end_ns: max,
+            copy_ns: u64::MAX,
+            copy_count: u32::MAX,
+            outcome: "store_headers",
+        };
+        diag.sampler.before = HostSnapshot {
+            monotonic_ns: max,
+            values: [Some(0); HOST_COUNTERS.len()],
+        };
+        diag.sampler.after = HostSnapshot {
+            monotonic_ns: max,
+            values: [max; HOST_COUNTERS.len()],
+        };
+        let anchors = Anchors {
+            monotonic_start_ns: max,
+            monotonic_end_ns: max,
+            process_cpu_start_ns: i128::from(u64::MAX),
+            process_cpu_end_ns: i128::from(u64::MAX),
+        };
+        // The trace's span buffer is private and read-only, so the object is measured as
+        // its span-free envelope plus n worst-case rows (and the n - 1 commas between them).
+        assert!(diag.trace.ranges().is_empty());
+        let envelope = serde_json::to_vec(&diag.query(&anchors)).unwrap().len();
+        let row = serde_json::to_vec(&span).unwrap().len();
+        assert!(row <= 22 * 21 + 2, "{row}");
+        let worst = envelope + 128 * row + 127;
+        assert!(worst < PANEL_LINE_CAP, "{worst}");
+        let typical = envelope + 32 * row + 31;
+        assert!(typical < PANEL_LINE_CAP / 2, "{typical}");
+    }
+
+    #[test]
+    fn host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null() {
+        let dir = tempfile::tempdir().unwrap();
+        write_proc(dir.path());
+        let mut buffer = Vec::with_capacity(HOST_READ_CAP + 1);
+        let snap = snapshot(dir.path(), &mut buffer);
+        assert!(snap.monotonic_ns.is_some());
+        for (name, expected) in [
+            ("TcpExt.TCPTimeouts", Some(7)),
+            ("TcpExt.TCPOFOQueue", Some(11)),
+            ("TcpExt.TCPFromZeroWindowAdv", Some(13)),
+            ("TcpExt.TCPFastRetrans", None),
+            ("Tcp.ActiveOpens", Some(5)),
+            ("Tcp.RetransSegs", Some(17)),
+            ("Tcp.InSegs", None),
+            ("cpu0.user_ticks", Some(10)),
+            ("cpu0.system_ticks", Some(20)),
+            ("cpu0.irq_ticks", Some(1)),
+            ("cpu0.softirq_ticks", Some(2)),
+            ("cpu0.steal_ticks", Some(9)),
+            ("cpu.irq_ticks", Some(5)),
+            ("cpu.softirq_ticks", Some(6)),
+            ("cpu.steal_ticks", Some(70)),
+            ("thread.sched_run_ns", Some(123_456)),
+            ("thread.sched_wait_ns", Some(789)),
+            ("thread.sched_timeslices", Some(42)),
+            ("thread.voluntary_ctxt_switches", Some(21)),
+            ("thread.nonvoluntary_ctxt_switches", Some(4)),
+            ("process.minor_faults", Some(777)),
+            ("process.major_faults", Some(99)),
+        ] {
+            assert_eq!(counter(&snap, name), expected, "{name}");
+        }
+        let mut names = HOST_COUNTERS.iter().map(|c| c.0).collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), HOST_COUNTERS.len());
+        assert!(buffer.capacity() <= 2 * (HOST_READ_CAP + 1));
+        // Nothing readable: every counter is explicitly unavailable, never zero.
+        let empty = tempfile::tempdir().unwrap();
+        let none = snapshot(empty.path(), &mut buffer);
+        assert!(none.monotonic_ns.is_some());
+        assert!(none.values.iter().all(Option::is_none));
+        // Over the read cap is unavailable, not truncated; other sources are unaffected.
+        std::fs::write(
+            dir.path().join("net/netstat"),
+            vec![b' '; HOST_READ_CAP + 1],
+        )
+        .unwrap();
+        let over = snapshot(dir.path(), &mut buffer);
+        assert_eq!(counter(&over, "TcpExt.TCPTimeouts"), None);
+        assert_eq!(counter(&over, "Tcp.ActiveOpens"), Some(5));
+        let mut at_cap = b"TcpExt: TCPTimeouts\nTcpExt: 3\n".to_vec();
+        at_cap.resize(HOST_READ_CAP, b' ');
+        std::fs::write(dir.path().join("net/netstat"), at_cap).unwrap();
+        assert_eq!(
+            counter(&snapshot(dir.path(), &mut buffer), "TcpExt.TCPTimeouts"),
+            Some(3)
+        );
+        // Deltas: only a monotone pair with both ends present is reported.
+        let cases = [
+            (Some(5), Some(9), Some(4)),
+            (Some(9), Some(5), None),
+            (None, Some(5), None),
+            (Some(5), None, None),
+            (Some(7), Some(7), Some(0)),
+            (Some(0), Some(u64::MAX), Some(u64::MAX)),
+        ];
+        let (mut before, mut after) = (HostSnapshot::EMPTY, HostSnapshot::EMPTY);
+        before.monotonic_ns = Some(10);
+        after.monotonic_ns = Some(30);
+        for (slot, case) in cases.iter().enumerate() {
+            before.values[slot] = case.0;
+            after.values[slot] = case.1;
+        }
+        let window = host_window(&before, &after);
+        for (slot, case) in cases.iter().enumerate() {
+            assert_eq!(window.deltas[HOST_COUNTERS[slot].0], case.2, "{slot}");
+        }
+        let reported = cases.iter().filter(|case| case.2.is_some()).count();
+        assert_eq!(window.unavailable, HOST_COUNTERS.len() - reported);
+        assert_eq!(window.deltas.len(), HOST_COUNTERS.len());
+        assert_eq!(
+            (window.before_monotonic_ns, window.after_monotonic_ns),
+            (Some(10), Some(30))
+        );
+    }
+
+    #[tokio::test]
+    async fn panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal() {
+        let shape = Shape {
+            count: 5,
+            ..Shape::tiny(257)
+        };
+        let (dir, base) = fixture(shape).await;
+        let proc = dir.path().join("proc");
+        write_proc(&proc);
+        use_proc(Some(proc.as_path()));
+        for (index, trace) in [false, true].into_iter().enumerate() {
+            let value = with_panel(base.clone(), &[1, 3, 4], trace);
+            let (rows, summary) =
+                run_panel(dir.path(), &format!("panel-{index}"), &value, shape).await;
+            let phases = rows
+                .iter()
+                .map(|r| r["phase"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            let first = |phase: &str| phases.iter().position(|p| p == phase).unwrap();
+            let last = |phase: &str| phases.iter().rposition(|p| p == phase).unwrap();
+            assert!(first("diagnostic_admission") < first("source_binding"));
+            assert!(last("query") < first("all_queries_sealed"));
+            assert!(first("all_queries_sealed") < first("recall"));
+            let queries = rows
+                .iter()
+                .filter(|r| r["phase"] == "query")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                queries
+                    .iter()
+                    .map(|q| q["ordinal"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                [1, 3, 4]
+            );
+            assert_eq!(
+                queries
+                    .iter()
+                    .map(|q| q["selected_slot"].as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                [0, 1, 2]
+            );
+            for query in &queries {
+                let ordinal = query["ordinal"].as_u64().unwrap() as usize;
+                let ids = query["returned"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|hit| hit["id"].as_u64().unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(ids, TRUTH_IDS[ordinal % 2]);
+            }
+            // Ordinals 1 and 3 are different request rows with identical results: two records.
+            assert_eq!(queries[0]["returned"], queries[1]["returned"]);
+            assert_ne!(queries[0]["returned"], queries[2]["returned"]);
+            let seal = rows
+                .iter()
+                .find(|r| r["phase"] == "all_queries_sealed")
+                .unwrap();
+            assert_eq!(seal["count"], 3);
+            assert_eq!(seal["selected_count"], 3);
+            assert_eq!(seal["population_count"], 5);
+            assert_eq!(seal["truth_opened"], false);
+            let admission = rows
+                .iter()
+                .find(|r| r["phase"] == "diagnostic_admission")
+                .unwrap();
+            assert_eq!(admission["selected_count"], 3);
+            assert_eq!(admission["population_count"], 5);
+            assert_eq!(admission["trace"], trace);
+            assert_eq!(admission["population_percentiles_valid"], false);
+            assert_eq!(admission["full_cohort_qualification"], false);
+            assert!(
+                admission["diagnostic_bytes_per_active_query"]
+                    .as_u64()
+                    .unwrap()
+                    <= DIAGNOSTIC_CAP as u64
+            );
+            // Retained trace bytes, cumulative drain peak and both-paths range state are reported
+            // as three separate figures; the trace ones exist only when tracing is on.
+            assert_eq!(
+                admission["range_state_both_paths_bytes"],
+                Sq8RangeTrace::pending_futures_bytes(128, 16)
+            );
+            // Baseline with a trace: the SOURCE phase (128 ranges) is the larger one, so the runner
+            // pins only its excess over the library-held SQ8 share (32 ranges).
+            let config = serde_json::from_value::<Config>(value.clone()).unwrap();
+            assert_eq!(
+                admission["range_state_pinned_by_runner_bytes"],
+                ordinary_range_state_pinned(&config)
+            );
+            assert_eq!(
+                ordinary_range_state_pinned(&config)
+                    == Sq8RangeTrace::pending_futures_bytes(128, 16),
+                !trace
+            );
+            if trace {
+                assert_eq!(
+                    admission["trace_retained_bytes"],
+                    Sq8RangeTrace::retained_bytes(BASELINE_QUERY_GETS)
+                );
+                assert_eq!(
+                    admission["trace_peak_bytes"],
+                    Sq8RangeTrace::modeled_bytes(BASELINE_QUERY_GETS, 16)
+                );
+            } else {
+                assert!(admission["trace_retained_bytes"].is_null());
+                assert!(admission["trace_peak_bytes"].is_null());
+            }
+            // Recall rows and the denominator follow the selected set; a selection-position
+            // truth lookup would score ordinal 1 against truth row 0 and miss nine hits.
+            let recalls = rows
+                .iter()
+                .filter(|r| r["phase"] == "recall")
+                .map(|r| r["ordinal"].as_u64().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(recalls, [1, 3, 4]);
+            assert_eq!(summary["queries"], 3);
+            assert_eq!(summary["selected_count"], 3);
+            assert_eq!(summary["executed_count"], 3);
+            assert_eq!(summary["population_count"], 5);
+            assert_eq!(summary["recall_denominator"], 30);
+            assert_eq!(summary["total_hits10"], 30);
+            assert_eq!(summary["mean_recall10"], 1.0);
+            assert_eq!(summary["diagnostic_panel"], true);
+            assert_eq!(summary["population_percentiles_valid"], false);
+            assert_eq!(summary["full_cohort_qualification"], false);
+        }
+        use_proc(None);
+    }
+
+    #[tokio::test]
+    async fn panel_authenticates_every_original_request_row_before_any_open() {
+        let shape = Shape {
+            count: 5,
+            ..Shape::tiny(32)
+        };
+        let (dir, base) = fixture(shape).await;
+        let good = std::fs::read(dir.path().join("requests.f32")).unwrap();
+        let mut zero_row = good.clone();
+        zero_row[2 * D * 4..3 * D * 4].fill(0);
+        let mut nan_tail = good.clone();
+        nan_tail[4 * D * 4..4 * D * 4 + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        for (name, bytes, row) in [("zero", zero_row, 2), ("nan-tail", nan_tail, 4)] {
+            let mut value = with_panel(base.clone(), &[0, 1], true);
+            value["requests"] = artifact(&dir.path().join(format!("bad-{name}")), &bytes);
+            let c: Config = serde_json::from_value(value).unwrap();
+            let mut out = Output::create(&dir.path().join(format!("early-{name}"))).unwrap();
+            let mut p = Progress::default();
+            let opened = std::cell::Cell::new(false);
+            let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
+                opened.set(true);
+                Reader::new(&c.backend)
+            })
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(error.contains(&format!("request {row}")), "{name}: {error}");
+            assert!(!opened.get(), "{name}");
+            assert_eq!((p.completed, p.sealed, p.truth_opened), (0, false, false));
+            assert_eq!(
+                out.bytes, 0,
+                "{name}: nothing is published before this check"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn panel_selector_refusals_precede_every_open_and_publication() {
+        let shape = Shape {
+            count: 5,
+            ..Shape::tiny(32)
+        };
+        let (dir, base) = fixture(shape).await;
+        for (index, ordinals) in [vec![], vec![5], vec![2, 2], vec![3, 2], vec![0, 7]]
+            .into_iter()
+            .enumerate()
+        {
+            let value = with_panel(base.clone(), &ordinals, index % 2 == 0);
+            let c: Config = serde_json::from_value(value).unwrap();
+            let mut out = Output::create(&dir.path().join(format!("refused-{index}"))).unwrap();
+            let mut p = Progress::default();
+            let opened = std::cell::Cell::new(false);
+            let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
+                opened.set(true);
+                Reader::new(&c.backend)
+            })
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(error.contains("sorted unique original ordinals"), "{error}");
+            assert!(!opened.get(), "{ordinals:?}");
+            assert_eq!((p.completed, p.sealed, p.truth_opened), (0, false, false));
+            assert_eq!(out.bytes, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct() {
+        let shape = Shape::tiny(257);
+        let (dir, base) = fixture(shape).await;
+        let object_bytes = 257 * (D + 12);
+        let proc = dir.path().join("proc");
+        write_proc(&proc);
+        use_proc(Some(proc.as_path()));
+        let strip = |query: &Value| {
+            let mut query = query.clone();
+            let fields = query.as_object_mut().unwrap();
+            for timing in [
+                "diagnostic",
+                "stages",
+                "query_wall_ns",
+                "query_process_cpu_ns",
+            ] {
+                fields.remove(timing);
+            }
+            query
+        };
+        for (mode, value) in [
+            ("baseline", base.clone()),
+            ("direct", with_direct(base.clone(), object_bytes, 2)),
+        ] {
+            let mut runs = Vec::new();
+            for trace in [false, true] {
+                let panel = with_panel(value.clone(), &[0, 1], trace);
+                let name = format!("toggle-{mode}-{trace}");
+                runs.push(run_panel(dir.path(), &name, &panel, shape).await);
+            }
+            let queries = |run: usize| {
+                runs[run]
+                    .0
+                    .iter()
+                    .filter(|r| r["phase"] == "query")
+                    .collect::<Vec<_>>()
+            };
+            let (off, on) = (queries(0), queries(1));
+            assert_eq!((off.len(), on.len()), (2, 2));
+            for (off, on) in off.iter().zip(&on) {
+                // Returned IDs and score bits, charges, plans, GETs, bytes and the plan
+                // trace are identical; only timing and the new diagnostic field differ.
+                assert_eq!(strip(*off), strip(*on), "{mode}");
+                assert!(off.get("diagnostic").is_none());
+                assert!(on["returned_count"].as_u64().unwrap() >= 1);
+            }
+            for key in [
+                "charges",
+                "sum",
+                "total_hits10",
+                "serving",
+                "recall_denominator",
+            ] {
+                assert_eq!(runs[0].1[key], runs[1].1[key], "{mode} {key}");
+            }
+            for query in &on {
+                let diag = &query["diagnostic"];
+                assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
+                let trace = &diag["sq8_range_trace"];
+                let fields = trace["range_fields"].as_array().unwrap();
+                assert_eq!(fields.len(), 22);
+                let at = |name: &str| fields.iter().position(|f| f == name).unwrap();
+                let ranges = trace["ranges"].as_array().unwrap();
+                let planned = query["plan"]["ranges"].as_array().unwrap();
+                assert_eq!(ranges.len(), planned.len());
+                assert_eq!(trace["planned_ranges"], planned.len());
+                assert_eq!(trace["dropped_ranges"], 0);
+                assert_eq!(trace["outcome"], "ranked");
+                let mut latest = 0;
+                for (i, row) in ranges.iter().enumerate() {
+                    let row = row.as_array().unwrap();
+                    assert_eq!(row.len(), fields.len());
+                    assert_eq!(row[at("index")], i);
+                    assert_eq!(row[at("start_byte")], planned[i][0]);
+                    assert_eq!(row[at("end_byte")], planned[i][1]);
+                    assert_eq!(row[at("outcome")], "ok");
+                    let chain = [
+                        "first_poll_ns",
+                        "request_ns",
+                        "headers_ns",
+                        "metadata_ns",
+                        "first_chunk_ns",
+                        "last_chunk_ns",
+                        "eof_ns",
+                        "auth_start_ns",
+                        "auth_end_ns",
+                        "complete_ns",
+                    ]
+                    .map(|name| row[at(name)].as_u64().expect(name));
+                    assert!(chain.windows(2).all(|w| w[0] <= w[1]), "{chain:?}");
+                    latest = latest.max(chain[9]);
+                    assert!(row[at("chunks")].as_u64().unwrap() >= 1);
+                    assert_eq!(row[at("copy_count")], row[at("chunks")]);
+                    assert_eq!(
+                        row[at("body_bytes")].as_u64().unwrap(),
+                        row[at("end_byte")].as_u64().unwrap()
+                            - row[at("start_byte")].as_u64().unwrap()
+                    );
+                }
+                let all = trace["all_ranges_complete_ns"].as_u64().unwrap();
+                let rank_start = trace["rank_start_ns"].as_u64().unwrap();
+                let rank_end = trace["rank_end_ns"].as_u64().unwrap();
+                let release_end = trace["release_end_ns"].as_u64().unwrap();
+                assert!(latest <= all && all <= rank_start && rank_start <= rank_end);
+                // Payload release is the last boundary of the SQ8 stage.
+                assert!(rank_end <= release_end);
+                assert!(release_end <= query["stages"]["sq8"]["end_ns"].as_u64().unwrap());
+                assert!(
+                    query["stages"]["sq8"]["start_ns"].as_u64().unwrap()
+                        <= trace["fetch_start_ns"].as_u64().unwrap()
+                );
+                assert_eq!(trace["rank"]["ranges"], planned.len());
+                let host = &diag["host"];
+                let deltas = host["deltas"].as_object().unwrap();
+                assert_eq!(deltas.len(), HOST_COUNTERS.len());
+                assert_eq!(host["deltas"]["Tcp.RetransSegs"], 0);
+                assert!(host["deltas"]["TcpExt.TCPFastRetrans"].is_null());
+                let missing = deltas.values().filter(|v| v.is_null()).count();
+                assert_eq!(host["unavailable"], missing);
+                let start = diag["query_monotonic_start_ns"].as_u64().unwrap();
+                let end = diag["query_monotonic_end_ns"].as_u64().unwrap();
+                assert!(host["before_monotonic_ns"].as_u64().unwrap() <= start);
+                assert!(start <= end && end <= host["after_monotonic_ns"].as_u64().unwrap());
+                assert!(
+                    diag["process_cpu_start_ns"].as_i64().unwrap()
+                        <= diag["process_cpu_end_ns"].as_i64().unwrap()
+                );
+            }
+        }
+        use_proc(None);
+    }
+
+    #[tokio::test]
+    async fn panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal() {
+        let shape = Shape::tiny(257);
+        let (dir, base) = fixture(shape).await;
+        let empty = dir.path().join("empty-proc");
+        std::fs::create_dir(&empty).unwrap();
+        use_proc(Some(empty.as_path()));
+        let value = with_panel(base, &[0, 1], true);
+        let (rows, summary) = run_panel(dir.path(), "unavailable", &value, shape).await;
+        assert_eq!(summary["status"], "MEASURED");
+        for query in rows.iter().filter(|r| r["phase"] == "query") {
+            let host = &query["diagnostic"]["host"];
+            assert_eq!(host["unavailable"], HOST_COUNTERS.len());
+            assert!(
+                host["deltas"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .all(Value::is_null)
+            );
+            assert!(host["before_monotonic_ns"].is_u64() && host["after_monotonic_ns"].is_u64());
+            assert_eq!(query["diagnostic"]["sq8_range_trace"]["outcome"], "ranked");
+        }
+        // Hold only query records to half of the shortest one: the earlier setup lines are
+        // published whole, then the first query line is refused whole.
+        let text = std::fs::read_to_string(dir.path().join("unavailable")).unwrap();
+        let shortest_query = text
+            .lines()
+            .filter(|line| line.starts_with("{\"phase\":\"query\""))
+            .map(|line| line.len() + 1)
+            .min()
+            .unwrap();
+        let cap = shortest_query / 2;
+        let c: Config = serde_json::from_value(value).unwrap();
+        let output = dir.path().join("overcap");
+        let mut out = Output::create(&output).unwrap();
+        out.panel_query_cap = Some(cap);
+        let mut p = Progress::default();
+        let error = query_and_seal(&c, shape, &mut out, &mut p)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("serialized line exceeds"), "{error}");
+        assert!(error.contains(&cap.to_string()), "{error}");
+        assert_eq!((p.completed, p.sealed, p.truth_opened), (0, false, false));
+        assert_eq!(p.stage, "query");
+        let published = std::fs::read_to_string(&output).unwrap();
+        assert!(published.ends_with('\n'));
+        assert!(published.lines().all(|line| {
+            serde_json::from_str::<Value>(line).is_ok() && !line.starts_with("{\"phase\":\"query")
+        }));
+        assert_eq!(out.bytes, published.len() as u64);
+        use_proc(None);
+    }
+
+    #[test]
+    fn panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let shape = Shape::tiny(257);
+        let (dir, base) = runtime.block_on(fixture(shape));
+        let object_bytes = 257 * (D + 12);
+        let proc = dir.path().join("proc");
+        write_proc(&proc);
+        use_proc(Some(proc.as_path()));
+        // The direct memory model is linear in max_sq8_bytes. Two totals are compared with the
+        // cap: the ALGORITHM total (what the same configuration models uninstrumented) and the
+        // COMPLETE total (as pinned, plus the library-owned trace reservation the first query
+        // is admitted against). Probe one admitted run through the real pipeline, then land
+        // exactly on each side of each cap with further real runs.
+        for trace in [false, true] {
+            let panel =
+                |bytes: usize| with_direct(with_panel(base.clone(), &[0, 1], trace), bytes, 2);
+            let name = |what: &str| format!("{what}-{trace}");
+            let (status, rows) =
+                run_status(dir.path(), &name("probe"), &panel(object_bytes), shape);
+            assert_eq!(status, Status::Measured);
+            let admission = rows
+                .iter()
+                .find(|r| r["phase"] == "direct_admission")
+                .unwrap()
+                .clone();
+            let figure = |value: &Value, key: &str| value[key].as_u64().unwrap();
+            let memory = &admission["memory"];
+            let (resident, planner, cap, total) = (
+                figure(memory, "resident_bytes"),
+                figure(memory, "direct_planner_bytes"),
+                figure(memory, "cap_bytes"),
+                figure(memory, "total_bytes"),
+            );
+            let config = serde_json::from_value::<Config>(panel(object_bytes)).unwrap();
+            let pinned = limits(&config).unwrap().already_pinned_bytes;
+            let reservation = figure(&admission, "library_trace_reservation_bytes");
+            assert_eq!(reservation, trace_peak_bytes(&config) as u64);
+            assert_eq!(reservation > 0, trace);
+            let diagnostic_pinned = figure(&admission, "diagnostic_pinned_bytes");
+            assert!(diagnostic_pinned >= 2 * PANEL_LINE_CAP as u64);
+            assert_eq!(
+                figure(&admission, "complete_total_bytes"),
+                total + reservation
+            );
+            assert_eq!(
+                figure(&admission, "algorithm_total_bytes"),
+                total - pinned + uninstrumented_pinned_bytes(&config)
+            );
+            let ranking = 256 * 257 + 4 * D as u64;
+            let fixed = resident + planner + ranking;
+            // complete(b) = fixed + 3b + reservation; algorithm(b) = fixed + 3b + shift.
+            let shift = uninstrumented_pinned_bytes(&config) as i128 - pinned as i128;
+            let largest = |limit: i128| ((cap as i128 - limit - fixed as i128) / 3) as usize;
+
+            // A. The complete total fits the cap exactly, trace reservation counted once: measured
+            //    through startup AND the library's own admission of the traced query.
+            let at_complete = largest(reservation as i128);
+            let (status, rows) = run_status(dir.path(), &name("fits"), &panel(at_complete), shape);
+            assert_eq!(status, Status::Measured, "{rows:?}");
+            // B. One more byte of the query model: the algorithm still fits but the instrumented
+            //    total does not. INVALID at startup, before any query payload opens.
+            let (status, rows) = run_status(
+                dir.path(),
+                &name("complete"),
+                &panel(at_complete + 1),
+                shape,
+            );
+            assert_eq!(status, Status::Invalid);
+            let terminal = &rows.last().unwrap()["summary"];
+            assert_eq!(terminal["status"], "INVALID");
+            assert!(terminal["resource_rejection"].is_null());
+            assert_eq!(terminal["stage"], "direct_admission");
+            assert!(
+                terminal["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("diagnostic memory")
+            );
+            assert_eq!(terminal["completed_queries"], 0);
+            assert_eq!(terminal["all_queries_sealed"], false);
+            assert_eq!(terminal["truth_opened"], false);
+            let refused = rows
+                .iter()
+                .find(|r| r["phase"] == "direct_admission")
+                .unwrap();
+            assert_eq!(refused["admitted"], false);
+            assert!(figure(refused, "algorithm_total_bytes") <= cap);
+            assert!(figure(refused, "complete_total_bytes") > cap);
+            assert!(rows.iter().all(|r| {
+                r["phase"] != "query"
+                    && r["phase"] != "query_failure"
+                    && r["phase"] != "all_queries_sealed"
+            }));
+            // C. The largest query model whose ALGORITHM total fits: its complete total does not
+            //    (instrumentation alone), so still INVALID, never a candidate rejection.
+            let at_algorithm = largest(shift);
+            assert!(at_algorithm > at_complete);
+            let (status, rows) = run_status(
+                dir.path(),
+                &name("algorithm-fits"),
+                &panel(at_algorithm),
+                shape,
+            );
+            assert_eq!(status, Status::Invalid);
+            let terminal = &rows.last().unwrap()["summary"];
+            assert!(terminal["resource_rejection"].is_null());
+            assert_eq!(terminal["stage"], "direct_admission");
+            let refused = rows
+                .iter()
+                .find(|r| r["phase"] == "direct_admission")
+                .unwrap();
+            assert!(figure(refused, "algorithm_total_bytes") <= cap);
+            assert!(figure(refused, "complete_total_bytes") > cap);
+            // D. One more byte of the ALGORITHM budget is a genuine, typed resource rejection.
+            let (status, rows) = run_status(
+                dir.path(),
+                &name("algorithm"),
+                &panel(at_algorithm + 1),
+                shape,
+            );
+            assert_eq!(status, Status::ResourceReject);
+            let terminal = &rows.last().unwrap()["summary"];
+            assert_eq!(terminal["status"], "RESOURCE_REJECT");
+            assert_eq!(terminal["resource_rejection"], "modeled_memory");
+            assert_eq!(terminal["stage"], "direct_admission");
+            let refused = rows
+                .iter()
+                .find(|r| r["phase"] == "direct_admission")
+                .unwrap();
+            assert!(figure(refused, "algorithm_total_bytes") > cap);
+        }
+        use_proc(None);
+    }
+
+    #[test]
+    fn panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut out = Output::create(&dir.path().join("failure")).unwrap();
+        out.admit_panel_lines(400);
+        let record =
+            json!({"phase":"query_failure","ordinal":7,"error":"boom","truth_opened":false});
+        emit_failure(&mut out, record.clone(), Some(json!({"x":1}))).unwrap();
+        emit_failure(&mut out, record, Some(json!({"x":"y".repeat(1000)}))).unwrap();
+        let published = out.bytes;
+        let huge = json!({"phase":"query_failure","error":"e".repeat(1000)});
+        let error = emit_failure(&mut out, huge, Some(json!({"x":1}))).unwrap_err();
+        assert!(error.downcast_ref::<LineCap>().is_some());
+        assert_eq!(out.bytes, published, "a refused line publishes no byte");
+        let rows = records(&out.path);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["diagnostic"], json!({"x":1}));
+        assert_eq!(
+            rows[1]["diagnostic"],
+            json!({"omitted":"serialized_line_cap","cap_bytes":400})
+        );
+        assert_eq!(
+            (&rows[1]["error"], &rows[1]["ordinal"]),
+            (&json!("boom"), &json!(7))
+        );
+    }
+
+    #[test]
+    fn panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap() {
+        assert_eq!(PANEL_LINE_CAP, 65_536);
+        assert_eq!(LINE_CAP, 256 * 1024);
+        let mut line = Vec::with_capacity(PANEL_LINE_CAP);
+        let (pointer, capacity) = (line.as_ptr(), line.capacity());
+        // A JSON string of n bytes serializes to n + 2 bytes; its newline makes n + 3.
+        for (n, ok) in [
+            (PANEL_LINE_CAP - 4, true),
+            (PANEL_LINE_CAP - 3, true),
+            (PANEL_LINE_CAP - 2, false),
+            (PANEL_LINE_CAP, false),
+            (3 * PANEL_LINE_CAP, false),
+        ] {
+            let result = bounded_line(&mut line, &"x".repeat(n), PANEL_LINE_CAP);
+            assert_eq!(result.is_ok(), ok, "{n}");
+            if ok {
+                assert_eq!(line.len(), n + 3);
+                assert!(line.len() <= PANEL_LINE_CAP);
+                assert_eq!(line.last(), Some(&b'\n'));
+            } else {
+                assert!(result.unwrap_err().downcast_ref::<LineCap>().is_some());
+            }
+            assert_eq!((line.as_ptr(), line.capacity()), (pointer, capacity));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut out = Output::create(&dir.path().join("panel")).unwrap();
+        out.admit_panel_lines(PANEL_LINE_CAP);
+        out.emit(&"x".repeat(PANEL_LINE_CAP - 3)).unwrap();
+        assert_eq!(out.bytes, PANEL_LINE_CAP as u64);
+        let error = out.emit(&"x".repeat(PANEL_LINE_CAP - 2)).unwrap_err();
+        assert!(error.downcast_ref::<LineCap>().is_some());
+        assert_eq!(out.bytes, PANEL_LINE_CAP as u64);
+        assert_eq!(
+            std::fs::metadata(&out.path).unwrap().len(),
+            PANEL_LINE_CAP as u64
+        );
+        assert_eq!(
+            bounded_text(&"é".repeat(5000)).chars().count(),
+            PANEL_ERROR_CHARS
+        );
+        assert_eq!(bounded_text("short"), "short");
+        out.emit(&json!({"after":"overcap"})).unwrap();
+        // Full execution keeps the unchanged 256 KiB per-line cap.
+        let mut full = Output::create(&dir.path().join("full")).unwrap();
+        assert!(full.panel.is_none());
+        full.emit(&"x".repeat(100_000)).unwrap();
+        assert!(full.emit(&"x".repeat(LINE_CAP)).is_err());
+    }
+
+    #[test]
+    fn panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let shape = Shape {
+            count: 5,
+            ..Shape::tiny(32)
+        };
+        let (dir, base) = runtime.block_on(fixture(shape));
+        let panel = with_panel(base, &[0, 2, 4], false);
+        let truth = dir.path().join("truth.u64");
+        let original = std::fs::read(&truth).unwrap();
+        // Unselected truth row 1 repeats an ID: a valid SHA still cannot hide it.
+        let mut repeated = original.clone();
+        let second = repeated[K * 8 + 8..K * 8 + 16].to_vec();
+        repeated[K * 8..K * 8 + 8].copy_from_slice(&second);
+        for (index, case) in ["missing", "tampered", "unselected-row"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut value = panel.clone();
+            match case {
+                "missing" => std::fs::remove_file(&truth).unwrap(),
+                "tampered" => {
+                    let mut bad = original.clone();
+                    bad[0] ^= 1;
+                    std::fs::write(&truth, bad).unwrap();
+                }
+                _ => value["truth"] = artifact(&truth, &repeated),
+            }
+            let (path, sha) = write_config(dir.path(), &value);
+            let output = dir.path().join(format!("panel-invalid-{index}"));
+            assert!(!execute_paths(&path, &sha, &output, shape).unwrap());
+            let records = records(&output);
+            assert_eq!(
+                records.iter().filter(|r| r["phase"] == "query").count(),
+                3,
+                "{case}"
+            );
+            assert!(records.iter().any(|r| r["phase"] == "all_queries_sealed"));
+            assert!(!records.iter().any(|r| r["phase"] == "recall"));
+            let terminal = &records.last().unwrap()["summary"];
+            assert_eq!(terminal["status"], "INVALID", "{case}");
+            assert_eq!(terminal["all_queries_sealed"], true);
+            assert_eq!(terminal["truth_opened"], true);
+            assert_eq!(terminal["completed_queries"], 3);
+        }
+        // The output cap also refuses a panel line whole, leaving no partial record.
+        let (dir, base) = runtime.block_on(fixture(shape));
+        let c: Config = serde_json::from_value(with_panel(base, &[0, 1], false)).unwrap();
+        let mut capped = Output::create(&dir.path().join("capped")).unwrap();
+        capped.cap = 100;
+        let mut p = Progress::default();
+        assert!(
+            runtime
+                .block_on(query_and_seal(&c, shape, &mut capped, &mut p))
+                .is_err()
+        );
+        assert!(!p.sealed && !p.truth_opened && capped.bytes <= 100);
+        let text = std::fs::read_to_string(dir.path().join("capped")).unwrap();
+        assert!(text.is_empty() || text.ends_with('\n'));
     }
 }

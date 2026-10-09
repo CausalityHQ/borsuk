@@ -146,6 +146,54 @@ pub fn rank_returned_ranges_excluding(
     max_bytes: usize,
     excluded_ids: &[i64],
 ) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    rank_returned_ranges_excluding_traced(
+        geometry,
+        ranges,
+        query,
+        low,
+        step,
+        top_k,
+        max_bytes,
+        excluded_ids,
+        None,
+    )
+}
+
+/// Opt-in rank phase durations. Present only when the caller supplies a sink:
+/// the ordinary path reads no clock. Phases never overlap, so they may be summed,
+/// but they are not the rank interval: validation and range bookkeeping between
+/// them are left unattributed on purpose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RankPhases {
+    pub ranges: u32,
+    pub rows: u64,
+    /// Sum of ordinal-index construction and shared SQ8 kernel calls over all ranges.
+    pub score_ns: u64,
+    /// Sum of duplicate-ID insertion and exclusion filtering over all ranges.
+    pub roster_ns: u64,
+    /// The one `(score, id)` sort over every retained row.
+    pub sort_ns: u64,
+    /// Copying the top-k out and releasing the scoring scratch (duplicate-ID set, scores).
+    pub finish_ns: u64,
+}
+
+fn elapsed_ns(since: std::time::Instant) -> u64 {
+    u64::try_from(since.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// The same ranking as `rank_returned_ranges_excluding`; `phases` only observes it.
+#[allow(clippy::too_many_arguments)]
+pub fn rank_returned_ranges_excluding_traced(
+    geometry: Sq8Geometry,
+    ranges: &[ReturnedRange<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_bytes: usize,
+    excluded_ids: &[i64],
+    mut phases: Option<&mut RankPhases>,
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
     if ranges.is_empty() || excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
         return Err(Sq8ScoreError::InvalidRoster);
     }
@@ -183,6 +231,7 @@ pub fn rank_returned_ranges_excluding(
         }
         let first_row = range.start / row_bytes;
         let count = range.bytes.len() / row_bytes;
+        let scored_at = phases.is_some().then(std::time::Instant::now);
         let local_ordinals = (0..count).collect::<Vec<_>>();
         let local = score_nominees(
             range.bytes,
@@ -195,6 +244,12 @@ pub fn rank_returned_ranges_excluding(
             low,
             step,
         )?;
+        if let (Some(phases), Some(since)) = (phases.as_deref_mut(), scored_at) {
+            phases.score_ns = phases.score_ns.saturating_add(elapsed_ns(since));
+            phases.ranges = phases.ranges.saturating_add(1);
+            phases.rows = phases.rows.saturating_add(count as u64);
+        }
+        let rostered_at = phases.is_some().then(std::time::Instant::now);
         for mut score in local {
             if !ids.insert(score.id) {
                 return Err(Sq8ScoreError::InvalidPlane);
@@ -204,15 +259,31 @@ pub fn rank_returned_ranges_excluding(
                 scores.push(score);
             }
         }
+        if let (Some(phases), Some(since)) = (phases.as_deref_mut(), rostered_at) {
+            phases.roster_ns = phases.roster_ns.saturating_add(elapsed_ns(since));
+        }
         previous_end = end;
     }
+    let sorted_at = phases.is_some().then(std::time::Instant::now);
     scores.sort_by(|left, right| {
         left.score
             .total_cmp(&right.score)
             .then(left.id.cmp(&right.id))
     });
+    if let (Some(phases), Some(since)) = (phases.as_deref_mut(), sorted_at) {
+        phases.sort_ns = elapsed_ns(since);
+    }
     // Release fetched-row capacity before returning caller-owned top-k results.
-    Ok(scores[..top_k.min(scores.len())].to_vec())
+    let finished_at = phases.is_some().then(std::time::Instant::now);
+    let top = scores[..top_k.min(scores.len())].to_vec();
+    // The duplicate-ID set and the score scratch are freed here, in their usual order (set
+    // first), so the finish phase covers their release instead of leaving it unattributed.
+    drop(ids);
+    drop(scores);
+    if let (Some(phases), Some(since)) = (phases.as_deref_mut(), finished_at) {
+        phases.finish_ns = elapsed_ns(since);
+    }
+    Ok(top)
 }
 
 #[cfg(test)]
@@ -363,6 +434,82 @@ mod tests {
             2,
             "fetched-row scratch must not escape in top-k results"
         );
+    }
+
+    #[test]
+    fn rank_phases_observe_without_changing_ties_exclusions_or_errors() {
+        let first = row(30, 1.0, 1);
+        let mut second = row(20, 1.0, 1);
+        second.extend_from_slice(&row(10, 1.0, 1));
+        let geometry = Sq8Geometry {
+            rows: 5,
+            dimensions: 1,
+        };
+        let ranges = [
+            ReturnedRange {
+                start: 0,
+                bytes: &first,
+            },
+            ReturnedRange {
+                start: 3 * 13,
+                bytes: &second,
+            },
+        ];
+        let rank =
+            |ranges: &[ReturnedRange<'_>], excluded: &[i64], phases: Option<&mut RankPhases>| {
+                rank_returned_ranges_excluding_traced(
+                    geometry,
+                    ranges,
+                    &[0.0],
+                    &[0.0],
+                    &[1.0],
+                    3,
+                    39,
+                    excluded,
+                    phases,
+                )
+            };
+        for excluded in [&[][..], &[20][..], &[10, 20, 30][..]] {
+            let mut phases = RankPhases::default();
+            let traced = rank(&ranges, excluded, Some(&mut phases)).unwrap();
+            let plain = rank(&ranges, excluded, None).unwrap();
+            assert_eq!(traced, plain);
+            assert_eq!(
+                traced
+                    .iter()
+                    .map(|hit| (hit.id, hit.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                plain
+                    .iter()
+                    .map(|hit| (hit.id, hit.score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!((phases.ranges, phases.rows), (2, 3));
+        }
+        // A failure keeps the phases reached so far and the exact untraced error.
+        let overlap = [
+            ReturnedRange {
+                start: 0,
+                bytes: &first,
+            },
+            ReturnedRange {
+                start: 0,
+                bytes: &first,
+            },
+        ];
+        let mut phases = RankPhases::default();
+        assert_eq!(
+            rank(&overlap, &[], Some(&mut phases)),
+            Err(Sq8ScoreError::InvalidPlane)
+        );
+        assert_eq!(rank(&overlap, &[], None), Err(Sq8ScoreError::InvalidPlane));
+        assert_eq!((phases.ranges, phases.rows, phases.sort_ns), (1, 1, 0));
+        let mut untouched = RankPhases::default();
+        assert_eq!(
+            rank(&[], &[], Some(&mut untouched)),
+            Err(Sq8ScoreError::InvalidRoster)
+        );
+        assert_eq!(untouched, RankPhases::default());
     }
 
     #[test]
