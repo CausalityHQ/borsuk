@@ -1,0 +1,60 @@
+{
+  "ancillary_reserved_usd": 0.15,
+  "ann_run": false,
+  "assets_stage_sha256": "53ce1754d23969cdc69cda552ca960822e7ca56d786e12835c280307f2fe436c",
+  "client_token": "borsuk-next1m-canary-a0002-1791589353",
+  "compute_reserved_usd": 0.65,
+  "conservative_all_gp3_provisioned_rates_estimate_usd": 0.08514092592592593,
+  "controller_commit": "10d045557a2b1d21bc90c9b8441b7e3189c14f33",
+  "ebs_api_rates": [
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0952 per GB-month of General Purpose (gp3) provisioned storage - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0952000000"
+      },
+      "rateCode": "43AUDFP7M3XV6YHQ.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GB-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.006 per provisioned IOPS-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0060000000"
+      },
+      "rateCode": "8AGS2P58KKNUHB49.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "IOPS-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0476 per provisioned MiBps-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "48.7424000000"
+      },
+      "rateCode": "GRZF7WF5ECWS5FS2.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GiBps-mo"
+    }
+  ],
+  "external_deadline_epoch": 1791592953,
+  "instance_not_yet_launched": true,
+  "launch_count": 1,
+  "local_deadline_epoch": 1791592353,
+  "performance_claim": false,
+  "prior_attempt": "i-0912233ef30c90bb5: terminated; both volumes absent; scratch exit90 preserved",
+  "purpose": "Canary-only scratch diagnostic, unchanged safety guards and native algorithm; no ANN",
+  "request_encoding": "raw script string; AWS CLI RunInstances customization applies base64 once",
+  "root_authorizes_one_diagnostic_canary": true,
+  "schema": "borsuk-canary-launch-admission-v1",
+  "started_epoch": 1791589353,
+  "termination_grace_seconds": 120,
+  "total_reserved_usd": 0.8,
+  "user_data_bytes": 12763,
+  "user_data_sha256": "a4a7182cbff96bd191ea16f0a013097312bc0211d0719747a84b8e4f55122149",
+  "watcher_sha256": "a703e43daee19b3b28cc4d27c00e9b76975f2924fa5a12614978c7e9bdfb08fe"
+}
