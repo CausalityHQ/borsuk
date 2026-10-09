@@ -1,0 +1,17 @@
+{
+  "candidate_commit": "36185e2e89aee078525851ade9374d0a771d2533",
+  "launch_authorized": false,
+  "performance_claim": false,
+  "remaining": [
+    "root assembly and frozen inputs",
+    "one disposable target canary",
+    "root replay plus termination and both volume deletions"
+  ],
+  "runtime_verified": false,
+  "schema": "borsuk-canary-source-integration-v1",
+  "source_checks_verified": true,
+  "source_sha256": {
+    "canary-coordinator.sh": "bff35749d957c1e76635b1170c2ef390fe97dadf5b3dc72712b65451397e6f35",
+    "canary-tail.sh": "ba736c3d4b6c05bd6b6c242f795ad2ac138580ab66a15df9856efe23b0fb9aae"
+  }
+}

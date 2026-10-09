@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-canary-static-evidence-v1",
+  "source_commit": "36185e2e89aee078525851ade9374d0a771d2533",
+  "sources": "extracted with git show from the committed blobs",
+  "files": {
+    "canary-tail.sh": "ba736c3d4b6c05bd6b6c242f795ad2ac138580ab66a15df9856efe23b0fb9aae",
+    "canary-coordinator.sh": "bff35749d957c1e76635b1170c2ef390fe97dadf5b3dc72712b65451397e6f35"
+  },
+  "bounded_unit": {
+    "kind": "systemd-run --user --scope",
+    "unit": "run-p2771523-i669547469.scope",
+    "invocation": "490198e3b9284f6c8f67229a76bb1229",
+    "CPUQuota": "100%",
+    "AllowedCPUs": "0",
+    "MemoryMax": "256M",
+    "MemorySwapMax": "0",
+    "TasksMax": 128,
+    "RuntimeMaxSec": 120,
+    "scope_exit": 0
+  },
+  "exits": {
+    "tail_bash_n": 0,
+    "tail_shellcheck_x": 0,
+    "coordinator_bash_n": 0,
+    "coordinator_shellcheck_x": 0,
+    "jq_compile_28_programs": 0,
+    "t3_jq_and_probe_py_compile": 0
+  },
+  "outputs_preserved_in": "scratchpad final-static/out (no pipe, no retry; shellcheck outputs empty)",
+  "supersedes": "/tmp/native-scale-build-canary-static-evidence.70add093.json (same checks on 70add093)",
+  "runtime_executed": false
+}
