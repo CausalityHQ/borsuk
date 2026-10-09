@@ -1,0 +1,36 @@
+{
+  "status": "PROSPECTIVE_COMPONENT_PLAN_NOT_QUALIFIED_NO_PERFORMANCE_LAUNCH",
+  "plan_consultation": "bf29bd603c9b44d7",
+  "preferred_component": "external raw child user/system lifecycle CPU accounting with owned-cgroup descendant completeness qualification",
+  "retained_gates": {
+    "query_cpu_ratio": 1.02,
+    "whole_native_process_user_system_cpu_ratio": 1.02,
+    "median_added_query_wall_ms": 1
+  },
+  "accounting_scope": "timeout plus native process, all native threads and waited descendants, creation through reaping; not total host CPU",
+  "native_fixture_required": [
+    "late work after premature terminal snapshot",
+    "all-thread and waited-child CPU",
+    "sub-centisecond pulse",
+    "nonzero/timeout status preservation",
+    "surviving descendant refusal",
+    "raw accounting versus drained owned cgroup",
+    "supervisor treatment-dependent cost bound"
+  ],
+  "fixture_proposal_only": {
+    "native_calls_max": 16,
+    "cpu": 1,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "seconds": 60,
+    "network": false,
+    "ann": false
+  },
+  "old_canary": "INCONCLUSIVE_UNCHANGED",
+  "fixed_confirmatory_sample_size": null,
+  "automatic_extension_authorized": false,
+  "performance_launch_authorized": false,
+  "method_source_implemented": false,
+  "numerical_analysis_note": "Planner reports closed-data sensitivity calculations. Its bounded analysis unit reached deadline after results; these are not independently qualified sizing evidence. Closed query CPU upper bounds alone already exclude GO irrespective of GNU-time rounding.",
+  "next_required_decision": "Implement and remotely qualify the smallest accounting component, then establish a defensible fixed-size inference basis before freezing any new performance protocol."
+}
