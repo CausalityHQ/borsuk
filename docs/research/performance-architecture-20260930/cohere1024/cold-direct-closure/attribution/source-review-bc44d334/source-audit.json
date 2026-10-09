@@ -1,0 +1,80 @@
+{
+  "status": "SOURCE_AUDIT_ONLY_NATIVE_UNRUN",
+  "commit": "bc44d3342513feb80391e0bba2d76a8f485c92dd",
+  "base": "4e6205edb9a70655cf40f1fdf2b6e16b357ef8b3",
+  "tree": "71133227b9bf9ee55d307ec1a0b975a79675a11d",
+  "paid_launch_authority": false,
+  "files": {
+    "crates/borsuk/src/sq8_s3_range.rs": {
+      "sha256": "d45a5652ad6a925f770d9f96265aa3ed2a1857aed0c00ef26f9dd9557c3872b1",
+      "bytes": 134398,
+      "old_test_names_retained": true,
+      "new_test_names": [
+        "range_future_and_outcome_layout_stay_within_the_modeled_allowance",
+        "refused_trace_clears_every_stamp_without_reallocating_or_reading_a_clock",
+        "traced_failures_report_truthful_partial_spans_through_the_full_drain",
+        "traced_range_query_future_is_send",
+        "traced_ranges_overlap_in_flight_and_order_boundaries_before_rank",
+        "traced_ranking_matches_untraced_and_leaves_unreached_stamps_unset"
+      ]
+    },
+    "crates/borsuk/src/returned_sq8.rs": {
+      "sha256": "bc5f1f2f10ec82bf4c8002331f39d1ad22ffad442e9ea7ec67f4299521d6a201",
+      "bytes": 22724,
+      "old_test_names_retained": true,
+      "new_test_names": [
+        "rank_phases_observe_without_changing_ties_exclusions_or_errors"
+      ]
+    },
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "sha256": "d771284ead889762794f59f6f69023a846674b41782436d11d06e8c03b7a64fd",
+      "bytes": 385217,
+      "old_test_names_retained": true,
+      "new_test_names": [
+        "native_sq8_range_trace_early_refusal_never_exposes_a_reused_trace_for_baseline_and_direct",
+        "native_sq8_range_trace_failure_outcomes_are_truthful_and_leave_ranking_unstarted",
+        "native_sq8_range_trace_memory_and_capacity_are_refused_before_slot_or_any_get",
+        "native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct"
+      ]
+    },
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+      "sha256": "5fa83d15d6b6dc7675489a81bc52f64deed581b95c40cc23f8439bdb54e1b76b",
+      "bytes": 191502,
+      "old_test_names_retained": true,
+      "new_test_names": [
+        "diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+        "execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+        "host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+        "panel_authenticates_every_original_request_row_before_any_open",
+        "panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+        "panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+        "panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+        "panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+        "panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed",
+        "panel_selector_refusals_precede_every_open_and_publication",
+        "panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+        "worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record"
+      ]
+    }
+  },
+  "new_test_count": 23,
+  "contract_sha256": "c715961ac042ba677e1883bfaeb85d3f8660faaa80c85911bfe2205a6b315bf7",
+  "contract_matches_source": true,
+  "review_group": "18833082535d48f9",
+  "independent_review": "BOTH_COMPLETED_SOURCE_REPAIRS_REQUIRED",
+  "disposition": "HOLD_VERIFIED_SOURCE_DEFECTS_REPAIR_PENDING",
+  "engineering_review": "/tmp/borsuk-sq8-attribution-engineering-bc44d334.json",
+  "blockers": [
+    "existing early-refusal assertions expect obsolete not_started",
+    "trace peak double charged and diagnostic-only exhaustion misclassified RESOURCE_REJECT",
+    "Clone and public mutable ranges break fixed-capacity reservation"
+  ],
+  "research_review": "/tmp/borsuk-sq8-attribution-research-bc44d334.json",
+  "research_reconciliation": {
+    "payload_release_interval": "repair requested at existing lifetime boundary",
+    "clock_calls": "retain until perturbation canary measures, no unsupported performance claim",
+    "interrupt_cpu_scope": "aggregate counters requested, root bootstrap records clocksource/affinity",
+    "layout_delta_comment": "correct unmeasured base delta",
+    "internal_trace_capacity": "preGET refusal requested"
+  }
+}
