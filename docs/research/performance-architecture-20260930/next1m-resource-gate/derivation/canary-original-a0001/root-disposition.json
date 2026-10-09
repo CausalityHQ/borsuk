@@ -1,0 +1,20 @@
+{
+  "ann_invoked": false,
+  "evidence": {
+    "bytes": 9029,
+    "sha256": "1956cefe36505fa0d11c0acbd261b42fafd40e6ad3b2683c74f0edf82a13d6c1"
+  },
+  "exact_failed_check": "UNPROVEN: no per-command scratch admission trace",
+  "failure_phase": "scratch",
+  "instance_id": "i-0912233ef30c90bb5",
+  "next_action": "Read-only scratch admission diagnosis; preserve all safety guards; no automatic paid retry",
+  "original_bootstrap_exit": 90,
+  "performance_claim": false,
+  "root_infrastructure_closeout_verified": true,
+  "schema": "borsuk-canary-root-disposition-v1",
+  "scientific_rejection": false,
+  "source_commit": "d2ca5e5f141d08aec4c6f32c32fcbb96086f1fed",
+  "status": "EXECUTION_INVALID",
+  "watcher_defect": "AWS CLI error prefix prevents original anchored deletion-error match",
+  "watcher_exit": 19
+}

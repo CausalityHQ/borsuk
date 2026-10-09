@@ -1,0 +1,7 @@
+{
+  "body_base64": "WyJhd3MiLCAiLS1wcm9maWxlIiwgImNhdXNhbGl0eSIsICItLXJlZ2lvbiIsICJldS1jZW50cmFsLTEiLCAiLS1jbGktY29ubmVjdC10aW1lb3V0IiwgIjUiLCAiLS1jbGktcmVhZC10aW1lb3V0IiwgIjE1IiwgImVjMiIsICJydW4taW5zdGFuY2VzIiwgIi0tY2xpLWlucHV0LWpzb24iLCAiZmlsZTovLy9kYXRhL3RhcmdldC9ib3JzdWstY29sZC1tZW1iZXJzaGlwLW5hdGl2ZS9zY2FsZS1tYWludGVuYW5jZS1xdWFsaWZpY2F0aW9uLWEwMDAyL25leHQxbS1kZXJpdmF0aW9uLWRyYWZ0L2NhbmFyeS1vcmlnaW5hbC1hMDAwMS9sYXVuY2gtcmVxdWVzdC5yMi5qc29uIl0K",
+  "bytes": 324,
+  "encoding": "base64",
+  "original_path": "run-instances.command.json",
+  "sha256": "e01587a2ab3c5a0fadc406220c62e54606d4bf9b3690693779311a992e6b34c1"
+}
