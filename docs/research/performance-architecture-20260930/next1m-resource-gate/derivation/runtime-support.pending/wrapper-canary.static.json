@@ -1,0 +1,48 @@
+{
+  "status": "STATIC_ONLY_RUNTIME_UNRUN",
+  "candidate_commit": "f12deb62d7691da6cced98c14e2bc38a5329b5a1",
+  "wrapper_sha256": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422",
+  "checks": {
+    "bash_n_and_shellcheck_warning": {
+      "exit": 0,
+      "unit": "run-p508629-i663079941.service",
+      "invocation": "60dad8e4309347c4b4a6036f2786e66a"
+    }
+  },
+  "scope": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 120
+  },
+  "files": {
+    "wrapper-canary.sh": {
+      "bytes": 6787,
+      "sha256": "bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f"
+    },
+    "run_native_scale_build_gate.sh": {
+      "bytes": 41373,
+      "sha256": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422"
+    }
+  },
+  "canary_claims": [
+    "source-bound refusal/exit/evidence/float checks",
+    "real qualified ELF usage startup only",
+    "Bash fixture phase supervisor commands explicitly labelled"
+  ],
+  "not_qualified": [
+    "native ANN",
+    "recall",
+    "cold performance",
+    "full bootstrap composition",
+    "scratch mount authority",
+    "independent manager/instance closure"
+  ],
+  "prior_unexecuted_canary_sha256": "7c1d3c16b17006c5bdbe244dfdbdbcd51e1fc1a5d0455b36327010fe97fc751d",
+  "independent_assertions_added": [
+    "native-exit17 failure reason and all three logger original exits0",
+    "stdout-cap failure reason and original tee nonzero"
+  ]
+}
