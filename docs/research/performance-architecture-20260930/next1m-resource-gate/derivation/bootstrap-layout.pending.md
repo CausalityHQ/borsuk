@@ -1,0 +1,19 @@
+# Next1M bootstrap adaptation boundary
+
+Pending implementation/canary; no launch authority or ready claim. Reuse the closed native-admission-a0001 bootstrap transport, service-stop, cloud-final exit attestation and termination-before-collection sequence. Do not create a new controller.
+
+Keep bootstrap/control assets under /mnt/borsuk-scale1m on the 80 GiB root volume. Mount the new blank 40 GiB gp3 scratch volume at /mnt/borsuk-scale1m/prepared-parent BEFORE the existing preparer config's output-parent device/inode finalization. The sealed corpus path /mnt/borsuk-scale1m/prepared-parent/cohort/corpus.f32 then stays unchanged. Put derive/store/generation/query outputs and publication receipt beneath the same mounted prepared-parent namespace; the wrapper's scratch_root is that mountpoint.
+
+Shards and ELF transport remain on the root volume. Their bytes stay charged conservatively in the complete disk ledger even though they do not consume scratch filesystem blocks. The dedicated scratch volume bounds scratch writes only, not aggregate host disk usage; retain separate root and scratch df/identity evidence. Reject disk/device ambiguity before formatting: require exactly the root-owned new 40 GiB EBS device, distinct from root and mounted devices, with launch-volume binding. Do not format a device inferred merely from its order or convenient name.
+
+Preserve the original strict derivation config body/path pins. Preparation stays the exact qualified wrapper and configuration geometry, with all five regenerated output seals checked before derivation. Extend the fixed transport roster13 to17 using the newly pinned four binaries. Keep body SHA/length/ETag authentication and redirect admission unchanged.
+
+Add one owned chain service after the preparation service closes successfully. Its runtime envelope must include all derive/stage/generation/publish/Q32 deadlines plus evidence and cleanup; same-host sequential execution, no retry. service-stop needs an explicit chain case, distinct manager receipt, and original exit semantics. Bootstrap EXIT cleanup stops and checks transport, preparation and chain services before collecting logger/evidence. Independent machine and external shutdown deadlines are absolute and never postponed.
+
+Extend small evidence collection explicitly to completed derivation receipt, generated configs, staged-SQ8 metadata, generation manifests, publication receipt, phase resource/exits and opaque baseline output. Proposed raw evidence cap128MiB and compressed tar cap256MiB: original32MiB raw cap is insufficient for the baseline's64MiB output ceiling plus phase stderr/time/stdout and bootstrap log. Charge and cap before copying; per-phase stdout proposal1MiB and each stderr/time writer1MiB. Do not archive multiGB raw/normalized/SQ8/generation bodies. Retain metadata/hash seals; terminate and wait before root downloads/replays the original terminal archive. Publication or manager/closure failure cannot yield an accepted success.
+
+Chain wrapper deadline9600s/outer service9660s includes9300s sum of derive/stage/build/publish/baseline maxima and300s wrapper allowance. Preparation outer2460s remains distinct. Setup/transport/publication and stop reserves must pass the bootstrap's remaining-absolute-time admission, rather than extending the machine shutdown when setup runs late.
+
+Canary must disclose unexercised phases. Real usage checks: derive --derive with missing args exit1; generation missing args exit1; publisher missing args exit2; baseline missing args exit2. These test startup/CLI only. Exact-wrapper early admission refusals can be real; synthetic post-admission phases must be labelled. No canary output establishes recall or performance.
+
+Current host pressure is severe (IO full avg10 44.59 percent observed); a Devbox read-only audit send timed out. No control/restart/resend or new job is justified by that timeout. Preserve worker and original queued messages.
