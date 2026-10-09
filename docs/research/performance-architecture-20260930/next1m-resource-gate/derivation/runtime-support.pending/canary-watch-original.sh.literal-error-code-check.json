@@ -1,0 +1,11 @@
+{
+  "bash_syntax_exit": 0,
+  "check_unit": "run-p4093361-i670872595.service",
+  "exit": 0,
+  "green_exact_code_rejects_similar_error": true,
+  "invocation_id": "83dda1895f5c42e289a1c4f983c78f71",
+  "recorded_two_volume_errors_accepted": true,
+  "red_old_matches_similar_error_code": true,
+  "remote_runtime_qualified": false,
+  "source_sha256": "32cdc4d34a00ad763e1a92f96f27b288cbdd88747bdc3be2d852c9c5ea89eef0"
+}

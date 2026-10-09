@@ -133,7 +133,7 @@ for vol in "${volume_ids[@]}"; do
     vr=0
     aws_call ec2 describe-volumes --volume-ids "$vol" > "remote-results/$vol.stdout" 2> "remote-results/$vol.stderr" || vr=$?
     printf '%s\n' "$vr" > "remote-results/$vol.exit"
-    if (( vr != 0 )) && grep -qE '^(aws: \[ERROR\]: )?An error occurred \(InvalidVolume.NotFound\) when calling the DescribeVolumes operation( \(reached max retries: [0-9]+\))?:' "remote-results/$vol.stderr"; then absent=true; break; fi
+    if (( vr != 0 )) && grep -qE '^(aws: \[ERROR\]: )?An error occurred \(InvalidVolume\.NotFound\) when calling the DescribeVolumes operation( \(reached max retries: [0-9]+\))?:' "remote-results/$vol.stderr"; then absent=true; break; fi
     nap "$call_stop" 3
   done
   [[ $absent == true ]] || { echo "volume deletion unconfirmed: $vol" >&2; exit 19; }
