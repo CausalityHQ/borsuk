@@ -1,0 +1,15 @@
+PENDING: do not spawn or implement before exact 481f4518 native qualification passes and root integrates it. No paid experiment authorized by this brief.
+
+Implement the smallest Rust-only scale evaluation extension. Evidence: next-scale-planning-result.md and next-scale-root-reconciliation.pending.md in this directory; historical prepared/complete.json committed under cohere1024/native-preflight-spot/a0002/preflight; prospective-scale-shard-pins.json is publisher metadata only, not authenticated data.
+
+Own only crates/borsuk/src/bin/prepare_cohere_native_cohort.rs, crates/borsuk/src/bin/check_cohere_native_baseline.rs, crates/borsuk/examples/compare_native_replay.rs. Root supplies exact integrated base. No library algorithm, routing, normalization, fit, SQ8, Python/TS, controller, resource cap, dataset acquisition or paid-run changes.
+
+Replace fixed production geometry/two-shard assumptions with strict authenticated experiment geometry and ordered shard descriptors. Preserve the historical 1000 query rows [100000,101000), original bytes and IDs. For 1M corpus select [0,100000) union [101000,1001000); reject overlap, duplicate IDs, malformed rows and insufficient authenticated rows. Validate checked arithmetic and exact EOF/body hashes/schema/column types for every shard; metadata listing is not body admission. Bump experimental schemas and reject incompatible artifacts clearly.
+
+Stream original f32 vectors into the native binary corpus; preserve row locators and application-ID mapping. Compute exhaustive cosine truth from original f32 data using bounded blocks, f64 arithmetic and explicit deterministic tie order. Keep only bounded queries/top-k state rather than all corpus vectors resident. Charge coexistence, decoder/ID state, outputs, temporary files and failures against explicit limits; never infer RSS from payload size.
+
+Runner must accept explicit population/profile, preserve actual native query/scoring and normalization ownership, seal all results before truth access, and bind geometry/source/generation/config identities. Reducer must authenticate corresponding counts/seals; no hardcoded 1000 assumptions hidden in output parsing. Keep cold claims false for local replay.
+
+Acceptance: independent tiny scalar truth oracle with excluded middle interval, nonidentity IDs, nonunit vectors/ties/tail; malformed/overlap/duplicate/short-body/overflow/cap failures; exact original-query preservation; runner/reducer count and seal mismatches. Root runs affected native tests, release, locked workspace all-target Clippy correctness+suspicious and real shim-unset test compilation remotely. Local source-only work CPU1/Allowed0/256MiB/noSwap/pids128/120s; no Cargo/native/data/network/consultations/children. Commit verified source slice or label UNVERIFIED if remote gates pending, hold same worker for actual disposition.
+
+No recall threshold, process envelope, deadline, performance GO, competitor win or 1M launch is authorized by this pending brief. Root freezes those after measured admission and native falsification.
