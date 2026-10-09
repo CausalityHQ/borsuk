@@ -1,0 +1,17 @@
+{
+  "bash_syntax_exit": 0,
+  "cases": [
+    "root volume error",
+    "scratch volume error",
+    "watcher retry-annotated error",
+    "reject AccessDenied",
+    "reject GetObject"
+  ],
+  "change": "Recognize recorded AWS CLI error prefix and retry annotation; still require nonzero command exit, exact error and exact API operation.",
+  "check_unit": "run-p3737298-i670519594.service",
+  "exit": 0,
+  "invocation_id": "93d75616bf264ba08dda09f47b556c08",
+  "original_a0001_watcher_unchanged": true,
+  "remote_watcher_runtime_qualified": false,
+  "source_sha256": "347b21ab8bfb6d9ddfe3441d24a3d2a4925d8c3958c2804c112e405a4a34e584"
+}
