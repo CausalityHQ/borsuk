@@ -1,0 +1,107 @@
+{
+  "source_parent": "632338931383f60216f4e891774a18a8e0b6148a",
+  "artifacts": [
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/frozen-protocol.json",
+      "bytes": 1009,
+      "sha256": "362a6c73faf15f9605fb2299bdd6eeb66c93f7df6c5951437654a55a35ac78a8"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/launch-request.json",
+      "bytes": 1362,
+      "sha256": "bb82768585c4fc71f0489e00002d6024e4be83ddbdc6c05578be0044565405f6"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/launch-response.json",
+      "bytes": 5416,
+      "sha256": "e751a66ea35a5e5ed31f53e1ad0e902093875d7271bc5b08830585d7e24680a3"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/staging-receipt.json",
+      "bytes": 1850,
+      "sha256": "786f14a321b9e0452dc89fcb38c0e657e0eb037ee8436408dc397293d9e299d4"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/terminal.json",
+      "bytes": 697,
+      "sha256": "ceea8f34dfd0871f45089665e2542e3a1a174ece14a7311474dfffaa18315365"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/collection.json",
+      "bytes": 190,
+      "sha256": "e1bd98c46d1b4fb43684ff505ca94bbad84c259289ba73d938af7af8614d1531"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/terminate.json",
+      "bytes": 335,
+      "sha256": "7ab9035ac260f7a3cb61919fdebf0c58695bca28d476534cdfd2bf94d2ac091e"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/independent-replay.json",
+      "bytes": 992,
+      "sha256": "55e1f9bd9bc464e9337ab81e76b77a760762e7655a8d73c7cf81ec3aa74d8192"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/evidence.tar.gz",
+      "bytes": 505767,
+      "sha256": "49cb44ab1e48dd984969b0cf5b6797bc047296495e17a23e4eaab8def82ff0fe"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0001/remote-results/evidence_faults.stdout",
+      "bytes": 5293,
+      "sha256": "20905960f6dc1051917501a023d4724b14dfacbfed41babeec4a51a73c970fef"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/frozen-protocol.json",
+      "bytes": 1501,
+      "sha256": "cac84cee1071aab6e5fdead193f20bf5ca7d7c38de066acd43bcd76952b9a850"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/launch-request.json",
+      "bytes": 1362,
+      "sha256": "214c6bd9a913906a4cef9013b31dbdc7209c95ef4c28f88012d51dafcfeb5118"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/launch-response.json",
+      "bytes": 5410,
+      "sha256": "03c70ffd75a62b2292e03c8f16b994c2ce22dab21940e73c210c45f637909997"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/staging-receipt.json",
+      "bytes": 1850,
+      "sha256": "7f866178aef34d2c1ea81f3b86fa7f852cc24317e4998e5bf19bc6ae25b99a7a"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/terminal.json",
+      "bytes": 697,
+      "sha256": "1e2f0a4f882c637d31354304e925a8de183172577ec07634039b2abf565ce6bc"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/collection.json",
+      "bytes": 190,
+      "sha256": "231390e0253617eba15ea5209613a58f0b2396d0bdbdd77ae482f7a670a4022b"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/terminate.json",
+      "bytes": 335,
+      "sha256": "870ef460a89582c925db32978cf76c841436970cc745a45c3ccedbc466e506cc"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/independent-replay.json",
+      "bytes": 3812,
+      "sha256": "7143b6b65b1c63536930525b3be27e9bafc456fb0aa6f9f29f24039b3cc24171"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/evidence.tar.gz",
+      "bytes": 636272,
+      "sha256": "ceca84029c4f6a81e26bff86db106ba889e6dd63e54f131988375e70022b2fd2"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/cohere1024/native-cpu-mechanics/a0002/remote-results/evidence_faults.stdout",
+      "bytes": 5236,
+      "sha256": "be4dba92a0753fbcedfe07c2764a8e11bec73c0d41249860024d61d4f2d942a8"
+    }
+  ],
+  "rust_source_changed": false,
+  "performance_claim": false
+}

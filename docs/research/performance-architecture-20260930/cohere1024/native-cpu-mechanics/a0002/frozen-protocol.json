@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-native-cpu-mechanics-frozen-v1",
+  "frozen_at": "2026-10-09T07:41:50.829667+00:00",
+  "driver_commit": "d5fd3ff1e7465f706c6e3788a4714148661c297f",
+  "instance_request_sha256": "214c6bd9a913906a4cef9013b31dbdc7209c95ef4c28f88012d51dafcfeb5118",
+  "userdata_sha256": "90b615d57f4f4145a93369309072373271693641d5af92fc9769b24d63b7f462",
+  "staging_receipt_sha256": "7f866178aef34d2c1ea81f3b86fa7f852cc24317e4998e5bf19bc6ae25b99a7a",
+  "maximum_machine_seconds_from_request": 1800,
+  "reserved_total_usd": "0.15",
+  "no_retry": true,
+  "spot_interruption": "INVALID/incomplete; preserve original; no automatic relaunch",
+  "gate_order": [
+    "exact-source fault checks",
+    "real dummy canary",
+    "once-only 12 native mechanics calls"
+  ],
+  "claims": {
+    "performance": false,
+    "numerical_cpu_accuracy": false,
+    "overhead_GO": false
+  },
+  "acceptance": "Independent closed archive replay plus original exits and exact same instance termination; self-reported GO insufficient",
+  "watcher_sha256": "7ae4d10a8a1de24e15eacc3da835c6806835fb05d67e755e91cca9dabd766af6",
+  "harness_sha256": "a5798687829430354bb8818b29a8106d7a560ec12d77465364094e7949d15570",
+  "repair": "Only fallback-write fault injection; all original assertions/driver/canary/resources unchanged",
+  "prior_attempt": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/fixture-driver-d5fd3ff1-unverified/verification-assets-a0001/remote-results/independent-replay.json"
+}

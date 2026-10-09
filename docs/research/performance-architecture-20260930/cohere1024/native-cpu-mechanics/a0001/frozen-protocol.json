@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-native-cpu-mechanics-frozen-v1",
+  "frozen_at": "2026-10-09T07:35:08.709366+00:00",
+  "driver_commit": "d5fd3ff1e7465f706c6e3788a4714148661c297f",
+  "instance_request_sha256": "bb82768585c4fc71f0489e00002d6024e4be83ddbdc6c05578be0044565405f6",
+  "userdata_sha256": "0714acf08429d2bcf25ca5ce4fae36c377931d5e658992369635cc3a1fe6b2da",
+  "staging_receipt_sha256": "786f14a321b9e0452dc89fcb38c0e657e0eb037ee8436408dc397293d9e299d4",
+  "maximum_machine_seconds_from_request": 1800,
+  "reserved_total_usd": "0.15",
+  "no_retry": true,
+  "spot_interruption": "INVALID/incomplete; preserve original; no automatic relaunch",
+  "gate_order": [
+    "exact-source fault checks",
+    "real dummy canary",
+    "once-only 12 native mechanics calls"
+  ],
+  "claims": {
+    "performance": false,
+    "numerical_cpu_accuracy": false,
+    "overhead_GO": false
+  },
+  "acceptance": "Independent closed archive replay plus original exits and exact same instance termination; self-reported GO insufficient"
+}

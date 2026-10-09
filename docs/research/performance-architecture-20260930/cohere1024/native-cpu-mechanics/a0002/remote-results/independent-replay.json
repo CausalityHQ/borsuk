@@ -1,0 +1,97 @@
+{
+  "status": "INVALID_CANARY_PAYLOAD_CPUSET_UNREADABLE",
+  "instance_id": "i-0d9186d80bc9be2cf",
+  "same_instance_terminated": true,
+  "archive_authenticated": true,
+  "all_six_asset_bodies_authenticated": true,
+  "faults": {
+    "harness": "fault-harness.sh",
+    "driver_sha256": "8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618",
+    "passed": 62,
+    "failed": 0,
+    "skipped_budget": 0,
+    "elapsed_s": 31,
+    "budget_s": 105,
+    "helper_or_fixture_invocations": 0,
+    "tripwire": "clear",
+    "workdir": "/tmp/ncpu-fault.XXbH5v"
+  },
+  "canary": {
+    "schema": "borsuk-native-cpu-fixture-canary-v1",
+    "state": "FAIL",
+    "failure": "check failed: [01-exit0] limits: cpu.max cpuset memory swap pids",
+    "publication_errors": "",
+    "cleanup_incomplete": false,
+    "batch": "canary-20261009T074351Z-5871",
+    "driver_sha256": "8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618",
+    "gate_sha256": "4f75286be37158c13a00cb60c8f77bdeba2f1303bdf5876394cb180389af1b85",
+    "hold_sha256": "fcfa6b243d6f069ef6b312c891b594c3186c931c4651364d194ab3d004d32dbb",
+    "checks_recorded": 7,
+    "checks": [
+      {
+        "check": "timeout is a symlink-free regular GNU coreutils ELF",
+        "ok": true,
+        "detail": "/usr/bin/timeout"
+      },
+      {
+        "check": "systemd >= 254",
+        "ok": true,
+        "detail": "255"
+      },
+      {
+        "check": "outer service RuntimeMaxSec <= 120 s (other outer limits recorded only)",
+        "ok": true,
+        "detail": "2min"
+      },
+      {
+        "check": "[01-exit0] gate reached ready under env -i HOME/SHELL + PrivateNetwork + ~@network-io",
+        "ok": true,
+        "detail": "/mnt/borsuk-ncpu/canary/fifo/01-exit0.ready"
+      },
+      {
+        "check": "[01-exit0] unit properties",
+        "ok": true,
+        "detail": "active|running|exec|process|yes|payload|/system.slice/borsuk-ncpu-canary-20261009T074351Z-5871-01-exit0.service"
+      },
+      {
+        "check": "[01-exit0] delegated main is in payload; unit cgroup holds no process",
+        "ok": true,
+        "detail": "0::/system.slice/borsuk-ncpu-canary-20261009T074351Z-5871-01-exit0.service/payload"
+      },
+      {
+        "check": "[01-exit0] limits: cpu.max cpuset memory swap pids",
+        "ok": false,
+        "detail": "100000 100000 0 <unreadable> 268435456 0 128"
+      }
+    ],
+    "dummy_command": "/bin/bash <canary dummy script> (exit 0 | exit 7 | exec sleep 100); the native helper and all fixtures are NEVER invoked",
+    "real_operations": [
+      "transient units via the driver exact systemd-run property array",
+      "env -i gate reaching ready under HOME/SHELL + PrivateNetwork + ~@network-io",
+      "DelegateSubgroup=payload placement",
+      "ExecStopPost hold in .control",
+      "ExecMainCode/Status at stop-post (exit 0 and exit 7)",
+      "payload cpu.stat retained after populated=0 while hold active",
+      "hold release -> unit end + hold receipt",
+      "driver kill_owned_units draining a sleeping dummy",
+      "bounded manager calls via the authenticated timeout",
+      "EXIT cleanup of canary-owned units only"
+    ],
+    "not_exercised": [
+      "native helper and fixtures",
+      "driver admission/package auth/outer-bound parsing/watchdog/hard stop/finalize/TERMINAL",
+      "publication-failure LimitFSIZE shape",
+      "survivor/unwaited/sigpipe/timeout-KILL cases",
+      "launch-response failure is a CANARY DECISION, only the cleanup is real"
+    ],
+    "claims": {
+      "numerical_CPU_accuracy": false,
+      "overhead_GO": false,
+      "performance": false
+    }
+  },
+  "original_exit": 1,
+  "native_fixture_unrun": true,
+  "performance_claim": false,
+  "next_action": "Diagnose delegated subtree controller enablement; preserve strict CPU0 admission; no automatic retry"
+}

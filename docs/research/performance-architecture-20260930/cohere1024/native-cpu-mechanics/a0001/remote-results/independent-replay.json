@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-native-cpu-mechanics-replay-v1",
+  "status": "INVALID_FAULT_INJECTION",
+  "instance_id": "i-05ab001489835f5fa",
+  "same_instance_terminated": true,
+  "archive_authenticated": true,
+  "all_six_asset_bodies_authenticated": [
+    "driver.sh",
+    "fault-harness.sh",
+    "target-canary.sh",
+    "run-stages.sh",
+    "stage-admit.sh",
+    "native_process_cpu"
+  ],
+  "fault_summary": {
+    "harness": "fault-harness.sh",
+    "driver_sha256": "8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618",
+    "passed": 61,
+    "failed": 1,
+    "skipped_budget": 0,
+    "elapsed_s": 32,
+    "budget_s": 105,
+    "helper_or_fixture_invocations": 0,
+    "tripwire": "clear",
+    "workdir": "/tmp/ncpu-fault.Et4980"
+  },
+  "original_exit_verified": 1,
+  "canary_and_fixture_artifacts_absent": true,
+  "runtime_driver_qualified": false,
+  "performance_claim": false,
+  "next_action": "Repair demonstrated jq-spy fallback injection; new frozen attempt, no automatic retry"
+}

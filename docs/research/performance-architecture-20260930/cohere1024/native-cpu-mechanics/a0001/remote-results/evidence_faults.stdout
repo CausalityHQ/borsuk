@@ -1,0 +1,108 @@
+== extracted from driver.sh sha256 8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618
+   sha                      line 95   text-sha256 1db4103cbe0b991d
+   rd                       line 101  text-sha256 f1fa96ae968b0e43
+   ev                       line 102  text-sha256 c538a47b7b7f0da5
+   inv                      line 105  text-sha256 65b5392664921aca
+   inc                      line 106  text-sha256 265ec923def5a2a6
+   eq                       line 107  text-sha256 274f05eaf8f8fda9
+   jarr                     line 100  text-sha256 8e253fa2b2b6c234
+   nap                      line 103  text-sha256 5e1a80e1e6dbb2a2
+   dl                       line 104  text-sha256 8c71b65923ddcb35
+   tmo                      line 94   text-sha256 5a77ad818f963972
+   span_us                  line 77   text-sha256 202d4b7f120d7c7f
+   unit_cg                  line 290  text-sha256 df5858f96397f168
+   kill_owned_units         line 303  text-sha256 8c29d159c0a31101
+   wait_cleanup_outcome     line 330  text-sha256 1f56d530dd66c930
+   start_watchdog           line 348  text-sha256 4c50196a10aee57c
+   wait_for                 line 390  text-sha256 2da339b68f7102d0
+   show_to                  line 410  text-sha256 2506ab013a6b2a91
+   sub_stop_post            line 416  text-sha256 52fba26f4f3d732a
+   unit_ended               line 417  text-sha256 c0c0fb205682f23b
+   payload_drained          line 419  text-sha256 f0b50ea4319667f7
+   cpu_usec                 line 725  text-sha256 1aca1e298f8f111f
+   diagnostic               line 729  text-sha256 7e79fb3295eec005
+   unwaited_witness         line 750  text-sha256 5a0cce01afebfecf
+   frag_object              line 758  text-sha256 6df78d82b7d866ed
+   finish_case              line 759  text-sha256 9b9ff9a2a7507dbb
+   not_run_case             line 805  text-sha256 700bda56d7c6cc2d
+   persist_evidence         line 611  text-sha256 ad1131251c8f46be
+   capture_stop_post        line 643  text-sha256 65f304e0a74e8add
+   run_case                 line 446  text-sha256 dbeb74cee818aa59
+   publish_result           line 849  text-sha256 214a3a32bc6b9918
+   publish_manifest         line 896  text-sha256 eb3fb892d4c1f873
+   close_admission          line 901  text-sha256 9bbe537cc507986d
+   retract_stale_success    line 909  text-sha256 ee802f0209c4c849
+   final_rc                 line 912  text-sha256 3b355737891bf55e
+   publish_terminal         line 913  text-sha256 9441bc85866ae773
+   finalize                 line 920  text-sha256 479b3ffc54f3736b
+   tail-region of run_case  text-sha256 ddc87e9fa94dfefc (19 lines, eval'd)
+   constant overrides in src.fast: CLEANUP_ALLOWANCE_S=1 PUBLICATION_ALLOWANCE_S=1; FH_DEADLINE_S overrides (labelled)
+PASS fin_happy
+PASS fin_marker_mismatch
+PASS fin_missing_case
+PASS fin_empty_case
+PASS fin_reordered_case
+PASS fin_state_mismatch
+PASS fin_result_jq_fail
+PASS fin_manifest_fail
+PASS fin_final_sync_fail
+PASS fin_result_sha_fail
+PASS fin_terminal_jq_fail
+PASS fin_terminal_mv_fail
+PASS fin_terminal_sync_fail
+PASS fin_stdout_fail
+FAIL fin_stale_success_failed_invalid_rewrite
+    |     ASSERT FAILED: fallback write failure retained
+PASS fin_deadline_never_success
+PASS fin_deadline_cleanup_failed
+PASS fin_hard_stop_marker
+PASS fin_cleanup_log_failed
+PASS fin_cleanup_log_unreadable
+PASS fin_extra_inconclusive
+PASS diag_normal
+PASS diag_decreasing
+PASS diag_malformed
+PASS diag_overflow_digits
+PASS diag_delta_over_one_hour
+PASS diag_missing_final
+PASS diag_empty_final
+PASS diag_missing_initial
+PASS witness_pass
+PASS witness_small_delta
+PASS witness_delta_not_absolute
+PASS fc_jq_fail_state_invalid
+PASS fc_fallback_write_fail
+PASS fc_empty_fragment
+PASS fc_required_fragment_missing
+PASS fc_baseline
+PASS cap_pid_mismatch
+PASS cap_pid_match
+PASS cap_hold_in_payload
+PASS kill_order_and_fifo
+PASS kill_exact_unit_only
+PASS kill_foreign_ignored
+PASS kill_uses_recorded_cg
+PASS kill_invalid_recorded_cg
+PASS launch_created_response_failed
+PASS tail_holdok_missing
+PASS tail_holdok_present
+PASS tail_deadline_done
+PASS tail_deadline_failed
+PASS tail_holdok_not_required_after_timeout
+PASS persist_ok
+PASS persist_sync_fail
+PASS arb_driver_wins
+PASS arb_watchdog_won_done
+PASS arb_watchdog_won_failed
+PASS arb_watchdog_won_no_outcome
+PASS arb_mkdir_error
+PASS wd_driver_wins
+PASS wd_watchdog_wins
+PASS wd_hard_stop_independent
+PASS kill_cleanup_failure
+== SCOPE (honest): source-bound FUNCTION-LEVEL / exact-region execution with spies; 0 helper, 0 fixture, 0 real-systemd invocations.
+   NOT exercised: admission (all of it), run_case pre-release validation + release/observe middle, observe_survivor, check_native_outputs
+   oracles, closed_controls, main loop and on_exit abort classes, unit_ended 15 s timeout, 60 s production deadline (deadline-like
+   branches use pre-seeded markers or labelled constant overrides), real systemd/cgroup/.control semantics, ext4+syncfs durability
+   (ran on /tmp), EPOCHREALTIME clock steps. No local run was made by the author; first execution is root's bounded remote run.
+{"harness":"fault-harness.sh","driver_sha256":"8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618","passed":61,"failed":1,"skipped_budget":0,"elapsed_s":32,"budget_s":105,"helper_or_fixture_invocations":0,"tripwire":"clear","workdir":"/tmp/ncpu-fault.Et4980"}

@@ -1,0 +1,50 @@
+{
+  "status": "ASSETS_STAGED_AUTHENTICATED_RUNTIME_UNRUN",
+  "time_utc": "2026-10-09T07:34:14.608394+00:00",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "assets": [
+    {
+      "name": "driver.sh",
+      "key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0001/inputs/driver.sh",
+      "bytes": 65264,
+      "sha256": "8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618",
+      "create_only": true,
+      "full_readback_match": true
+    },
+    {
+      "name": "fault-harness.sh",
+      "key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0001/inputs/fault-harness.sh",
+      "bytes": 45120,
+      "sha256": "a18810e66056c8bd9396aedfbdef970f15c39c369bbdc0f472005ca8eb1fd88c",
+      "create_only": true,
+      "full_readback_match": true
+    },
+    {
+      "name": "target-canary.sh",
+      "key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0001/inputs/target-canary.sh",
+      "bytes": 19871,
+      "sha256": "d622118455673ec5f1db66e0eef4dcd550130ea201636fc3c5c043a519a318a9",
+      "create_only": true,
+      "full_readback_match": true
+    },
+    {
+      "name": "run-stages.sh",
+      "key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0001/inputs/run-stages.sh",
+      "bytes": 3551,
+      "sha256": "87587f9d75c2c3c30d28979085976d3903ee413d028aa4748e6d54b564171ba6",
+      "create_only": true,
+      "full_readback_match": true
+    },
+    {
+      "name": "stage-admit.sh",
+      "key": "research/semantic-router/20261009/native-cpu-fixture-mechanics-a0001/inputs/stage-admit.sh",
+      "bytes": 743,
+      "sha256": "d079e1fac2804c0aecbc055afd2a89e33c80cf6dadedb09204be96e7e481d591",
+      "create_only": true,
+      "full_readback_match": true
+    }
+  ],
+  "instance_launched": false,
+  "native_executed": false,
+  "performance_claim": false
+}

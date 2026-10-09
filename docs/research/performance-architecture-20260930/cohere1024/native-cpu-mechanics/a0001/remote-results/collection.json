@@ -1,0 +1,8 @@
+{
+  "instance_id": "i-05ab001489835f5fa",
+  "terminated": true,
+  "reason": "terminal",
+  "archive_authenticated": true,
+  "independent_replay_pending": true,
+  "performance_claim": false
+}

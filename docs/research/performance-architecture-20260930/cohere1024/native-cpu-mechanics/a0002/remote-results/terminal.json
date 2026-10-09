@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-native-cpu-fixture-mechanics-closed-v1",
+  "instance_id": "i-0d9186d80bc9be2cf",
+  "phase": "canary",
+  "original_exit": 1,
+  "exit": 1,
+  "driver_commit": "d5fd3ff1e7465f706c6e3788a4714148661c297f",
+  "driver_sha256": "8b5f023a528b8a4a7cc84ea95c12d8b6a1bb8a61a7d5a7b3a736e9141639e618",
+  "helper_sha256": "1ce0405566852577e15dae1b7beeb626626af561d716af45baa75add4f6c4b74",
+  "evidence": {
+    "bytes": 636272,
+    "sha256": "ceca84029c4f6a81e26bff86db106ba889e6dd63e54f131988375e70022b2fd2"
+  },
+  "scope": "execution mechanics only; independent replay required",
+  "ann_run": false,
+  "performance_claim": false,
+  "numerical_CPU_accuracy": false,
+  "overhead_GO": false
+}

@@ -1,0 +1,59 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.large",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "ClientToken": "borsuk-ncpu-mechanics-a0001-d5fd3ff1",
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+  },
+  "Placement": {
+    "AvailabilityZone": "eu-central-1c"
+  },
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "MaxPrice": "0.10",
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate"
+    }
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "VolumeSize": 8,
+        "VolumeType": "gp3",
+        "DeleteOnTermination": true
+      }
+    }
+  ],
+  "MetadataOptions": {
+    "HttpTokens": "required",
+    "HttpEndpoint": "enabled"
+  },
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-native-cpu-fixture-mechanics-a0001"
+        },
+        {
+          "Key": "Purpose",
+          "Value": "native-cpu-mechanics-only-no-ann"
+        },
+        {
+          "Key": "Owner",
+          "Value": "borsuk-prod-ready-v9"
+        }
+      ]
+    }
+  ]
+}
