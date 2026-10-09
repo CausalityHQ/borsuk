@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (NoSuchEntity) when calling the GetRolePolicy operation: The role policy with name BorsukScaleInputsImmutable20261009 cannot be found.

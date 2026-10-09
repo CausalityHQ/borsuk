@@ -1,0 +1,31 @@
+{
+    "InstanceProfile": {
+        "Path": "/",
+        "InstanceProfileName": "borsuk-bench-profile",
+        "InstanceProfileId": "AIPAWTA6JHQ2J3ZONR2IU",
+        "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+        "CreateDate": "2026-07-18T12:31:12+00:00",
+        "Roles": [
+            {
+                "Path": "/",
+                "RoleName": "borsuk-bench-role",
+                "RoleId": "AROAWTA6JHQ2OLUFS3BA2",
+                "Arn": "arn:aws:iam::453182569524:role/borsuk-bench-role",
+                "CreateDate": "2026-07-18T12:31:07+00:00",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ec2.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                }
+            }
+        ],
+        "Tags": []
+    }
+}

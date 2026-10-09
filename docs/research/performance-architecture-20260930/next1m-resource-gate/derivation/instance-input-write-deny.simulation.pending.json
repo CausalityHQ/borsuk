@@ -1,0 +1,313 @@
+{
+    "EvaluationResults": [
+        {
+            "EvalActionName": "s3:PutObject",
+            "EvalResourceName": "arn:aws:s3:::${BucketName}/${KeyName}",
+            "EvalDecision": "explicitDeny",
+            "MatchedStatements": [
+                {
+                    "SourcePolicyId": "AmazonS3FullAccess",
+                    "SourcePolicyType": "IAM Policy",
+                    "StartPosition": {
+                        "Line": 3,
+                        "Column": 17
+                    },
+                    "EndPosition": {
+                        "Line": 8,
+                        "Column": 6
+                    }
+                },
+                {
+                    "SourcePolicyId": "PolicyInputList.1",
+                    "SourcePolicyType": "IAM Policy",
+                    "StartPosition": {
+                        "Line": 3,
+                        "Column": 17
+                    },
+                    "EndPosition": {
+                        "Line": 11,
+                        "Column": 4
+                    }
+                }
+            ],
+            "MissingContextValues": [],
+            "EvalDecisionDetails": {},
+            "ResourceSpecificResults": [
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/inputs/probe",
+                    "EvalResourceDecision": "explicitDeny",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "PolicyInputList.1",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 11,
+                                "Column": 4
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-a0001/inputs/probe",
+                    "EvalResourceDecision": "explicitDeny",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "PolicyInputList.1",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 11,
+                                "Column": 4
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/evidence/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/historical-preserved/inputs/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "EvalActionName": "s3:GetObject",
+            "EvalResourceName": "arn:aws:s3:::${BucketName}/${KeyName}",
+            "EvalDecision": "allowed",
+            "MatchedStatements": [
+                {
+                    "SourcePolicyId": "AmazonS3FullAccess",
+                    "SourcePolicyType": "IAM Policy",
+                    "StartPosition": {
+                        "Line": 3,
+                        "Column": 17
+                    },
+                    "EndPosition": {
+                        "Line": 8,
+                        "Column": 6
+                    }
+                }
+            ],
+            "MissingContextValues": [],
+            "EvalDecisionDetails": {},
+            "ResourceSpecificResults": [
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/inputs/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-a0001/inputs/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/evidence/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/historical-preserved/inputs/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "EvalActionName": "s3:DeleteObject",
+            "EvalResourceName": "arn:aws:s3:::${BucketName}/${KeyName}",
+            "EvalDecision": "explicitDeny",
+            "MatchedStatements": [
+                {
+                    "SourcePolicyId": "AmazonS3FullAccess",
+                    "SourcePolicyType": "IAM Policy",
+                    "StartPosition": {
+                        "Line": 3,
+                        "Column": 17
+                    },
+                    "EndPosition": {
+                        "Line": 8,
+                        "Column": 6
+                    }
+                },
+                {
+                    "SourcePolicyId": "PolicyInputList.1",
+                    "SourcePolicyType": "IAM Policy",
+                    "StartPosition": {
+                        "Line": 3,
+                        "Column": 17
+                    },
+                    "EndPosition": {
+                        "Line": 11,
+                        "Column": 4
+                    }
+                }
+            ],
+            "MissingContextValues": [],
+            "EvalDecisionDetails": {},
+            "ResourceSpecificResults": [
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/inputs/probe",
+                    "EvalResourceDecision": "explicitDeny",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "PolicyInputList.1",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 11,
+                                "Column": 4
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-a0001/inputs/probe",
+                    "EvalResourceDecision": "explicitDeny",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "PolicyInputList.1",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 11,
+                                "Column": 4
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/evidence/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                },
+                {
+                    "EvalResourceName": "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/historical-preserved/inputs/probe",
+                    "EvalResourceDecision": "allowed",
+                    "MatchedStatements": [
+                        {
+                            "SourcePolicyId": "AmazonS3FullAccess",
+                            "SourcePolicyType": "IAM Policy",
+                            "StartPosition": {
+                                "Line": 3,
+                                "Column": 17
+                            },
+                            "EndPosition": {
+                                "Line": 8,
+                                "Column": 6
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

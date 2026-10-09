@@ -1,0 +1,7 @@
+{
+    "PolicyNames": [
+        "BorsukColdS3VectorsReference20261007",
+        "BorsukFormatQualificationMetricsRead",
+        "BorsukPublicationS3Vectors"
+    ]
+}
