@@ -1,0 +1,85 @@
+{
+  "ami": {
+    "Architecture": "x86_64",
+    "BlockDeviceMappings": [
+      {
+        "DeviceName": "/dev/sda1",
+        "Ebs": {
+          "DeleteOnTermination": true,
+          "Encrypted": false,
+          "SnapshotId": "snap-092018bfedac13319",
+          "VolumeSize": 8,
+          "VolumeType": "gp3"
+        }
+      },
+      {
+        "DeviceName": "/dev/sdb",
+        "VirtualName": "ephemeral0"
+      },
+      {
+        "DeviceName": "/dev/sdc",
+        "VirtualName": "ephemeral1"
+      }
+    ],
+    "BootMode": "uefi-preferred",
+    "CreationDate": "2026-09-23T11:56:55.000Z",
+    "DeprecationTime": "2028-09-23T11:56:55.000Z",
+    "Description": "Canonical, Ubuntu, 24.04, amd64 noble image",
+    "EnaSupport": true,
+    "FreeTierEligible": true,
+    "Hypervisor": "xen",
+    "ImageId": "ami-0b8a830d6339a9758",
+    "ImageLocation": "amazon/ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260923",
+    "ImageOwnerAlias": "amazon",
+    "ImageType": "machine",
+    "ImdsSupport": "v2.0",
+    "Name": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260923",
+    "OwnerId": "099720109477",
+    "PlatformDetails": "Linux/UNIX",
+    "Public": true,
+    "PublicSsmParameterName": "aws/service/canonical/ubuntu/server/noble/stable/current/amd64/hvm/ebs-gp3/ami-id",
+    "RootDeviceName": "/dev/sda1",
+    "RootDeviceType": "ebs",
+    "SriovNetSupport": "simple",
+    "State": "available",
+    "UsageOperation": "RunInstances",
+    "VirtualizationType": "hvm"
+  },
+  "failure_reason": "versioning stdout empty; jq object-shape check failed after all three original APIs exited0",
+  "launch_admitted": false,
+  "observed_started_utc": "2026-10-09T22:36:39Z",
+  "original_postcheck_exit": 4,
+  "performance_claim": false,
+  "raw": {
+    "ami": {
+      "bytes": 1944,
+      "sha256": "966df088d77f75edcb206893e3129c3e6b2f1ff7398dc4a6e7fc827aa7e63099"
+    },
+    "spot": {
+      "bytes": 332,
+      "sha256": "556d215735cbc537909fd55a8a9bd05057a2eee13e3bdd8379949d319ef3d6e5"
+    },
+    "versioning": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "schema": "borsuk-next1m-canary-cloud-readonly-observation-v1",
+  "spot": [
+    {
+      "AvailabilityZone": "eu-central-1c",
+      "AvailabilityZoneId": "euc1-az1",
+      "InstanceType": "c7i.2xlarge",
+      "ProductDescription": "Linux/UNIX",
+      "SpotPrice": "0.204400",
+      "Timestamp": "2026-10-09T18:00:00+00:00"
+    }
+  ],
+  "spot_capacity_verified": false,
+  "status": "AMI_QUOTE_OBSERVED_VERSIONING_UNASSERTED",
+  "versioning": {
+    "api_exit": 0,
+    "status": "UNASSERTED",
+    "stdout_bytes": 0
+  }
+}
