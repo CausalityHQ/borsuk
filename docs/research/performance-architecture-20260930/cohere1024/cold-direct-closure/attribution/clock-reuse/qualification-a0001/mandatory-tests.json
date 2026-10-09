@@ -1,0 +1,36 @@
+{
+  "ranges": [
+    "sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance",
+    "sq8_s3_range::tests::real_http_traced_body_clock_count_matches_delivered_chunks",
+    "sq8_s3_range::tests::refused_trace_clears_every_stamp_without_reallocating_or_reading_a_clock",
+    "sq8_s3_range::tests::traced_body_clock_reuse_counts_chunks_and_failure_boundaries",
+    "sq8_s3_range::tests::traced_failures_report_truthful_partial_spans_through_the_full_drain",
+    "sq8_s3_range::tests::traced_range_query_future_is_send",
+    "sq8_s3_range::tests::traced_ranges_overlap_in_flight_and_order_boundaries_before_rank",
+    "sq8_s3_range::tests::traced_ranking_matches_untraced_and_leaves_unreached_stamps_unset"
+  ],
+  "ranking": [
+    "returned_sq8::tests::rank_phases_observe_without_changing_ties_exclusions_or_errors"
+  ],
+  "generation": [
+    "two_bit_generation::source_walk_tests::native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct",
+    "two_bit_generation::source_walk_tests::native_sq8_range_trace_memory_and_capacity_are_refused_before_slot_or_any_get",
+    "two_bit_generation::source_walk_tests::native_sq8_range_trace_early_refusal_never_exposes_a_reused_trace_for_baseline_and_direct",
+    "two_bit_generation::source_walk_tests::native_sq8_range_trace_failure_outcomes_are_truthful_and_leave_ranking_unstarted"
+  ],
+  "bin": [
+    "execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+    "diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+    "worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record",
+    "host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+    "panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+    "panel_authenticates_every_original_request_row_before_any_open",
+    "panel_selector_refusals_precede_every_open_and_publication",
+    "panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+    "panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+    "panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+    "panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+    "panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+    "panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed"
+  ]
+}

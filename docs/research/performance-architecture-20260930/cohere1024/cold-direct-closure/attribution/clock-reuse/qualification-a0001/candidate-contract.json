@@ -1,0 +1,65 @@
+{
+  "status": "UNVERIFIED",
+  "phase": "source_committed_hold_same_worker",
+  "base": "c31c51627e460f59e47dfbcb9cd17e7f6c2ed779",
+  "api": "No new production public API; fetch_verified_pages_core unchanged signature; all 22 RangeSpan fields and ranking/host sampling retained; diagnostic schema borsuk-sq8-range-attribution-diagnostic-v2",
+  "owned_sha256": {
+    "crates/borsuk/src/sq8_s3_range.rs": "3f6407664d5f2c1be817e4b32e6a9dce8d4bf8e66ca455e237d0e7b0716ad711",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "c748c970583c9dcb6b6851230dbbf191db9662c7d8e974927d3f9a801b706956"
+  },
+  "clock_oracle": "successful fetch_verified_pages_traced: 2 * chunks + 9; disabled tracing: 0 Probe::now_ns reads",
+  "test_names": [
+    "sq8_s3_range::tests::traced_body_clock_reuse_counts_chunks_and_failure_boundaries",
+    "sq8_s3_range::tests::real_http_traced_body_clock_count_matches_delivered_chunks",
+    "sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance",
+    "sq8_s3_range::tests::traced_ranges_overlap_in_flight_and_order_boundaries_before_rank",
+    "sq8_s3_range::tests::traced_failures_report_truthful_partial_spans_through_the_full_drain",
+    "tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct (check_cohere_native_baseline binary)"
+  ],
+  "remote_commands": [
+    "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+    "cargo test --locked -p borsuk --lib returned_sq8::tests -- --test-threads=1",
+    "cargo test --locked -p borsuk --lib source_walk_tests -- --test-threads=1",
+    "cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --nocapture --test-threads=1",
+    "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+    "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+  ],
+  "remote_environment": "CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1; unset BORSUK_TEST_BUILD_COMMAND RUSTFLAGS CARGO_ENCODED_RUSTFLAGS",
+  "local_limits": "CPU1 / 256MiB / 0swap / pids128 / timeout120s per bounded command; source-only reads/edits/rustfmt/diff; no Cargo/rustc/native/network/consult/children",
+  "qualification_owner": "parent; actual bounded remote native qualification required before integration",
+  "commit": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "local_checks": [
+    {
+      "command": "rustfmt --edition 2024 --check crates/borsuk/src/sq8_s3_range.rs crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "exit": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0
+    },
+    {
+      "command": "git status --porcelain=v1 -uno",
+      "exit": 0,
+      "output": ""
+    }
+  ],
+  "clock_boundaries": "first_poll/request/headers/metadata=4; initial mark=1; each successful chunk arrival/copy-completion=2; EOF arrival=1; auth start/end=2; wrapper completion=1: 2*c+9 total. Overlong one chunk=8; successful chunk then stream error=9. All actual Probe::now_ns calls counted; disabled path=0.",
+  "native_fixture_cases": [
+    "coalesced",
+    "multi-empty (3 chunks including 0 bytes)",
+    "eof-error",
+    "overlong",
+    "truncated",
+    "empty-body",
+    "auth-failure",
+    "real HTTP delivered-chunk count"
+  ],
+  "interval_semantics": "gap begins at prior copy completion or initial pre-poll mark, includes loop-back observer bookkeeping; copy includes note_wait/note_chunk/length validation; no nanosecond error bound, pure memcpy or TCP evidence claim",
+  "native_runs": 0,
+  "paid_runs": 0,
+  "public_api_added": false,
+  "admission_allowances_changed": false,
+  "completion": "HOLD SAME worker; do not agent_complete before root exact remote qualification/disposition"
+}
