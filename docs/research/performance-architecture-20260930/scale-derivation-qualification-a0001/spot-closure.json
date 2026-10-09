@@ -1,0 +1,61 @@
+{
+    "SpotInstanceRequests": [
+        {
+            "CreateTime": "2026-10-09T14:08:20+00:00",
+            "InstanceId": "i-0c3fdec0bdeaa8a64",
+            "LaunchSpecification": {
+                "BlockDeviceMappings": [
+                    {
+                        "Ebs": {
+                            "DeleteOnTermination": true,
+                            "VolumeSize": 80,
+                            "VolumeType": "gp3"
+                        },
+                        "DeviceName": "/dev/sda1"
+                    }
+                ],
+                "IamInstanceProfile": {
+                    "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+                    "Name": "borsuk-bench-profile"
+                },
+                "ImageId": "ami-0b8a830d6339a9758",
+                "InstanceType": "c7i.2xlarge",
+                "NetworkInterfaces": [
+                    {
+                        "DeleteOnTermination": true,
+                        "DeviceIndex": 0,
+                        "SubnetId": "subnet-0a12dbed0ca6fac25"
+                    }
+                ],
+                "Placement": {
+                    "AvailabilityZone": "eu-central-1c",
+                    "Tenancy": "default",
+                    "AvailabilityZoneId": "euc1-az1"
+                },
+                "SecurityGroups": [
+                    {
+                        "GroupId": "sg-0b1fd3e4fbde4af0d",
+                        "GroupName": "borsuk-bench-sg"
+                    }
+                ],
+                "Monitoring": {
+                    "Enabled": false
+                }
+            },
+            "LaunchedAvailabilityZone": "eu-central-1c",
+            "LaunchedAvailabilityZoneId": "euc1-az1",
+            "ProductDescription": "Linux/UNIX",
+            "SpotInstanceRequestId": "sir-e1gqmt4h",
+            "SpotPrice": "0.600000",
+            "State": "closed",
+            "Status": {
+                "Code": "instance-terminated-no-capacity",
+                "Message": "Your Spot instance was terminated because there is no Spot capacity available that matches your request.",
+                "UpdateTime": "2026-10-09T14:24:59+00:00"
+            },
+            "Tags": [],
+            "Type": "one-time",
+            "InstanceInterruptionBehavior": "terminate"
+        }
+    ]
+}

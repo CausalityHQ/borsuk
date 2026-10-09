@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-scale-derivation-qualification-closed-v1",
+  "instance_id": "i-0c3fdec0bdeaa8a64",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": null,
+  "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "native_source_file_count": 426,
+  "native_source_identity_sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91",
+  "source_archive_sha256": "0131c8fdfd4a7fbdbb89fa33eba1dd5345494ecd9c5c433ebceb084a9d14736e",
+  "evidence": {
+    "bytes": 449749,
+    "sha256": "458a1a5fa99081b03e943b601fbc3378599502174a73efd122f89423ca33ce1a"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

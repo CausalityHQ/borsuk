@@ -1,0 +1,36 @@
+{
+  "status": "EXECUTION_INVALID_SPOT_CAPACITY_INTERRUPTION",
+  "instance_id": "i-0c3fdec0bdeaa8a64",
+  "terminated": true,
+  "original_terminal_claim_not_accepted": true,
+  "aws_spot_status": "instance-terminated-no-capacity",
+  "tests_passed_by_stage": {
+    "preparer-tests": 11,
+    "derivation-tests": 8,
+    "baseline-tests": 41,
+    "reducer-tests": 79
+  },
+  "mandatory_reducer_names_missing": [],
+  "historical_reducer_names_omitted_from_handoff": [
+    "source_cover::tests::cheapest_gap_bridge_counts_bytes_and_rejects_over_cap_page",
+    "source_cover::tests::complete_sparse_scores_refine_dense_page_admission",
+    "source_cover::tests::incremental_cover_charge_matches_exact_cover_across_page_patterns",
+    "source_cover::tests::incremental_cover_charge_matches_exact_ranges_with_tied_gaps_and_final_page",
+    "source_cover::tests::primary_page_precedes_better_scoring_secondary_page",
+    "source_cover::tests::short_final_page_is_charged_by_its_actual_rows",
+    "source_cover::tests::signed_zero_scores_tie_by_page_id",
+    "source_cover::tests::source_unit_cover_preserves_all_units_and_clips_tail",
+    "source_cover::tests::sparse_candidates_never_admit_an_unvisited_page",
+    "source_cover::tests::sparse_candidates_reject_duplicates_and_unknown_pages"
+  ],
+  "remaining_stages_unfinished": [
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "qualified": false,
+  "performance_claim": false,
+  "algorithm_rejected": false,
+  "evidence_archive_sha256": "458a1a5fa99081b03e943b601fbc3378599502174a73efd122f89423ca33ce1a",
+  "next_action": "Preserve original; repair terminal acceptance and complete roster; separately freeze new recorded attempt from unchanged candidate source. No automatic relaunch."
+}

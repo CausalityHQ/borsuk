@@ -1,0 +1,12 @@
+{
+  "status": "AUTHENTICATED_PARTIAL_TEST_PASS_EXECUTION_INVALID",
+  "archive_files": 52,
+  "source_before_files": 2465,
+  "test_executions_passed": 139,
+  "source_after_missing": true,
+  "release_unfinished": true,
+  "clippy_unrun": true,
+  "test_build_unrun": true,
+  "native_qualified": false,
+  "performance_claim": false
+}

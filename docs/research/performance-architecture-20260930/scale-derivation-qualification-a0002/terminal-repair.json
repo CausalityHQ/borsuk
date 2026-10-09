@@ -1,0 +1,9 @@
+{
+  "status": "TERMINAL_ACCEPTANCE_SOURCE_REPAIRED_RUNTIME_UNRUN",
+  "demonstrated_failure": "Spot no-capacity terminated release. systemd-run reported success for killed SIGTERM; final-exit and qualification-exit missing; original terminal not accepted.",
+  "repair": "After systemd-run require all seven native/tee exit receipts0, qualification/final receipts0, identical complete source before/after logs and six retained binary receipts before phase complete. Missing/nonzero evidence exits98. Independent verifier still required.",
+  "rust_source_unchanged": true,
+  "candidate_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "old_attempt_preserved": true,
+  "no_automatic_relaunch": true
+}
