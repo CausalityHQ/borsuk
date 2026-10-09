@@ -1,0 +1,275 @@
+{
+  "phase": "SOURCE_REPAIR_UNVERIFIED_HOLD_ROOT_GATES",
+  "base": "2f3445571f63fa6ac689262826acb714354cb1cf",
+  "commit": "fd0fe04891df7cf0c912006a8fe7ad1802710f24",
+  "owned_files": [
+    "crates/borsuk/examples/native_process_cpu.rs",
+    "crates/borsuk/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "cli": "native_process_cpu CONFIG CONFIG_SHA256 NEW_REPORT | native_process_cpu --fixture CASE",
+  "config": {
+    "schema": "native-process-cpu-config-v1",
+    "executable": {
+      "path": "absolute UTF-8 regular ELF file",
+      "bytes": "1..536870912",
+      "sha256": "64 lowercase hex"
+    },
+    "args": "<=64 UTF-8 strings, <=4096 bytes each, <=16384 bytes including NUL terminators"
+  },
+  "bounds": {
+    "config_bytes": 65536,
+    "path_bytes": 4096,
+    "executable_bytes": 536870912,
+    "hash_buffer_bytes": 65536,
+    "report_bytes": 16384,
+    "args_count": 64,
+    "arg_bytes_each": 4096,
+    "arg_bytes_total_including_terminators": 16384
+  },
+  "api": "libc wait4(exact child PID, options=0), EINTR retry; libc getrusage(RUSAGE_SELF); CLOCK_MONOTONIC and CLOCK_PROCESS_CPUTIME_ID; Command without shell; authenticated executable held open and executed through /proc/self/fd with original argv[0]; fixture-only exact-PID waitid(WEXITED|WNOWAIT) without reap; checked setrlimit/getrlimit RLIMIT_CORE soft+hard0 at helper entry",
+  "report": "REAPED_ACCOUNTING_ONLY; raw checked user/system sec,usec and exact checked u64 ns; raw wait status, normal exit or signal; monotonic before-spawn/after-reap bounds; helper entry/after-reap self snapshots and interval, never subtracted",
+  "report_schema": {
+    "schema": "native-process-cpu-report-v1",
+    "status": "REAPED_ACCOUNTING_ONLY",
+    "config_sha256": "lowercase hex; binds path and complete argv",
+    "executable_sha256": "lowercase hex",
+    "executable_bytes": "u64",
+    "argument_count": "usize <=64",
+    "child_pid": "u32",
+    "child_status": {
+      "raw_wait_status": "i32",
+      "exit_code": "i32|null",
+      "signal": "i32|null",
+      "core_dumped": "bool"
+    },
+    "child_cpu": "CpuUsage",
+    "before_spawn_monotonic_ns": "u64 CLOCK_MONOTONIC",
+    "after_reap_monotonic_ns": "u64 CLOCK_MONOTONIC",
+    "lifecycle_wall_bound_ns": "u64 checked after-before",
+    "helper_self_at_entry": "CpuUsage",
+    "helper_self_before_report": "CpuUsage",
+    "helper_observed_cpu_ns": "u64 checked snapshot-total difference",
+    "accounting_scope": "fixed explicit string",
+    "completeness": "fixed UNVERIFIED/root drain obligation string",
+    "helper_scope": "fixed explicit excluded-cost string"
+  },
+  "CpuUsage": {
+    "user": {
+      "seconds": "nonnegative i64",
+      "microseconds": "i64 in 0..1000000",
+      "cpu_ns": "checked u64 seconds*1000000000 + microseconds*1000"
+    },
+    "system": "same as user",
+    "cpu_ns": "checked u64 user.cpu_ns+system.cpu_ns"
+  },
+  "publication": "create_new mode0600 reservation before child; bounded JSON; file sync_all and parent sync_all; failed/partial reservation retained; post-spawn errors emit separate structured collector failure receipt and preserve child exit/signal. Missing success receipt invalidates accounting even when report bytes exist and child exit0.",
+  "fixture_roster": [
+    "pulse",
+    "threads",
+    "waited",
+    "io",
+    "late",
+    "delay",
+    "nonzero",
+    "survivor",
+    "unwaited",
+    "sigpipe"
+  ],
+  "local_resources": "source reads/rustfmt/diff only; CPU1/256MiB/swap0/pids128/120s bounded units; no cargo/rustc/native fixture/network/cloud/reviews/children",
+  "remote_fixture_resources": "root only: <=16 runtime fixture calls including nested fixtures, CPU1/256MiB/swap0/60s/ext4/no network, fresh disposable invocation cgroup placed before exec; TMPDIR points to root-owned ext4 scratch; no performance/ANN/GT workload",
+  "supervisor_limitations": [
+    "No cgroup manipulation or drain/completeness claim; root must refuse any survivor and reconcile drained cgroup accounting",
+    "Root must set external deadline and resources, stable immutable source/output directories, sanitized environment and runtime dependency identity",
+    "Pinned descriptor avoids executable path substitution; in-place modification is forbidden externally; dynamic loader/libraries/argv-referenced files are outside executable pin",
+    "Helper self snapshot excludes its startup before entry and report serialization/sync/exit after snapshot; root must bound omitted and treatment-dependent supervisor costs",
+    "Parent wait4 includes descendant usage only when propagated through waits; excludes ALL descendants not waited inside the hierarchy, including terminated descendants reaped elsewhere. Root must qualify drained cgroup discrepancy as well as survivor refusal",
+    "After reaping, accounting/publication failure preserves child status and emits a separate best-effort structured stderr receipt with original raw/exit/signal/core fields; root must require exactly the corresponding REPORT_SYNCED receipt plus report, and refuse failures/missing receipt even if child exit is zero",
+    "Normal child exit is mirrored; a signaled child is mirrored by restoring default/unblocking/re-raising that signal (128+signal emergency fallback); original raw/core status is in the report",
+    "Preflight/spawn/unsupported errors use 125; a reserved empty report can remain on spawn failure; root must not treat its existence as success",
+    "If wait4 irrecoverably fails, std Child::wait attempts only to recover original status; no accounting report is issued, and unavailable status is a helper failure",
+    "No statistically qualified resolution, error envelope, performance claim or sample size",
+    "Survivor and unwaited require BORSUK_NATIVE_CPU_DISPOSABLE_CGROUP=1 root attestation; helper does not inspect/mutate cgroup membership, so assertion is not ownership proof"
+  ],
+  "remote_required": [
+    "cargo test --locked -p borsuk --example native_process_cpu --no-run",
+    "cargo test --locked -p borsuk --example native_process_cpu -- --list",
+    "cargo test --locked -p borsuk --example native_process_cpu -- --test-threads=1",
+    "cargo build --locked --release -p borsuk --example native_process_cpu",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "cargo clippy --locked -p borsuk --example native_process_cpu --profile test -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+    "root-owned bounded native falsifier and independent review on exact source; clear RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER and any compiler shim; root owns compiler-host resource envelope"
+  ],
+  "authored_tests": [
+    "integer_accounting_rejects_invalid_fields_and_overflow",
+    "wait_status_keeps_exit_signal_and_core_flag",
+    "collector_failure_is_separate_from_original_child_status",
+    "config_authentication_schema_and_argument_bounds",
+    "source_and_config_refuse_symlink_size_hash_and_non_elf",
+    "output_is_create_only_and_partial_evidence_is_retained",
+    "real_child_accounting",
+    "ignored child_cpu_exit is invoked exactly once by real_child_accounting; do not run all ignored tests separately"
+  ],
+  "fixture_commands": [
+    "$HELPER --fixture pulse",
+    "$HELPER --fixture threads",
+    "$HELPER --fixture waited",
+    "$HELPER --fixture io",
+    "$HELPER --fixture late",
+    "$HELPER --fixture delay",
+    "$HELPER --fixture nonzero",
+    "BORSUK_NATIVE_CPU_DISPOSABLE_CGROUP=1 $HELPER --fixture survivor",
+    "BORSUK_NATIVE_CPU_DISPOSABLE_CGROUP=1 $HELPER --fixture unwaited",
+    "$HELPER --fixture sigpipe"
+  ],
+  "fixture_command_binding": "The ten strings describe authenticated child argv, not permission to execute them uncontained. For each case root writes a strict config with executable.path=$HELPER, its exact release bytes/SHA, args=[--fixture,CASE], freezes CONFIG_SHA256 and absent NEW_REPORT, establishes a fresh disposable cgroup before exec, then runs the helper invocation below. No helper reads cgroup controls. Before the survivor or unwaited helper invocation root additionally sets BORSUK_NATIVE_CPU_DISPOSABLE_CGROUP=1 only after establishing its fresh disposable context. Missing attestation fails before spawning the descendant.",
+  "helper_invocation": "\"$HELPER\" \"$CONFIG\" \"$CONFIG_SHA256\" \"$NEW_REPORT\"",
+  "fixture_oracles": {
+    "pulse": "2ms process-CPU injection exposes sub-centisecond loss; actual native clock interval is emitted",
+    "threads": "two threads each burn until a 5ms process-clock interval; emitted process total is the oracle, not the sum of overlapping intervals",
+    "waited": "spawns and wait4-reaps one pulse self-child; emits waited_child_cpu_ns separately from its own process clock",
+    "io": "16 bounded /proc/self/status reads and <=1MiB temporary file writes plus sync outside query timing",
+    "late": "2ms query window and flushed fake terminal CPU snapshot, then >=20ms process CPU, serialization, temporary write/sync/cleanup; root must reject premature-snapshot substitution without changing 1.02 ceiling",
+    "delay": "2sec wall-only sleep; root-owned authenticated timeout ELF around this case must preserve 124 or actual wrapper status",
+    "nonzero": "Writes exact bytes 'nonzero fixture stderr without LF' without a line terminator, then exit7; root's existing nonzero invocation must verify parseable matching collector final JSON line and preserved child status",
+    "survivor": "Requires explicit root disposable-cgroup environment attestation; one non-waited delay child with emitted PID, two-second bounded lifetime; root must refuse survivor even if subsequently drained",
+    "unwaited": "Root disposable-cgroup attestation required. Launch existing late child, observe exact PID via EINTR-retried waitid WEXITED|WNOWAIT, validate SIGCHLD/CLD_EXITED/status0, emit unwaited_event PID/signo/code/status/observed_with/missing-wait scope, then exit without reaping. Root must detect >=20ms injected descendant CPU missing from wait4 despite eventual cgroup drain.",
+    "sigpipe": ">=2ms process-CPU injection, flushed before_signal witness with expected_signal SIGPIPE, then unchanged finish restores default/unblocks/raises SIGPIPE. Root must see actual signal13, not exit141."
+  },
+  "fixture_budget": "Root-selected research roster: existing8 cases=10 fixture processes; real-child test1; unwaited2; sigpipe1; publication-failure pulse1; timeout-KILL delay1; total16. Missing-receipt and premature-snapshot mutations reuse closed artifacts, no added calls. Whole method CPU1/256MiB/swap0/60s/ext4/no network. Not a statistical sample size or performance authorization.",
+  "qualification_still_required": [
+    "Effective native accounting resolution and wait4 vs drained cgroup discrepancy envelope",
+    "Whole-process late-work and thread/waited-child falsification",
+    "Root timeout, actual signal propagation, publication-error behavior and survivor refusal",
+    "Treatment-dependent complete supervisor cost including omitted terminal work",
+    "Independent fixed-size inference basis before any performance protocol",
+    "Unwaited completed-descendant discrepancy control and actual SIGPIPE mirror; later query-wall method qualification is separate"
+  ],
+  "retained_gates": {
+    "query_cpu_ratio": 1.02,
+    "whole_native_process_user_system_cpu_ratio": 1.02,
+    "median_added_query_wall_ms": 1,
+    "fixed_confirmatory_sample_size": null,
+    "performance_launch_authorized": false
+  },
+  "local_evidence": {
+    "rustfmt_edition2024_check": "exit0 with installed /data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt inside bounded unit",
+    "git_diff_cached_check": "exit0 inside bounded unit",
+    "compilation_tests_fixtures_reviews": "NOT RUN, explicitly prohibited locally",
+    "repair_checkpoints": "1b6130d8 and a4018d77: installed rustfmt --edition2024 --check and git diff --check exit0; clean Git; seven active tests/one ignored entry and fixture caps unchanged; no native verification; fd0fe048 source-only rustfmt check and diff check exit0, no test names added, checked core-limit exercised by existing self-child entry when root runs it."
+  },
+  "hashes": {
+    "crates/borsuk/examples/native_process_cpu.rs": "4c6d63fecec2eaf289949fbb00b6cc52810e740c92ab63b6a0cb224e1be8ddf5",
+    "crates/borsuk/Cargo.toml": "223db506245fabfeed340429ec842f15d6c3e9d747c3b7a93d059b86956efd97",
+    "Cargo.lock": "b40795df0d89a7b027dcda125e47035d524712acf2bbc3cd9dd9f120a9bac19b"
+  },
+  "worker_state": "HOLD same worker for root compiler/review repairs; do not complete/archive",
+  "collector_receipt": {
+    "destination": "stderr JSON line; root must preserve and require the matching success receipt in addition to report",
+    "schema": "native-process-cpu-collector-v1",
+    "config_sha256": "exact authenticated config SHA",
+    "collector_status": "REPORT_SYNCED | ACCOUNTING_OR_PUBLICATION_FAILED",
+    "raw_child_wait_status": "i32",
+    "child_exit_code": "i32|null",
+    "child_signal": "i32|null",
+    "child_core_dumped": "bool",
+    "error": "string|null",
+    "framing": "Leading LF establishes boundary after unterminated child stderr; exactly one collector JSON line ends with LF. Existing test checks both publication outcomes and raw normal0/normal7/SIGTERM statuses; authored, not locally executed."
+  },
+  "parent_clarification": "1791515177335660144-665549 read via agent_messages and acknowledged after actual handling; original final send timed out with no durable envelope found, so corrected checkpoint follows.",
+  "original_contract_snapshot": "/tmp/borsuk-native-lifecycle-cpu-accounting-contract-f23b1a44.json",
+  "source_history": [
+    {
+      "commit": "f23b1a4419bf47cf1fc0bd83b23855f8cbeb5b6f",
+      "parent": "2f3445571f63fa6ac689262826acb714354cb1cf",
+      "source_sha256": "c7703bd70cd6e53ed802d4bf1c5b37857541ed8808c26015b00be389a7324620",
+      "status": "original UNVERIFIED source snapshot preserved"
+    },
+    {
+      "commit": "1b6130d87a32fa13ca3eb0ea349232814f05f1ac",
+      "parent": "f23b1a4419bf47cf1fc0bd83b23855f8cbeb5b6f",
+      "source_sha256": "b112d50eb5361109f97cce46b4b897be6d7cd7d9e21e0e6439db8df4bef86ef3",
+      "change": "LF boundary before shared success/failure receipt; existing receipt test strengthened for unterminated child stderr",
+      "evidence": "/tmp/borsuk-native-lifecycle-cpu-accounting-repair-lf.json",
+      "native_verification": "UNRUN"
+    },
+    {
+      "commit": "a4018d779d9b671a7c1d9c43444b62c3a8d52961",
+      "parent": "1b6130d87a32fa13ca3eb0ea349232814f05f1ac",
+      "source_sha256": "f2e3cad7c36d50b54e61d0b896fefd1d97e9fba4d5b07077b28102142e68f0f3",
+      "change": "Existing nonzero fixture emits unterminated stderr before exit7, no additional fixture or process",
+      "evidence": "/tmp/borsuk-native-lifecycle-cpu-accounting-repair-nonzero.json",
+      "native_verification": "UNRUN"
+    },
+    {
+      "commit": "fd0fe04891df7cf0c912006a8fe7ad1802710f24",
+      "parent": "a4018d779d9b671a7c1d9c43444b62c3a8d52961",
+      "source_sha256": "4c6d63fecec2eaf289949fbb00b6cc52810e740c92ab63b6a0cb224e1be8ddf5",
+      "change": "Required unwaited and sigpipe controls, checked process-local RLIMIT_CORE=0, explicit all-unwaited-descendant exclusion",
+      "evidence": "/tmp/borsuk-native-lifecycle-cpu-accounting-repair-unwaited-sigpipe.json",
+      "native_verification": "UNRUN"
+    }
+  ],
+  "compiler_gate": {
+    "status": "PENDING_ROOT_NO_LAUNCH",
+    "stages": [
+      {
+        "stage": 1,
+        "command": "cargo test --locked -p borsuk --example native_process_cpu --no-run",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 2,
+        "command": "cargo test --locked -p borsuk --example native_process_cpu -- --list",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 3,
+        "command": "cargo test --locked -p borsuk --example native_process_cpu -- --test-threads=1",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 4,
+        "command": "cargo build --locked --release -p borsuk --example native_process_cpu",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 5,
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 6,
+        "command": "cargo clippy --locked -p borsuk --example native_process_cpu --profile test -- -D clippy::correctness -D clippy::suspicious",
+        "status": "UNRUN"
+      },
+      {
+        "stage": 7,
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+        "status": "UNRUN"
+      }
+    ],
+    "expected_affected_test_result": "7 passed, 1 ignored; expectation only, not an execution result",
+    "prerequisite": "Exact current source, real compiler/shims unset, root-selected bounded remote host; no local Cargo/native execution"
+  },
+  "review_state": {
+    "original_group": "b542bb999f3a431b",
+    "engineering": "completed0; full saved result read; LF/nonzero repairs preserved",
+    "research": "completed0; full saved result read; required unwaited/sigpipe/core-limit source repair applied",
+    "source_freeze": false,
+    "method_falsifier": "UNRUN",
+    "worker": "HOLD SAME worker; root owns combined main+OWN3 exact compiler/method gates"
+  },
+  "metadata_update": {
+    "instruction": "1791518128689681668-665549",
+    "scope": "Only compiler-gate metadata corrected to seven exact pending stages; test-profile example Clippy inserted before final shim-unset testbuild. Source unchanged; no freeze/completion or gate launch."
+  },
+  "prior_contract_snapshots": [
+    "/tmp/borsuk-native-lifecycle-cpu-accounting-contract-f23b1a44.json",
+    "/tmp/borsuk-native-lifecycle-cpu-accounting-contract-a4018d77.json"
+  ],
+  "core_limit": "Before any spawn, main sets and verifies soft+hard process-local RLIMIT_CORE=0; failure exits125. Future children inherit limits. Host/global core settings are not changed.",
+  "accounting_exclusion": "ALL descendants not waited within the child's hierarchy, whether live, terminated without a wait or reaped elsewhere; host CPU charged elsewhere remains excluded.",
+  "publication_failure_coverage": "Actual root fixture uses child exit0 only; existing authored collector unit exercises failure receipts for child exit7 and signals. Do not describe unit coverage as actual post-spawn nonzero filesystem-failure execution."
+}

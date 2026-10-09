@@ -1,0 +1,90 @@
+{
+  "status": "FROZEN_REVIEWED_COMPILER_ONLY_BEFORE_LAUNCH",
+  "paid_launch_authorized": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/native-lifecycle-cpu-qualification-a0001",
+  "source_commit": "d7e6c8ac31c090a89a290d3e3921d702370f0afe",
+  "source": {
+    "status": "SOURCE_EXPORT_VERIFIED_NATIVE_UNRUN_NO_LAUNCH",
+    "candidate": "fd0fe04891df7cf0c912006a8fe7ad1802710f24",
+    "root": "c6dbddf67748a83e1147106c2a7cd82d3c935299",
+    "tree": "fc8e25cdacba7cc236dfcc25b05c46e289966c06",
+    "native_source_count": 426,
+    "native_source_identity_sha256": "207f383bc1f63fc01dae3984fc2b5606e0e2c0189cad4d577d17025655094aac",
+    "files": 2465,
+    "uncompressed_bytes": 58365170,
+    "archive_bytes": 13571947,
+    "archive_sha256": "04410daa7486cf8cb8c7cd7898c42d70ef1d50b92646427d4250f6bc475a3299",
+    "scope": "prior support roster plus complete current Rust/Cargo map; no dirty worktree bytes"
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 280890,
+      "sha256": "12a6633dfb8ec4ff80479936325ca1a81753c2fd9b5f07b0946834a6439c1b68"
+    },
+    "candidate-contract.json": {
+      "bytes": 18535,
+      "sha256": "1e3d576afffc34658295a3809c9fb77cd8328ca28b3d885384bd6f3ea71d6d61"
+    },
+    "gates.sh": {
+      "bytes": 3400,
+      "sha256": "5274ba4c4a82778d1e866ae9814200cc31138eb0856300b4bf5d89e428549b50"
+    },
+    "native-source.json": {
+      "bytes": 49468,
+      "sha256": "695ad8daf39932ae4ead0485a03c03068cceaf605b009973673bea67fd79078d"
+    }
+  },
+  "userdata": {
+    "bytes": 7157,
+    "sha256": "3c436be7e4a0210343017bfd839dee8b2f2e57a3ba4617887af7875d2d262bea"
+  },
+  "resources": {
+    "cpu": 2,
+    "memory_bytes": 8589934592,
+    "swap": 0,
+    "pids": 512,
+    "jobs": 1,
+    "build_seconds": 7200,
+    "unit_seconds": 7440,
+    "machine_seconds": 9000,
+    "ebs_gib": 80
+  },
+  "cost_observation": {
+    "provider": "AWS EC2 describe-spot-price-history",
+    "region": "eu-central-1",
+    "zone": "eu-central-1c",
+    "instance_type": "c7i.2xlarge",
+    "spot_usd_per_hour": "0.205000",
+    "quote_timestamp": "2026-10-09T03:00:00+00:00",
+    "bid_max_usd_per_hour": "0.50",
+    "machine_max_seconds": 9000,
+    "compute_worst_usd": 1.25,
+    "compute_cap_usd": 1.5,
+    "ancillary_cap_usd": 0.15,
+    "matching_campaign_nonterminal_instances": []
+  },
+  "mandatory_stages": [
+    "example-compile",
+    "example-inventory",
+    "affected-example",
+    "release",
+    "clippy",
+    "example-test-clippy",
+    "test-build"
+  ],
+  "expected_tests": {
+    "passed": 7,
+    "ignored": 1
+  },
+  "retained_binary": "native_process_cpu",
+  "failure_policy": "setup/compiler INVALID; no algorithm or performance rejection; preserve attempt",
+  "spot_interruption": "preserve incomplete evidence; discard interrupted qualification; no automatic relaunch",
+  "remaining": [
+    "exact upload receipts",
+    "fresh zero-live check before request",
+    "original watcher and independent verifier"
+  ]
+}

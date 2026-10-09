@@ -1,0 +1,34 @@
+{
+  "schema": "borsuk-native-lifecycle-cpu-review-reconciliation-v1",
+  "status": "REPAIRS_REQUIRED_SOURCE_NOT_FROZEN",
+  "review_group": "b542bb999f3a431b",
+  "reviewers": {
+    "engineering": {
+      "id": "947a69cb3cf74aa9",
+      "exit": 0
+    },
+    "research": {
+      "id": "79b9218842564aa5",
+      "exit": 0
+    }
+  },
+  "decisions": {
+    "receipt_framing": "Verified and source repaired1b6130d8; real nonzero witnessa4018d77 pending native execution",
+    "whole_tree_qualification": "Accepted. Root exports combined current main+exact candidate OWN3 clean Git tree and qualifies full inventory. Worker rebase unnecessary; no dirty worktree build. Prior preview426 will be rebuilt after final repairs.",
+    "unwaited_descendant": "Accepted positive control: exited-but-not-reaped CPU descendant may evade live survivor test; add bounded waitid WNOWAIT fixture and widened exclusion scope.",
+    "signal_mirror": "Accepted actual SIGPIPE/default/unblock/re-raise control and corelimit0 beforechild. Do not downgrade original signal to normal exit141.",
+    "test_cfg_clippy": "Accepted separate --example native_process_cpu --profile test correctness/suspicious stage. Cargo Book says test profile enables test cfg.",
+    "query_wall": "Accepted method obligation. Component cannot qualify three gates; future native query-wall oracle required. No speculative helper API or ANN source changes.",
+    "two_microsecond_accuracy": "Not adopted. Microsecond integer representation is not proven target-host effective accuracy; native calibrated discrepancy/error envelope remains required.",
+    "helper_startup": "Absolute entry snapshot includes process startup; delta excludes entry-preceding cost. Reported absolute snapshots retained, terminal cost remains unreported and root-owned full lifecycle check required.",
+    "optional_expansions": "No nonce/subreaper/compatibility layer/SIGCHLD reset/extra framework. Stable immutable directories/runtime/source and inherited signal prerequisites remain explicit external admission obligations."
+  },
+  "fixture_process_cap": 16,
+  "performance_launch_authorized": false,
+  "native_qualification_run": false,
+  "primary_sources": [
+    "https://man7.org/linux/man-pages/man2/wait.2.html",
+    "https://man7.org/linux/man-pages/man2/getrusage.2.html",
+    "https://doc.rust-lang.org/cargo/commands/cargo-check.html"
+  ]
+}
