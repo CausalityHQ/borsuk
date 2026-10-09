@@ -1,0 +1,43 @@
+[
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0000.parquet",
+    "relative_path": "input/en/0000.parquet",
+    "bytes": 216612385,
+    "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0001.parquet",
+    "relative_path": "input/en/0001.parquet",
+    "bytes": 216746705,
+    "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+    "etag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+    "relative_path": "historical/requests",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+    "etag": "\"04fc7819a26ce9b269bd25b23b514607\"",
+    "relative_path": "historical/truth",
+    "bytes": 80000,
+    "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/prepare_cohere_native_cohort",
+    "etag": "\"9d3eba0e43cdd72aec7cd341fa1d7a62-2\"",
+    "relative_path": "bin/prepare_cohere_native_cohort",
+    "bytes": 10015160,
+    "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb"
+  }
+]

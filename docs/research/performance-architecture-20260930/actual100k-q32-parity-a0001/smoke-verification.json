@@ -1,0 +1,28 @@
+{
+  "status": "MECHANICS_VERIFIED",
+  "instance_id": "i-0746642eab10f5a0e",
+  "terminated": true,
+  "original_watcher_session": 33529,
+  "original_watcher_exit": 0,
+  "root_verifier_exit": 0,
+  "root_verifier_unit": "run-p2484054-i652489833.service",
+  "root_verifier_path": "/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/actual100k-q32-parity-smoke-a0002-preparation/verify-closed.streaming-r1.py",
+  "root_verifier_sha256": "b1e0aadcc876b52fb501d280d0fdc9775e48007ba93e21480ca842be2c923486",
+  "root_verifier_peak_display": "9.1M",
+  "manager_sha256": "1e7d41feee69f7159d482b7de2555f6bffa5a0bb3a43dac6e1d61a883995decd",
+  "evidence_sha256": "720e69e9305a46003d63141c95561c5e95546a3ff328cb13fe0437b04307e259",
+  "terminal_sha256": "12abd5606b8b08341a41882a61ce0325dbf833cc743000297e6136a8ef8b8450",
+  "native_correctness_claim": false,
+  "full_wrapper_claim": false,
+  "http_get_body_claim": false,
+  "poweroff_hook_claim": false,
+  "performance_claim": false,
+  "prior_attempt_preserved": "../actual100k-q32-parity-smoke-a0001-preparation/disposition.invalid.json",
+  "root_verifier_repair": {
+    "prior_frozen_verifier_exit": 1,
+    "prior_reason": "unjustified 64MiB expanded cap excluded four deliberate oversized cap fixtures",
+    "repair": "exact four frozen fixture sizes, streaming every body SHA; remaining metadata each<=1MiB,total<=4MiB",
+    "same_archive_replayed": true,
+    "no_paid_rerun_for_verifier_repair": true
+  }
+}

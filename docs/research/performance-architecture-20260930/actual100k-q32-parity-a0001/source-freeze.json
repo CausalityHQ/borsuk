@@ -1,0 +1,33 @@
+{
+  "status": "FROZEN_NOT_LAUNCHED",
+  "files": {
+    "config-template.json": {
+      "bytes": 1724,
+      "sha256": "34da76735f5d0e916c7052b3a159225880e1873f75f39678268ed1c658d2966f"
+    },
+    "run_actual_cohort_parity.sh": {
+      "bytes": 17122,
+      "sha256": "e451806e4a5bfb36c47c9ca00b428fbac4f3e56fc9af550273fde1aded68f29e"
+    },
+    "service-stop.sh": {
+      "bytes": 1975,
+      "sha256": "75409be8fea2f68dd83bf769842ea3f2e878dc3f05b5274f00676ebcd85ce3c1"
+    },
+    "support.sha256": {
+      "bytes": 428,
+      "sha256": "64cbd8e1861d95835b820d3ca14b0c4b93b8428dc818411bf6ebfaa00920c125"
+    },
+    "transport-pins.json": {
+      "bytes": 1863,
+      "sha256": "dd5cbd73d6a729b61acd438d5a63afebe7a513b7cc8358416113c543b9f3d4d8"
+    },
+    "transport.py": {
+      "bytes": 3652,
+      "sha256": "85f8af5c5f981d415f8bf72736884092ef4c69741325bfb928635691d78d2e38"
+    }
+  },
+  "bootstrap_sha256": "71b560fc6f64802ca4c77b42fa466def1ba0d63d98db5f433646649f0892a9da",
+  "verifier_sha256": "d30987140f8acc09ce708a47450ad0a211ae288493d5d5b18a8a3ce43b513f5c",
+  "watcher_sha256": "2a458135568a9449617169f8d39dfaf39cfea6d5ac94783c1ec6d59979fa1ab4",
+  "smoke_verified_receipt_sha256": "b747f70f76356fa6e418e2f050f50dc9c8fd6389c303efb0f7950dcacdd25a35"
+}
