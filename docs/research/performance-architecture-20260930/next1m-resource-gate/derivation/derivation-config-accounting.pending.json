@@ -1,0 +1,13 @@
+{
+  "status": "PENDING_REGENERATION_AND_NATIVE_RUNTIME_ADMISSION",
+  "config_sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d",
+  "native_own_scratch_upper_bytes": 13340131072,
+  "caller_scratch_bytes": 4193879871,
+  "caller_nondata_reserve_bytes": 1610612736,
+  "temporary_reserve_bytes": 67108864,
+  "aggregate_scratch_cap_bytes": 17601119807,
+  "modeled_payload_cap_bytes": 2147483648,
+  "host_memory_cap_bytes": 8589934592,
+  "body_available": false,
+  "performance_claim": false
+}
