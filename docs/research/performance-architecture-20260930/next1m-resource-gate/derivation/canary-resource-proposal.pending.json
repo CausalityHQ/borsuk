@@ -1,0 +1,96 @@
+{
+  "cost_proposal": {
+    "actual_billed_cost_measured": false,
+    "ancillary_reserved_usd": "0.15",
+    "compute_reserved_usd": "0.65",
+    "compute_upper_formula": "(3600+120)*0.59/3600",
+    "fresh_spot_quote_and_storage_estimate_required": true,
+    "modeled_compute_upper_usd": "0.6096666666666666666666666667",
+    "total_reserved_usd": "0.80"
+  },
+  "instance": {
+    "availability_zone": "eu-central-1c",
+    "delete_on_termination": true,
+    "each_volume_iops": 3000,
+    "each_volume_throughput_mib_s": 125,
+    "encrypted": true,
+    "imds_tokens": "required",
+    "market": "spot",
+    "max_price_usd_per_hour": "0.59",
+    "profile": "causality",
+    "region": "eu-central-1",
+    "root_gib": 80,
+    "scratch_gib": 40,
+    "shutdown_behavior": "terminate",
+    "type": "c7i.2xlarge",
+    "volume_type": "gp3"
+  },
+  "launch_authorized_by_this_file": false,
+  "remaining_before_launch": [
+    "review and freeze the minimal source-bound adapter and exact evidence inventory",
+    "freeze source/config/support/role/input pins and check user-data byte cap",
+    "refresh Spot and EBS/S3 cost metadata",
+    "verify create-only new prefix and controlled permission-test assets",
+    "root capture actual launch/device mapping and fresh-volume binding"
+  ],
+  "required_root_closeout": [
+    "same instance terminated before collection",
+    "both delete-on-termination volumes absent",
+    "actual three manager cases and original exits",
+    "independent archive replay and no ANN claim"
+  ],
+  "runtime_limits": {
+    "allowed_cpus": "0-3",
+    "cpu_percent": 400,
+    "external_deadline_seconds_from_ec2_launch": 3600,
+    "inner_scheduling_margin_seconds": 300,
+    "local_deadline_seconds": 3000,
+    "memory_bytes": 8589934592,
+    "phase_upper_seconds": {
+      "bootstrap_and_install": 900,
+      "evidence_and_cleanup": 600,
+      "manager_cases": 180,
+      "pinned_transport": 900,
+      "wrapper_checks": 120
+    },
+    "pids": 128,
+    "swap_bytes": 0,
+    "termination_grace_seconds": 120
+  },
+  "runtime_scope": {
+    "fixtures": [
+      "Bash commands inside wrapper phase supervision",
+      "one shell script per cloud-init exit case"
+    ],
+    "not_run": [
+      "corpus preparation",
+      "derivation",
+      "ANN",
+      "query or truth decoding",
+      "recall",
+      "performance"
+    ],
+    "performance_claim": false,
+    "real": [
+      "SDK installation and 17 exact opaque transports",
+      "fresh scratch-volume identity and formatting",
+      "systemd/cgroup placement and cleanup",
+      "installed cloud-init scripts-user original 0/2/3 mapping",
+      "qualified ELF CLI usage only",
+      "role Get allowed and input Put/Delete explicitly denied"
+    ],
+    "scientific_success": false
+  },
+  "schema": "borsuk-next1m-composition-canary-resource-proposal-v1",
+  "source_pins": {
+    "bootstrap_commit": "d4c1b1b8e9b1f198532ba35d3586aa016684cf71",
+    "native_identity_sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91",
+    "native_qualified": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "replay_commit": "9244e2a721a917070b1bd90c285b910e44e00179",
+    "wrapper_canary_sha256": "bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f",
+    "wrapper_commit": "f12deb62d7691da6cced98c14e2bc38a5329b5a1"
+  },
+  "source_review_base": "2be5df716eed80b5604c95d3a1ddbae0cbf61d73",
+  "status": "PENDING_SOURCE_AND_RUNTIME_ADMISSION",
+  "worker_instance": "a9467308-8022-4e38-ace4-ccf30e28c577"
+}
