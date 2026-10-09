@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (InvalidParameterValue) when calling the RunInstances operation (reached max retries: 0): User data is limited to 16384 bytes

@@ -1,0 +1,57 @@
+{
+  "ancillary_reserved_usd": 0.15,
+  "ann_run": false,
+  "client_token": "borsuk-next1m-canary-a0001-r2-1791587853",
+  "compute_reserved_usd": 0.65,
+  "conservative_all_gp3_provisioned_rates_estimate_usd": 0.08514092592592593,
+  "controller_commit": "5a08a0be965ba37e8352f0c13b47f8c8014229e6",
+  "ebs_api_rates": [
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0952 per GB-month of General Purpose (gp3) provisioned storage - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0952000000"
+      },
+      "rateCode": "43AUDFP7M3XV6YHQ.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GB-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.006 per provisioned IOPS-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0060000000"
+      },
+      "rateCode": "8AGS2P58KKNUHB49.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "IOPS-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0476 per provisioned MiBps-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "48.7424000000"
+      },
+      "rateCode": "GRZF7WF5ECWS5FS2.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GiBps-mo"
+    }
+  ],
+  "external_deadline_epoch": 1791591453,
+  "instance_not_yet_launched": true,
+  "launch_count": 1,
+  "local_deadline_epoch": 1791590853,
+  "performance_claim": false,
+  "previous_request_no_instance_confirmed": true,
+  "request_encoding": "raw script string; AWS CLI RunInstances customization applies base64 once",
+  "schema": "borsuk-canary-launch-admission-v1",
+  "started_epoch": 1791587853,
+  "termination_grace_seconds": 120,
+  "total_reserved_usd": 0.8,
+  "user_data_bytes": 12592,
+  "user_data_sha256": "c12d5460975a8f6b61bbcae9336e1817f693113598f15b5ab9ad06d042398031",
+  "watcher_sha256": "a29f3864543932188b606758c48f618023488be53cfa895ea17aa7039227d4a3"
+}
