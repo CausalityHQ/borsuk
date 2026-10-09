@@ -1,0 +1,46 @@
+{
+  "status": "INVALID_NATIVE_TEST_FAILURE",
+  "instance_id": "i-0afe41a761a3ce28e",
+  "terminated": true,
+  "source_commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "stages": [
+    {
+      "name": "semantic-router-tests",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "two-bit-library-tests",
+      "native_exit": 0,
+      "tee_exit": 0
+    },
+    {
+      "name": "application-id-tests",
+      "native_exit": 101,
+      "tee_exit": 0
+    },
+    {
+      "name": "generation-integration-tests",
+      "native_exit": null,
+      "tee_exit": null
+    },
+    {
+      "name": "release",
+      "native_exit": null,
+      "tee_exit": null
+    },
+    {
+      "name": "clippy",
+      "native_exit": null,
+      "tee_exit": null
+    },
+    {
+      "name": "test-build",
+      "native_exit": null,
+      "tee_exit": null
+    }
+  ],
+  "archive_sha256": "104cbb5f1b590359558b6062ffbc9b1b147723e1410132870355719ec570cde4",
+  "performance_claim": false,
+  "new_paid_run": false
+}

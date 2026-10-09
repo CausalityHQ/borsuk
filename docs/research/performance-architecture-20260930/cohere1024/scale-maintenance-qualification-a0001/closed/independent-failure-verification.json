@@ -1,0 +1,16 @@
+{
+  "status": "VERIFIED_CLOSED_TEST_FAILURE",
+  "instance_id": "i-0afe41a761a3ce28e",
+  "terminated_before_collection": true,
+  "source_commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "source_files_checked_before_and_after": 2465,
+  "native_map_exact": true,
+  "original_exit": 1,
+  "application_id_native_exit": 101,
+  "remaining_stages": "UNRUN",
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "failure_kind": "Two actual recovery test failures; production vs fixture cause under same-worker diagnosis",
+  "native_qualified": false,
+  "performance_claim": false
+}
