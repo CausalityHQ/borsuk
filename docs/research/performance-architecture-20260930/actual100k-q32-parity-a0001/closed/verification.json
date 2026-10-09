@@ -1,0 +1,70 @@
+{
+  "status": "PARITY_VERIFIED",
+  "instance_id": "i-033c3ba3710539ce5",
+  "terminated": true,
+  "original_watcher_session": 48141,
+  "original_watcher_exit": 0,
+  "root_verifier_exit": 0,
+  "root_verifier_unit": "run-p3450406-i653437793.service",
+  "root_verifier_sha256": "d30987140f8acc09ce708a47450ad0a211ae288493d5d5b18a8a3ce43b513f5c",
+  "root_verifier_peak_display": "8.1M",
+  "native_source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "protocol_commit": "e4a253de0603292a19d4a6a5025de9bf0f88ea73",
+  "rows": 100000,
+  "queries": 32,
+  "reserved_query_count": 1000,
+  "dimensions": 1024,
+  "k": 10,
+  "native_elapsed_seconds": 7.26096658,
+  "native_observed_rss_bytes": 25247744,
+  "modeled_peak_bytes": 1472505068,
+  "prefixes": {
+    "method": "head -c | sha256sum after whole historical body authentication",
+    "requests": {
+      "path": "/mnt/borsuk-scale-parity/assets/historical/requests",
+      "prefix_bytes": 131072,
+      "prefix_sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    "truth": {
+      "path": "/mnt/borsuk-scale-parity/assets/historical/truth",
+      "prefix_bytes": 2560,
+      "prefix_sha256": "6992e3bb38c7eaf9bec1140801cbab9daa4393c0be492c2fafbb09f7301a504b"
+    }
+  },
+  "native_outputs": [
+    {
+      "bytes": 409600000,
+      "name": "corpus.f32",
+      "sha256": "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c"
+    },
+    {
+      "bytes": 131072,
+      "name": "queries.f32",
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    {
+      "bytes": 19786207,
+      "name": "corpus.ids.jsonl",
+      "sha256": "c9d88b725d00b1ae76773111c715f2aedafbb88f44f62d2d3acfaa2942216f11"
+    },
+    {
+      "bytes": 6200,
+      "name": "queries.ids.jsonl",
+      "sha256": "e27fa2d4d0a22a4f9f4dbb9eb2aeeeb0681f48c7e2193e3aa57a2b49cb5ddeb4"
+    },
+    {
+      "bytes": 2560,
+      "name": "truth.u64",
+      "sha256": "6992e3bb38c7eaf9bec1140801cbab9daa4393c0be492c2fafbb09f7301a504b"
+    }
+  ],
+  "evidence_sha256": "97c19a9d813fda6faefcbfc946114350cde61290e2fd7401b842e3d078ce58c1",
+  "terminal_sha256": "79a64299a6e713b13eebb7ab245a16bd99cfadfcff205e3eeb2c75bf67529898",
+  "manager_sha256": "f17fdf12dcfcac68caa26452bdbe8e864ff66b9ae0ee5a280d00f409f1177fa6",
+  "truth_scope": "historical sequential-f64 arithmetic regression parity, not independent truth correctness",
+  "historical_id_bytes_parity": false,
+  "ann_run": false,
+  "performance_claim": false,
+  "native_unit_memory_peak_bytes": 718491648,
+  "memory_peak_scope": "native parity service including charged file cache; excludes other services"
+}

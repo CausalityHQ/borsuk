@@ -1,0 +1,6 @@
+{
+  "schema": "borsuk-parity-service-exit-v1",
+  "exit_code": "exited",
+  "exit_status": "0",
+  "service_result": "success"
+}

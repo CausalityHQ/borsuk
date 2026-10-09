@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-actual-cohort-parity-closed-v1",
+  "instance_id": "i-033c3ba3710539ce5",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "evidence": {
+    "bytes": 13713,
+    "sha256": "97c19a9d813fda6faefcbfc946114350cde61290e2fd7401b842e3d078ce58c1"
+  },
+  "acceptance": "PROVISIONAL_REQUIRES_EXTERNAL_BOOTSTRAP_EXIT",
+  "publication_verified": false,
+  "performance_claim": false,
+  "ann_run": false
+}
