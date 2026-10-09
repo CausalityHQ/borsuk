@@ -1,0 +1,92 @@
+{
+  "status": "FROZEN_SOURCE_REVIEWED_COMPILE_ONLY_NOT_LAUNCHED",
+  "paid_launch_authorized": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/sq8-attribution-qualification-a0001",
+  "source": {
+    "status": "SOURCE_ARCHIVE_PREPARED_NOT_QUALIFIED_NOT_LAUNCHED",
+    "commit": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+    "files": 2464,
+    "native_files": 425,
+    "archive_bytes": 13559022,
+    "archive_sha256": "a8f4bd100dc71ead09f907dd40deefccdeab35be40ebad92bdfb398a4ff27f8b",
+    "paid_launch_authority": false,
+    "native_identity": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+    "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62"
+  },
+  "inputs": {
+    "mandatory-tests.json": {
+      "bytes": 2291,
+      "sha256": "11718704490bdfbd0dd7d5f5f335b67ba7ddb9ba653dcd16d01ec7f9bf214fab"
+    },
+    "candidate-contract.json": {
+      "bytes": 33620,
+      "sha256": "0935e7a3d8c6a36514bd65841f3ca66b1ce66bc4e01b16ac8a302b6b94eaa102"
+    },
+    "gates.sh": {
+      "bytes": 3933,
+      "sha256": "c8fdd497ae1d73efe5717dcfb1091da5c8042caf6767d467cb8ecf78d243d1f0"
+    },
+    "source-files.sha256": {
+      "bytes": 280779,
+      "sha256": "1d979a4670efbce4926c205309b7ca95a455909fd774c47d9c56d8bc1441e532"
+    },
+    "expected-test-inventory.json": {
+      "bytes": 10680,
+      "sha256": "21a0044aca9acef2fe9c8f3915dee26d9c613003ce5c71df9044b0438e2f9860"
+    },
+    "native-source.json": {
+      "bytes": 49350,
+      "sha256": "b9f9a44096343cbf532ebc447d5fc283a7bee762e188cb1ca780a3f9c697927a"
+    }
+  },
+  "userdata": {
+    "bytes": 7781,
+    "sha256": "7a236f48018cf1e6eb504d663ae2ab93a93b958bd723aeee14cdce41e5c981ce"
+  },
+  "build_seconds": 7200,
+  "gate_unit_seconds": 7440,
+  "machine_seconds": 9000,
+  "build_memory_bytes": 8589934592,
+  "build_cpu": 2,
+  "build_jobs": 1,
+  "swap": 0,
+  "pids": 512,
+  "compute_cap_usd": 1.5,
+  "ancillary_cap_usd": 0.15,
+  "ebs_gib": 80,
+  "mandatory_stages": [
+    "affected-ranges",
+    "affected-ranking",
+    "range-layout",
+    "affected-lib",
+    "affected-bin",
+    "release",
+    "clippy",
+    "test-build"
+  ],
+  "inventory_stages": [
+    "range-inventory",
+    "rank-inventory",
+    "lib-inventory",
+    "bin-inventory"
+  ],
+  "expected_test_counts": {
+    "ranges": 18,
+    "ranking": 6,
+    "generation": 30,
+    "bin": 26
+  },
+  "new_test_counts": {
+    "ranges": 6,
+    "ranking": 1,
+    "generation": 4,
+    "bin": 13
+  },
+  "spot_interruption": "discard incomplete qualification, preserve terminal/infrastructure evidence, no automatic duplicate launch",
+  "failure_policy": "compiler/setup INVALID; no recall/performance inference; repair SAME worker and record distinct attempt",
+  "source_code_integration": "only after native affected/release/Clippy/real test-build exits0"
+}
