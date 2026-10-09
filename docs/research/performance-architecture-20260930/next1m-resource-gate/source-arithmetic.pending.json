@@ -1,0 +1,30 @@
+{
+  "status": "SOURCE_DERIVED_MODEL_NOT_RUNTIME_ADMISSION",
+  "rows": 1000000,
+  "dimensions": 1024,
+  "cells": 3907,
+  "samples": 250048,
+  "batch": 256,
+  "flat_fit_api_payload_upper_bound_bytes": 1142200704,
+  "source_lengths": {
+    "crates/borsuk/examples/build_sq8_source.rs": 47963,
+    "crates/borsuk/src/sq8_source.rs": 15552,
+    "crates/borsuk/src/source_order.rs": 19237
+  },
+  "scalar_coordinate_product_terms": {
+    "lloyd_12": 12004608442368,
+    "full_assignment": 4000768000000,
+    "centroid_chain_upper": 15631000576
+  },
+  "derive_scratch_without_caller_or_temporary_reserve_bytes": 13340131072,
+  "measured_runtime": false,
+  "launch_authority": false,
+  "derive_wrapper_payload_bytes": 4309824,
+  "derive_peak_payload_upper_bound_bytes": 1146510528,
+  "ordinary_fit_seeds": [
+    8201,
+    8202
+  ],
+  "ordinary_lloyd_rounds": 12,
+  "source_scope": "exact qualified build_sq8_source derive admission; not process RSS or measured runtime"
+}
