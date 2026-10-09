@@ -1,0 +1,9 @@
+{
+  "instance_id": "PENDING",
+  "source_sha256": {
+    "cases.sh": "fb3b3213ea466998e1ca43b695fd04996bed455eb42df089e436baa1286a7a63",
+    "collector.sh": "518fe80c116593c590456ed6bd370842a32dcd13c4b90bcdd6d132d34540befb",
+    "source.sha256": "733ccbe35ed6b7eb3f088b7a64047ec5c535469befc148a84bd426179d0efa23"
+  },
+  "user_data_sha256": "edbe49e71240085ad286f768b2ef75f0deb8b95b380df585a116c1c302131901"
+}

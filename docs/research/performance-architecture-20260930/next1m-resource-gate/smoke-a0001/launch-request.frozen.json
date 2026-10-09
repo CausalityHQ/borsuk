@@ -1,0 +1,56 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.2xlarge",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "Placement": {
+    "AvailabilityZone": "eu-central-1c"
+  },
+  "ClientToken": "borsuk-actual1m-q32-admission-smoke-a0001",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "MetadataOptions": {
+    "HttpTokens": "required",
+    "HttpEndpoint": "enabled"
+  },
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "MaxPrice": "0.60",
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate"
+    }
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "VolumeSize": 20,
+        "VolumeType": "gp3",
+        "DeleteOnTermination": true
+      }
+    }
+  ],
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-actual1m-q32-admission-smoke-a0001"
+        },
+        {
+          "Key": "Project",
+          "Value": "borsuk"
+        }
+      ]
+    }
+  ],
+  "UserData": "IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLUVldW8gcGlwZWZhaWwKdW1hc2sgMDc3CnJvb3Q9L21udC9ib3JzdWstYWRtaXNzaW9uLXNtb2tlCm1rZGlyICIkcm9vdCIKY2QgIiRyb290Igpib290X2Vwb2NoPSQoZGF0ZSArJXMpCnNodXRkb3duIC1oICsxNApleGVjID4gYm9vdHN0cmFwLmxvZyAyPiYxCnRpbWVvdXQgLWsgNSA5MCBhcHQtZ2V0IC1xcSAtbyBEUGtnOjpMb2NrOjpUaW1lb3V0PTYwIHVwZGF0ZQp0aW1lb3V0IC1rIDUgMTIwIGFwdC1nZXQgLXFxIC15IC1vIERQa2c6OkxvY2s6OlRpbWVvdXQ9NjAgaW5zdGFsbCBjdXJsIHVuemlwIGpxIHB5dGhvbjMgdGltZSB1dGlsLWxpbnV4Cih1bGltaXQgLWYgNzE0MTI7IGN1cmwgLWZzUyAtLXByb3RvICc9aHR0cHMnIC0tY29ubmVjdC10aW1lb3V0IDUgLS1tYXgtdGltZSA5MCAtLW1heC1maWxlc2l6ZSA3MzAyMjkzNSAtbyBhd3NjbGl2Mi56aXAgaHR0cHM6Ly9hd3NjbGkuYW1hem9uYXdzLmNvbS9hd3NjbGktZXhlLWxpbnV4LXg4Nl82NC0yLjM2LjExLnppcCkKcHJpbnRmICclcyAgYXdzY2xpdjIuemlwXG4nIDUwZmJiN2EyZjQ0YTc4ZWFiNGEyMTAwODgwNDBlOGYwYmM0Yjk5MzdjYWM4MDQzYzIzNTQyNjlkNTg2MTRkZjYgfCBzaGEyNTZzdW0gLWMgLQp0aW1lb3V0IC1rIDUgNjAgdW56aXAgLXEgYXdzY2xpdjIuemlwCnRpbWVvdXQgLWsgNSA2MCAuL2F3cy9pbnN0YWxsCltbICQoYXdzIC0tdmVyc2lvbikgPT0gYXdzLWNsaS8yLjM2LjExXCAqIF1dCnRva2VuPSQoY3VybCAtZnNTIC0tY29ubmVjdC10aW1lb3V0IDUgLS1tYXgtdGltZSAxMCAtWCBQVVQgLUggJ1gtYXdzLWVjMi1tZXRhZGF0YS10b2tlbi10dGwtc2Vjb25kczogNjAnIGh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L2FwaS90b2tlbikKY3VybCAtZnNTIC0tY29ubmVjdC10aW1lb3V0IDUgLS1tYXgtdGltZSAxMCAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkdG9rZW4iIGh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pbnN0YW5jZS1pZCA+IGluc3RhbmNlLnR4dApncmVwIC1FcSAnXmktWzAtOWEtZl0rJCcgaW5zdGFuY2UudHh0Cih1bGltaXQgLWYgNjQ7IHRpbWVvdXQgLWsgNSAzMCBhd3MgczNhcGkgZ2V0LW9iamVjdCAtLWJ1Y2tldCBib3JzdWstYmVuY2gtNDUzMTgyNTY5NTI0LWV1YzEgLS1rZXkgcmVzZWFyY2gvc2VtYW50aWMtcm91dGVyLzIwMjYxMDA5L2FjdHVhbDFtLXEzMi1hZG1pc3Npb24tc21va2UtYTAwMDEvaW5wdXRzL3NvdXJjZS50YXIuZ3ogLS1pZi1tYXRjaCAnIjMzOTZjYWNhYmNlOTE0MTg4M2E3ODU0MWQ2OWM0MjY5Iicgc291cmNlLnRhci5neikKcHJpbnRmICclcyAgc291cmNlLnRhci5nelxuJyA4MzFkZDA3N2MwYmE3NTQwYmE4ODVhZTg5MTY0MzFkZTAzMWRmOGJjYTJhYjQ4ZDQzOTYyNWFhYTU3ZGU2ZTFhIHwgc2hhMjU2c3VtIC1jIC0KdGFyIC14emYgc291cmNlLnRhci5negpzaGEyNTZzdW0gLS1zdHJpY3QgLWMgYXNzZXRzLnNoYTI1NgpjYXQgPiAvcnVuL3N5c3RlbWQvc3lzdGVtL2JvcnN1ay1zbW9rZS5zbGljZSA8PCdVTklUJwpbU2xpY2VdCkNQVVF1b3RhPTEwMCUKQWxsb3dlZENQVXM9MApNZW1vcnlNYXg9MjU2TQpNZW1vcnlTd2FwTWF4PTAKVGFza3NNYXg9MTI4ClVOSVQKc3lzdGVtY3RsIGRhZW1vbi1yZWxvYWQKc3lzdGVtY3RsIHN0YXJ0IGJvcnN1ay1zbW9rZS5zbGljZQpbWyAkKGRhdGUgKyVzKSAtZ2UgJGJvb3RfZXBvY2ggXV0KKCggJChkYXRlICslcykgKyA3NTAgPD0gYm9vdF9lcG9jaCArIDg0MCApKQpzeXN0ZW1kLXJ1biAtLXVuaXQ9Ym9yc3VrLXNtb2tlLWNvbGxlY3RvciAtLW5vLWJsb2NrIC1wIENQVVF1b3RhPTEwMCUgLXAgQWxsb3dlZENQVXM9MCAtcCBNZW1vcnlNYXg9MjU2TSAtcCBNZW1vcnlTd2FwTWF4PTAgLXAgVGFza3NNYXg9MTI4IC1wIFJ1bnRpbWVNYXhTZWM9NzIwIC1wIFRpbWVvdXRTdG9wU2VjPTMwIC1wIEtpbGxNb2RlPWNvbnRyb2wtZ3JvdXAgLXAgIkV4ZWNTdG9wUG9zdD0vYmluL2Jhc2ggJHJvb3Qvc291cmNlcy9zZXJ2aWNlLXN0b3Auc2ggYm9vdHN0cmFwIGJvcnN1ay1iZW5jaC00NTMxODI1Njk1MjQtZXVjMSByZXNlYXJjaC9zZW1hbnRpYy1yb3V0ZXIvMjAyNjEwMDkvYWN0dWFsMW0tcTMyLWFkbWlzc2lvbi1zbW9rZS1hMDAwMS9ib290c3RyYXAtbWFuYWdlci5qc29uIiAvYmluL2Jhc2ggIiRyb290L2NvbGxlY3Rvci5zaCIK"
+}

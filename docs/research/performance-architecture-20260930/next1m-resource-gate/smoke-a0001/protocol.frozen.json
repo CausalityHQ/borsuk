@@ -1,0 +1,90 @@
+{
+  "schema": "borsuk-actual1m-admission-smoke-proposal-v1",
+  "status": "ROOT_FROZEN_FOR_ONE_DISPOSABLE_SMOKE",
+  "campaign": "actual1m-q32-admission-smoke-a0001",
+  "source_candidate": "19db0399f764acd937a46e4dfd4e80854b68db40",
+  "region": "eu-central-1",
+  "az": "eu-central-1c",
+  "instance_type": "c7i.2xlarge",
+  "market": "spot",
+  "max_bid_usd_hour": 0.6,
+  "external_deadline_seconds": 900,
+  "max_compute_reserved_usd": 0.15,
+  "ancillary_reserved_usd": 0.15,
+  "max_total_reserved_usd": 0.3,
+  "driver_limits": {
+    "cpu_cores": 1,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 420
+  },
+  "real": [
+    "systemd units/stop hooks/cloud-final manager",
+    "Bash jq SHA sync tar",
+    "bounded logger overflow and status collection",
+    "unit drain before evidence closure"
+  ],
+  "mocked": [
+    "native body and output receipt intent",
+    "S3 PUT GET bodies in network-denied driver",
+    "shutdown command"
+  ],
+  "not_exercised": [
+    "native preparer execution",
+    "1M corpus/requests/truth decode",
+    "full positive wrapper validation",
+    "full1M SHA duration",
+    "ANN quality/performance"
+  ],
+  "no_automatic_repeat": true,
+  "paid_launch_authority": true,
+  "performance_claim": false,
+  "no_corpus_queries_truth": true,
+  "required_before_launch": [
+    "exact final wrapper and root source hashes",
+    "source-bound smoke diff review",
+    "bounded target metadata/quote check",
+    "source archive/support immutable freeze",
+    "external watcher same-ID termination and streaming replay"
+  ],
+  "root_commit": "93d610b6379ff82743747eac7608ff7b7a2c15e0",
+  "source_archive": {
+    "bytes": 19481,
+    "sha256": "831dd077c0ba7540ba885ae8916431de031df8bca2ab48d439625aaa57de6e1a"
+  },
+  "source_archive_key": "research/semantic-router/20261009/actual1m-q32-admission-smoke-a0001/inputs/source.tar.gz",
+  "asset_hashes": {
+    "cases.sh": "fb3b3213ea466998e1ca43b695fd04996bed455eb42df089e436baa1286a7a63",
+    "collector.sh": "518fe80c116593c590456ed6bd370842a32dcd13c4b90bcdd6d132d34540befb",
+    "sources/user-data.sh": "0f27949da781dc39022ccaef75edc10a944da012b7368db3c2b67d7c66da081a",
+    "sources/service-stop.sh": "7d4c7156a1950fa243c538e6e9c05e2665c9429a07bcf4d6f0cf7075a2de9881",
+    "sources/transport.py": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12",
+    "sources/run_actual_cohort_admission.sh": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008",
+    "sources/source.sha256": "733ccbe35ed6b7eb3f088b7a64047ec5c535469befc148a84bd426179d0efa23"
+  },
+  "source_etag": "\"3396cacabce9141883a78541d69c4269\"",
+  "collector_limits": {
+    "cpu_cores": 1,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 720
+  },
+  "concurrent_driver_plus_collector_memory_ceiling_bytes": 536870912,
+  "user_data_sha256": "edbe49e71240085ad286f768b2ef75f0deb8b95b380df585a116c1c302131901",
+  "watcher_sha256": "5eb403c7aef65d1c8e357aed80bc46ff5caaf56ef77564efa7e19dfcf53b52e0",
+  "verifier_sha256": "9d046ade491ae919b5dc90e649ffa3d9915409a79bf06eb311474dc06cc0301d",
+  "launch_request_sha256": "3492e4fa26581e8a6307df184075e403a96def945f4052ac01b78332acea2959",
+  "metadata_check": "target-metadata-and-quote.checked.json",
+  "runtime_verified": false,
+  "static_final": {
+    "unit": "borsuk-actual1m-smoke-final-static-r1",
+    "invocation": "9754e9be21404890ab56ea447fb11810",
+    "exit": 0,
+    "runtime_tested": false
+  },
+  "freeze_diff_check_prior": "FAILED trailing whitespace in copied watcher; corrected before commit/launch"
+}
