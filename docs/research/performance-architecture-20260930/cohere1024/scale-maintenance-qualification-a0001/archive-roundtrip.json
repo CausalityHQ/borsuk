@@ -1,0 +1,9 @@
+{
+  "commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "archive_sha256": "2afc24e54d3d5cbc4f988c19fa2210cb4ed540790606f2e3addc236e1a39bb42",
+  "files": 2465,
+  "bytes": 58419081,
+  "original_exit": 0,
+  "status": "ARCHIVE_ROUNDTRIP_VERIFIED",
+  "native_execution": false
+}

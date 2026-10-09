@@ -1,0 +1,285 @@
+{
+  "status": "FROZEN_COMPILER_ONLY_BEFORE_LAUNCH",
+  "paid_launch_authorized": true,
+  "source_commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "source": {
+    "commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+    "archive": {
+      "path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-6de-source.tar.gz",
+      "bytes": 16965779,
+      "sha256": "2afc24e54d3d5cbc4f988c19fa2210cb4ed540790606f2e3addc236e1a39bb42"
+    },
+    "source_manifest": {
+      "path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-6de-source-files.sha256",
+      "bytes": 280890,
+      "sha256": "26706aa1b819bf1c195902bfbe0950e94d54eca8fc66b3290c2f9bee6a428ae7"
+    },
+    "files": 2465,
+    "source_bytes": 58419081,
+    "native_files": 426,
+    "native_identity_sha256": "255002c6dc42432ca1526ebdfd1168cfeb920e0cf1dedeac221559dd85118c29",
+    "native_identity_encoding": "UTF-8 sorted-key compact JSON of complete path-to-SHA256 map",
+    "status": "BUNDLE_CREATED_NATIVE_UNRUN",
+    "paid_launch": false
+  },
+  "inputs": {
+    "source-files.sha256": {
+      "bytes": 280890,
+      "sha256": "26706aa1b819bf1c195902bfbe0950e94d54eca8fc66b3290c2f9bee6a428ae7"
+    },
+    "candidate-contract.json": {
+      "bytes": 18530,
+      "sha256": "800ccd4966f7071ed96394b1b79ce97cd838a95fee4fac16b4457b7b8bff8965"
+    },
+    "gates.sh": {
+      "bytes": 3481,
+      "sha256": "248c77c1a1ca05d722fdeab3e83924c9944741914ea8624b31c09995476a51e2"
+    },
+    "native-source.json": {
+      "bytes": 49468,
+      "sha256": "9c1ebd06cdc86e4b6a7f8a4175a6451bc9fae2727e4a924ff846de9dbace2192"
+    },
+    "user-data.sh": {
+      "bytes": 7227,
+      "sha256": "2f1685bf25726daf9f66c0cae4906bdf872e29fc9c85ab06e02d3649bd819bc2"
+    }
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/scale-maintenance-qualification-a0001",
+  "resources": {
+    "cpu": 2,
+    "allowed_cpus": "0,1",
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "jobs": 1,
+    "build_seconds": 7200,
+    "unit_seconds": 7440,
+    "machine_seconds": 9000,
+    "ebs_gib": 80
+  },
+  "cost_observation": {
+    "region": "eu-central-1",
+    "zone": "eu-central-1c",
+    "type": "c7i.2xlarge",
+    "spot_usd_hour": "0.204400",
+    "quote_timestamp": "2026-10-09T08:00:00+00:00",
+    "bid_max_usd_hour": "0.50",
+    "compute_worst_usd": 1.25,
+    "compute_reserve_usd": 1.5,
+    "ancillary_reserve_usd": 0.15
+  },
+  "mandatory_stage_plan": {
+    "status": "FROZEN_REPAIRED_SOURCE_NATIVE_UNRUN",
+    "mandatory_existing_names": [
+      {
+        "stage": "two-bit-library-tests",
+        "name": "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "repair_fixtures_required": [
+      "orphan staging reclaimed before retry allocation",
+      "Fresh target refused before mutation sealing",
+      "explicit Scale target transition and unready recovery",
+      "ready and prehead profile changes refused"
+    ],
+    "base_commit": "344740c89b696407518f62e3c1470ff56e722f71",
+    "worker": "borsuk/scale-profile-maintenance-native",
+    "scope": "Generic positive populations up to1M, D1..1024, explicit authenticated profile across maintenance/restart/empty/refill",
+    "reuse_gate_runner": "native-lifecycle-cpu-qualification-a0001/gates.sh serial time/tee/original-exit/source-before-after pattern",
+    "prospective_commands": [
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "semantic_unit_router::",
+        "--",
+        "--test-threads=1"
+      ],
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "two_bit_",
+        "--",
+        "--test-threads=1"
+      ],
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_application_ids",
+        "--",
+        "--test-threads=1"
+      ],
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--test",
+        "two_bit_generation",
+        "--",
+        "--test-threads=1"
+      ],
+      [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--bin",
+        "publish_two_bit_generation",
+        "--bin",
+        "check_cohere_native_baseline"
+      ],
+      [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "CARGO_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    ],
+    "mandatory_new_names": [
+      {
+        "stage": "semantic-router-tests",
+        "name": "semantic_unit_router::tests::scale_profile_dimension_population_leaf_and_million_row_arithmetic_bounds",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "semantic-router-tests",
+        "name": "semantic_unit_router::tests::scale_profile_build_and_nomination_support_singleton_and_partial_pages",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "two-bit-library-tests",
+        "name": "two_bit_compaction::tests::empty_and_job_profiles_are_required_and_old_formats_refuse",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "application-id-tests",
+        "name": "scale_profile_varied_dimensions_scalar_codes_norms_scores_topk_and_refill",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "application-id-tests",
+        "name": "scale_profile_recovers_build_ready_and_prehead_with_exact_profile",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "application-id-tests",
+        "name": "scale_profile_explicit_empty_creation_and_missing_profile_authority_refuse",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "two-bit-library-tests",
+        "name": "two_bit_compaction::tests::scale_profile_compaction_million_row_payload_and_disk_arithmetic",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "application-id-tests",
+        "name": "scale_profile_remaining_mutation_budget_refuses_before_body_read",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "resources": "Existing bounded remote compiler envelope; freeze exact final source, full inventory and resource/cost quote before launch",
+    "local_execution": "No Cargo/rustc/native/runtime; source and bounded static checks only",
+    "acceptance": "Every mandatory new test actual PASS, expected stage counts, original native+tee exits0, full source before=after, terminal artifact hashes and same-instance termination-before-collection",
+    "claims": {
+      "scale_runtime_ready": false,
+      "performance": false,
+      "competitor_win": false
+    },
+    "candidate_commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+    "mandatory_repair_names": [
+      {
+        "stage": "application-id-tests",
+        "name": "fresh_profile_target_refuses_before_seal_and_explicit_scale_transition_works",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "stage": "application-id-tests",
+        "name": "native_overpopulation_unready_job_recovers_with_explicit_scale_profile",
+        "passes": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "review_group": "2073fefb6d264b68",
+    "prospective_stage_names": [
+      "semantic-router-tests",
+      "two-bit-library-tests",
+      "application-id-tests",
+      "generation-integration-tests",
+      "release",
+      "clippy",
+      "test-build"
+    ]
+  },
+  "native_qualified": false,
+  "performance_claim": false,
+  "ann_run": false,
+  "failure_policy": "Compiler/environment errors are execution INVALID; preserve attempt; no automatic paid retry",
+  "spot_interruption": "Preserve infrastructure/partial evidence; interrupted gate attempt discarded; no automatic relaunch",
+  "launch": {
+    "image": "ami-0b8a830d6339a9758",
+    "image_state_verified": "available",
+    "instance_type": "c7i.2xlarge",
+    "subnet": "subnet-0a12dbed0ca6fac25",
+    "security_group": "sg-0b1fd3e4fbde4af0d",
+    "instance_profile": "borsuk-bench-profile",
+    "spot_max_price": "0.50",
+    "client_token": "borsuk-scale-maintenance-qualification-a0001",
+    "matching_nonterminal_instances": [],
+    "terminate_on_shutdown": true,
+    "imds_v2_required": true
+  }
+}

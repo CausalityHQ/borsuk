@@ -1,0 +1,20 @@
+{
+  "commit": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "archive": {
+    "path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-6de-source.tar.gz",
+    "bytes": 16965779,
+    "sha256": "2afc24e54d3d5cbc4f988c19fa2210cb4ed540790606f2e3addc236e1a39bb42"
+  },
+  "source_manifest": {
+    "path": "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-6de-source-files.sha256",
+    "bytes": 280890,
+    "sha256": "26706aa1b819bf1c195902bfbe0950e94d54eca8fc66b3290c2f9bee6a428ae7"
+  },
+  "files": 2465,
+  "source_bytes": 58419081,
+  "native_files": 426,
+  "native_identity_sha256": "255002c6dc42432ca1526ebdfd1168cfeb920e0cf1dedeac221559dd85118c29",
+  "native_identity_encoding": "UTF-8 sorted-key compact JSON of complete path-to-SHA256 map",
+  "status": "BUNDLE_CREATED_NATIVE_UNRUN",
+  "paid_launch": false
+}

@@ -1,0 +1,295 @@
+{
+   "apis" : [
+      "SemanticProfile::Scale1m; JSON scale1m; binary profile code3; N1..1000000/D1..1024; caps remain512MiB/4MiB",
+      "TwoBitGenerationBuilder::build_with_semantic_profile (existing explicit path)",
+      "compact_two_bit_index_with_semantic_profile(store,prefix,maintenance,options,profile)",
+      "publish_empty_two_bit_generation_with_semantic_profile(store,prefix,dimensions,generation,expected,profile)"
+   ],
+   "arithmetic_1m_d1024" : {
+      "router_payload_peak_bytes" : 506729928,
+      "router_root_bound_bytes" : 4064832,
+      "selected_leaf_bytes" : 6303744
+   },
+   "base" : "344740c89b696407518f62e3c1470ff56e722f71",
+   "candidate_parent" : "a07b979286293fdf5e6e205302b1808de3e09b84",
+   "commit" : "6de2799d746bf0da30727e5a1178761c7c3eb667",
+   "commits" : [
+      "15eb7f466158e488f50dd3fab52bb26a84565e48",
+      "49bb4effcb34f6f49e95470dca1d2f754200e2ba",
+      "a07b979286293fdf5e6e205302b1808de3e09b84",
+      "6de2799d746bf0da30727e5a1178761c7c3eb667"
+   ],
+   "compaction_arithmetic" : {
+      "builder" : "router_peak + 128*D + 32*ceil(N/256) + 256*(D+12) + 262144 + 8*N (caller order)",
+      "builder_1m_d1024" : {
+         "coordinate_scratch" : 131072,
+         "fixed" : 262144,
+         "order" : 8000000,
+         "page_buffer" : 265216,
+         "page_hashes" : 125024,
+         "router" : 506729928,
+         "total" : 515513384
+      },
+      "disk" : "N*(9D+36+ceil(padded_dimensions(D)/4)+8) +ceil(N/32)*(32D+16384) +32*ceil(N/256)+262144; premerge conservatively substitutes old rows+puts, later exact output rows; graph bound deliberately retained for semantic staging",
+      "disk_1m_d1024" : {
+         "fixed" : 262144,
+         "graph_and_centroid_bound" : 1536000000,
+         "page_hashes" : 125024,
+         "per_row" : 9516,
+         "rows_component" : 9516000000,
+         "total" : 11052387168
+      },
+      "evidence" : "64-bit source models; arithmetic native tests UNRUN, no RSS/runtime qualification",
+      "mutation_admission" : "12*B + 8*X + 4096 <= effective mutation cap, checked before reading mutation control/body; seal also uses effective cap",
+      "prepare_source" : "2*S +262144+T+12*D <=C-R; exact job-owned orphan staging is reclaimed before retry allocation; explicit close succeeds before generation build, so canonical staging does not coexist with new generation staging.",
+      "publication" : "generation limits already_pinned=P+S+K; shared publisher adds actual expected H. Publication serving validator adds new metadata/cache/query/validation-page models and actual authority bytes before allocation; then semantic validator requires router_peak within remaining publication budget. Upload remaining=max_generation-P-S-K-H-[131072+8*(three encoded manifests+namespace)+authority bytes], with 2*file part buffer check. No automatic hydration of an old generation: live caller generations belong in P.",
+      "publication_serving_model" : "3*actual metadata disk +64*mean bytes +131072+graph memory(0 semantic) +32*actual router root bytes+directory peak+1MiB*active queries +query_payload_bytes(geometry,query bytes,query scratch+1MiB,active queries) +2*min(source bytes,record bytes)*active queries +local validation page bytes, plus P+S+K+H; declarations are unchanged",
+      "readiness" : "Router geometry fits512MiB narrowly; all separate source/build/disk/generation/query/caller-pin caps must pass. No1M native execution, measuredRSS, performance or readiness claim.",
+      "retained" : "R=P+H+K; source phase allowance=C-R; effective mutation cap=min(original mutation memory cap,C-R)",
+      "router" : "u=ceil(N/32), c=ceil(u/64), l=2c-1; max(training,emit,validate) unchanged; dimensions enter centroid/root/leaf/prototype/trainer terms",
+      "router_1m_d1024" : {
+         "centers" : 489,
+         "emit" : 416660264,
+         "max_leaves" : 977,
+         "profile_payload_cap" : 536870912,
+         "training" : 506729928,
+         "units" : 31250,
+         "validate" : 354344920
+      },
+      "sq8_encoding" : "Build budget=C-R-S-8N; SQ8 encoder checks 24N+ceil(N/8)+32D+131072 before its copies, in addition to caller IDs reservation; retained payload in this conservative phase <=P+H+S+32550984 at1M/D1024",
+      "sq8_upload" : "Upload allowance=C-R-S-16N-8D-131072; helper reserves 2*min(part_bytes,artifact_bytes), part=max(8MiB,ceil(ceil(bytes/9000)/MiB)*MiB). At1M/D1024 SQ8 bytes1036000000, two8MiB buffers, phase <=P+H+S+33178624.",
+      "symbols" : "N output rows; D dimensions; P caller already_pinned_bytes; H actual old head retained_root_bytes; S sealed snapshot resident_payload_bytes; C source.max_memory_bytes; K=262144 owned compaction bookkeeping; B max_snapshot_bytes; X metadata prefix bytes; T max_source_chunk_bytes",
+      "whole_build" : "P+H+K+S+8*N (caller IDs)+builder; actual merged preflight runs before ID/order allocation; prospective phase uses old rows+puts upper bound and clamps router geometry to profile max before exact merged admission",
+      "whole_build_1m_d1024" : "523775528 + P + H + S bytes; if source cap512MiB, requires P+H+S <=13095384. No hidden/default cap increase; larger caller/old pins may refuse."
+   },
+   "complete" : false,
+   "consumed_root_messages" : [
+      "1791534848445986323-665549",
+      "1791534946305236488-665549",
+      "1791535412043636785-665549"
+   ],
+   "durable_formats" : {
+      "empty" : "borsuk-two-bit-empty-generation-v4",
+      "job" : "borsuk-two-bit-compaction-job-v4",
+      "ready" : "borsuk-two-bit-compaction-ready-v2",
+      "router" : "BORSUSR2 explicit code3"
+   },
+   "exact_static_unit_receipt" : {
+      "AllowedCPUs" : "0",
+      "CPUQuotaPerSecUSec" : "1s",
+      "Cpus_allowed_list" : "0",
+      "MemoryMax" : 268435456,
+      "MemorySwapMax" : 0,
+      "RuntimeMaxUSec" : "2min",
+      "TasksMax" : 128,
+      "checks" : "rustfmt canonical_source then --edition2024 --check all7; git diff --check; scoped operator commit; contract JSON/hash/11 test declarations; clean Git",
+      "cpu_max" : "100000 100000",
+      "exit_code" : 0,
+      "native" : "UNRUN",
+      "unit" : "borsuk-scale-profile-review-source-commit-1791540.service"
+   },
+   "final_contract_receipt" : {
+      "checks" : "Canonical exact40-character commit; all preserved commit entries exact40; current OWN7 SHA256 equality; JSON reparsed",
+      "exit_code" : 0,
+      "native" : "UNRUN",
+      "unit" : "borsuk-scale-profile-review-contract-final-1791540.service"
+   },
+   "fixture_geometry" : "4rows nonidentity IDs; D1/3/255/257/1024; rebuild ready and prehead faults D257; delete-all then singleton refill; existing Native100k D768/D1024 tests retained",
+   "fixture_limits" : {
+      "active_queries" : 1,
+      "disk_bytes" : 4194304,
+      "memory_bytes" : 33554432,
+      "mutation_memory_bytes" : 1000000,
+      "mutation_snapshot_bytes" : 32768,
+      "query_gets" : 1,
+      "rows" : 4,
+      "source_chunk_bytes" : 65536,
+      "source_gets" : 1
+   },
+   "focused_remaining_budget_fixture" : {
+      "dimensions" : 3,
+      "expected_error" : "mutation payload cap",
+      "expected_mutation_path_operations" : 0,
+      "native_status" : "UNRUN",
+      "original_mutation_cap" : 1000000,
+      "pinned_formula" : "1000000 - old_head_bytes - 262144 - 397311",
+      "remaining_after_retention" : 397311,
+      "rows" : 1,
+      "snapshot_cap" : 32768,
+      "source_cap" : 1000000
+   },
+   "gates" : [
+      {
+         "command" : "cargo test --locked -p borsuk --lib semantic_unit_router::tests",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib two_bit_compaction::tests",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --test two_bit_application_ids",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --test two_bit_generation",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo build --locked -p borsuk --release",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::semantic_object_store_parity",
+         "status" : "UNRUN_ROOT_REMOTE_ONLY"
+      }
+   ],
+   "local_checks" : {
+      "git_diff_check" : "exit0",
+      "native" : "FORBIDDEN_UNRUN",
+      "rustfmt_check" : "exit0",
+      "rustfmt_parse" : "exit0"
+   },
+   "local_resources" : {
+      "AllowedCPUs" : "0 plus taskset0",
+      "CPUQuota" : "100%",
+      "MemoryMax" : 268435456,
+      "MemorySwapMax" : 0,
+      "RuntimeMaxSec" : 120,
+      "TasksMax" : 128,
+      "timeout_seconds" : 120
+   },
+   "maintenance_target_policy" : "Resolved Fresh1m semantic maintenance/empty target refuses before seal or publication. Preliminary target resolution includes captured job before maintenance state creation and is revalidated under lock. Explicit compatible Scale1m target on Fresh base is permitted. Historical scoring/selection/arithmetic unchanged.",
+   "native_qualification" : false,
+   "native_tests" : [
+      "scale_profile_dimension_population_leaf_and_million_row_arithmetic_bounds",
+      "scale_profile_build_and_nomination_support_singleton_and_partial_pages",
+      "empty_and_job_profiles_are_required_and_old_formats_refuse",
+      "scale_profile_varied_dimensions_scalar_codes_norms_scores_topk_and_refill",
+      "scale_profile_recovers_build_ready_and_prehead_with_exact_profile",
+      "scale_profile_explicit_empty_creation_and_missing_profile_authority_refuse",
+      "scale_profile_compaction_million_row_payload_and_disk_arithmetic",
+      "scale_profile_remaining_mutation_budget_refuses_before_body_read",
+      "fresh_profile_target_refuses_before_seal_and_explicit_scale_transition_works",
+      "native_overpopulation_unready_job_recovers_with_explicit_scale_profile",
+      "two_bit_generation::source_walk_tests::semantic_object_store_parity"
+   ],
+   "owned_sha256" : {
+      "crates/borsuk/src/canonical_source.rs" : "b63855d0a8d4b49ba1e9c5d3ec85f0df633e204f47d150a2abf3cb2d9e9beea7",
+      "crates/borsuk/src/semantic_unit_router.rs" : "2961d9295d49e217e4b8c24ef734b09f079fa112306e65655962cebba17c7ae5",
+      "crates/borsuk/src/two_bit_build.rs" : "e6178f7bdac2ba97fa1496158383fcacd8515619fde71e17024f726f5e7f55b0",
+      "crates/borsuk/src/two_bit_compaction.rs" : "6e3fdc716b9bd5bb4abac79c8209e842659a7b922e5c6d83f587de57c43a537a",
+      "crates/borsuk/src/two_bit_generation.rs" : "6acb7cdbb23d790aee8bfbcba8924ae09f0c7c7738e87ca2b3e40006fd0e3f38",
+      "crates/borsuk/src/two_bit_store.rs" : "061d780c6879848d16417ebcfe675f3cee276966181e94bb6eb38e886b3f70f0",
+      "crates/borsuk/tests/two_bit_application_ids.rs" : "854437c6d06ee293e73158e0843df09d4ff176aca56d5435638d8da7114f2f13"
+   },
+   "phase" : "SOURCE_REVIEW_REPAIR_COMMITTED_UNVERIFIED_HOLD_SAME_WORKER",
+   "preparation_staging" : {
+      "authority" : "Existing exclusive job lock plus exact v4 base/profile/dimensions/mutation SHA/revision/epoch job comparison before cleanup",
+      "cleanup" : "Only recognized exact job-owned staging is reclaimed before retry allocation; symlink/non-directory refuses; no arbitrary temp-prefix scan/shared cleanup",
+      "fixture" : "scale_profile_recovers_build_ready_and_prehead_with_exact_profile phase2 installs three durable orphan files each equal to disk cap, independent of RAII unwinding; invalid base/mutation/epoch preserves orphan; valid retry removes it before a post-preparation claim fault; unrelated external temp directory remains",
+      "native_status" : "UNRUN",
+      "path" : "<maintenance>/<authenticated-base-sha256>/preparation",
+      "phase_boundary" : "Explicit staging close must succeed before preparation returns and generation construction starts; ordinary errors retain RAII best-effort cleanup",
+      "standalone_api" : "Public standalone preparation retains caller-owned temporary lifecycle; only compaction uses the job-owned path"
+   },
+   "previous_exact_static_unit_receipt" : {
+      "AllowedCPUs" : "0",
+      "CPUQuotaPerSecUSec" : "1s",
+      "Cpus_allowed_list" : "0",
+      "MemoryMax" : 268435456,
+      "MemorySwapMax" : 0,
+      "RuntimeMaxUSec" : "2min",
+      "TasksMax" : 128,
+      "checks" : "all6 rustfmt --edition2024 --check; git diff --check; exacthead49bb4eff; clean Git",
+      "cpu_max" : "100000 100000",
+      "exit_code" : 0,
+      "native" : "UNRUN",
+      "unit" : "borsuk-scale-profile-static-final-1791536.service"
+   },
+   "previous_review_static_receipt" : {
+      "AllowedCPUs" : "0",
+      "CPUQuotaPerSecUSec" : "1s",
+      "Cpus_allowed_list" : "0",
+      "MemoryMax" : 268435456,
+      "MemorySwapMax" : 0,
+      "RuntimeMaxUSec" : "2min",
+      "TasksMax" : 128,
+      "checks" : "rustfmt changed2 then all6 --edition2024 --check; git diff --check; commit a07b9792; clean Git",
+      "cpu_max" : "100000 100000",
+      "exit_code" : 0,
+      "native" : "UNRUN",
+      "unit" : "borsuk-scale-profile-static-repair-1791536.service"
+   },
+   "profile_contract" : "Mandatory empty/job base_profile/profile; exact ready/prehead target binding. Explicit discovery or profile replacement permitted only for captured UNREADY jobs after base/mutation/revision/epoch binding; profile/mode replacement refused when ready.json exists. Graph profile null; no compatibility reader.",
+   "remote_resources" : {
+      "compiler_jobs" : 1,
+      "owner" : "borsuk/prod-ready-v9",
+      "status" : "UNLAUNCHED; root must bind exact source and enforce its approved remote caps"
+   },
+   "repair_details" : [
+      "Focused remaining-budget mutation fixture requires refusal before any mutation path operation.",
+      "Pure arithmetic fixture reconciles router, builder, whole-build coexistence and disk at1M/D1024.",
+      "Row-count preflight authenticates base.metadata_prefix rather than index prefix.",
+      "Publication retains 262144-byte compaction bookkeeping in already_pinned_bytes."
+   ],
+   "resource_limits" : "No increased caps. Build preflight subtracts caller pins+actual old head+262144 bookkeeping; builder/order/IDs and upload buffers charged before allocation. Premerge uses conservative old rows+puts upper bound. Existing publication model checks actual new metadata+caller pins+actual old head. 1M runtime readiness/performance UNQUALIFIED; concurrent pins/disk/source/query caps can refuse.",
+   "review_artifacts_sha256" : {
+      "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-engineering_critic-a07.md" : "da536849f2957dfcb980fa06cca61c2514f1e259875007c9cb5dbffac6ae4f69",
+      "/data/target/borsuk-cold-membership-native/native-lifecycle-cpu-qualification-a0001/scale-maintenance-research_critic-a07.md" : "0d2f4d8d89c4fe86a66c6b30a92e0ab8c1b3affe792cfd96b35f130a20a0ec1f"
+   },
+   "review_fixture_limits" : {
+      "fresh_transition" : {
+         "dimensions" : 768,
+         "disk_bytes" : 4194304,
+         "native_status" : "UNRUN",
+         "rows" : 1,
+         "source_memory_bytes" : 33554432
+      },
+      "lib_parity" : "Existing admitted fixture limits preserved; one-shot claim.json PUT failure proves preparation succeeded; unready graph recovery and mutation-authority tamper assertions retained",
+      "native_overpopulation" : {
+         "base_rows" : 100000,
+         "dimensions" : 2,
+         "disk_bytes" : 67108864,
+         "mutation_snapshot_bytes" : 32768,
+         "native_status" : "UNRUN",
+         "output_rows" : 100001,
+         "source_memory_bytes" : 134217728
+      },
+      "orphan_recovery" : {
+         "each_orphan_file_bytes" : 4194304,
+         "native_status" : "UNRUN",
+         "orphan_files" : 3,
+         "source_disk_cap_bytes" : 4194304
+      }
+   },
+   "review_nonblocker_disclosures" : [
+      "Shared publisher old-head H charge affects all expected-head callers; unchanged in this repair; tight-cap tests require root qualification.",
+      "Dimension support helper still expresses valid_geometry(1,D) OR valid_geometry(1000000,D) for the current three profiles.",
+      "Prospective old rows+puts disk bound is conservative for updates; no optional loosening.",
+      "Scalar code/norm/score oracle pins existing format/arithmetic and mirrors its operations; no independent scientific algorithm claim.",
+      "D1 normalized rows tie; truncation-stage ordering remains an unrun runtime concern.",
+      "Small-population nomination may approach exhaustive; does not qualify 1M recall/latency.",
+      "1M/D1024 whole-build model leaves only13095384B for P+H+S within512MiB; disk11052387168B exceeds8GiB. No changed caps, runtime readiness or RSS claim.",
+      "Ready recovery still repeats cap admission; tighter retry caps can refuse; no optional recovery optimization."
+   ],
+   "review_reconciliation" : {
+      "both_reports" : "FULLY_READ; repairs independently source checked; this new commit remains UNVERIFIED and unreviewed by root",
+      "candidate_reviewed" : "a07b979286293fdf5e6e205302b1808de3e09b84",
+      "engineering_critic" : "Recognized preparation staging/retry reclamation and explicit cleanup-before-build; parity fixture fails at post-preparation claim instead of preflight disk admission",
+      "group" : "2073fefb6d264b68",
+      "namespace_nonblocker" : "Basic namespace/order/dimension validation moved before remote profile lookup; wrong-prefix fixture requires zero operations",
+      "research_critic" : "Fresh refusal and captured-unready replacement source repaired; ready/prehead fencing retained",
+      "root_acceptance" : "PENDING_ROOT_RECONCILIATION_AND_NATIVE_GATES"
+   },
+   "root_gate_requirement" : "All eight listed affected/existing-LIB/release/workspaceClippy correctness+suspicious/real shim-unset jobs1testcompile commands must return0 and root accept before completion. HOLD same worker.",
+   "source_check_receipt" : "Actual bounded CPU1/0/256MiB/noSwap/pids128/120s; all7 rustfmt parse/check and diff-check exit0; operator-attributed separate repair commit; JSON exact hashes/test declarations; no native/Cargo/rustc/review/consult/children/push/merge."
+}
