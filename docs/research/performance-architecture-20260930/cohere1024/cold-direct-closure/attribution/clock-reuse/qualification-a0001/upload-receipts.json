@@ -1,0 +1,107 @@
+[
+  {
+    "name": "source.tar.gz",
+    "key": "research/native-library-check/sources/7ad0b09bb2077e9a125da698a0a3a819772a4f6c54ea9827261b0157a4f30248.tar.gz",
+    "bytes": 13562064,
+    "sha256": "7ad0b09bb2077e9a125da698a0a3a819772a4f6c54ea9827261b0157a4f30248",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:26+00:00",
+      "ContentLength": 13562064,
+      "ETag": "\"027d4de2bf9c3fa2698d56c44b2937a5-2\"",
+      "ContentType": "application/x-tar",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "mandatory-tests.json",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/mandatory-tests.json",
+    "bytes": 2467,
+    "sha256": "bbb43110ddf182685f923198872795a6781862fbd2bfdc175d3a11864c37ed23",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:30+00:00",
+      "ContentLength": 2467,
+      "ETag": "\"faf94e6b036d35038f44a6e52ffffd97\"",
+      "ContentType": "application/json",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "candidate-contract.json",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/candidate-contract.json",
+    "bytes": 4050,
+    "sha256": "0bbd03a7e7394ccbc72d72da1dcdce17bcfd2ec93563b3acf86e102e60e6c2fc",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:32+00:00",
+      "ContentLength": 4050,
+      "ETag": "\"c0376da3fd35267ade33f6df7db57de9\"",
+      "ContentType": "application/json",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "gates.sh",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/gates.sh",
+    "bytes": 3934,
+    "sha256": "1615ff07b4586e21446e23b701bb2f0294039de3f4bae4562ad866dabb5a0732",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:37+00:00",
+      "ContentLength": 3934,
+      "ETag": "\"eb4b3e223a753a4ddb0e24e95b3638d9\"",
+      "ContentType": "application/x-sh",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "source-files.sha256",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/source-files.sha256",
+    "bytes": 280779,
+    "sha256": "5fde5946df61c18387b4825f8d68dda0d998a1847949a63f6dba160b0a65fe94",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:39+00:00",
+      "ContentLength": 280779,
+      "ETag": "\"c2b0ff32148e8f9f2311edbfe87cf0b6\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "expected-test-inventory.json",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/expected-test-inventory.json",
+    "bytes": 11093,
+    "sha256": "d7a9bd775d84061f74bf8c5fe10bad740ab81ce1db06ec9d9dc524bb4278a882",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:46+00:00",
+      "ContentLength": 11093,
+      "ETag": "\"431c39a313f8459038e39bf5ebb4d891\"",
+      "ContentType": "application/json",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  {
+    "name": "native-source.json",
+    "key": "research/semantic-router/20261009/sq8-clock-reuse-qualification-a0001/inputs/native-source.json",
+    "bytes": 49350,
+    "sha256": "cbcd8d38d5549fb166208f2f8ce89271c03676246a224eaad83f7dd100a0426c",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-09T02:44:48+00:00",
+      "ContentLength": 49350,
+      "ETag": "\"3b37f019b162332b7e0ce1780d39771a\"",
+      "ContentType": "application/json",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  }
+]

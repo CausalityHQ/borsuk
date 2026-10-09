@@ -1,0 +1,9 @@
+{
+  "status": "RUNNING_COMPILER_ONLY_NOT_QUALIFIED",
+  "instance_id": "i-0174741616505dbda",
+  "original_watcher_session": 43463,
+  "candidate": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "ann_run": false,
+  "integration_authorized": false,
+  "termination": "Original watcher terminates and waits SAME instance before collection; no duplicate launch."
+}

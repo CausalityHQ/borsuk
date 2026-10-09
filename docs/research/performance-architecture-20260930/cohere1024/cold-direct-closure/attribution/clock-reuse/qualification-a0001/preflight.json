@@ -1,0 +1,39 @@
+{
+  "checked_at": "2026-10-09T02:45:13.293567+00:00",
+  "source": "b82e524c5fe4d50a0428af887f5c3fb23785e97e",
+  "preregistration": "950c66786776f923b879738e02efaa33b9b074d5",
+  "same_campaign_instances": [],
+  "subnet": {
+    "Subnets": [
+      {
+        "AvailabilityZoneId": "euc1-az1",
+        "MapCustomerOwnedIpOnLaunch": false,
+        "OwnerId": "453182569524",
+        "AssignIpv6AddressOnCreation": false,
+        "Ipv6CidrBlockAssociationSet": [],
+        "SubnetArn": "arn:aws:ec2:eu-central-1:453182569524:subnet/subnet-0a12dbed0ca6fac25",
+        "EnableDns64": false,
+        "Ipv6Native": false,
+        "PrivateDnsNameOptionsOnLaunch": {
+          "HostnameType": "ip-name",
+          "EnableResourceNameDnsARecord": false,
+          "EnableResourceNameDnsAAAARecord": false
+        },
+        "BlockPublicAccessStates": {
+          "InternetGatewayBlockMode": "off"
+        },
+        "SubnetId": "subnet-0a12dbed0ca6fac25",
+        "State": "available",
+        "VpcId": "vpc-02bed5aadbc3c0a2d",
+        "CidrBlock": "172.31.0.0/20",
+        "AvailableIpAddressCount": 4091,
+        "AvailabilityZone": "eu-central-1c",
+        "DefaultForAz": true,
+        "MapPublicIpOnLaunch": true
+      }
+    ]
+  },
+  "inputs_verified": 7,
+  "userdata_sha256": "ade6965e2156e5280e3169602baae7161922e19b3a176526d2914d3be5bd9c65",
+  "compiler_only": true
+}
