@@ -1,0 +1,102 @@
+{
+  "schema": "borsuk-actual1m-admission-smoke-proposal-v1",
+  "status": "ROOT_FROZEN_FOR_ONE_CORRECTED_DISPOSABLE_SMOKE",
+  "campaign": "actual1m-q32-admission-smoke-a0002",
+  "source_candidate": "19db0399f764acd937a46e4dfd4e80854b68db40",
+  "region": "eu-central-1",
+  "az": "eu-central-1c",
+  "instance_type": "c7i.2xlarge",
+  "market": "spot",
+  "max_bid_usd_hour": 0.6,
+  "external_deadline_seconds": 900,
+  "max_compute_reserved_usd": 0.15,
+  "ancillary_reserved_usd": 0.15,
+  "max_total_reserved_usd": 0.3,
+  "driver_limits": {
+    "cpu_cores": 1,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 420
+  },
+  "real": [
+    "systemd units/stop hooks/cloud-final manager",
+    "Bash jq SHA sync tar",
+    "bounded logger overflow and status collection",
+    "unit drain before evidence closure"
+  ],
+  "mocked": [
+    "native body and output receipt intent",
+    "S3 PUT GET bodies in network-denied driver",
+    "shutdown command"
+  ],
+  "not_exercised": [
+    "native preparer execution",
+    "1M corpus/requests/truth decode",
+    "full positive wrapper validation",
+    "full1M SHA duration",
+    "ANN quality/performance"
+  ],
+  "no_automatic_repeat": true,
+  "paid_launch_authority": true,
+  "performance_claim": false,
+  "no_corpus_queries_truth": true,
+  "required_before_launch": [
+    "exact final wrapper and root source hashes",
+    "source-bound smoke diff review",
+    "bounded target metadata/quote check",
+    "source archive/support immutable freeze",
+    "external watcher same-ID termination and streaming replay"
+  ],
+  "root_commit": "c6edd32100f25ba39cea603bf66282860dd4a1a1",
+  "source_archive": {
+    "bytes": 19793,
+    "sha256": "e9fa6535a0a8be7a6aaf54c02f90a37afc6c761cebd6812d5bc3163d8e6ec54c"
+  },
+  "source_archive_key": "research/semantic-router/20261009/actual1m-q32-admission-smoke-a0002/inputs/source.tar.gz",
+  "asset_hashes": {
+    "cases.sh": "fff35ca99fcb27984c5b9bee5ffded66d3bce6d69421ce5082a81e059d339ad7",
+    "collector.sh": "fcbe4b924db5a15af34594c5a79a4f9e209e9d0b6ca6a1dfc06f8aea7990cbf0",
+    "sources/user-data.sh": "0f27949da781dc39022ccaef75edc10a944da012b7368db3c2b67d7c66da081a",
+    "sources/source.sha256": "733ccbe35ed6b7eb3f088b7a64047ec5c535469befc148a84bd426179d0efa23",
+    "sources/service-stop.sh": "7d4c7156a1950fa243c538e6e9c05e2665c9429a07bcf4d6f0cf7075a2de9881",
+    "sources/run_actual_cohort_admission.sh": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008",
+    "sources/transport.py": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12"
+  },
+  "collector_limits": {
+    "cpu_cores": 1,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 720
+  },
+  "concurrent_driver_plus_collector_memory_ceiling_bytes": 536870912,
+  "watcher_sha256": "7addfefed3dab1936cd5cf404c7e8c0781ddb49b2f29e5f6aed1abf721251a1b",
+  "verifier_sha256": "9d046ade491ae919b5dc90e649ffa3d9915409a79bf06eb311474dc06cc0301d",
+  "metadata_check": "target-metadata-and-quote.checked.json",
+  "runtime_verified": false,
+  "static_final": {
+    "unit": "borsuk-actual1m-smoke-a0002-final-static-r1",
+    "exit": 0,
+    "runtime_verified": false
+  },
+  "freeze_diff_check_prior": "FAILED trailing whitespace in copied watcher; corrected before commit/launch",
+  "prior_attempt": {
+    "campaign": "actual1m-q32-admission-smoke-a0001",
+    "instance_id": "i-076dfa3cb40f93e79",
+    "terminated": true,
+    "driver_exit": 1,
+    "disposition": "EXECUTION_INVALID_TEST_ORACLE_CONTRADICTION"
+  },
+  "changes_from_a0001": [
+    "overflow test allows existing immediate -h now failure shutdown; normal still forbids shutdown calls",
+    "diagnostic last parent error line/status/mode",
+    "quiesced failure-current fixture size/SHA and bounded prefix retained"
+  ],
+  "algorithm_and_caps_unchanged": true,
+  "source_etag": "\"33dcea74d202ab5b523784d69acfb1a2\"",
+  "user_data_sha256": "39d19510a58855ca23fd57a88c796c7f3f68526459d837a3555fbefacaafe948",
+  "launch_request_sha256": "7f5c8e85f91cc7c1bce9aec7c68ca7d7236cbf75146afc7b1ea4b2cec6366c53"
+}

@@ -1,0 +1,26 @@
+{
+  "status": "TARGET_METADATA_AND_QUOTE_CHECKED",
+  "utc": "2026-10-09T19:19:29.412070+00:00",
+  "ami": {
+    "id": "ami-0b8a830d6339a9758",
+    "state": "available",
+    "architecture": "x86_64"
+  },
+  "subnet": {
+    "id": "subnet-0a12dbed0ca6fac25",
+    "az": "eu-central-1c"
+  },
+  "spot": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.204400",
+    "Timestamp": "2026-10-09T18:00:00+00:00"
+  },
+  "exact_campaign_live_instances": 0,
+  "compute_max_reserved_usd": 0.15,
+  "ancillary_reserved_usd": 0.15,
+  "total_max_reserved_usd": 0.3,
+  "paid_launched": false
+}
