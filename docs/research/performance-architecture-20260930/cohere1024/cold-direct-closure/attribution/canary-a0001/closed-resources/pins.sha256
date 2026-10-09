@@ -1,0 +1,12 @@
+e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836  /mnt/borsuk-retained-s3/runner
+2f63e2812acfcf39770986b0b07ea36e883ad056821d7f4f136ca259ad048aca  /mnt/borsuk-retained-s3/stage.sh
+b7b5588566b00dad5118dc94a5c56ddf5edaa48e04a3db3ddbc81e0352be52b0  /mnt/borsuk-retained-s3/A_last-untraced.config.json
+587654bb92844486bbc3de3d1add19a6d618605efef52c1629277700c72a501f  /mnt/borsuk-retained-s3/B_first-untraced.config.json
+97f977bf2cd6d1da508d7ef800c8385529b656d4c9032c4693beda862d14b936  /mnt/borsuk-retained-s3/A_first-trace.config.json
+9b8f9639d6e6cd4feec8bdb94ce82f197dd5e6e696165b451c78ce5a13403c8d  /mnt/borsuk-retained-s3/B_last-trace.config.json
+7230ecb8f274ea38073f6eb4e4078399a5a729067dbfeb1fcf508a84a7870425  /mnt/borsuk-retained-s3/A_last-trace.config.json
+dbcc24fc0a21ebf96c257d2927ce6931146c6add3d56f3e6b840c10fa74d4411  /mnt/borsuk-retained-s3/B_first-trace.config.json
+3c889cb1a9a269b015d1f813fe2a67879f491ddcb6bdc8fe5507aacc0967a3fc  /mnt/borsuk-retained-s3/B_last-untraced.config.json
+2febc7205e3fb4a78c8e125572d9e26a3ca6421968fe7bd4d3f659711db020f3  /mnt/borsuk-retained-s3/A_first-untraced.config.json
+8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e  /mnt/borsuk-retained-s3/queries.f32
+479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c  /mnt/borsuk-retained-s3/truth.u64

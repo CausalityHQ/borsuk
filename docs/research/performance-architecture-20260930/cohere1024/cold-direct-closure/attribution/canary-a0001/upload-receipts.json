@@ -1,0 +1,123 @@
+[
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/stage.sh",
+    "sha256": "2f63e2812acfcf39770986b0b07ea36e883ad056821d7f4f136ca259ad048aca",
+    "bytes": 169318,
+    "receipt": {
+      "ETag": "\"2bc99995d9cd7f484c42cbeb9009100b\"",
+      "ChecksumCRC64NVME": "mVKedy3D+yE=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/A_last-untraced.config.json",
+    "sha256": "b7b5588566b00dad5118dc94a5c56ddf5edaa48e04a3db3ddbc81e0352be52b0",
+    "bytes": 2675,
+    "receipt": {
+      "ETag": "\"6a47e30307fad6af6999275b5fdecad5\"",
+      "ChecksumCRC64NVME": "8Z9wwwt3SA4=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/B_first-untraced.config.json",
+    "sha256": "587654bb92844486bbc3de3d1add19a6d618605efef52c1629277700c72a501f",
+    "bytes": 2722,
+    "receipt": {
+      "ETag": "\"a3713df76740e81832aa31e785892471\"",
+      "ChecksumCRC64NVME": "3keVu8I2ZlY=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/A_first-trace.config.json",
+    "sha256": "97f977bf2cd6d1da508d7ef800c8385529b656d4c9032c4693beda862d14b936",
+    "bytes": 2657,
+    "receipt": {
+      "ETag": "\"9b8ddbb01ff4904bb6270a38c4351089\"",
+      "ChecksumCRC64NVME": "NKiBeh525iM=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/B_last-trace.config.json",
+    "sha256": "9b8f9639d6e6cd4feec8bdb94ce82f197dd5e6e696165b451c78ce5a13403c8d",
+    "bytes": 2732,
+    "receipt": {
+      "ETag": "\"12f7d45362568d5ab3d2feb8e24bf71d\"",
+      "ChecksumCRC64NVME": "jvj9r3HtxHU=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/A_last-trace.config.json",
+    "sha256": "7230ecb8f274ea38073f6eb4e4078399a5a729067dbfeb1fcf508a84a7870425",
+    "bytes": 2671,
+    "receipt": {
+      "ETag": "\"0f5e55b278c014703a1aa8944a4d0886\"",
+      "ChecksumCRC64NVME": "Qmzt63QYuOY=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/B_first-trace.config.json",
+    "sha256": "dbcc24fc0a21ebf96c257d2927ce6931146c6add3d56f3e6b840c10fa74d4411",
+    "bytes": 2718,
+    "receipt": {
+      "ETag": "\"7d94cdc68c97c2d592c3921beda751bf\"",
+      "ChecksumCRC64NVME": "RmF+p2CtXyI=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/B_last-untraced.config.json",
+    "sha256": "3c889cb1a9a269b015d1f813fe2a67879f491ddcb6bdc8fe5507aacc0967a3fc",
+    "bytes": 2736,
+    "receipt": {
+      "ETag": "\"167fc9634502da50b5fc0f586f17dae6\"",
+      "ChecksumCRC64NVME": "/IiqLUlF6ro=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/inputs/A_first-untraced.config.json",
+    "sha256": "2febc7205e3fb4a78c8e125572d9e26a3ca6421968fe7bd4d3f659711db020f3",
+    "bytes": 2661,
+    "receipt": {
+      "ETag": "\"48896f902a83d3e410a06602d29f847f\"",
+      "ChecksumCRC64NVME": "OyxxT7gskgI=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/protocol.json",
+    "sha256": "b759dba2874385dcb40c2f204dffa358dee1d2464b99dc018a1a2e40f9736216",
+    "bytes": 65808,
+    "receipt": {
+      "ETag": "\"f45ff9f2cf214e9ab757fd7e94c2d4b8\"",
+      "ChecksumCRC64NVME": "wwNhI/BU4Hw=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  },
+  {
+    "key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/preflight.json",
+    "sha256": "159df30d6e383bab3bb8bda0ad73eddecb67ebd868d6766ca19bc81ecb4a3760",
+    "bytes": 795,
+    "receipt": {
+      "ETag": "\"eedc40fc6e6d4f077c8263728b35953a\"",
+      "ChecksumCRC64NVME": "aoS5q/DXmj4=",
+      "ChecksumType": "FULL_OBJECT",
+      "ServerSideEncryption": "AES256"
+    }
+  }
+]

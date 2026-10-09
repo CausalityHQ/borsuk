@@ -1,0 +1,12 @@
+{
+  "instance_id": "i-07ef6693295028bfb",
+  "campaign": "borsuk-sq8-attribution-canary-a0001",
+  "prefix": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001",
+  "launch_time": "2026-10-09T01:35:04.797027+00:00",
+  "protocol_commit": "994bc19aa0ad6b69d814c1018f6eeadb2ee615fc",
+  "compute_cap_usd": 1.2,
+  "ancillary_cap_usd": 0.75,
+  "machine_seconds": 9600,
+  "source": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "claim": "observer-overhead only; quality/vendor claims false"
+}

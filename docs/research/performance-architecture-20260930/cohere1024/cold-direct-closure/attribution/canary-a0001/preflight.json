@@ -1,0 +1,23 @@
+{
+  "status": "READY_FROZEN_NATIVE_OBSERVER_CANARY",
+  "commit": "994bc19aa0ad6b69d814c1018f6eeadb2ee615fc",
+  "spot_quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.205600",
+    "Timestamp": "2026-10-08T19:00:00+00:00"
+  },
+  "native_admission_reused_for_unchanged_algorithm_inputs": true,
+  "config_delta": "scratch_parent only",
+  "real": [
+    "AWS identity",
+    "campaign duplicate check",
+    "Spot quote",
+    "HEAD pinned binary/requests/truth/SQ8",
+    "exact local config/hash comparison to native-admitted inputs"
+  ],
+  "body_authentication": "performed by native/staging on new instance; HEAD is not body SHA verification",
+  "launched": false
+}

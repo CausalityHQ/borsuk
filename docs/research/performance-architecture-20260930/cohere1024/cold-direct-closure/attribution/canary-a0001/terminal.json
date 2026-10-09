@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-sq8-attribution-overhead-canary-closed-v1",
+  "instance_id": "i-07ef6693295028bfb",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "native_exit": 0,
+  "binary_source_commit": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "integration_commit": "fd408f6f6868cc38c0208f94ad27cadd4dd0b769",
+  "qualified_source_identity_sha256": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+  "evidence": {
+    "bytes": 44015094,
+    "sha256": "a70f9e4b8fdab7e161342196537825cdd76db5efe4dcf4358c9cbc969d79fa0c"
+  },
+  "terminal_delivery": "attempted",
+  "performance_claim": false
+}

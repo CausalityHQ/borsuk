@@ -1,0 +1,61 @@
+{
+  "status": "INCONCLUSIVE",
+  "arms": {
+    "A": {
+      "query_cpu": {
+        "estimate": 1.0082957014374552,
+        "lower": 0.9912588881674981,
+        "upper": 1.0253325147074124,
+        "clusters": 32,
+        "critical_multiplier": 3,
+        "scope": "approximate paired-quad delta/Student bound"
+      },
+      "whole_os_cpu": {
+        "lower": 0.9925474024646483,
+        "upper": 1.0367772586507316,
+        "reported_ratio": 1.0146196415296937,
+        "truncation_interval_per_quad_seconds": 0.04
+      },
+      "latency": {
+        "estimate_ns": 325005.375,
+        "lower_ns": -1217068.25,
+        "upper_ns": 1653769.75,
+        "upper_one_sided_coverage_under_independent_quads": 0.99649981665425
+      }
+    },
+    "B": {
+      "query_cpu": {
+        "estimate": 1.0053446358490028,
+        "lower": 0.9884048334763459,
+        "upper": 1.0222844382216596,
+        "clusters": 32,
+        "critical_multiplier": 3,
+        "scope": "approximate paired-quad delta/Student bound"
+      },
+      "whole_os_cpu": {
+        "lower": 0.989902741465029,
+        "upper": 1.030790584238029,
+        "reported_ratio": 1.0103003263766206,
+        "truncation_interval_per_quad_seconds": 0.04
+      },
+      "latency": {
+        "estimate_ns": -131013.375,
+        "lower_ns": -979516.5,
+        "upper_ns": 685438.0,
+        "upper_one_sided_coverage_under_independent_quads": 0.99649981665425
+      }
+    }
+  },
+  "receipt_validation_performed": true,
+  "vendor_win_claim": false,
+  "population_percentile_claim": false,
+  "scope": "selected128ordinals, perarm process-quad observer-overhead gate only",
+  "confidence_limitations": "CPU intervals approximate; independent stable randomized-quad errors assumed; uncontrolled backend remains disclosed; no optional extension",
+  "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "instance_id": "i-07ef6693295028bfb",
+  "terminated": true,
+  "semantic_parity": true,
+  "sealed_before_truth": true,
+  "native_calls": 256,
+  "searches": 16384
+}

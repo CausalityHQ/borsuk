@@ -1,0 +1,12 @@
+/mnt/borsuk-retained-s3/runner: OK
+/mnt/borsuk-retained-s3/stage.sh: OK
+/mnt/borsuk-retained-s3/A_last-untraced.config.json: OK
+/mnt/borsuk-retained-s3/B_first-untraced.config.json: OK
+/mnt/borsuk-retained-s3/A_first-trace.config.json: OK
+/mnt/borsuk-retained-s3/B_last-trace.config.json: OK
+/mnt/borsuk-retained-s3/A_last-trace.config.json: OK
+/mnt/borsuk-retained-s3/B_first-trace.config.json: OK
+/mnt/borsuk-retained-s3/B_last-untraced.config.json: OK
+/mnt/borsuk-retained-s3/A_first-untraced.config.json: OK
+/mnt/borsuk-retained-s3/queries.f32: OK
+/mnt/borsuk-retained-s3/truth.u64: OK

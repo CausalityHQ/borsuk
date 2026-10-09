@@ -1,0 +1,31 @@
+{
+  "status": "INCONCLUSIVE",
+  "native_execution": "VALID_CLOSED",
+  "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "instance_id": "i-07ef6693295028bfb",
+  "original_watcher": 71738,
+  "watcher_exit": 0,
+  "root_verifier_exit": 0,
+  "root_verifier_unit": "borsuk-attribution-canary-root-verify-a0001",
+  "root_verifier_runtime_seconds": 10.489,
+  "root_verifier_cpu_seconds": 7.212,
+  "root_verifier_peak_reported": "49.1M",
+  "root_verifier_swap_bytes": 0,
+  "terminated_before_collection": true,
+  "native_calls": 256,
+  "searches": 16384,
+  "semantic_parity": true,
+  "sealed_before_truth": true,
+  "panel_launch_authorized": false,
+  "automatic_extension_authorized": false,
+  "algorithm_rejection": false,
+  "vendor_win_claim": false,
+  "population_percentile_claim": false,
+  "decision": "Preserve fixed observer limits. No diagnostic panel or automatic repetition. Select a cheaper diagnostic design only from the closed CPU/phase evidence, then qualify a distinct causal change before any new performance gate.",
+  "raw_evidence": {
+    "s3_bucket": "borsuk-bench-453182569524-euc1",
+    "s3_key": "research/semantic-router/20261009/sq8-attribution-overhead-canary-a0001/evidence.tar.gz",
+    "bytes": 44015094,
+    "sha256": "a70f9e4b8fdab7e161342196537825cdd76db5efe4dcf4358c9cbc969d79fa0c"
+  }
+}
