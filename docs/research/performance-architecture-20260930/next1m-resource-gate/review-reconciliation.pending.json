@@ -37,9 +37,12 @@
   "launch_authority": false,
   "full_results": "review64.completed.json",
   "remaining": [
-    "same OWN1 wrapper repairs1791571373292265474-3160204",
-    "root launch/collection pins must carry immutable user_data_sha256 and support_manifest_sha256",
-    "real staged hooks/status/failure/logger overflow smoke",
-    "wrapper hashing budget qualification under existing ceilings"
-  ]
+    "disposable exact-source staging hooks/logger/status/resource smoke",
+    "independent launch and collection checksum pin freeze",
+    "whole1M wrapper hashing budget measured under unchanged ceilings"
+  ],
+  "wrapper_repaired_candidate": "19db0399f764acd937a46e4dfd4e80854b68db40",
+  "wrapper_source_sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008",
+  "wrapper_static_pass": true,
+  "runtime_verified": false
 }

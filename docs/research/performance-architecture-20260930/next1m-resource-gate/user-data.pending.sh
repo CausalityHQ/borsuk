@@ -72,7 +72,7 @@ trap finish EXIT
 trap 'exit 97' TERM INT HUP
 trap 'exit 98' PIPE
 # Only the logger inherits this file-size cap; SDK extraction and native outputs do not.
-exec > >(ulimit -f 32768; exec cat >run.log) 2>&1
+exec > >(trap - EXIT ERR; ulimit -c 0; ulimit -f 32768; exec cat >run.log) 2>&1
 log_pid=$!
 # Independent machine stop remains active even if package/transport setup fails.
 # Effective local stop is 3900s, leaving 300s before the external 4200s hard cap.
@@ -113,7 +113,7 @@ mkdir -p /run/systemd/system/cloud-final.service.d
 printf '[Service]\nExecStopPost=/bin/bash %s/service-stop.sh bootstrap %s %s/bootstrap-manager.json\n' "$root" "$bucket" "$prefix" > /run/systemd/system/cloud-final.service.d/borsuk-exit.conf
 systemctl daemon-reload
 systemctl cat cloud-final.service > evidence-root/cloud-final-unit.txt
-{ uname -r; cat /etc/os-release; jq --version; bash --version; systemd --version; /usr/bin/time --version; sha256sum /usr/bin/jq; } > evidence-root/environment.txt
+{ uname -r; cat /etc/os-release; jq --version; bash --version; systemd --version; /usr/bin/time --version; prlimit --version; sha256sum /usr/bin/jq /usr/bin/prlimit; } > evidence-root/environment.txt
 df -B1 "$root" > evidence-root/disk-before.txt
 available=$(df -B1 --output=avail "$root" | tail -1 | tr -d ' ')
 [[ $available =~ ^[0-9]+$ ]] && (( available >= 15331342625 ))

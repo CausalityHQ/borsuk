@@ -1,6 +1,6 @@
 {
   "status": "PENDING_NOT_LAUNCHABLE",
-  "source_commit": "18affac794f51a462001ba35064e16f27f2b2e60",
+  "source_commit": "88ebe19978ee08244a282dc835c1bc8fefbf461b",
   "geometry": {
     "corpus": 1000000,
     "queries": 32,
@@ -12,7 +12,7 @@
   "expected_new_shard_rows": 100000,
   "new_shard_row_count_scope": "prospective hypothesis, NOT independently observed; exact authenticated footer mismatch refuses before decode/output",
   "output_parent_pending": true,
-  "resource_audit_pending": "da9cc4b351b64abf",
+  "resource_audit_pending": null,
   "cpu_proposal": 4,
   "memory_ceiling_proposal_bytes": 8589934592,
   "native_deadline_ceiling_seconds": 2400,
@@ -20,5 +20,9 @@
   "performance_claim": false,
   "paid_launch_authority": false,
   "caller_scratch_reserve_bytes": 1610612736,
-  "caller_scratch_scope": "two <=512MiB SDK expansions/install copies +73022935B SDK archive +ELF/request/support/evidence/archive/control; root volume OS/apt headroom checked separately"
+  "caller_scratch_scope": "two <=512MiB SDK expansions/install copies +73022935B SDK archive +ELF/request/support/evidence/archive/control; root volume OS/apt headroom checked separately",
+  "resource_audit_closed": "da9cc4b351b64abf",
+  "review_group_closed": "64b25766a59643cf",
+  "staging_required": true,
+  "native_margin_qualification": "UNVERIFIED; wrapper2400/2460 unchanged; hash time measured during staging/admission, timeout INVALID not algorithm rejection"
 }

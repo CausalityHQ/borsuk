@@ -1,0 +1,52 @@
+{
+  "schema": "borsuk-actual1m-admission-smoke-proposal-v1",
+  "status": "PENDING_NOT_LAUNCHABLE",
+  "campaign": "actual1m-q32-admission-smoke-a0001",
+  "source_candidate": "19db0399f764acd937a46e4dfd4e80854b68db40",
+  "region": "eu-central-1",
+  "az": "eu-central-1c",
+  "instance_type": "c7i.2xlarge",
+  "market": "spot",
+  "max_bid_usd_hour": 0.6,
+  "external_deadline_seconds": 900,
+  "max_compute_reserved_usd": 0.15,
+  "ancillary_reserved_usd": 0.15,
+  "max_total_reserved_usd": 0.3,
+  "driver_limits": {
+    "cpu_cores": 1,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 420
+  },
+  "real": [
+    "systemd units/stop hooks/cloud-final manager",
+    "Bash jq SHA sync tar",
+    "bounded logger overflow and status collection",
+    "unit drain before evidence closure"
+  ],
+  "mocked": [
+    "native body and output receipt intent",
+    "S3 PUT GET bodies in network-denied driver",
+    "shutdown command"
+  ],
+  "not_exercised": [
+    "native preparer execution",
+    "1M corpus/requests/truth decode",
+    "full positive wrapper validation",
+    "full1M SHA duration",
+    "ANN quality/performance"
+  ],
+  "no_automatic_repeat": true,
+  "paid_launch_authority": false,
+  "performance_claim": false,
+  "no_corpus_queries_truth": true,
+  "required_before_launch": [
+    "exact final wrapper and root source hashes",
+    "source-bound smoke diff review",
+    "bounded target metadata/quote check",
+    "source archive/support immutable freeze",
+    "external watcher same-ID termination and streaming replay"
+  ]
+}

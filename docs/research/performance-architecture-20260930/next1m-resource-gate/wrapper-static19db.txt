@@ -1,0 +1,16 @@
+source before final review64 repair check:
+39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008  scripts/run_actual_cohort_admission.sh
+Running as unit: borsuk-actual1m-own1-review64b-static-20261009.service
+cgroup=/system.slice/borsuk-actual1m-own1-review64b-static-20261009.service
+cpu.max=100000 100000
+cpuset.cpus.effective=0
+memory.max=268435456
+memory.swap.max=0
+pids.max=128
+bash_n_exit=0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 34ms
+             CPU time consumed: 28ms
+                   Memory peak: 2.3M (swap: 0B)
+systemd_run_exit=0

@@ -10,7 +10,12 @@ def bounded(p,cap=65536):
     req(p.is_file() and not p.is_symlink() and 0<p.stat().st_size<=cap,'metadata size/type '+str(p))
     with p.open('rb') as f: b=f.read(cap+1)
     req(len(b)<=cap,'metadata growth');return b
-def read(p): return json.loads(bounded(p))
+def unique(pairs):
+    req(len({k for k,v in pairs})==len(pairs),'duplicate JSON fields')
+    return dict(pairs)
+def decode(b): return json.loads(b,object_pairs_hook=unique)
+def same(a,b): return json.dumps(a,sort_keys=True,separators=(',',':'))==json.dumps(b,sort_keys=True,separators=(',',':'))
+def read(p): return decode(bounded(p))
 class EvidenceHeader(tarfile.TarInfo):
     headers=0
     @classmethod
@@ -23,12 +28,13 @@ class EvidenceHeader(tarfile.TarInfo):
         return header
 def main():
     R,pins_path=map(Path,sys.argv[1:3]);pins=read(pins_path)
-    terminal_body=bounded(R/'terminal.json');term=json.loads(terminal_body);col=read(R/'collection.json');manager=read(R/'bootstrap-manager.json')
+    terminal_body=bounded(R/'terminal.json');term=decode(terminal_body);col=read(R/'collection.json');manager=read(R/'bootstrap-manager.json')
+    req(digest(terminal_body)==pins['terminal_sha256'],'independent collected terminal pin')
     instance=pins['instance_id'];req(col['terminated'] is True and col['instance_id']==instance,'terminated original')
     req(col['user_data_sha256']==pins['user_data_sha256'],'independent launch user-data provenance')
     req(term['schema']=='borsuk-actual-cohort-parity-closed-v1' and term['instance_id']==instance and term['phase']=='complete' and type(term['original_exit']) is int and term['original_exit']==0 and type(term['exit']) is int and term['exit']==0 and term['publication_verified'] is False and term['performance_claim'] is False and term['ann_run'] is False,'outer original outcome')
     req(manager['schema']=='borsuk-parity-bootstrap-exit-v1' and manager['instance_id']==instance and manager['terminal_sha256']==digest(terminal_body) and manager['exit_code']=='exited' and manager['exit_status']=='0' and manager['service_result']=='success' and manager['final_exit']=='0','original main and final child outcome')
-    archive=R/'evidence.tar.gz';req(0<archive.stat().st_size<=67108864 and archive.stat().st_size==term['evidence']['bytes'],'archive size');req(digest(archive.read_bytes())==term['evidence']['sha256'],'archive SHA')
+    archive=R/'evidence.tar.gz';req(0<archive.stat().st_size<=67108864 and archive.stat().st_size==term['evidence']['bytes'],'archive size');req(digest(archive.read_bytes())==term['evidence']['sha256']==pins['archive_sha256'],'independent archive SHA')
     bodies={};total=0
     EvidenceHeader.headers=0
     with tarfile.open(archive,'r:gz',tarinfo=EvidenceHeader) as t:
@@ -38,13 +44,15 @@ def main():
             req(m.isfile() and name not in bodies and m.size<=33554432,'archive type/duplicate/member cap');total+=m.size;req(total<=67108864,'expanded evidence cap')
             f=t.extractfile(m);req(f is not None,'archive stream');bodies[name]=f.read(m.size+1);req(len(bodies[name])==m.size,'body length')
     listed={}
-    for line in bounded(R/'artifacts.sha256',1048576).decode().splitlines():
+    manifest_body=bounded(R/'artifacts.sha256',1048576)
+    req(digest(manifest_body)==pins['artifacts_manifest_sha256'],'independent manifest pin')
+    for line in manifest_body.decode().splitlines():
         match=re.fullmatch(r'([0-9a-f]{64})  (.+)',line);req(match is not None,'manifest syntax');name=str(PurePosixPath(match[2]));req(name not in listed,'manifest duplicate');listed[name]=match[1]
     req(set(listed)==set(bodies),'closed exact inventory');req(all(digest(bodies[n])==h for n,h in listed.items()),'inventory SHA')
     req(digest(bodies['support.sha256'])==pins['support_manifest_sha256'],'frozen support provenance')
     for n in ('finalized-config.json','native-complete.json','evidence-local/config.json','evidence-local/terminal.json','evidence-local/native.stdout.json'):
         req(0<len(bodies[n])<=65536,'native/control body cap '+n)
-    j=lambda n:json.loads(bodies[n]);jl=lambda n:[json.loads(l) for l in bodies[n].splitlines()]
+    j=lambda n:decode(bodies[n]);jl=lambda n:[decode(l) for l in bodies[n].splitlines()]
     for n in ('transport','parity'):req(bodies[n+'-unit.exit'].strip()==b'0','original '+n+' wait exit')
     for n in ('transport-exit.json','service-exit.json'):
         m=j(n);req(m['schema']=='borsuk-parity-service-exit-v1' and m['exit_code']=='exited' and m['exit_status']=='0' and m['service_result']=='success','manager '+n)
@@ -52,7 +60,10 @@ def main():
     for n in ('config.validated.txt','receipt.validated.txt','resource-closure.after.txt','resource-closure.closed.txt'):
         req(bodies['evidence-local/'+n]==b'true\n','validation marker '+n)
     req(local['elf_sha256']==pins['elf_sha256'],'qualified ELF binding')
-    for n in ('native','timeout','time','tee','wrapper'):req(bodies['evidence-local/'+n+'.exit']==b'0\n','original '+n+' status')
+    for n in ('native','timeout','time','tee','wrapper','time-log','supervisor-stderr-log','native-stderr-log'):req(bodies['evidence-local/'+n+'.exit']==b'0\n','original '+n+' status')
+    for n in ('native.stderr.txt','supervisor.stderr.txt','native.time.txt'):
+        req(len(bodies['evidence-local/'+n])<=1048576,'log write cap '+n)
+    req(len(bodies['evidence-local/native.stdout.json'])<=1024,'native stdout write cap')
     req(bodies['evidence-local/inputs.before.jsonl']==bodies['evidence-local/inputs.after.jsonl'],'whole-input closure')
     inputs=jl('evidence-local/inputs.before.jsonl');observed={(v['bytes'],v['sha256']) for v in inputs};req(set(tuple(v) for v in pins['input_size_sha'])<=observed,'all frozen input pins')
     cfg=j('finalized-config.json');cfgbody=bodies['finalized-config.json'];req(digest(cfgbody)==local['config_sha256'],'exact final config SHA');req(cfg==j('evidence-local/config.json'),'config copy')
@@ -71,6 +82,11 @@ def main():
         for a,b in zip(before,after):
             req(all(a[k]==b[k] for k in keys),'ancestor limits');ac,bc=counters(a['memory_events']),counters(b['memory_events']);req(all(ac.get(k)==bc.get(k) for k in ('oom','oom_kill','oom_group_kill')),'memory event closure');req(bc.get('max',0)>=ac.get('max',0),'reclaim counter monotonicity');req(counters(a['pids_events'])==counters(b['pids_events']),'pids event closure')
         leaf=after[0];req(int(leaf['memory_current'])<=8589934592 and int(leaf['memory_peak'])<=8589934592 and int(leaf['memory_swap_current'])==0,'leaf memory evidence')
+        previous='before' if phase=='after' else 'after'
+        events=j('evidence-local/resource-events.'+phase+'.json')
+        expected_events=[{'path':a['path'],'before':counters(a['memory_events']).get('max'),'after':counters(b['memory_events']).get('max'),'delta':counters(b['memory_events']).get('max',0)-counters(a['memory_events']).get('max',0)} for a,b in zip(before,after)]
+        req(same(events,{'from':previous,'to':phase,'memory_max_events':expected_events,'valid':True}),'independent reclaim event delta')
+        before=after
     req(bodies['evidence-local/outputs.authenticated.jsonl']==bodies['evidence-local/outputs.closed.jsonl'],'whole output closure')
     receipt=j('native-complete.json');seal=j('evidence-local/native.stdout.json');req(seal['status']=='COMPLETE' and seal['receipt_sha256']==digest(bodies['native-complete.json']),'native receipt seal')
     req(receipt['schema']=='borsuk-cohere-native-cohort-receipt-v3' and receipt['status']=='COMPLETE' and receipt['config']['sha256']==local['config_sha256'] and receipt['resources']==cfg['resources'] and receipt['output_parent']==cfg['output_parent'],'native receipt configuration')
@@ -100,7 +116,7 @@ def main():
         'source_bytes':2382253857,'output_cap_bytes':11271367168,
         'caller_scratch_bytes':1610612736,'temporary_and_failure_reserve_bytes':67108864,
         'failure_outputs_retained_within_output_cap':True,'process_rss_is_separate':True}
-    req(receipt['resource_accounting']==accounting and accounting['admitted_decoder_peak_bytes']>0,'exact native resource accounting')
+    req(same(receipt['resource_accounting'],accounting) and accounting['admitted_decoder_peak_bytes']>0,'exact native resource accounting')
     req(type(receipt['elapsed_seconds_at_receipt']) in (int,float) and 0<receipt['elapsed_seconds_at_receipt']<2400,'native elapsed bound')
     timing=bodies['evidence-local/native.time.txt'].decode()
     def time_field(label):
@@ -110,6 +126,9 @@ def main():
     req(receipt['geometry']['corpus_rows']==1000000 and receipt['geometry']['query_rows']==32 and receipt['geometry']['dimensions']==1024 and receipt['geometry']['k']==10,'actual geometry')
     req(receipt['reserved_queries_sha256']=='8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e','all reserved query seal')
     outputs={v['name']:v for v in receipt['outputs']};req(set(outputs)=={'corpus.f32','corpus.ids.jsonl','queries.f32','queries.ids.jsonl','truth.u64'},'exact native output roster')
+    req(all(set(v)=={'name','bytes','sha256'} and type(v['bytes']) is int and 0<v['bytes']<=7175168000 and re.fullmatch('[0-9a-f]{64}',v['sha256']) for v in receipt['outputs']),'native output descriptor contract')
+    req(bodies['evidence-local/receipt.authenticated.jsonl']==bodies['evidence-local/receipt.closed.jsonl'],'receipt descriptor closure')
+    rs=jl('evidence-local/receipt.closed.jsonl');req(len(rs)==1 and rs[0]['bytes']==len(bodies['native-complete.json']) and rs[0]['sha256']==digest(bodies['native-complete.json']),'independent complete receipt authentication')
     req(len(receipt['outputs'])==5 and outputs['corpus.f32']['bytes']==4096000000 and outputs['queries.f32']['bytes']==131072 and outputs['truth.u64']['bytes']==2560,'exact 1M native vector/truth geometry')
     req(receipt['geometry']['corpus_intervals']==[{'start':0,'end':100000},{'start':101000,'end':1001000}] and receipt['geometry']['reserved_query_interval']=={'start':100000,'end':101000},'query exclusion')
     req(receipt['truth_arithmetic']=='sequential f64 dot and squared-norm sums over original f32; 1-dot/(sqrt(cnorm2)*sqrt(qnorm2))','frozen truth arithmetic')

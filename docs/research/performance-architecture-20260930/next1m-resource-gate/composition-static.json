@@ -1,0 +1,18 @@
+{
+  "status": "STATIC_PARSE_ONLY",
+  "runtime_verified": false,
+  "launch_authority": false,
+  "unit": "borsuk-next1m-composition-static-r1",
+  "invocation": "417873141b0f4d2bb5e3e17ff1885de3",
+  "exit": 0,
+  "requested_limits": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks": 128,
+    "runtime_seconds": 120
+  },
+  "reported_peak": "7.1M",
+  "wrapper_candidate": "19db0399f764acd937a46e4dfd4e80854b68db40"
+}
