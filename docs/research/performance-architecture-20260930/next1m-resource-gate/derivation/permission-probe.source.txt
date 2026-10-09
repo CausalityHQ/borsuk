@@ -1,0 +1,1 @@
+borsuk-canary-role-read-only-input-v1

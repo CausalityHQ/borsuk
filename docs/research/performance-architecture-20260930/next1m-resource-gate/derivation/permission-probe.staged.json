@@ -1,0 +1,47 @@
+{
+  "benchmark_data": false,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "bytes": 38,
+  "condition": "If-None-Match:*",
+  "get": {
+    "AcceptRanges": "bytes",
+    "ChecksumSHA256": "YRHLyfUEvj3EPJbcRQ8tMNMZqyDM3PCs+U1lpRgHL8k=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentLength": 38,
+    "ContentType": "binary/octet-stream",
+    "ETag": "\"990536587f64ed962feacda15795a0bc\"",
+    "LastModified": "2026-10-09T22:09:46+00:00",
+    "Metadata": {},
+    "ServerSideEncryption": "AES256"
+  },
+  "get_original_exit": 0,
+  "head": {
+    "AcceptRanges": "bytes",
+    "ContentLength": 38,
+    "ContentType": "binary/octet-stream",
+    "ETag": "\"990536587f64ed962feacda15795a0bc\"",
+    "LastModified": "2026-10-09T22:09:46+00:00",
+    "Metadata": {},
+    "ServerSideEncryption": "AES256"
+  },
+  "head_original_exit": 0,
+  "input_fixture_only": true,
+  "instance_launch": false,
+  "key": "research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/inputs/permission-probe.txt",
+  "performance_claim": false,
+  "put": {
+    "ChecksumSHA256": "YRHLyfUEvj3EPJbcRQ8tMNMZqyDM3PCs+U1lpRgHL8k=",
+    "ChecksumType": "FULL_OBJECT",
+    "ETag": "\"990536587f64ed962feacda15795a0bc\"",
+    "ServerSideEncryption": "AES256"
+  },
+  "put_original_exit": 0,
+  "role_delete_denied_verified": false,
+  "role_get_verified": false,
+  "role_put_denied_verified": false,
+  "root_caller_arn": "arn:aws:iam::453182569524:user/borsuk-codex-automation",
+  "schema": "borsuk-next1m-canary-permission-probe-staged-v1",
+  "sha256": "6111cbc9f504be3dc43c96dc450f2d30d319ab20ccdcf0acf94d65a518072fc9",
+  "status": "ROOT_STAGED_INSTANCE_PERMISSION_TEST_PENDING",
+  "timestamp_utc": "2026-10-09T22:09:47.428396+00:00"
+}
