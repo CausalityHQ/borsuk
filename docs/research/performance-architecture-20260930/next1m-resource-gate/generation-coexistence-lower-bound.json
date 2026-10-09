@@ -1,0 +1,27 @@
+{
+  "status": "LOWER_BOUND_ONLY_NOT_FULL_PIPELINE_ADMISSION",
+  "source_commit": "5c08110a1841fcf2cd057f6aa49c28aa30ed6209",
+  "scenario": "retain raw+normalized+compressed shards and charge full publication copies; no unmeasured hardlink savings",
+  "components_bytes": {
+    "original_and_normalized": 8192000000,
+    "compressed_shards": 2382253857,
+    "sq8": 1036000000,
+    "canonical_build_and_publication_copy": 8208000000,
+    "packed_build_and_publication_copy": 528000000,
+    "centroids_build": 64000032
+  },
+  "lower_bound_bytes": 20410253889,
+  "prep_only_cap_bytes": 17179869184,
+  "exceeds_prep_only_cap": true,
+  "excluded": [
+    "IDs",
+    "router bodies",
+    "SDK and caller files",
+    "publication temporary bodies",
+    "generation sidecars",
+    "old/current generation coexistence",
+    "query/truth/evidence"
+  ],
+  "next_action": "measure current preparation; separately admit full build/publication envelope before ANN launch",
+  "performance_claim": false
+}
