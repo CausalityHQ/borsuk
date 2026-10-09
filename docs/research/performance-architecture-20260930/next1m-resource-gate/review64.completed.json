@@ -1,0 +1,714 @@
+{
+  "id": "64b25766a59643cf",
+  "status": "completed",
+  "started_at": 1791570738,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "Distinct hard release review for new1M actual-input admission after100k actual parity terminal0/published18affac7. Prior772ac25c source/runtime smoke reviews completed and reconciled; no active or duplicate critique. New candidate405a354b +exact2constant caller reserve repair,13assets/11shards/1Mgeometry/freshtruth/16GiB scratch changes scientific identity/resource closure. One dual review on immutable snapshot required before new paid source run.",
+  "rolling_6h_count": 4,
+  "prompt_preview": "Read-only exact-source release critique BORSUK1M/Q32 source admission (NOT ANN performance). Repo /home/rb/worktrees/borsuk-prod-ready-v9 HEAD0f732d5716849f38404978b498344b0db28c2140. IMMUTABLE snapshot /data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/ sha256.json. Read ALL wrapper.sh,user-data.sh,transport.py,config-template.json,transport-pins.json,service-stop.sh,verify-closed.py,admission.json,smoke-scope.json. wrapper proposal=candidate405a354b8c6671de01af78530047dafd48825ed5 originala1686b80... with ONLY2 caller_scratch_bytes constants0->1610612736; proposalSHAc10d87d8618b9f9498a1f548b6d23f09a00bbb8a9baaa8201714889dd9150a3c. Native preparerbc308 already139tests/7gates all0;100kactualPARITY_VERIFIED closed18affac7; no native rebuild planned. New1M corpus union[0,100k)+[101k,1001k),reserved1000 excluded,Q32,D1024,k10,11wholeHFshards explicit100k-row hypotheses authenticated nativefooter; newtruth NEVER equals old100kGT. Exact13assets2.396GB. Caps4CPU0-3/8GiB/swap0/pids128/native2400/outer2460/trans900/localhalt3900/external4200,16GiB scratch with1.5GiB retainedSDK/assets reserve; no coldscience/performanceclaim. Missing supportmanifestSHA intentional freeze blocker, not bug. Review intended/actual original native/time/timeout/tee/service/cloud-final/final.exit statuses; fail-closed publication/termination+closure; JSON/config/receipt/alloutput sizes/sourceidentity/cgroup/accounting and input stability; bounded downloads/log/evidence/scratch; deadline/memory coexistence; freshtruth/raw prefix validity. In particular 1M source/output repeated SHA work vs outer60s native margin, GNUtime/resource receipt jq correctness, independent replay don't accept stale100k or rehashed false declarations. Flag concrete blockers with source lines/minimalfix and required bounded remote smoke cases. Do NOT propose controllerfeatures, newdata decoding outsideRust, newcompiler/research/paidrun, newalgorithm/caps based on projections; no edits/children/network/native/data/GTdecode. Exact source reads only CPU1/256MiB/noSwap/120s individually; avoid broad repo/cache scans. Original worker HOLD source-only; all paid jobs terminated. Need both independent full labeled results; no optional experiments.",
+  "prompt_sha256": "12f85db1757cb12f73e9e51c0ecbb0168083507b9563f0884cb73393cc510dfa",
+  "prompt_bytes": 2292,
+  "fingerprint": "f1960998c6975bcc87109acae4dd4b473e4ea6d57d3ae8dbe17ffc6e37f84a3c",
+  "evidence": {
+    "git_commit": "0f732d5716849f38404978b498344b0db28c2140",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "fb6ebee9f6abea5d8a7c1d39be6e3ee32279ff098e04fbffc8242235201a00ed",
+    "worktree_sha256": "ec2ee79145e72f0b487a1181b33d1ff41ff0c33913a0e28ba0e51a2c872aef64",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "2fcc93ee82db4062",
+      "provider": "claude",
+      "model": "claude-opus-5-5",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791570738,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791571938,
+      "budget_usd": 4,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only exact-source release critique BORSUK1M/Q32 source admission (NOT ANN performance). Repo /home/rb/worktrees/borsuk-prod-ready-v9 HEAD0f732d5716849f38404978b498344b0db28c2140. IMMUTABLE snapshot /data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/ sha256.json. Read ALL wrapper.sh,user-data.sh,transport.py,config-template.json,transport-pins.json,service-stop.sh,verify-closed.py,admission.json,smoke-scope.json. wrapper proposal=candidate405a354b8c6671de01af78530047dafd48825ed5 originala1686b80... with ONLY2 caller_scratch_bytes constants0->1610612736; proposalSHAc10d87d8618b9f9498a1f548b6d23f09a00bbb8a9baaa8201714889dd9150a3c. Native preparerbc308 already139tests/7gates all0;100kactualPARITY_VERIFIED closed18affac7; no native rebuild planned. New1M corpus union[0,100k)+[101k,1001k),reserved1000 excluded,Q32,D1024,k10,11wholeHFshards explicit100k-row hypotheses authenticated nativefooter; newtruth NEVER equals old100kGT. Exact13assets2.396GB. Caps4CPU0-3/8GiB/swap0/pids128/native2400/outer2460/trans900/localhalt3900/external4200,16GiB scratch with1.5GiB retainedSDK/assets reserve; no coldscience/performanceclaim. Missing supportmanifestSHA intentional freeze blocker, not bug. Review intended/actual original native/time/timeout/tee/service/cloud-final/final.exit statuses; fail-closed publication/termination+closure; JSON/config/receipt/alloutput sizes/sourceidentity/cgroup/accounting and input stability; bounded downloads/log/evidence/scratch; deadline/memory coexistence; freshtruth/raw prefix validity. In particular 1M source/output repeated SHA work vs outer60s native margin, GNUtime/resource receipt jq correctness, independent replay don't accept stale100k or rehashed false declarations. Flag concrete blockers with source lines/minimalfix and required bounded remote smoke cases. Do NOT propose controllerfeatures, newdata decoding outsideRust, newcompiler/research/paidrun, newalgorithm/caps based on projections; no edits/children/network/native/data/GTdecode. Exact source reads only CPU1/256MiB/noSwap/120s individually; avoid broad repo/cache scans. Original worker HOLD source-only; all paid jobs terminated. Need both independent full labeled results; no optional experiments.",
+      "prompt_sha256": "9fa45d9cab20ec1d9e5bbd27278d3b7a583d86f31c76f1dab6cbeea7021e075e",
+      "prompt_bytes": 2676,
+      "fingerprint": "6dccc1cda02c4329a9e410de9d507dc176b13d6890b1d45ff2a9f8ca56908dde",
+      "evidence": {
+        "git_commit": "0f732d5716849f38404978b498344b0db28c2140",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "fb6ebee9f6abea5d8a7c1d39be6e3ee32279ff098e04fbffc8242235201a00ed",
+        "worktree_sha256": "ec2ee79145e72f0b487a1181b33d1ff41ff0c33913a0e28ba0e51a2c872aef64",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "60c6d44635a2e53c9d4015502964b519ac21a2d51246a3de81b3bb9f638ff52a",
+      "reused": false,
+      "critique_id": "64b25766a59643cf",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-2fcc93ee82db4062.service",
+      "pid": 2304121,
+      "pgid": 2304121,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1199,
+          "started_at": 1791570739
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791571295,
+      "event_cursor": 41,
+      "events": [
+        {
+          "seq": 18,
+          "at": 1791571249,
+          "provider": "claude",
+          "kind": "tool",
+          "label": "Bash started"
+        },
+        {
+          "seq": 19,
+          "at": 1791571267,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 20,
+          "at": 1791571268,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 21,
+          "at": 1791571269,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 22,
+          "at": 1791571270,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 23,
+          "at": 1791571271,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 24,
+          "at": 1791571272,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 25,
+          "at": 1791571273,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 26,
+          "at": 1791571275,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 27,
+          "at": 1791571276,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 28,
+          "at": 1791571277,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 29,
+          "at": 1791571278,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 30,
+          "at": 1791571279,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 31,
+          "at": 1791571280,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 32,
+          "at": 1791571282,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 33,
+          "at": 1791571283,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 34,
+          "at": 1791571284,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 35,
+          "at": 1791571285,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 36,
+          "at": 1791571286,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 37,
+          "at": 1791571287,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 38,
+          "at": 1791571288,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 39,
+          "at": 1791571289,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 40,
+          "at": 1791571290,
+          "provider": "claude",
+          "kind": "partial",
+          "label": "Partial answer updated"
+        },
+        {
+          "seq": 41,
+          "at": 1791571294,
+          "provider": "claude",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 34,
+            "at": 1791571284,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 35,
+            "at": 1791571285,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 36,
+            "at": 1791571286,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 37,
+            "at": 1791571287,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 38,
+            "at": 1791571288,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 39,
+            "at": 1791571289,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 40,
+            "at": 1791571290,
+            "provider": "claude",
+            "kind": "partial",
+            "label": "Partial answer updated"
+          },
+          {
+            "seq": 41,
+            "at": 1791571294,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "# Independent research critic: 1M/Q32 source admission, snapshot review-source-r1\n\n**Verdict: HOLD.** There is one blocker that makes the run fail every time: it fails safely, but the paid run would be wasted. There is one more blocker that depends on what the root's launch record contains. I found no path where a bad run gets reported as a success.\n\n**How this was read.** I checked all 9 files in the snapshot against `sha256.json`, and every hash matched. Every read ran in a scope limited to CPU 1, 256 MiB, no swap and 120 s. I compared `user-data.sh`, `verify-closed.py`, `transport.py` and `service-stop.sh` with the closed 100k versions in HEAD. I read the `main()` and output-staging code of the native preparer at HEAD, which is identical to bc3082a8. I edited nothing and used no network or data.\n\n## Blockers\n\n**B1. `service-stop.sh` still points at the 100k directory. The run will always come out INVALID.**\n- `service-stop.sh` has SHA `75409be8…`, which is byte-identical to the 100k file. It hardcodes `/mnt/borsuk-scale-parity` at lines 6, 11, 12, 16, 17, 20, 32 and 33.\n- The 1M `user-data.sh:5` changed the root to `/mnt/borsuk-scale1m`. As a result:\n  - **Transport stage:** the cleanup hook for the transport service writes to a directory that doesn't exist, so it exits nonzero. The service then counts as failed. Even if it didn't, `user-data.sh:119` reads `evidence-root/transport-exit.json`, which is never created. The run dies here, after downloading about 2.4 GB.\n  - **Native stage:** the same failure would hit `service-exit.json` (`user-data.sh:141`).\n  - **Shutdown:** the cloud-final hook fails its check that `/mnt/borsuk-scale-parity/terminal.json` exists. So `bootstrap-manager.json` is never written, and `verify-closed.py:67` can never pass.\n- `smoke-scope.json` lists \"original service exit + final.exit manager proof\" as reused unchanged. That reuse was tied to the old path.\n- **Minimal fix:** change the 8 occurrences to `/mnt/borsuk-scale1m`, then re-freeze the support manifest.\n\n**B2. The replay cannot prove which code ran. This is a blocker unless the root's launch receipt already covers it.**\n- The evidence archive leaves out `support.sha256`.\n- `verify-closed.py:68` reads only `terminated` and `instance_id` from `collection.json`.\n- So nothing in the replay ties wrapper `c10d87…`, `service-stop`, `transport` or `config-template` to this instance. `evidence-local/terminal.json` is only a statement made by whichever wrapper happened to run.\n- **Minimal fix (either one):**\n  - In `finish`, copy `support.sha256` into `evidence-root`. Then have `verify-closed` require it to equal the pinned manifest SHA and to list wrapper `c10d87…`.\n  - Or require `collection.json` to carry a pinned `user_data_sha256`.\n\n## High\n\n**H1. The `memory.events max` equality check (`wrapper.sh:191-192`) measures page cache, not a resource breach.**\n- At 100k it passed easily: the leaf's peak was 718 MB, RSS was 25 MB, and `max` stayed 0. The 9577 count on `system.slice` came from the transport's 256M limit and was already there before the run, so it doesn't count.\n- At 1M, the file cache charged to the leaf cgroup is about 6.7 GB, which is 78% of 8 GiB before any process memory:\n  - 2.396 GB of inputs, read at line 198\n  - 4.096 GB of `corpus.f32`\n  - about 0.2 GB of ids\n- The check passes only if the native's own memory plus kernel memory stays under about 1.9 GB.\n- But the receipt's admitted model is at least 2.89 GB (line 266), and the earlier audit model was 3.83 GB. At that size, normal reclaim raises the `max` counter, and the run is marked INVALID even though no limit was broken.\n- The measured 25 MB RSS suggests it will probably pass, but the check contradicts the memory model it was admitted under.\n- **Minimal fix:** require only `{oom, oom_kill, oom_group_kill}` to stay unchanged, and record the change in `max` as an observation.\n\n## Medium\n\n- **M1. The outer 60 s margin doesn't budget the wrapper's hashing.** Outside the native call, the wrapper hashes about 13.8 GB:\n  - line 198: 2.40 GB before the native call\n  - lines 293–317: after it, 4.30 GB of outputs, 0.41 GB of prefix, 2.40 GB of inputs, then the 4.30 GB of outputs again\n\n  The native gets 2400 + 10 s, which leaves about 50 s for all of that. Every way this can fail is safe (the service is killed on timeout and the result is INVALID), and the native should take roughly 10 × 7.26 s. So this is not a blocker. A receipt elapsed time just under 2400 would still pass the check at line 265 and then be killed. Optional saving: drop the second full hash of the outputs. The stamp comparison (dev, inode, size, mtime and ctime with nanoseconds) already detects any write.\n- **M2. The requests prefix is checked against a value the wrapper reports, not a pinned constant** (`wrapper.sh:303-311`, `verify-closed.py:110-111`). The closed 100k receipt fixes `queries.f32` (131072 B) at `664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667`. Pin it in both places, the same way the corpus prefix `3c95fa49…` is pinned.\n- **M3. The 16 GiB scratch is never enforced.** The native has no free-space check (`statvfs`), and `user-data.sh:110` records `df` without checking it. Running out of disk fails safely but wastes the run. Fix: before transport, assert available space ≥ 15,331,342,625 B.\n\n## Low\n\n- `verify-closed.py:87` doesn't check `local['schema']`. It also doesn't require `config.validated.txt`, `receipt.validated.txt` and `resource-closure.{after,closed}.txt` to equal `true\\n`.\n- The outer terminal schema `borsuk-actual-cohort-parity-closed-v1` reuses the 100k name. Stale 100k evidence still can't pass, because geometry, bytes, status and instance all differ.\n\n## Verified correct (no change needed)\n\n- **Exit chain:** `native`, `timeout`, `time`, `tee` and `wrapper` exits must each be exactly `0\\n`. A killed layer leaves a missing exit file, which fails safely. The pipeline exit capture under `set +e` is correct.\n- **GNU time check:** the field split matches the tab-prefixed line, units are KiB, and exactly one match is required. The multi-line \"Command being timed\" text can't collide with it. Child processes' max RSS is carried up through the waits.\n- **jq:** the `del(...) + {...}` expression for `runtime_limits` groups correctly.\n- **Arithmetic:**\n  - The 11 shard sizes sum to 2,382,253,857 B.\n  - The output cap is 11,271,301,632 B, or 11,271,367,168 B with the 65,536 B receipt.\n  - The scratch bound is 15,331,342,625 B, which is under 17,179,869,184.\n  - All 13 assets total 2,396,365,017 B.\n- **Native CLI and output size:** the native takes 3 arguments (`argc == 4`), matching the 7-argument wrapper. Its stderr is a single line on failure, so evidence size stays bounded.\n- **Fresh truth:** there is no truth argument and no comparison to the 100k ground truth. The collected truth's SHA must match the receipt.\n- **Publication:** `finish` refuses to publish while any owned unit is still active. `final.exit` is written after the last upload, and the manager record binds the terminal SHA, the cloud-final exit and `final.exit`, once B1 is fixed.\n- **Deadline:** setup must finish within 1140 s, and the 300 s `finish` budget covers at most 100 s of stops plus 180 s of uploads.\n\n## Required bounded remote smoke cases\n\nAll on staging, with stub natives clearly labelled as mocks:\n1. **Exit receipts (B1):**\n   - Run the real `service-stop.sh` under `/mnt/borsuk-scale1m` with stub transport and parity units, once with exit 0 and once with exit 1.\n   - Check that both receipts land in `$root/evidence-root`.\n   - Fire the cloud-final hook and check that `bootstrap-manager.json` records `final_exit` and is uploaded to S3 with if-none-match.\n2. **Hugging Face redirects:** run a body-free HEAD resolve of all 11 Hugging Face URLs from the launch region. Every hop must end on `us.aws.cdn.hf.co`; only 0000 and 0001 have been proven so far.\n3. **Wrapper argument and config refusals:**\n   - Wrong argument counts of 6 and 8 must be refused.\n   - `caller_scratch` values of 0 and 1610612735 must be refused at both line 127 and line 275.\n4. **Mutation cases:**\n   - Flip a byte in, or touch, a shard or an output.\n   - Add an extra output file.\n   - Replace the output parent directory.\n5. **Memory check (H1):** inside an 8G cgroup, read at least 9 GiB of files. Show that `max` goes up while `oom` stays 0, so the H1 semantics are settled before the freeze.\n6. **Publication failure:** deny the `terminal.json` upload. Expect `final.exit` 96, the manager to record \"96\", and the replay to reject. Also run `finish` with a unit still active and expect no publication.\n7. **If M2 and M3 are adopted:** check that a changed `queries.f32` is refused, and that the free-space assertion refuses an undersized volume.\n\nI saved these findings to memory as `actual1m-q32-admission-source-review-r1.md`.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "# Independent research critic: 1M/Q32 source admission, snapshot review-source-r1\n\n**Verdict: HOLD.** There is one blocker that makes the run fail every time: it fails safely, but the paid run would be wasted. There is one more blocker that depends on what the root's launch record contains. I found no path where a bad run gets reported as a success.\n\n**How this was read.** I checked all 9 files in the snapshot against `sha256.json`, and every hash matched. Every read ran in a scope limited to CPU 1, 256 MiB, no swap and 120 s. I compared `user-data.sh`, `verify-closed.py`, `transport.py` and `service-stop.sh` with the closed 100k versions in HEAD. I read the `main()` and output-staging code of the native preparer at HEAD, which is identical to bc3082a8. I edited nothing and used no network or data.\n\n## Blockers\n\n**B1. `service-stop.sh` still points at the 100k directory. The run will always come out INVALID.**\n- `service-stop.sh` has SHA `75409be8…`, which is byte-identical to the 100k file. It hardcodes `/mnt/borsuk-scale-parity` at lines 6, 11, 12, 16, 17, 20, 32 and 33.\n- The 1M `user-data.sh:5` changed the root to `/mnt/borsuk-scale1m`. As a result:\n  - **Transport stage:** the cleanup hook for the transport service writes to a directory that doesn't exist, so it exits nonzero. The service then counts as failed. Even if it didn't, `user-data.sh:119` reads `evidence-root/transport-exit.json`, which is never created. The run dies here, after downloading about 2.4 GB.\n  - **Native stage:** the same failure would hit `service-exit.json` (`user-data.sh:141`).\n  - **Shutdown:** the cloud-final hook fails its check that `/mnt/borsuk-scale-parity/terminal.json` exists. So `bootstrap-manager.json` is never written, and `verify-closed.py:67` can never pass.\n- `smoke-scope.json` lists \"original service exit + final.exit manager proof\" as reused unchanged. That reuse was tied to the old path.\n- **Minimal fix:** change the 8 occurrences to `/mnt/borsuk-scale1m`, then re-freeze the support manifest.\n\n**B2. The replay cannot prove which code ran. This is a blocker unless the root's launch receipt already covers it.**\n- The evidence archive leaves out `support.sha256`.\n- `verify-closed.py:68` reads only `terminated` and `instance_id` from `collection.json`.\n- So nothing in the replay ties wrapper `c10d87…`, `service-stop`, `transport` or `config-template` to this instance. `evidence-local/terminal.json` is only a statement made by whichever wrapper happened to run.\n- **Minimal fix (either one):**\n  - In `finish`, copy `support.sha256` into `evidence-root`. Then have `verify-closed` require it to equal the pinned manifest SHA and to list wrapper `c10d87…`.\n  - Or require `collection.json` to carry a pinned `user_data_sha256`.\n\n## High\n\n**H1. The `memory.events max` equality check (`wrapper.sh:191-192`) measures page cache, not a resource breach.**\n- At 100k it passed easily: the leaf's peak was 718 MB, RSS was 25 MB, and `max` stayed 0. The 9577 count on `system.slice` came from the transport's 256M limit and was already there before the run, so it doesn't count.\n- At 1M, the file cache charged to the leaf cgroup is about 6.7 GB, which is 78% of 8 GiB before any process memory:\n  - 2.396 GB of inputs, read at line 198\n  - 4.096 GB of `corpus.f32`\n  - about 0.2 GB of ids\n- The check passes only if the native's own memory plus kernel memory stays under about 1.9 GB.\n- But the receipt's admitted model is at least 2.89 GB (line 266), and the earlier audit model was 3.83 GB. At that size, normal reclaim raises the `max` counter, and the run is marked INVALID even though no limit was broken.\n- The measured 25 MB RSS suggests it will probably pass, but the check contradicts the memory model it was admitted under.\n- **Minimal fix:** require only `{oom, oom_kill, oom_group_kill}` to stay unchanged, and record the change in `max` as an observation.\n\n## Medium\n\n- **M1. The outer 60 s margin doesn't budget the wrapper's hashing.** Outside the native call, the wrapper hashes about 13.8 GB:\n  - line 198: 2.40 GB before the native call\n  - lines 293–317: after it, 4.30 GB of outputs, 0.41 GB of prefix, 2.40 GB of inputs, then the 4.30 GB of outputs again\n\n  The native gets 2400 + 10 s, which leaves about 50 s for all of that. Every way this can fail is safe (the service is killed on timeout and the result is INVALID), and the native should take roughly 10 × 7.26 s. So this is not a blocker. A receipt elapsed time just under 2400 would still pass the check at line 265 and then be killed. Optional saving: drop the second full hash of the outputs. The stamp comparison (dev, inode, size, mtime and ctime with nanoseconds) already detects any write.\n- **M2. The requests prefix is checked against a value the wrapper reports, not a pinned constant** (`wrapper.sh:303-311`, `verify-closed.py:110-111`). The closed 100k receipt fixes `queries.f32` (131072 B) at `664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667`. Pin it in both places, the same way the corpus prefix `3c95fa49…` is pinned.\n- **M3. The 16 GiB scratch is never enforced.** The native has no free-space check (`statvfs`), and `user-data.sh:110` records `df` without checking it. Running out of disk fails safely but wastes the run. Fix: before transport, assert available space ≥ 15,331,342,625 B.\n\n## Low\n\n- `verify-closed.py:87` doesn't check `local['schema']`. It also doesn't require `config.validated.txt`, `receipt.validated.txt` and `resource-closure.{after,closed}.txt` to equal `true\\n`.\n- The outer terminal schema `borsuk-actual-cohort-parity-closed-v1` reuses the 100k name. Stale 100k evidence still can't pass, because geometry, bytes, status and instance all differ.\n\n## Verified correct (no change needed)\n\n- **Exit chain:** `native`, `timeout`, `time`, `tee` and `wrapper` exits must each be exactly `0\\n`. A killed layer leaves a missing exit file, which fails safely. The pipeline exit capture under `set +e` is correct.\n- **GNU time check:** the field split matches the tab-prefixed line, units are KiB, and exactly one match is required. The multi-line \"Command being timed\" text can't collide with it. Child processes' max RSS is carried up through the waits.\n- **jq:** the `del(...) + {...}` expression for `runtime_limits` groups correctly.\n- **Arithmetic:**\n  - The 11 shard sizes sum to 2,382,253,857 B.\n  - The output cap is 11,271,301,632 B, or 11,271,367,168 B with the 65,536 B receipt.\n  - The scratch bound is 15,331,342,625 B, which is under 17,179,869,184.\n  - All 13 assets total 2,396,365,017 B.\n- **Native CLI and output size:** the native takes 3 arguments (`argc == 4`), matching the 7-argument wrapper. Its stderr is a single line on failure, so evidence size stays bounded.\n- **Fresh truth:** there is no truth argument and no comparison to the 100k ground truth. The collected truth's SHA must match the receipt.\n- **Publication:** `finish` refuses to publish while any owned unit is still active. `final.exit` is written after the last upload, and the manager record binds the terminal SHA, the cloud-final exit and `final.exit`, once B1 is fixed.\n- **Deadline:** setup must finish within 1140 s, and the 300 s `finish` budget covers at most 100 s of stops plus 180 s of uploads.\n\n## Required bounded remote smoke cases\n\nAll on staging, with stub natives clearly labelled as mocks:\n1. **Exit receipts (B1):**\n   - Run the real `service-stop.sh` under `/mnt/borsuk-scale1m` with stub transport and parity units, once with exit 0 and once with exit 1.\n   - Check that both receipts land in `$root/evidence-root`.\n   - Fire the cloud-final hook and check that `bootstrap-manager.json` records `final_exit` and is uploaded to S3 with if-none-match.\n2. **Hugging Face redirects:** run a body-free HEAD resolve of all 11 Hugging Face URLs from the launch region. Every hop must end on `us.aws.cdn.hf.co`; only 0000 and 0001 have been proven so far.\n3. **Wrapper argument and config refusals:**\n   - Wrong argument counts of 6 and 8 must be refused.\n   - `caller_scratch` values of 0 and 1610612735 must be refused at both line 127 and line 275.\n4. **Mutation cases:**\n   - Flip a byte in, or touch, a shard or an output.\n   - Add an extra output file.\n   - Replace the output parent directory.\n5. **Memory check (H1):** inside an 8G cgroup, read at least 9 GiB of files. Show that `max` goes up while `oom` stays 0, so the H1 semantics are settled before the freeze.\n6. **Publication failure:** deny the `terminal.json` upload. Expect `final.exit` 96, the manager to record \"96\", and the replay to reject. Also run `finish` with a unit still active and expect no publication.\n7. **If M2 and M3 are adopted:** check that a changed `queries.f32` is refused, and that the free-space assertion refuses an undersized volume.\n\nI saved these findings to memory as `actual1m-q32-admission-source-review-r1.md`."
+      },
+      "providers_used": [
+        "claude"
+      ],
+      "active_provider": "claude",
+      "phase": "Consultation completed",
+      "input_bytes": 2676,
+      "output_bytes": 8886,
+      "elapsed_seconds": 557,
+      "progress": "devbox-ask: claude consult still running (0m 30s)\ndevbox-ask: claude consult still running (1m 00s)\ndevbox-ask: claude consult still running (1m 30s)\ndevbox-ask: claude consult still running (2m 00s)\ndevbox-ask: claude consult still running (2m 30s)\ndevbox-ask: claude consult still running (3m 00s)\ndevbox-ask: claude consult still running (3m 30s)\ndevbox-ask: claude consult still running (4m 00s)\ndevbox-ask: claude consult still running (4m 30s)\ndevbox-ask: claude consult still running (5m 00s)\ndevbox-ask: claude consult still running (5m 30s)\ndevbox-ask: claude consult still running (6m 00s)\ndevbox-ask: claude consult still running (6m 30s)\ndevbox-ask: claude consult still running (7m 00s)\ndevbox-ask: claude consult still running (7m 30s)\ndevbox-ask: claude consult still running (8m 00s)\ndevbox-ask: claude consult still running (8m 30s)\ndevbox-ask: claude consult still running (9m 00s)",
+      "progress_truncated": false,
+      "result": "# Independent research critic: 1M/Q32 source admission, snapshot review-source-r1\n\n**Verdict: HOLD.** There is one blocker that makes the run fail every time: it fails safely, but the paid run would be wasted. There is one more blocker that depends on what the root's launch record contains. I found no path where a bad run gets reported as a success.\n\n**How this was read.** I checked all 9 files in the snapshot against `sha256.json`, and every hash matched. Every read ran in a scope limited to CPU 1, 256 MiB, no swap and 120 s. I compared `user-data.sh`, `verify-closed.py`, `transport.py` and `service-stop.sh` with the closed 100k versions in HEAD. I read the `main()` and output-staging code of the native preparer at HEAD, which is identical to bc3082a8. I edited nothing and used no network or data.\n\n## Blockers\n\n**B1. `service-stop.sh` still points at the 100k directory. The run will always come out INVALID.**\n- `service-stop.sh` has SHA `75409be8…`, which is byte-identical to the 100k file. It hardcodes `/mnt/borsuk-scale-parity` at lines 6, 11, 12, 16, 17, 20, 32 and 33.\n- The 1M `user-data.sh:5` changed the root to `/mnt/borsuk-scale1m`. As a result:\n  - **Transport stage:** the cleanup hook for the transport service writes to a directory that doesn't exist, so it exits nonzero. The service then counts as failed. Even if it didn't, `user-data.sh:119` reads `evidence-root/transport-exit.json`, which is never created. The run dies here, after downloading about 2.4 GB.\n  - **Native stage:** the same failure would hit `service-exit.json` (`user-data.sh:141`).\n  - **Shutdown:** the cloud-final hook fails its check that `/mnt/borsuk-scale-parity/terminal.json` exists. So `bootstrap-manager.json` is never written, and `verify-closed.py:67` can never pass.\n- `smoke-scope.json` lists \"original service exit + final.exit manager proof\" as reused unchanged. That reuse was tied to the old path.\n- **Minimal fix:** change the 8 occurrences to `/mnt/borsuk-scale1m`, then re-freeze the support manifest.\n\n**B2. The replay cannot prove which code ran. This is a blocker unless the root's launch receipt already covers it.**\n- The evidence archive leaves out `support.sha256`.\n- `verify-closed.py:68` reads only `terminated` and `instance_id` from `collection.json`.\n- So nothing in the replay ties wrapper `c10d87…`, `service-stop`, `transport` or `config-template` to this instance. `evidence-local/terminal.json` is only a statement made by whichever wrapper happened to run.\n- **Minimal fix (either one):**\n  - In `finish`, copy `support.sha256` into `evidence-root`. Then have `verify-closed` require it to equal the pinned manifest SHA and to list wrapper `c10d87…`.\n  - Or require `collection.json` to carry a pinned `user_data_sha256`.\n\n## High\n\n**H1. The `memory.events max` equality check (`wrapper.sh:191-192`) measures page cache, not a resource breach.**\n- At 100k it passed easily: the leaf's peak was 718 MB, RSS was 25 MB, and `max` stayed 0. The 9577 count on `system.slice` came from the transport's 256M limit and was already there before the run, so it doesn't count.\n- At 1M, the file cache charged to the leaf cgroup is about 6.7 GB, which is 78% of 8 GiB before any process memory:\n  - 2.396 GB of inputs, read at line 198\n  - 4.096 GB of `corpus.f32`\n  - about 0.2 GB of ids\n- The check passes only if the native's own memory plus kernel memory stays under about 1.9 GB.\n- But the receipt's admitted model is at least 2.89 GB (line 266), and the earlier audit model was 3.83 GB. At that size, normal reclaim raises the `max` counter, and the run is marked INVALID even though no limit was broken.\n- The measured 25 MB RSS suggests it will probably pass, but the check contradicts the memory model it was admitted under.\n- **Minimal fix:** require only `{oom, oom_kill, oom_group_kill}` to stay unchanged, and record the change in `max` as an observation.\n\n## Medium\n\n- **M1. The outer 60 s margin doesn't budget the wrapper's hashing.** Outside the native call, the wrapper hashes about 13.8 GB:\n  - line 198: 2.40 GB before the native call\n  - lines 293–317: after it, 4.30 GB of outputs, 0.41 GB of prefix, 2.40 GB of inputs, then the 4.30 GB of outputs again\n\n  The native gets 2400 + 10 s, which leaves about 50 s for all of that. Every way this can fail is safe (the service is killed on timeout and the result is INVALID), and the native should take roughly 10 × 7.26 s. So this is not a blocker. A receipt elapsed time just under 2400 would still pass the check at line 265 and then be killed. Optional saving: drop the second full hash of the outputs. The stamp comparison (dev, inode, size, mtime and ctime with nanoseconds) already detects any write.\n- **M2. The requests prefix is checked against a value the wrapper reports, not a pinned constant** (`wrapper.sh:303-311`, `verify-closed.py:110-111`). The closed 100k receipt fixes `queries.f32` (131072 B) at `664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667`. Pin it in both places, the same way the corpus prefix `3c95fa49…` is pinned.\n- **M3. The 16 GiB scratch is never enforced.** The native has no free-space check (`statvfs`), and `user-data.sh:110` records `df` without checking it. Running out of disk fails safely but wastes the run. Fix: before transport, assert available space ≥ 15,331,342,625 B.\n\n## Low\n\n- `verify-closed.py:87` doesn't check `local['schema']`. It also doesn't require `config.validated.txt`, `receipt.validated.txt` and `resource-closure.{after,closed}.txt` to equal `true\\n`.\n- The outer terminal schema `borsuk-actual-cohort-parity-closed-v1` reuses the 100k name. Stale 100k evidence still can't pass, because geometry, bytes, status and instance all differ.\n\n## Verified correct (no change needed)\n\n- **Exit chain:** `native`, `timeout`, `time`, `tee` and `wrapper` exits must each be exactly `0\\n`. A killed layer leaves a missing exit file, which fails safely. The pipeline exit capture under `set +e` is correct.\n- **GNU time check:** the field split matches the tab-prefixed line, units are KiB, and exactly one match is required. The multi-line \"Command being timed\" text can't collide with it. Child processes' max RSS is carried up through the waits.\n- **jq:** the `del(...) + {...}` expression for `runtime_limits` groups correctly.\n- **Arithmetic:**\n  - The 11 shard sizes sum to 2,382,253,857 B.\n  - The output cap is 11,271,301,632 B, or 11,271,367,168 B with the 65,536 B receipt.\n  - The scratch bound is 15,331,342,625 B, which is under 17,179,869,184.\n  - All 13 assets total 2,396,365,017 B.\n- **Native CLI and output size:** the native takes 3 arguments (`argc == 4`), matching the 7-argument wrapper. Its stderr is a single line on failure, so evidence size stays bounded.\n- **Fresh truth:** there is no truth argument and no comparison to the 100k ground truth. The collected truth's SHA must match the receipt.\n- **Publication:** `finish` refuses to publish while any owned unit is still active. `final.exit` is written after the last upload, and the manager record binds the terminal SHA, the cloud-final exit and `final.exit`, once B1 is fixed.\n- **Deadline:** setup must finish within 1140 s, and the 300 s `finish` budget covers at most 100 s of stops plus 180 s of uploads.\n\n## Required bounded remote smoke cases\n\nAll on staging, with stub natives clearly labelled as mocks:\n1. **Exit receipts (B1):**\n   - Run the real `service-stop.sh` under `/mnt/borsuk-scale1m` with stub transport and parity units, once with exit 0 and once with exit 1.\n   - Check that both receipts land in `$root/evidence-root`.\n   - Fire the cloud-final hook and check that `bootstrap-manager.json` records `final_exit` and is uploaded to S3 with if-none-match.\n2. **Hugging Face redirects:** run a body-free HEAD resolve of all 11 Hugging Face URLs from the launch region. Every hop must end on `us.aws.cdn.hf.co`; only 0000 and 0001 have been proven so far.\n3. **Wrapper argument and config refusals:**\n   - Wrong argument counts of 6 and 8 must be refused.\n   - `caller_scratch` values of 0 and 1610612735 must be refused at both line 127 and line 275.\n4. **Mutation cases:**\n   - Flip a byte in, or touch, a shard or an output.\n   - Add an extra output file.\n   - Replace the output parent directory.\n5. **Memory check (H1):** inside an 8G cgroup, read at least 9 GiB of files. Show that `max` goes up while `oom` stays 0, so the H1 semantics are settled before the freeze.\n6. **Publication failure:** deny the `terminal.json` upload. Expect `final.exit` 96, the manager to record \"96\", and the replay to reject. Also run `finish` with a unit still active and expect no publication.\n7. **If M2 and M3 are adopted:** check that a changed `queries.f32` is refused, and that the free-space assertion refuses an undersized volume.\n\nI saved these findings to memory as `actual1m-q32-admission-source-review-r1.md`.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "67095eceb54e4446",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791570739,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791571939,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only exact-source release critique BORSUK1M/Q32 source admission (NOT ANN performance). Repo /home/rb/worktrees/borsuk-prod-ready-v9 HEAD0f732d5716849f38404978b498344b0db28c2140. IMMUTABLE snapshot /data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/ sha256.json. Read ALL wrapper.sh,user-data.sh,transport.py,config-template.json,transport-pins.json,service-stop.sh,verify-closed.py,admission.json,smoke-scope.json. wrapper proposal=candidate405a354b8c6671de01af78530047dafd48825ed5 originala1686b80... with ONLY2 caller_scratch_bytes constants0->1610612736; proposalSHAc10d87d8618b9f9498a1f548b6d23f09a00bbb8a9baaa8201714889dd9150a3c. Native preparerbc308 already139tests/7gates all0;100kactualPARITY_VERIFIED closed18affac7; no native rebuild planned. New1M corpus union[0,100k)+[101k,1001k),reserved1000 excluded,Q32,D1024,k10,11wholeHFshards explicit100k-row hypotheses authenticated nativefooter; newtruth NEVER equals old100kGT. Exact13assets2.396GB. Caps4CPU0-3/8GiB/swap0/pids128/native2400/outer2460/trans900/localhalt3900/external4200,16GiB scratch with1.5GiB retainedSDK/assets reserve; no coldscience/performanceclaim. Missing supportmanifestSHA intentional freeze blocker, not bug. Review intended/actual original native/time/timeout/tee/service/cloud-final/final.exit statuses; fail-closed publication/termination+closure; JSON/config/receipt/alloutput sizes/sourceidentity/cgroup/accounting and input stability; bounded downloads/log/evidence/scratch; deadline/memory coexistence; freshtruth/raw prefix validity. In particular 1M source/output repeated SHA work vs outer60s native margin, GNUtime/resource receipt jq correctness, independent replay don't accept stale100k or rehashed false declarations. Flag concrete blockers with source lines/minimalfix and required bounded remote smoke cases. Do NOT propose controllerfeatures, newdata decoding outsideRust, newcompiler/research/paidrun, newalgorithm/caps based on projections; no edits/children/network/native/data/GTdecode. Exact source reads only CPU1/256MiB/noSwap/120s individually; avoid broad repo/cache scans. Original worker HOLD source-only; all paid jobs terminated. Need both independent full labeled results; no optional experiments.",
+      "prompt_sha256": "c7022800c2cc599fd9f60032aa5d8facea51d0139fdf693dcdb0963dccbad7f9",
+      "prompt_bytes": 2710,
+      "fingerprint": "366ead9ed279a96efe3ba2b102a7371dac386caa92eb615ad291cc99a1e9bac1",
+      "evidence": {
+        "git_commit": "0f732d5716849f38404978b498344b0db28c2140",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "fb6ebee9f6abea5d8a7c1d39be6e3ee32279ff098e04fbffc8242235201a00ed",
+        "worktree_sha256": "ec2ee79145e72f0b487a1181b33d1ff41ff0c33913a0e28ba0e51a2c872aef64",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "6dccc1cda02c4329a9e410de9d507dc176b13d6890b1d45ff2a9f8ca56908dde",
+      "reused": false,
+      "critique_id": "64b25766a59643cf",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-67095eceb54e4446.service",
+      "pid": 2304177,
+      "pgid": 2304177,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791570739
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791571241,
+      "event_cursor": 40,
+      "events": [
+        {
+          "seq": 17,
+          "at": 1791570888,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 18,
+          "at": 1791570905,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 19,
+          "at": 1791570908,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 20,
+          "at": 1791570908,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 1"
+        },
+        {
+          "seq": 21,
+          "at": 1791570917,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 22,
+          "at": 1791570917,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 23,
+          "at": 1791570919,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 24,
+          "at": 1791570919,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 25,
+          "at": 1791570933,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 26,
+          "at": 1791570933,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 27,
+          "at": 1791570938,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 28,
+          "at": 1791570938,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 29,
+          "at": 1791570947,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 30,
+          "at": 1791570950,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 31,
+          "at": 1791570956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 32,
+          "at": 1791570956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 33,
+          "at": 1791571021,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 34,
+          "at": 1791571024,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 35,
+          "at": 1791571024,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 36,
+          "at": 1791571080,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 37,
+          "at": 1791571080,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 38,
+          "at": 1791571157,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 39,
+          "at": 1791571241,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 40,
+          "at": 1791571241,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 33,
+            "at": 1791571021,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 34,
+            "at": 1791571024,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 35,
+            "at": 1791571024,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 36,
+            "at": 1791571080,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 37,
+            "at": 1791571080,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 38,
+            "at": 1791571157,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 39,
+            "at": 1791571241,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 40,
+            "at": 1791571241,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "**Independent engineering/release verdict: HOLD.**\n\nWhat this change does: It prepares and authenticates a 1M/Q32 cohort, computes fresh native truth, checks historical vector prefixes, and publishes closure evidence. It makes no ANN performance claim.\n\nAll nine files match the snapshot’s `sha256.json`. The wrapper differs from commit `405a354b` only in the two declared `caller_scratch_bytes` changes. The 13 asset pins total **2,396,365,017 bytes** and match the configured shard identities.\n\n1. **[P1] Every service-stop receipt targets the wrong directory.**  \n   [service-stop.sh:6](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/service-stop.sh:6), lines 11–20 and 32–33, still use `/mnt/borsuk-scale-parity`. `user-data.sh` creates `/mnt/borsuk-scale1m`.\n\n   On a clean machine, the transport stop hook cannot write its receipt. The bootstrap hook also cannot find this run’s terminal or `final.exit`. Creating the old directory would merely put evidence where the caller does not look.\n\n   **Minimal fix:** consistently use the new root in the stop hook, then refreeze its identity. Require an end-to-end smoke of transport, parity, and cloud-final receipts in the exact new namespace.\n\n2. **[P1] Replay can accept evidence that contradicts final resource and output closure.**  \n   [verify-closed.py:35](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:35), especially lines 42 and 58–59.\n\n   Replay compares only the before/after *effective* resource summaries. It ignores raw cgroup events, final resource snapshots, GNU time RSS, `outputs.closed.jsonl`, and receipt closure. An empty `closure.sha256` passes its loop. A consistently rehashed bundle can therefore contain output drift or an OOM event and still receive `ADMISSION_VERIFIED`.\n\n   **Minimal fix:** require the exact closure inventory and independently evaluate before/after/closed resource evidence, event deltas, RSS, and output/receipt identity equality. Do not accept empty or incomplete local manifests.\n\n3. **[P1] Replay’s fresh-truth and exact-source claims exceed what it verifies.**  \n   [verify-closed.py:43](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:43), lines 44–60.\n\n   Replay does not validate native source/footer records, resource accounting, runtime limits, or `truth_method`. For example, deleting `resource_accounting` or changing `truth_method` to a reuse declaration, then recomputing the bundle’s internal hashes, is not rejected. Substituting a historical Q32 truth body is also size-compatible: both bodies contain 2,560 bytes.\n\n   Unchanged 100k evidence is rejected by the geometry checks. That protection does **not** establish freshness against rewritten declarations.\n\n   **Minimal fix:** validate the complete relevant native receipt contract and bind execution to the frozen wrapper/support identities. Bind collected objects to independently retained immutable checksums or object identities; hashes rewritten together inside the same bundle establish consistency, not provenance. No truth decoding outside Rust is needed.\n\n4. **[P2] Cleanup can extend the declared local stop deadline.**  \n   [user-data.sh:64](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:64), also lines 63, 72, 129 and 133.\n\n   Cleanup schedules a new `shutdown -h +1`, replacing the existing shutdown schedule. If cleanup reaches this command less than a minute before the original deadline, the machine remains running beyond the declared 3,900-second local limit. The admission calculation also budgets 60 seconds for stopping, while neither service explicitly sets `TimeoutStopSec`.\n\n   **Minimal fix:** preserve the absolute shutdown deadline and explicitly bind service termination grace to the admitted budget. Keep the independent 4,200-second external ceiling unchanged.\n\n5. **[P2, qualification blocker] The 60-second wrapper margin is unqualified at 1M.**  \n   [wrapper.sh:198](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/wrapper.sh:198), lines 293–327; `user-data.sh:133`.\n\n   Before and after native execution, the wrapper hashes at least **13,394,859,442 bytes**, excluding ID outputs and small metadata. All this work, validation and synchronization shares the 2,460-second service deadline with the 2,400-second native allowance.\n\n   This is not proof of a timeout. It does mean that reusing the 100k deadline result does not qualify the new workload.\n\n   **Required resolution:** establish and record the stage budgets under the existing ceilings. A wrapper deadline failure remains execution **INVALID**, not a scientific rejection. Do not increase caps from this byte calculation.\n\n6. **[P2] Evidence limits are checked after potentially unbounded writes.**  \n   [user-data.sh:29](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:29), lines 44 and 69; `wrapper.sh:210–219,239`.\n\n   The 32 MiB evidence limit is checked during finalization, after bootstrap logging and native output capture have already written files. The native stdout limit is likewise checked after `tee` finishes. An overflowing producer can exhaust the caller’s scratch reserve before rejection, leaving too little space for failure evidence.\n\n   **Minimal fix:** enforce log/evidence bounds while writing, with overflow producing INVALID and preserving original statuses. Keep those limits separate from the legitimate multi-gigabyte native outputs.\n\n7. **[P2] Replay does not bound every input before parsing it.**  \n   [verify-closed.py:9](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:9), lines 11–25.\n\n   Pins, terminal, collection, manager and manifest files are read without byte limits. Archive members receive limits only after `tarfile` processes their headers; extended metadata can consume resources before that check. The aggregate archive limit also does not replace the wrapper’s much smaller config and receipt limits.\n\n   **Minimal fix:** check individual metadata sizes before reading/parsing, enforce the corresponding config/receipt limits, and bound archive metadata processing. Oversized evidence must reject predictably within the replay resource envelope.\n\nThe source inspection supports several existing choices: the wrapper’s GNU time RSS units and native resource-accounting constants agree with `bc3082a`; the scratch reserve is included; native code checks authenticated footer row counts, excludes the reserved interval, and computes fresh exhaustive truth. I found no basis to demand a native rebuild for these glue defects.\n\nRequired bounded staging cases, **not run here**:\n\n| Case | Required result |\n|---|---|\n| Clean namespace and normal completion | Real systemd stop hooks and cloud-final produce correctly located receipts; all original exit statuses agree. |\n| Native failure, timeout, signal, `tee` failure and receipt-write failure | Each original failure remains visible; no successful replay. |\n| Rehashed contradictory evidence | Reject empty closure manifests, changed final outputs, cgroup event increases, invalid RSS, missing accounting, altered source records and historical truth substituted into a claimed fresh result. |\n| Publication and finalization failures | Failed/conflicting puts, terminal write failure and `final.exit` sync failure cannot yield accepted closure. |\n| Deadline boundaries | Stop grace is explicit; cleanup cannot postpone the original local deadline; wrapper work fits its admitted budget. |\n| Size and transport failures | Oversized logs/metadata, truncated or oversized downloads, wrong hashes and disallowed redirects reject within the resource limits. |\n\nUse explicitly labeled simulated native bodies where appropriate; staging success does not establish actual 1M source admission.\n\nThe missing support-manifest SHA remains the intentional freeze blocker, not an additional finding. No files were edited, children launched, network accessed, native code executed, or corpus/truth bodies decoded. This is the engineering/release critic’s independent result.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "**Independent engineering/release verdict: HOLD.**\n\nWhat this change does: It prepares and authenticates a 1M/Q32 cohort, computes fresh native truth, checks historical vector prefixes, and publishes closure evidence. It makes no ANN performance claim.\n\nAll nine files match the snapshot’s `sha256.json`. The wrapper differs from commit `405a354b` only in the two declared `caller_scratch_bytes` changes. The 13 asset pins total **2,396,365,017 bytes** and match the configured shard identities.\n\n1. **[P1] Every service-stop receipt targets the wrong directory.**  \n   [service-stop.sh:6](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/service-stop.sh:6), lines 11–20 and 32–33, still use `/mnt/borsuk-scale-parity`. `user-data.sh` creates `/mnt/borsuk-scale1m`.\n\n   On a clean machine, the transport stop hook cannot write its receipt. The bootstrap hook also cannot find this run’s terminal or `final.exit`. Creating the old directory would merely put evidence where the caller does not look.\n\n   **Minimal fix:** consistently use the new root in the stop hook, then refreeze its identity. Require an end-to-end smoke of transport, parity, and cloud-final receipts in the exact new namespace.\n\n2. **[P1] Replay can accept evidence that contradicts final resource and output closure.**  \n   [verify-closed.py:35](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:35), especially lines 42 and 58–59.\n\n   Replay compares only the before/after *effective* resource summaries. It ignores raw cgroup events, final resource snapshots, GNU time RSS, `outputs.closed.jsonl`, and receipt closure. An empty `closure.sha256` passes its loop. A consistently rehashed bundle can therefore contain output drift or an OOM event and still receive `ADMISSION_VERIFIED`.\n\n   **Minimal fix:** require the exact closure inventory and independently evaluate before/after/closed resource evidence, event deltas, RSS, and output/receipt identity equality. Do not accept empty or incomplete local manifests.\n\n3. **[P1] Replay’s fresh-truth and exact-source claims exceed what it verifies.**  \n   [verify-closed.py:43](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:43), lines 44–60.\n\n   Replay does not validate native source/footer records, resource accounting, runtime limits, or `truth_method`. For example, deleting `resource_accounting` or changing `truth_method` to a reuse declaration, then recomputing the bundle’s internal hashes, is not rejected. Substituting a historical Q32 truth body is also size-compatible: both bodies contain 2,560 bytes.\n\n   Unchanged 100k evidence is rejected by the geometry checks. That protection does **not** establish freshness against rewritten declarations.\n\n   **Minimal fix:** validate the complete relevant native receipt contract and bind execution to the frozen wrapper/support identities. Bind collected objects to independently retained immutable checksums or object identities; hashes rewritten together inside the same bundle establish consistency, not provenance. No truth decoding outside Rust is needed.\n\n4. **[P2] Cleanup can extend the declared local stop deadline.**  \n   [user-data.sh:64](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:64), also lines 63, 72, 129 and 133.\n\n   Cleanup schedules a new `shutdown -h +1`, replacing the existing shutdown schedule. If cleanup reaches this command less than a minute before the original deadline, the machine remains running beyond the declared 3,900-second local limit. The admission calculation also budgets 60 seconds for stopping, while neither service explicitly sets `TimeoutStopSec`.\n\n   **Minimal fix:** preserve the absolute shutdown deadline and explicitly bind service termination grace to the admitted budget. Keep the independent 4,200-second external ceiling unchanged.\n\n5. **[P2, qualification blocker] The 60-second wrapper margin is unqualified at 1M.**  \n   [wrapper.sh:198](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/wrapper.sh:198), lines 293–327; `user-data.sh:133`.\n\n   Before and after native execution, the wrapper hashes at least **13,394,859,442 bytes**, excluding ID outputs and small metadata. All this work, validation and synchronization shares the 2,460-second service deadline with the 2,400-second native allowance.\n\n   This is not proof of a timeout. It does mean that reusing the 100k deadline result does not qualify the new workload.\n\n   **Required resolution:** establish and record the stage budgets under the existing ceilings. A wrapper deadline failure remains execution **INVALID**, not a scientific rejection. Do not increase caps from this byte calculation.\n\n6. **[P2] Evidence limits are checked after potentially unbounded writes.**  \n   [user-data.sh:29](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:29), lines 44 and 69; `wrapper.sh:210–219,239`.\n\n   The 32 MiB evidence limit is checked during finalization, after bootstrap logging and native output capture have already written files. The native stdout limit is likewise checked after `tee` finishes. An overflowing producer can exhaust the caller’s scratch reserve before rejection, leaving too little space for failure evidence.\n\n   **Minimal fix:** enforce log/evidence bounds while writing, with overflow producing INVALID and preserving original statuses. Keep those limits separate from the legitimate multi-gigabyte native outputs.\n\n7. **[P2] Replay does not bound every input before parsing it.**  \n   [verify-closed.py:9](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:9), lines 11–25.\n\n   Pins, terminal, collection, manager and manifest files are read without byte limits. Archive members receive limits only after `tarfile` processes their headers; extended metadata can consume resources before that check. The aggregate archive limit also does not replace the wrapper’s much smaller config and receipt limits.\n\n   **Minimal fix:** check individual metadata sizes before reading/parsing, enforce the corresponding config/receipt limits, and bound archive metadata processing. Oversized evidence must reject predictably within the replay resource envelope.\n\nThe source inspection supports several existing choices: the wrapper’s GNU time RSS units and native resource-accounting constants agree with `bc3082a`; the scratch reserve is included; native code checks authenticated footer row counts, excludes the reserved interval, and computes fresh exhaustive truth. I found no basis to demand a native rebuild for these glue defects.\n\nRequired bounded staging cases, **not run here**:\n\n| Case | Required result |\n|---|---|\n| Clean namespace and normal completion | Real systemd stop hooks and cloud-final produce correctly located receipts; all original exit statuses agree. |\n| Native failure, timeout, signal, `tee` failure and receipt-write failure | Each original failure remains visible; no successful replay. |\n| Rehashed contradictory evidence | Reject empty closure manifests, changed final outputs, cgroup event increases, invalid RSS, missing accounting, altered source records and historical truth substituted into a claimed fresh result. |\n| Publication and finalization failures | Failed/conflicting puts, terminal write failure and `final.exit` sync failure cannot yield accepted closure. |\n| Deadline boundaries | Stop grace is explicit; cleanup cannot postpone the original local deadline; wrapper work fits its admitted budget. |\n| Size and transport failures | Oversized logs/metadata, truncated or oversized downloads, wrong hashes and disallowed redirects reject within the resource limits. |\n\nUse explicitly labeled simulated native bodies where appropriate; staging success does not establish actual 1M source admission.\n\nThe missing support-manifest SHA remains the intentional freeze blocker, not an additional finding. No files were edited, children launched, network accessed, native code executed, or corpus/truth bodies decoded. This is the engineering/release critic’s independent result."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 2710,
+      "output_bytes": 8554,
+      "elapsed_seconds": 502,
+      "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)\ndevbox-ask: codex consult still running (7m 00s)\ndevbox-ask: codex consult still running (7m 30s)\ndevbox-ask: codex consult still running (8m 00s)",
+      "progress_truncated": false,
+      "result": "**Independent engineering/release verdict: HOLD.**\n\nWhat this change does: It prepares and authenticates a 1M/Q32 cohort, computes fresh native truth, checks historical vector prefixes, and publishes closure evidence. It makes no ANN performance claim.\n\nAll nine files match the snapshot’s `sha256.json`. The wrapper differs from commit `405a354b` only in the two declared `caller_scratch_bytes` changes. The 13 asset pins total **2,396,365,017 bytes** and match the configured shard identities.\n\n1. **[P1] Every service-stop receipt targets the wrong directory.**  \n   [service-stop.sh:6](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/service-stop.sh:6), lines 11–20 and 32–33, still use `/mnt/borsuk-scale-parity`. `user-data.sh` creates `/mnt/borsuk-scale1m`.\n\n   On a clean machine, the transport stop hook cannot write its receipt. The bootstrap hook also cannot find this run’s terminal or `final.exit`. Creating the old directory would merely put evidence where the caller does not look.\n\n   **Minimal fix:** consistently use the new root in the stop hook, then refreeze its identity. Require an end-to-end smoke of transport, parity, and cloud-final receipts in the exact new namespace.\n\n2. **[P1] Replay can accept evidence that contradicts final resource and output closure.**  \n   [verify-closed.py:35](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:35), especially lines 42 and 58–59.\n\n   Replay compares only the before/after *effective* resource summaries. It ignores raw cgroup events, final resource snapshots, GNU time RSS, `outputs.closed.jsonl`, and receipt closure. An empty `closure.sha256` passes its loop. A consistently rehashed bundle can therefore contain output drift or an OOM event and still receive `ADMISSION_VERIFIED`.\n\n   **Minimal fix:** require the exact closure inventory and independently evaluate before/after/closed resource evidence, event deltas, RSS, and output/receipt identity equality. Do not accept empty or incomplete local manifests.\n\n3. **[P1] Replay’s fresh-truth and exact-source claims exceed what it verifies.**  \n   [verify-closed.py:43](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:43), lines 44–60.\n\n   Replay does not validate native source/footer records, resource accounting, runtime limits, or `truth_method`. For example, deleting `resource_accounting` or changing `truth_method` to a reuse declaration, then recomputing the bundle’s internal hashes, is not rejected. Substituting a historical Q32 truth body is also size-compatible: both bodies contain 2,560 bytes.\n\n   Unchanged 100k evidence is rejected by the geometry checks. That protection does **not** establish freshness against rewritten declarations.\n\n   **Minimal fix:** validate the complete relevant native receipt contract and bind execution to the frozen wrapper/support identities. Bind collected objects to independently retained immutable checksums or object identities; hashes rewritten together inside the same bundle establish consistency, not provenance. No truth decoding outside Rust is needed.\n\n4. **[P2] Cleanup can extend the declared local stop deadline.**  \n   [user-data.sh:64](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:64), also lines 63, 72, 129 and 133.\n\n   Cleanup schedules a new `shutdown -h +1`, replacing the existing shutdown schedule. If cleanup reaches this command less than a minute before the original deadline, the machine remains running beyond the declared 3,900-second local limit. The admission calculation also budgets 60 seconds for stopping, while neither service explicitly sets `TimeoutStopSec`.\n\n   **Minimal fix:** preserve the absolute shutdown deadline and explicitly bind service termination grace to the admitted budget. Keep the independent 4,200-second external ceiling unchanged.\n\n5. **[P2, qualification blocker] The 60-second wrapper margin is unqualified at 1M.**  \n   [wrapper.sh:198](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/wrapper.sh:198), lines 293–327; `user-data.sh:133`.\n\n   Before and after native execution, the wrapper hashes at least **13,394,859,442 bytes**, excluding ID outputs and small metadata. All this work, validation and synchronization shares the 2,460-second service deadline with the 2,400-second native allowance.\n\n   This is not proof of a timeout. It does mean that reusing the 100k deadline result does not qualify the new workload.\n\n   **Required resolution:** establish and record the stage budgets under the existing ceilings. A wrapper deadline failure remains execution **INVALID**, not a scientific rejection. Do not increase caps from this byte calculation.\n\n6. **[P2] Evidence limits are checked after potentially unbounded writes.**  \n   [user-data.sh:29](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/user-data.sh:29), lines 44 and 69; `wrapper.sh:210–219,239`.\n\n   The 32 MiB evidence limit is checked during finalization, after bootstrap logging and native output capture have already written files. The native stdout limit is likewise checked after `tee` finishes. An overflowing producer can exhaust the caller’s scratch reserve before rejection, leaving too little space for failure evidence.\n\n   **Minimal fix:** enforce log/evidence bounds while writing, with overflow producing INVALID and preserving original statuses. Keep those limits separate from the legitimate multi-gigabyte native outputs.\n\n7. **[P2] Replay does not bound every input before parsing it.**  \n   [verify-closed.py:9](/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-preparation-draft/review-source-r1/verify-closed.py:9), lines 11–25.\n\n   Pins, terminal, collection, manager and manifest files are read without byte limits. Archive members receive limits only after `tarfile` processes their headers; extended metadata can consume resources before that check. The aggregate archive limit also does not replace the wrapper’s much smaller config and receipt limits.\n\n   **Minimal fix:** check individual metadata sizes before reading/parsing, enforce the corresponding config/receipt limits, and bound archive metadata processing. Oversized evidence must reject predictably within the replay resource envelope.\n\nThe source inspection supports several existing choices: the wrapper’s GNU time RSS units and native resource-accounting constants agree with `bc3082a`; the scratch reserve is included; native code checks authenticated footer row counts, excludes the reserved interval, and computes fresh exhaustive truth. I found no basis to demand a native rebuild for these glue defects.\n\nRequired bounded staging cases, **not run here**:\n\n| Case | Required result |\n|---|---|\n| Clean namespace and normal completion | Real systemd stop hooks and cloud-final produce correctly located receipts; all original exit statuses agree. |\n| Native failure, timeout, signal, `tee` failure and receipt-write failure | Each original failure remains visible; no successful replay. |\n| Rehashed contradictory evidence | Reject empty closure manifests, changed final outputs, cgroup event increases, invalid RSS, missing accounting, altered source records and historical truth substituted into a claimed fresh result. |\n| Publication and finalization failures | Failed/conflicting puts, terminal write failure and `final.exit` sync failure cannot yield accepted closure. |\n| Deadline boundaries | Stop grace is explicit; cleanup cannot postpone the original local deadline; wrapper work fits its admitted budget. |\n| Size and transport failures | Oversized logs/metadata, truncated or oversized downloads, wrong hashes and disallowed redirects reject within the resource limits. |\n\nUse explicitly labeled simulated native bodies where appropriate; staging success does not establish actual 1M source admission.\n\nThe missing support-manifest SHA remains the intentional freeze blocker, not an additional finding. No files were edited, children launched, network accessed, native code executed, or corpus/truth bodies decoded. This is the engineering/release critic’s independent result.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791571334,
+  "elapsed_seconds": 557,
+  "input_bytes": 2292,
+  "output_bytes": 17440
+}

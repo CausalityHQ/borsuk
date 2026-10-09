@@ -1,0 +1,45 @@
+{
+  "status": "REVIEWS_COMPLETE_REPAIRS_PENDING_STAGING",
+  "group": "64b25766a59643cf",
+  "research_critic": "2fcc93ee82db4062",
+  "engineering_critic": "67095eceb54e4446",
+  "confirmed_repairs": [
+    {
+      "finding": "old100kstop-hook paths",
+      "scope": "root service-stop only",
+      "fix": "allfixedpaths/mnt/borsuk-scale1m",
+      "historical_source_preserved": true
+    },
+    {
+      "finding": "root replay missing final resource/output closure",
+      "scope": "root verifier only",
+      "fix": "before/after/closed effective+ancestor limits/events and leafpeak; exactoutputclosure"
+    },
+    {
+      "finding": "support provenance, deadline postponement and replay semantic/accounting/manifest gaps",
+      "scope": "root pending drafts",
+      "fix": "retain support manifest; preserve absolute shutdown; explicit stop grace; disk admission; bounded metadata; complete closure; source footer/config/RSS/accounting/query prefix checks",
+      "verification": "static parse only exit0 unit borsuk-next1m-review-repairs-static-r2 invocation95b650603ea84210a10af57252ec792a"
+    },
+    {
+      "finding": "tar metadata preparse bounds and runtime limits",
+      "scope": "root pending verifier",
+      "fix": "reject extended/link/sparse headers before processing; 512 headers; exact native cgroup enforcement; bounded metadata input"
+    },
+    {
+      "finding": "bootstrap log writes unbounded",
+      "scope": "root pending bootstrap",
+      "fix": "separate capped logger; collect original logger exit after owned services stop",
+      "verification": "STATIC_ONLY; real smoke pending"
+    }
+  ],
+  "wrapper_caller_repair_matches_snapshot": "66047fe3238b1f75786b137706ef68351396e398",
+  "launch_authority": false,
+  "full_results": "review64.completed.json",
+  "remaining": [
+    "same OWN1 wrapper repairs1791571373292265474-3160204",
+    "root launch/collection pins must carry immutable user_data_sha256 and support_manifest_sha256",
+    "real staged hooks/status/failure/logger overflow smoke",
+    "wrapper hashing budget qualification under existing ceilings"
+  ]
+}

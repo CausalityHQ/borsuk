@@ -1,0 +1,17 @@
+{
+  "status": "STATIC_PARSE_ONLY",
+  "runtime_verified": false,
+  "launch_authority": false,
+  "unit": "borsuk-next1m-review-repairs-static-r5",
+  "exit": 0,
+  "requested_limits": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "tasks": 128,
+    "runtime_seconds": 120
+  },
+  "reported_peak": "7.1M",
+  "full_reviews": "review64.completed.json"
+}
