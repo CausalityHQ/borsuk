@@ -1,0 +1,15 @@
+{
+  "status": "PENDING_TRANSPORT_CANARY_AND_CONFIG_FREEZE",
+  "items": 17,
+  "total_bytes": 2438351737,
+  "s3_observation": {
+    "unit": "run-p2481059-i660855060.service",
+    "invocation": "554401c885594b43af67be2d41cfde68",
+    "original_exit": 0,
+    "exact_prefix": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/",
+    "truncated": false,
+    "scope": "LIST metadata only; whole binary hashes remain mandatory on GET"
+  },
+  "qualified_binary_evidence": "docs/research/performance-architecture-20260930/scale-derivation-qualification-a0002/binary-collection.json",
+  "performance_claim": false
+}
