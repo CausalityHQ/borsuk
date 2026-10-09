@@ -1,0 +1,14 @@
+{
+  "status": "CLOSED_MECHANICS_VERIFIED",
+  "campaign": "actual1m-q32-admission-smoke-a0002",
+  "instance_id": "i-078f7888c43ea8e94",
+  "source_commit": "699d84d6ca30daf960fd7d2af5aeb098942e9d2d",
+  "performance_claim": false,
+  "no_automatic_repeat": true,
+  "watcher_session": 26087,
+  "watcher_unit": "borsuk-actual1m-smoke-watch-a0002",
+  "watcher_invocation": "3bb43ae5210646e1b9cfab18f776fc58",
+  "watcher_exit": 0,
+  "independent_replay_exit": 0,
+  "terminated": true
+}

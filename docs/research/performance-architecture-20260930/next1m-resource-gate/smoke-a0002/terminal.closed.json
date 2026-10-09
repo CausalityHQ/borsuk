@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-parity-smoke-closed-v1",
+  "instance_id": "i-078f7888c43ea8e94",
+  "original_unit_exit": 0,
+  "evidence": {
+    "bytes": 235368,
+    "sha256": "22b1eeec546daa51e461292957400df81b876fa76d1bede4c03c7a7294338756"
+  },
+  "acceptance": "ROOT_REPLAY_REQUIRED",
+  "performance_claim": false
+}
