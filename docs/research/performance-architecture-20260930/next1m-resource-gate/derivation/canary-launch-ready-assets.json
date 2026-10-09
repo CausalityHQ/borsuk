@@ -1,0 +1,70 @@
+{
+  "assets": [
+    {
+      "bytes": 709,
+      "name": "support.sha256",
+      "sha256": "678116deb41a9ee205d2b33cb7512998f036db638ce6bacaff9d228e84cec1ad"
+    },
+    {
+      "bytes": 3991,
+      "name": "config-template.json",
+      "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba"
+    },
+    {
+      "bytes": 1145,
+      "name": "derivation-config.json",
+      "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+    },
+    {
+      "bytes": 4332,
+      "name": "gate-config-template.json",
+      "sha256": "270e79c439915dda8183f89b539683a95a297b8c31d165ddea138615a9019082"
+    },
+    {
+      "bytes": 22040,
+      "name": "run_actual_cohort_admission.sh",
+      "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008"
+    },
+    {
+      "bytes": 41373,
+      "name": "run_native_scale_build_gate.sh",
+      "sha256": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422"
+    },
+    {
+      "bytes": 1958,
+      "name": "service-stop.sh",
+      "sha256": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e"
+    },
+    {
+      "bytes": 6201,
+      "name": "transport-pins.json",
+      "sha256": "93995d925d71b3242d135c38203806801ea0a1d3476c45da9d798ca286dfcc82"
+    },
+    {
+      "bytes": 3654,
+      "name": "transport.py",
+      "sha256": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529"
+    },
+    {
+      "bytes": 14558,
+      "name": "canary-tail.sh",
+      "sha256": "ba736c3d4b6c05bd6b6c242f795ad2ac138580ab66a15df9856efe23b0fb9aae"
+    },
+    {
+      "bytes": 31593,
+      "name": "canary-coordinator.sh",
+      "sha256": "bff35749d957c1e76635b1170c2ef390fe97dadf5b3dc72712b65451397e6f35"
+    },
+    {
+      "bytes": 6787,
+      "name": "wrapper-canary.sh",
+      "sha256": "bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f"
+    }
+  ],
+  "launch_authorized": false,
+  "performance_claim": false,
+  "schema": "borsuk-canary-ready-assets-v1",
+  "source_commit": "62f113246cd420710371a958702d7beaeac66342",
+  "staged": false,
+  "support_sha256": "678116deb41a9ee205d2b33cb7512998f036db638ce6bacaff9d228e84cec1ad"
+}

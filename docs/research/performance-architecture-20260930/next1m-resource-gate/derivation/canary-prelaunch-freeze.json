@@ -1,0 +1,47 @@
+{
+  "ancillary_reserved_usd": "0.15",
+  "ann_run": false,
+  "canary_source_commit": "36185e2e89aee078525851ade9374d0a771d2533",
+  "compute_reserved_usd": "0.65",
+  "external_deadline_seconds": 3600,
+  "instances": 1,
+  "launch_status": "NOT_LAUNCHED_ROOT_EPOCH_AND_REQUEST_PENDING",
+  "local_deadline_seconds": 3000,
+  "market": "spot",
+  "native_chain_run": false,
+  "performance_claim": false,
+  "prefix": "research/semantic-router/20261009/actual1m-scale-chain-canary-a0001",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "required_closeout": [
+    "original instance terminated before collection",
+    "both exact launch volumes absent",
+    "original nested99 and all three modified manager cases",
+    "independent root source-bound replay"
+  ],
+  "schema": "borsuk-canary-prelaunch-freeze-v1",
+  "source_commit": "62f113246cd420710371a958702d7beaeac66342",
+  "spot_observed_usd_per_hour": "0.204400",
+  "storage_estimate": {
+    "3720_second_estimate_usd": "0.02039",
+    "assumed_gp3_usd_gib_month_upper": "0.12",
+    "billed_cost_measured": false,
+    "root_and_scratch_gib": 120,
+    "s3_and_other_reserve_usd": "0.12961"
+  },
+  "termination_grace_seconds": 120,
+  "total_reserved_usd": "0.80",
+  "watcher_sha256": "a29f3864543932188b606758c48f618023488be53cfa895ea17aa7039227d4a3",
+  "watcher_static": {
+    "allowed_cpus": "0",
+    "bash_n": 0,
+    "cpu_percent": 100,
+    "invocation": "8a46aca845ac47a6a0c538f86c44e3e1",
+    "memory_bytes": 268435456,
+    "pids": 128,
+    "seconds": 120,
+    "shellcheck_x": 0,
+    "swap_bytes": 0,
+    "unit": "run-p2997804-i669763993.service"
+  }
+}
