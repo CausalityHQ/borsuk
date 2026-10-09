@@ -1,0 +1,21 @@
+{
+  "group_id": "0553f38d14984d7c",
+  "launch_admitted": false,
+  "performance_claim": false,
+  "plan_sha256": "096dfec16c5c8c64490e8f35e2987a47534c5e272c6250370c587d9978885786",
+  "repair_message_id": "1791584937665584452-3160204",
+  "reports": {
+    "canary-plan-r5.engineering_critic.review.md": {
+      "bytes": 6776,
+      "sha256": "f374dec73fe865380b4a15971256c47ca679dbb6edc7d0c0622924dcd82792e5"
+    },
+    "canary-plan-r5.research_critic.review.md": {
+      "bytes": 7311,
+      "sha256": "6826a5adadad51aca98a244dde7c34dda0651e4a12e1f8df9f68df0ff4b32d24"
+    }
+  },
+  "repository_copy_normalization": "Trailing spaces removed; original reports and their original byte hashes retained in the draft directory.",
+  "runtime_verified": false,
+  "schema": "borsuk-next1m-canary-design-review-closed-v1",
+  "status": "HOLD_PLAN_REPAIR"
+}
