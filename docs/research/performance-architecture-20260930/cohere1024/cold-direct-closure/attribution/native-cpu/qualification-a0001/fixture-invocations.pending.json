@@ -1,0 +1,201 @@
+{
+  "schema": "borsuk-native-cpu-fixture-invocations-v1",
+  "status": "PROSPECTIVE_NOT_EXECUTABLE_NO_LAUNCH",
+  "source_commit": "d7e6c8ac31c090a89a290d3e3921d702370f0afe",
+  "calls": [
+    {
+      "id": "pulse",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "pulse"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "threads",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "threads"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "waited",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "waited"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 2,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "io",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "io"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "late",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "late"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "delay",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "delay"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "nonzero",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "nonzero"
+      ],
+      "expected_original_exit": 7,
+      "expected_original_signal": null,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "survivor",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "survivor"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 2,
+      "accounting_completeness": "REFUSE",
+      "context_attestation": true
+    },
+    {
+      "id": "unwaited",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "unwaited"
+      ],
+      "expected_original_exit": 0,
+      "expected_original_signal": null,
+      "fixture_processes": 2,
+      "accounting_completeness": "REFUSE",
+      "context_attestation": true
+    },
+    {
+      "id": "sigpipe",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "sigpipe"
+      ],
+      "expected_original_exit": null,
+      "expected_original_signal": 13,
+      "fixture_processes": 1,
+      "accounting_completeness": "UNQUALIFIED_UNTIL_RUNTIME_EVIDENCE",
+      "context_attestation": false
+    },
+    {
+      "id": "publication-failure",
+      "executable_role": "qualified_helper",
+      "args": [
+        "--fixture",
+        "pulse"
+      ],
+      "expected_original_exit": 0,
+      "fixture_processes": 1,
+      "setup": "helper invocation file-size limit1024 bytes and SIGXFSZ ignored; report reservation succeeds before pulse; postspawn report write must fail",
+      "accounting_completeness": "REFUSE; require separate failed collector, preserve child0"
+    },
+    {
+      "id": "timeout-KILL",
+      "executable_role": "authenticated_coreutils_timeout",
+      "args": [
+        "--signal=KILL",
+        "0.2",
+        "QUALIFIED_HELPER",
+        "--fixture",
+        "delay"
+      ],
+      "fixture_processes": 1,
+      "expected_original_signal": 9,
+      "accounting_completeness": "REFUSE full descendant accounting; KILL may prevent descendant wait propagation",
+      "scope": "Original direct child is timeout, not an independently reaped fixture; do not claim fixture wait status from supervisor status"
+    }
+  ],
+  "fixture_process_cap": 16,
+  "test_gate_reserved_fixture_processes": 1,
+  "resources": {
+    "cpu": 1,
+    "cpuset": [
+      0
+    ],
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "whole_seconds": 60,
+    "network": false,
+    "scratch": "exclusive ext4"
+  },
+  "runtime_prerequisites": [
+    "exact compiler verification0 and authenticated qualified helper ELF",
+    "immutable binary and invocation configs",
+    "actual timeout binary SHA/bytes/package identity authenticated before invocation",
+    "fresh cgroup placement before native exec and actual CPU/memory/swap/PID readback",
+    "retain cgroup counters through drain and record live survivors before natural exit",
+    "capture raw status plus collector and durable output hashes; missing success receipt refuses accounting"
+  ],
+  "artifact_controls": [
+    "remove matching collector from already closed successful artifact -> refusal without new process",
+    "replace late lifecycle CPU by original premature fake_terminal_cpu_ns -> refusal without new process"
+  ],
+  "claims": {
+    "query_wall_gate": false,
+    "CPU_resolution": false,
+    "performance": false,
+    "descendant_complete": false
+  },
+  "remaining": [
+    "root bounded fixture supervisor implementation and protocol review",
+    "runtime native controls and independent discrepancy envelope",
+    "helper full lifecycle cost measurement and target-host effective resolution"
+  ]
+}

@@ -715,6 +715,7 @@ dependencies = [
  "futures-util",
  "half",
  "http-body-util",
+ "libc",
  "memory-stats",
  "nalgebra",
  "object_store 0.14.1",

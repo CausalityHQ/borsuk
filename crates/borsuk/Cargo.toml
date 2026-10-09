@@ -72,6 +72,9 @@ zstd = "0.13"
 # sha2 0.10 requires this feature for runtime-detected ARM SHA instructions.
 sha2 = { version = "0.10", features = ["asm"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2.186"
+
 [dev-dependencies]
 axum = "0.8"
 criterion = "0.7"
@@ -84,6 +87,9 @@ workspace = true
 
 # Historical campaign examples are preserved in their source archives. Keep the
 # current package's examples limited to supported API and smoke paths.
+[[example]]
+name = "native_process_cpu"
+
 [[example]]
 name = "compare_native_replay"
 

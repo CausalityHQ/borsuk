@@ -1,0 +1,24 @@
+{
+  "status": "READ_ONLY_RECIPE_RECONCILED_MECHANICAL_SCOPE_ONLY",
+  "consultation": "e6dae9ad203d4335",
+  "exit": 0,
+  "result_sha256": "0f862afa5ed967ecb072dc822bcc672d116e0909415349ee1740a339a584e01d",
+  "accepted": [
+    "fresh delegated payload cgroup before release and actual resource readback",
+    "hold stop-post outside payload to retain counters through drain",
+    "exact syscall report status separate from systemd result",
+    "observed live survivor before natural exit or INCONCLUSIVE",
+    "publication failure after actual child0 vs pre-spawn refusal",
+    "timeout original direct child is timeout; no independently reaped fixture status",
+    "exact16 fixture process cap, no retry"
+  ],
+  "unmet_quantitative_obligation": "cgroup-minus-wait4 includes helper/gate and omitted final publication/receipt/exit CPU; observed separation and maximum valid-control residual are not justified error bounds",
+  "inference": "Mechanical checks may qualify refusal/status/durability behaviour only, never quantitative discrepancy resolution or overhead GO",
+  "performance_authority": false,
+  "source_changes": false,
+  "remaining": [
+    "bounded exact fixture supervisor implementation",
+    "target runtime systemd support and subgroup lifecycle validation",
+    "separate independent quantitative accounting error bound/full observer cost proof before performance authority"
+  ]
+}

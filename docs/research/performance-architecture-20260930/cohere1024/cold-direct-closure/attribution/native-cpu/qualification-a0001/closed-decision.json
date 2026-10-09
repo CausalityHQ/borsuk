@@ -1,0 +1,22 @@
+{
+  "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+  "candidate": "fd0fe04891df7cf0c912006a8fe7ad1802710f24",
+  "source_commit": "d7e6c8ac31c090a89a290d3e3921d702370f0afe",
+  "instance_id": "i-09757926061839bea",
+  "terminated": true,
+  "stage_count": 7,
+  "tests_passed": 7,
+  "tests_ignored": 1,
+  "source_count": 426,
+  "native_source_identity_sha256": "207f383bc1f63fc01dae3984fc2b5606e0e2c0189cad4d577d17025655094aac",
+  "performance_claim": false,
+  "method_falsifier": "UNRUN",
+  "quantitative_CPU_error_bound": "UNQUALIFIED",
+  "verifier_original_attempt": "exit1 on nested log parsing; original exact evidence preserved; no native rerun",
+  "verifier_repaired_attempt": "exit0 on same closed evidence, exact nested test receipt authenticated",
+  "remaining": [
+    "bounded mechanical fixtures",
+    "independent quantitative accounting error bound and full observer cost",
+    "new exact-input admission and canary before any performance experiment"
+  ]
+}

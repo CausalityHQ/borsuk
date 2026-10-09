@@ -1,0 +1,26 @@
+{
+  "status": "PENDING_MECHANICAL_FIXTURE_GLUE_SYNTAX_ONLY",
+  "files": {
+    "fixture-gate.pending.sh": {
+      "bytes": 723,
+      "sha256": "c965bbbcdab55107502d48f77fa1f934e620f246502550aa4d6fb87e8b08a76d",
+      "bash_n_exit": 0
+    },
+    "fixture-hold.pending.sh": {
+      "bytes": 332,
+      "sha256": "fdeccd7ab095f32d2a76b274887795caf3b1511cf09c03943647cd00b6aabd26",
+      "bash_n_exit": 0
+    }
+  },
+  "native_execution": false,
+  "fixture_invocations": 0,
+  "source_code_changes": false,
+  "constraints": [
+    "external controller must prove fresh payload placement and limits before release",
+    "stop-post hold must run outside payload and preserve counters through drain",
+    "batch deadline/owned subtree cleanup not implemented here",
+    "publication-failure unit must establish LimitFSIZE1024 independently",
+    "no cgroup counters are a quantitative error bound",
+    "remaining controller needs actual systemd staging validation and bounded protocol review"
+  ]
+}

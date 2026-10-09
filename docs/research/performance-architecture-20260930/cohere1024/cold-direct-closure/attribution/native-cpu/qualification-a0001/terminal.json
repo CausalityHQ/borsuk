@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-lifecycle-cpu-qualification-closed-v1",
+  "instance_id": "i-09757926061839bea",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": 0,
+  "source_commit": "d7e6c8ac31c090a89a290d3e3921d702370f0afe",
+  "native_source_file_count": 426,
+  "native_source_identity_sha256": "207f383bc1f63fc01dae3984fc2b5606e0e2c0189cad4d577d17025655094aac",
+  "source_archive_sha256": "04410daa7486cf8cb8c7cd7898c42d70ef1d50b92646427d4250f6bc475a3299",
+  "evidence": {
+    "bytes": 653010,
+    "sha256": "9ab6f7820f1c78baf01769d4293bf75357cd536c5b1b5cbf100b7f0b4f3610e3"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

@@ -1,0 +1,59 @@
+{
+  "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+  "source_commit": "d7e6c8ac31c090a89a290d3e3921d702370f0afe",
+  "candidate": "fd0fe04891df7cf0c912006a8fe7ad1802710f24",
+  "instance_id": "i-09757926061839bea",
+  "terminated": true,
+  "source_file_count": 426,
+  "native_source_identity_sha256": "207f383bc1f63fc01dae3984fc2b5606e0e2c0189cad4d577d17025655094aac",
+  "full_source_before_after_root_match": true,
+  "stages": [
+    {
+      "name": "example-compile",
+      "command": "cargo test --locked -p borsuk --example native_process_cpu --no-run",
+      "exit": 0
+    },
+    {
+      "name": "example-inventory",
+      "command": "cargo test --locked -p borsuk --example native_process_cpu -- --list",
+      "exit": 0
+    },
+    {
+      "name": "affected-example",
+      "command": "cargo test --locked -p borsuk --example native_process_cpu -- --test-threads=1",
+      "exit": 0
+    },
+    {
+      "name": "release",
+      "command": "cargo build --locked --release -p borsuk --example native_process_cpu",
+      "exit": 0
+    },
+    {
+      "name": "clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0
+    },
+    {
+      "name": "example-test-clippy",
+      "command": "cargo clippy --locked -p borsuk --example native_process_cpu --profile test -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0
+    },
+    {
+      "name": "test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0
+    }
+  ],
+  "test_counts": {
+    "passed": 7,
+    "ignored": 1
+  },
+  "binary": {
+    "bytes": 826456,
+    "sha256": "1ce0405566852577e15dae1b7beeb626626af561d716af45baa75add4f6c4b74"
+  },
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "method_falsifier": "UNRUN"
+}

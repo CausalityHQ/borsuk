@@ -1,0 +1,17 @@
+{
+  "status": "READ_ONLY_FIXTURE_EXECUTION_PLAN_RUNNING",
+  "consultation_id": "e6dae9ad203d4335",
+  "specialist_decision": "df07cc7b-6888-4b98-a107-2b73fb457442",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "effort": "xhigh",
+  "systemd_unit": "devbox-consult-e6dae9ad203d4335.service",
+  "started_at": 1791518885,
+  "deadline_at": 1791520085,
+  "scope": "minimal fixture execution recipe, cgroup lifetime and honest signal/timeout/coverage proof; no source edits/native/AWS/children",
+  "question_distinct_from": [
+    "helper code review b542bb999f3a431b",
+    "whole overhead scientific method bf29bd603c9b44d7"
+  ],
+  "original_compiler_untouched": "i-09757926061839bea/watcher79162"
+}
