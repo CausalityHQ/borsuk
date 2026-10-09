@@ -1,0 +1,13 @@
+{
+  "status": "ROOT_REPLAY_CORRECTION_NOT_NEW_NATIVE_RUN",
+  "original_verifier_sha256": "53581fd9bb4fe7ad7e5899b1761fa4e6b98d311d77fa1793829fd6b1e0996bc6",
+  "corrected_verifier_sha256": "fc01d0aaf473e07f08ffde1d4e4a65566a47b217f740e1eb6bcf8bbd86ef212d",
+  "original_replay_exit": 1,
+  "corrected_replay_exit": 0,
+  "native_proc_vmhwm_bytes": 113532928,
+  "gnu_time_peak_bytes": 113426432,
+  "ceiling_bytes": 8589934592,
+  "source": "https://www.kernel.org/doc/html/latest/filesystems/proc.html",
+  "reason": "Different approximate RSS observations have no guaranteed ordering; require both independently within unchanged ceiling. Original cgroup peak/events/limits checks retained.",
+  "performance_claim": false
+}

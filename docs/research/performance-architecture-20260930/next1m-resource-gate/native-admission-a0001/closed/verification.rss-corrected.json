@@ -1,0 +1,1 @@
+{"status": "ADMISSION_VERIFIED", "instance_id": "i-034348c725b8a4fca", "terminated": true, "rows": 1000000, "queries": 32, "performance_claim": false, "ann_run": false, "truth_scope": "fresh 1M exhaustive native arithmetic; no historical truth equality", "historical_id_bytes_parity": false}

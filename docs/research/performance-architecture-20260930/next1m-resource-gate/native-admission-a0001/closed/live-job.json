@@ -1,0 +1,17 @@
+{
+  "status": "CLOSED_ADMISSION_VERIFIED_AFTER_REPLAY_CORRECTION",
+  "campaign": "actual1m-q32-admission-a0001",
+  "instance_id": "i-034348c725b8a4fca",
+  "source_commit": "5c08110a1841fcf2cd057f6aa49c28aa30ed6209",
+  "watcher_session": 19235,
+  "watcher_unit": "borsuk-1m-native-admission-watch.service",
+  "watcher_invocation": "92889d9ebd69425caf990f22955d8134",
+  "external_deadline_seconds": 4200,
+  "no_automatic_repeat": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "watcher_exit": 0,
+  "original_replay_exit": 1,
+  "corrected_replay_exit": 0,
+  "terminated": true
+}

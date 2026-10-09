@@ -1,0 +1,9 @@
+{
+  "instance_id": "i-034348c725b8a4fca",
+  "terminated": true,
+  "reason": "terminal",
+  "user_data_sha256": "f036bdc12884e96e933a29ff103e49b61e480fc52d340b371a4aa523ed41f672",
+  "archive_authenticated": true,
+  "independent_replay_pending": true,
+  "performance_claim": false
+}

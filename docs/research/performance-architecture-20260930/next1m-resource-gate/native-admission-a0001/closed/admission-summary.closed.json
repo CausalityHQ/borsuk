@@ -1,0 +1,85 @@
+{
+  "status": "ADMISSION_VERIFIED_AFTER_RSS_REPLAY_CORRECTION",
+  "instance_id": "i-034348c725b8a4fca",
+  "terminated": true,
+  "elapsed_seconds": 72.436516251,
+  "native_peak_rss_bytes": 113532928,
+  "gnu_time_peak_rss_bytes": 113426432,
+  "resource_accounting": {
+    "admitted_decoder_peak_bytes": 939380688,
+    "caller_memory_bytes": 67108864,
+    "caller_scratch_bytes": 1610612736,
+    "control_output_and_failure_buffers_bytes": 67108864,
+    "encoded_and_decoded_row_bytes": 8192,
+    "failure_outputs_retained_within_output_cap": true,
+    "id_state_bytes": 1281280000,
+    "output_cap_bytes": 11271367168,
+    "process_rss_is_separate": true,
+    "resident_peak_bytes": 2893086880,
+    "retained_query_vector_bytes": 131072,
+    "retained_shard_metadata_bytes": 1476395008,
+    "source_bytes": 2382253857,
+    "temporary_and_failure_reserve_bytes": 67108864,
+    "truth_all_query_top_k_bytes": 5120,
+    "truth_heap_header_bytes": 768,
+    "truth_query_norm_bytes": 256,
+    "truth_single_sorted_output_reserve_bytes": 160,
+    "truth_vector_block_bytes": 1048576
+  },
+  "geometry": {
+    "corpus_intervals": [
+      {
+        "end": 100000,
+        "start": 0
+      },
+      {
+        "end": 1001000,
+        "start": 101000
+      }
+    ],
+    "corpus_rows": 1000000,
+    "dimensions": 1024,
+    "k": 10,
+    "query_rows": 32,
+    "query_source_ordinals": [
+      100000,
+      100032
+    ],
+    "reserved_query_interval": {
+      "end": 101000,
+      "start": 100000
+    }
+  },
+  "outputs": [
+    {
+      "bytes": 4096000000,
+      "name": "corpus.f32",
+      "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+    },
+    {
+      "bytes": 131072,
+      "name": "queries.f32",
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    {
+      "bytes": 200873446,
+      "name": "corpus.ids.jsonl",
+      "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+    },
+    {
+      "bytes": 6200,
+      "name": "queries.ids.jsonl",
+      "sha256": "e27fa2d4d0a22a4f9f4dbb9eb2aeeeb0681f48c7e2193e3aa57a2b49cb5ddeb4"
+    },
+    {
+      "bytes": 2560,
+      "name": "truth.u64",
+      "sha256": "36e83267ebfe5efb86db28c778d18897563a8c6c0784933e2b8d6d05cf31bb93"
+    }
+  ],
+  "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+  "ann_run": false,
+  "performance_claim": false,
+  "original_replay": "REJECTED_RSS_ORDERING",
+  "corrected_replay": "ADMISSION_VERIFIED"
+}
