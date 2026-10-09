@@ -1,0 +1,13 @@
+# Wrapper review disposition
+
+Original dual group e9562bb5239940c0 completed, research e0bfc77420ea4cb2 and engineering 640e46e0275d4c85. Both reviewed exact e4722262 source, not runtime. Full labelled reports accompany this decision.
+
+Root independently verified the engineering three defects: suppressed evidence destination/write errors, raw unverified shell exit collision, and derive-config semantic parsing before regular-file/size/SHA authentication. The research B1 exit/signal collision is the same defect. Same-worker f12deb62d7691da6cced98c14e2bc38a5329b5a1 repairs these; root read its complete diff, verified SHA c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422, bash syntax and diff-check in unit run-p3961275-i662327142.service (exit0, CPU1/Allowed0/256MiB/swap0/pids128/120s). No native source changed. Candidate remains unintegrated and runtime UNVERIFIED.
+
+Disposition: source permits proceeding to a bounded disposable composition canary, after exact bootstrap/finalizer/evidence/volume pins exist. This is not launch admission for a measured ANN run. Canary must exercise original wrappers and runtime refusal paths, f32 serialization/ETag, logger failures, timeout/signal/cgroup cleanup and evidence-write faults; validate Bash>=5.1, target jq and GNU time environment. Preserve original status and normalize glue failure to INVALID/98; root requires actual manager and outer statuses, not terminal intention alone.
+
+Record Q32 only as a weak not-broken screen. Contiguous queries may share articles; 304/320 is not a population recall confidence bound, a cold win, or Turbopuffer parity. Report each query's hits. Ground truth uses original-vector cosine; served normalized-f32 rounding may change ties. Native calibration-bit checks prevent a wrong serialized generation from becoming MEASURED. Baseline output must be archived before termination; wrapper never interprets it.
+
+Keep all declared deadlines and host caps. Closing rehash is bounded by root outer/machine deadlines and can become INVALID if phases consume the allowance; no guaranteed runtime feasibility claim. Root bootstrap must admit enough remaining absolute time, terminate whole cgroups, and collect only after the exact instance terminates. No repeated paid run, review or Rust rebuild is authorized by this source review.
+
+Historical support copies retain their exact old bytes and hashes solely to implement the next thin bootstrap from the already closed preparation lifecycle. New runtime-support.pending changes only roster13->17 and the chain manager receipt case; its runtime is untested. Original campaign artifacts remain immutable.

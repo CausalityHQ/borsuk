@@ -1,0 +1,26 @@
+{
+  "user-data.sh": {
+    "bytes": 10895,
+    "sha256": "f036bdc12884e96e933a29ff103e49b61e480fc52d340b371a4aa523ed41f672"
+  },
+  "watch-original.sh": {
+    "bytes": 4658,
+    "sha256": "f60ba37abf1dc0d7715d42002c10e9e4331c51bb4fad7cff58c249b83e84faba"
+  },
+  "service-stop.sh": {
+    "bytes": 1925,
+    "sha256": "7d4c7156a1950fa243c538e6e9c05e2665c9429a07bcf4d6f0cf7075a2de9881"
+  },
+  "transport.py": {
+    "bytes": 3654,
+    "sha256": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12"
+  },
+  "run_actual_cohort_admission.sh": {
+    "bytes": 22040,
+    "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008"
+  },
+  "config-template.json": {
+    "bytes": 3991,
+    "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba"
+  }
+}
