@@ -1,0 +1,25 @@
+{
+  "status": "STATIC_PARSE_ONLY",
+  "unit": "borsuk-next1m-bootstrap-static-r1",
+  "original_exit": 0,
+  "requested_limits": {
+    "cpu_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 120
+  },
+  "files": {
+    "user-data.pending.sh": "c9dd09ff2cf4729bd3f6e7062156afb5c60365540be5ce6a25535d6062c5f735",
+    "transport.pending.py": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12"
+  },
+  "runtime_executed": false,
+  "paid_launch_authority": false,
+  "pending": [
+    "support manifest SHA",
+    "wrapper terminal schema/status",
+    "source-bound real smoke",
+    "resource quote and input HEAD validation"
+  ]
+}

@@ -124,7 +124,7 @@
     "timeout_seconds": 2400,
     "truth_block_rows": 256,
     "caller_memory_bytes": 67108864,
-    "caller_scratch_bytes": 0,
+    "caller_scratch_bytes": 1610612736,
     "temporary_reserve_bytes": 67108864
   }
 }

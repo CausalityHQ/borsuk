@@ -1,0 +1,26 @@
+{
+  "status": "SOURCE_DERIVED_PARTIAL_LEDGER_NOT_ADMITTED",
+  "source_commit": "ba84eec059b22b731871c1729c5c432ed543bc34",
+  "native_generation_build_base_payload_bytes": 8783456,
+  "semantic_router_build_payload_bytes": 506729928,
+  "combined_builder_payload_bytes": 515513384,
+  "caller_order_additional_bytes": 8000000,
+  "canonical_bytes": 4104000000,
+  "packed_record_bytes": 264000000,
+  "centroids_bytes": 64000032,
+  "sq8_page_digest_bytes": 125024,
+  "router_root_bytes": 4064832,
+  "original_and_normalized_bytes": 8192000000,
+  "sq8_bytes": 1036000000,
+  "publication_scope": "LocalFileSystem upload_authenticated_file may create second canonical/record/router bodies; account full copies, not assumed links",
+  "cohort_scope": "Q32 and Q1000 preparer outputs coexist unless explicit authenticated immutable reuse avoids duplication; separate cohort receipt required",
+  "remaining": [
+    "exact all generation sidecar sizes",
+    "publisher temporary/file-copy coexistence",
+    "old/current snapshot resident payload and runtime overhead",
+    "full cold stage object/transport caps and actual RSS",
+    "retained SDK/source/receipts budget"
+  ],
+  "paid_launch_authority": false,
+  "performance_claim": false
+}
