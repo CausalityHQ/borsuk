@@ -1,0 +1,12 @@
+{
+  "max_memory_bytes":536870912,
+  "max_active_queries":1,
+  "max_query_bytes":16773120,
+  "max_query_gets":32,
+  "max_parallel_gets":1,
+  "max_source_bytes":67108864,
+  "max_source_gets":128,
+  "max_parallel_source_gets":1,
+  "max_query_scratch_bytes":594520,
+  "already_pinned_bytes":0
+}
