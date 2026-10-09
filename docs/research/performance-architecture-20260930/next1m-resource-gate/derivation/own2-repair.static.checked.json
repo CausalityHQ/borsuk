@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-next1m-bootstrap-source-check-v1",
+  "status": "SOURCE_CHECKED_TARGET_UNVERIFIED",
+  "source_commit": "d4c1b1b8e9b1f198532ba35d3586aa016684cf71",
+  "user_data_sha256": "916682b97beb350a5e505d18b42742729042f3bc6301fcd1a8e3f09bb5a15811",
+  "watcher_sha256": "120d1316015419feaabf585164f99aa996df18ef0edbe625d759404dd086ef6c",
+  "owned_files": 2,
+  "root_unit": "run-p3130512-i665708339.service",
+  "root_invocation_id": "b4b4b960863d4c7ea343ce26c8de0b2f",
+  "exit": 0,
+  "checks": ["both exact Git blob SHA256s", "both Bash syntax checks", "full diff whitespace check", "exact two-file ownership", "Roman attribution without AI trailers", "root full source and review reconciliation"],
+  "runtime_execution": false,
+  "cloud_init_mapping": "TARGET_UNVERIFIED_PROSPECTIVE_0_TO_0_AND_2_OR_3_TO_1",
+  "canary_passed": false,
+  "launch_admitted": false,
+  "performance_claim": false
+}
