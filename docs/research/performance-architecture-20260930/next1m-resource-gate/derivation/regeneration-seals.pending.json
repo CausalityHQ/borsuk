@@ -1,0 +1,68 @@
+{
+  "status": "PENDING_NEXT_NATIVE_CHAIN_FREEZE",
+  "prerequisite": "04bccf4e real1M/Q32 closed admission",
+  "regeneration_required": true,
+  "reason": "Original admission retained closed metadata and seals, not multiGB corpus bodies; original instance terminated.",
+  "expected_geometry": {
+    "corpus_intervals": [
+      {
+        "end": 100000,
+        "start": 0
+      },
+      {
+        "end": 1001000,
+        "start": 101000
+      }
+    ],
+    "corpus_rows": 1000000,
+    "dimensions": 1024,
+    "k": 10,
+    "query_rows": 32,
+    "query_source_ordinals": [
+      100000,
+      100032
+    ],
+    "reserved_query_interval": {
+      "end": 101000,
+      "start": 100000
+    }
+  },
+  "expected_outputs": [
+    {
+      "bytes": 4096000000,
+      "name": "corpus.f32",
+      "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+    },
+    {
+      "bytes": 131072,
+      "name": "queries.f32",
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    {
+      "bytes": 200873446,
+      "name": "corpus.ids.jsonl",
+      "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+    },
+    {
+      "bytes": 6200,
+      "name": "queries.ids.jsonl",
+      "sha256": "e27fa2d4d0a22a4f9f4dbb9eb2aeeeb0681f48c7e2193e3aa57a2b49cb5ddeb4"
+    },
+    {
+      "bytes": 2560,
+      "name": "truth.u64",
+      "sha256": "36e83267ebfe5efb86db28c778d18897563a8c6c0784933e2b8d6d05cf31bb93"
+    }
+  ],
+  "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+  "rules": [
+    "Run unchanged qualified preparer on identical eleven whole authenticated shards and exact selection/config.",
+    "Authenticate all five regenerated output byte lengths and SHA256 against closed first-admission seals before any derive call.",
+    "No replacement rows or query selection changes.",
+    "Native producer exit0 plus service/cgroup/closure/termination proof required.",
+    "Retain original failed attempts; no automatic replacement of interrupted measurements.",
+    "Q1000 requires its own fresh truth and receipt; Q32 does not establish population quality."
+  ],
+  "ann_run": false,
+  "performance_claim": false
+}
