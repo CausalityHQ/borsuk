@@ -1,0 +1,31 @@
+{
+  "status": "EXECUTION_INVALID_TEST_ORACLE_CONTRADICTION",
+  "instance_id": "i-076dfa3cb40f93e79",
+  "terminated": true,
+  "original_watcher_session": 29382,
+  "original_watcher_exit": 2,
+  "original_driver_exit": 1,
+  "archive_sha256": "204459bd7f195d79b37813517d88ade2eebe106f041a30f7bf4fce9e8123f5ba",
+  "observed": [
+    "CLOUD_MANAGER_CASES_PASSED_REMAINING_CASES_PENDING",
+    "case.logger-normal archived with final.exit0/terminal.exit0/run.log256B",
+    "overflow case not moved into archived results; remaining cases UNRUN"
+  ],
+  "source_defect": "test unconditionally forbids shutdown.calls, but unchanged bootstrap evidence-cap rejection calls shutdown -h now; failure shutdown is legitimate and fail-closed",
+  "causal_scope": "source contradiction confirmed; runtime checkpoint localizes next failure to overflow case, whose unmoved filesystem was not archived; exact failing instruction not directly recorded",
+  "repair": "normal case still forbids shutdown; overflow permits only -h now, never postponing shutdown",
+  "rust_algorithm_changed": false,
+  "resource_caps_changed": false,
+  "ann_run": false,
+  "performance_claim": false,
+  "automatic_retry": false,
+  "original_collector_manager": {
+    "schema": "borsuk-parity-bootstrap-exit-v1",
+    "exit_code": "exited",
+    "exit_status": "0",
+    "service_result": "success",
+    "final_exit": "0",
+    "terminal_sha_bound": true
+  },
+  "outcome_scope": "collector closed0 but original smoke-driver1; root rejects success"
+}

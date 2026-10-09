@@ -202,7 +202,12 @@ for mode in logger-normal logger-overflow; do
    [[ ! -e $root/put/terminal.json ]]
   fi
  fi
- [[ ! -e $root/shutdown.calls ]]
+ if [[ $mode == logger-normal ]]; then
+  [[ ! -e $root/shutdown.calls ]]
+ elif [[ -f $root/shutdown.calls ]]; then
+  # Overflow may trigger the existing fail-closed immediate shutdown path.
+  [[ $(cat "$root/shutdown.calls") == '-h now' ]]
+ fi
  mv "$root" "$out/case.$mode"; mkdir "$root"
 done
 

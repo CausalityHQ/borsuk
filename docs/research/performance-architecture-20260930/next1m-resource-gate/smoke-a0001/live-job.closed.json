@@ -1,0 +1,15 @@
+{
+  "status": "CLOSED_EXECUTION_INVALID",
+  "instance_id": "i-076dfa3cb40f93e79",
+  "campaign": "actual1m-q32-admission-smoke-a0001",
+  "source_commit": "a53298e6925d23c2c222c2d613490c43cc171eac",
+  "performance_claim": false,
+  "no_automatic_repeat": true,
+  "watcher_session": 29382,
+  "watcher_unit": "borsuk-actual1m-smoke-watch-a0001",
+  "watcher_invocation": "cd6099e23cf14f7e963a2cd59feb0fa3",
+  "watcher_exit": 2,
+  "driver_exit": 1,
+  "terminated": true,
+  "background_cleared": true
+}
