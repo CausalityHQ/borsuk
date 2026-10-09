@@ -1,0 +1,21 @@
+{
+  "ann_invoked": false,
+  "evidence": {
+    "bytes": 9635,
+    "sha256": "25ea280b779743ef7c7c7410ac4b00cb36685f52f5f96ddcb63fc36d332462a5"
+  },
+  "exact_failed_check": "cmp -s -n 4194304 /dev/nvme1n1 /dev/zero",
+  "failure_phase": "scratch",
+  "instance_id": "i-05a9b90ce89169037",
+  "next_action": "Determine cmp difference versus I/O error before changing zero-prefix admission; no automatic paid retry",
+  "original_bootstrap_exit": 90,
+  "performance_claim": false,
+  "root_infrastructure_closeout_verified": true,
+  "schema": "borsuk-canary-root-disposition-v1",
+  "scientific_rejection": false,
+  "source_commit": "927ad51f8fd521476f1a1bf28f158a52f6a318ee",
+  "status": "EXECUTION_INVALID",
+  "underlying_cause": "UNPROVEN: raw cmp return and nonsilent diagnostic absent",
+  "watcher_actual_bootstrap_failure_stop_verified": true,
+  "watcher_exit": 0
+}
