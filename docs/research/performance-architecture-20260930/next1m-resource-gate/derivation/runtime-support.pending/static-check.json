@@ -1,0 +1,15 @@
+{
+  "status": "STATIC_ONLY_PENDING_REMOTE_CANARY",
+  "historical_support_unchanged": true,
+  "asset_count": 17,
+  "chain_receipt": "chain-exit.json",
+  "runtime_executed": false,
+  "files": {
+    "transport.py": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529",
+    "service-stop.sh": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e"
+  },
+  "historical_files": {
+    "transport.py": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12",
+    "service-stop.sh": "7d4c7156a1950fa243c538e6e9c05e2665c9429a07bcf4d6f0cf7075a2de9881"
+  }
+}
