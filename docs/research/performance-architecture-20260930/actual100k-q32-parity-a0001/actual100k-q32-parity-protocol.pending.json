@@ -1,0 +1,162 @@
+{
+  "schema": "borsuk-actual-cohort-parity-protocol-v1",
+  "status": "DRAFT_NOT_LAUNCH_AUTHORITY",
+  "campaign": "actual100k-q32-parity-a0001",
+  "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "integration_commit": "a3777aa7068da1de2908e86e3d9038f2cb3e5f1d",
+  "qualified_preparer": {
+    "name": "prepare_cohere_native_cohort",
+    "bytes": 10015160,
+    "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+    "terminated_before_collection": true,
+    "local_path": "/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/derivation-qualification-a0002-preparation/remote-results/binaries/prepare_cohere_native_cohort"
+  },
+  "shard_transports": {
+    "en/0000.parquet": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0000.parquet",
+    "en/0001.parquet": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0001.parquet"
+  },
+  "redirect_hosts": [
+    "us.aws.cdn.hf.co"
+  ],
+  "historical_comparison": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "requests": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+      "bytes": 4096000,
+      "etag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "truth": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+      "bytes": 80000,
+      "etag": "\"04fc7819a26ce9b269bd25b23b514607\"",
+      "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+    },
+    "provenance": "Exact frozen membership-admission-a0001 bootstrap GET keys/ETags; authenticated historical SHA pins remain unchanged",
+    "head_observed_utc": "2026-10-09T14:21:31.161859+00:00",
+    "head_size_etag_match": true,
+    "new_body_authentication": false,
+    "next_step": "Conditional If-Match GET on admitted remote host, whole body SHA/EOF check, then mechanically compute first32 prefix SHA without decoding truth."
+  },
+  "cell": {
+    "rows": 100000,
+    "queries": 32,
+    "reserved_queries_validated": 1000,
+    "dimensions": 1024,
+    "k": 10,
+    "corpus_intervals": [
+      {
+        "start": 0,
+        "end": 100000
+      }
+    ],
+    "reserved_query_interval": {
+      "start": 100000,
+      "end": 101000
+    },
+    "purpose": "Real shard decode/source/ID/reserved-query parity and bounded sequential-f64 truth falsifier. No cold ANN or competitor rerun.",
+    "preparation_deadline_max_seconds": 2400,
+    "cpu_max": 4,
+    "rss_ceiling_max_bytes": 8589934592,
+    "swap_bytes": 0,
+    "scratch_admission": "Explicit measured/checked live input+output+IDs+temporary ledger required before freeze; no implicit32GiB admission",
+    "outputs_required": [
+      "Original corpus exact historical409600000B/SHA",
+      "Full1000 reserved-request validation/digest unchanged; emitted32 request prefix authenticated",
+      "Truth2560B exact historical prefix with independently computed SHA",
+      "Completed cohort receipt + original process exit0 + resource/closure evidence"
+    ],
+    "no_acceptance_from": [
+      "COMPLETE filename alone",
+      "Synthetic native tests",
+      "Declared source_commit alone",
+      "Rehashed declarations without source/wholebody authentication"
+    ]
+  },
+  "resources": {
+    "cpu_cores": 4,
+    "allowed_cpus": "0-3",
+    "memory_max_bytes": 8589934592,
+    "swap_max_bytes": 0,
+    "pids_max": 128,
+    "scratch_cap_bytes": 4294967296,
+    "native_deadline_seconds": 2400,
+    "unit_deadline_seconds": 2460,
+    "transport_deadline_seconds": 900,
+    "machine_deadline_seconds": 4200,
+    "ebs_gib": 40,
+    "instance_type": "c7i.2xlarge",
+    "spot_max_usd_per_hour": "0.60",
+    "compute_reserve_usd": "0.70",
+    "ancillary_reserve_usd": "0.15",
+    "total_reserve_usd": "0.85"
+  },
+  "scratch_ledger": {
+    "status": "SOURCE_ARITHMETIC_ONLY_ACTUAL_METADATA_ADMISSION_PENDING",
+    "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "resident_parts": {
+      "id_state": 129280000,
+      "queries": 131072,
+      "truth_block": 1048576,
+      "top_k": 5120,
+      "query_norms": 256,
+      "heap_headers_x86_64": 768,
+      "sorted_top_k": 160,
+      "metadata": 268435456,
+      "row_buffers": 8192,
+      "control": 67108864,
+      "caller": 67108864
+    },
+    "resident_bytes": 533127328,
+    "candidate_size_bytes_x86_64": 16,
+    "heap_header_size_bytes_x86_64": 24,
+    "type_size_scope": "source layout arithmetic; native receipt must independently record actual charges",
+    "shard_bytes": 433359090,
+    "id_output_cap": 723968000,
+    "native_output_cap": 1133767168,
+    "native_scratch_charge": 1634235122,
+    "external_comparison_elf_evidence_allowance": 81562168,
+    "whole_stage_scratch_bound": 1715797290,
+    "scratch_cap": 4294967296,
+    "scratch_fits": true,
+    "decoder_charge_formula": "resident + 4*(selected compressed + selected uncompressed) + 24*selected values + 32*group rows + 2*max_batch_bytes",
+    "modeled_memory_cap": 7516192768,
+    "actual_rss_cap": 8589934592,
+    "actual_row_group_footer_page_dictionary_admission": "NOT RUN; native must refuse before decode if any admission exceeds caps",
+    "runtime_feasibility": false,
+    "performance_claim": false
+  },
+  "execution_order": [
+    "authenticate source/qualification/ELF and exact resource declarations",
+    "bounded transport into fresh namespace; whole SHA/length/EOF of two shards and historical requests/truth",
+    "create output parent and freeze actual dev/inode in strict config; hash exact finalized bytes",
+    "record effective cgroup-v2 CPU/memory/swap/pids before native exec",
+    "execute qualified preparer exactly once under original deadline; retain original native exit separately from supervisor",
+    "require original exit0 and complete receipt; authenticate all declared output bodies",
+    "mechanically compare original corpus SHA, reserved1000 digest, emittedQ32 request prefix and truth prefix to authenticated historical bodies",
+    "record after-resource/closure, upload immutable evidence and terminal last",
+    "terminate and wait SAME instance before collection; independently replay small evidence"
+  ],
+  "refusals": [
+    "any missing qualification/binary/input pin",
+    "original exit absent/nonzero even with surviving COMPLETE",
+    "any resource or parity mismatch",
+    "unverified output parent dev/inode",
+    "Spot interruption"
+  ],
+  "states": {
+    "PARITY_VERIFIED": "all exact body/receipt/process/resource/closure evidence authenticated; not ANN measurement",
+    "INVALID": "setup/resource/parity/process/publication/closure failure; preserve raw evidence, no algorithm rejection"
+  },
+  "spot_interruption": "discard incomplete cell, preserve exact original instance/terminal; no automatic relaunch",
+  "no_native_build": true,
+  "no_ann_queries": true,
+  "competitor_repeat": false,
+  "performance_claim": false,
+  "remaining_before_freeze": [
+    "exact bootstrap/transport source-bound checks",
+    "prospective cost quote",
+    "committed bootstrap/config-template/ELF/input pins",
+    "separate staging canary before any later ANN cold measurement"
+  ]
+}

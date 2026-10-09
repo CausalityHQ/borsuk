@@ -1,0 +1,136 @@
+{
+  "status": "NATIVE_QUALIFIED_ACTUAL_INPUT_RESOURCE_ADMISSION_PENDING",
+  "dataset_revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "dimensions": 1024,
+  "k": 10,
+  "historical_100k": {
+    "corpus_intervals": [
+      {
+        "start": 0,
+        "end": 100000
+      }
+    ],
+    "original_corpus": {
+      "bytes": 409600000,
+      "sha256": "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c"
+    },
+    "full_reserved_requests": {
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "full_truth": {
+      "bytes": 80000,
+      "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+    }
+  },
+  "reserved_query_interval": {
+    "start": 100000,
+    "end": 101000
+  },
+  "corpus_1m_intervals": [
+    {
+      "start": 0,
+      "end": 100000
+    },
+    {
+      "start": 101000,
+      "end": 1001000
+    }
+  ],
+  "required_checks": [
+    "Authenticate whole historical bodies before using their comparison pins; paths and S3 locators remain root-frozen inputs",
+    "New 100k extraction matches original corpus and full reserved request body exactly",
+    "New 100k Q32 truth equals first 2560 bytes of authenticated historical truth; derive and record prefix SHA on the admitted remote host, never invent it",
+    "If running new 100k Q1000 truth, it matches all 80000 historical bytes",
+    "New 1M corpus excludes every reserved query row, authenticates all eleven shard bodies and actual footer/schema/counts, and validates original f32 rows and selected IDs",
+    "New 1M Q32 truth matches the first 2560 bytes of the later Q1000 truth generated over the identical authenticated 1M corpus",
+    "Derivation producer output is bound to original corpus and frozen qualified executable; query-count changes reuse the same corpus-only derivation",
+    "Actual runtime validator admission uses authenticated requests/records/truth before any paid cold measurement",
+    "Separate disposable staging/canary precedes frozen cold measurement; it is not performance evidence"
+  ],
+  "historical_truth_prefix_sha256": null,
+  "scale_1m_original_corpus_sha256": null,
+  "scale_1m_truth_sha256": null,
+  "runtime_executed": false,
+  "performance_claim": false,
+  "competitor_benchmark_repeat": false,
+  "native_qualification_dependency": {
+    "campaign": "scale-derivation-qualification-a0002",
+    "instance_id": "i-0e7aa614cb21c3e8a",
+    "candidate_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "integration_commit": "a3777aa7068da1de2908e86e3d9038f2cb3e5f1d",
+    "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+    "tests": 139,
+    "stages": 7,
+    "terminated_before_collection": true,
+    "evidence": {
+      "bytes": 637943,
+      "sha256": "615615d1c7e54762dd59b30203af6e711bf5de7eae638e9d805334b87f2a61e8"
+    }
+  },
+  "first_actual_input_cell": {
+    "rows": 100000,
+    "queries": 32,
+    "reserved_queries_validated": 1000,
+    "dimensions": 1024,
+    "k": 10,
+    "corpus_intervals": [
+      {
+        "start": 0,
+        "end": 100000
+      }
+    ],
+    "reserved_query_interval": {
+      "start": 100000,
+      "end": 101000
+    },
+    "purpose": "Real shard decode/source/ID/reserved-query parity and bounded sequential-f64 truth falsifier. No cold ANN or competitor rerun.",
+    "preparation_deadline_max_seconds": 2400,
+    "cpu_max": 4,
+    "rss_ceiling_max_bytes": 8589934592,
+    "swap_bytes": 0,
+    "scratch_admission": "Explicit measured/checked live input+output+IDs+temporary ledger required before freeze; no implicit32GiB admission",
+    "outputs_required": [
+      "Original corpus exact historical409600000B/SHA",
+      "Full1000 reserved-request validation/digest unchanged; emitted32 request prefix authenticated",
+      "Truth2560B exact historical prefix with independently computed SHA",
+      "Completed cohort receipt + original process exit0 + resource/closure evidence"
+    ],
+    "no_acceptance_from": [
+      "COMPLETE filename alone",
+      "Synthetic native tests",
+      "Declared source_commit alone",
+      "Rehashed declarations without source/wholebody authentication"
+    ]
+  },
+  "producer_acceptance_gate": "For corpus-only normalize/ordinaryfit/SQ8, collect ORIGINAL producer process terminal exit0 with exact config/argv/ELF and seals before binding completed derivation to generation. SurvivingCOMPLETE after a failure cannot authorize later phases.",
+  "paid_launch_authorized_by_this_file": false,
+  "historical_comparison_locators": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "requests": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+      "bytes": 4096000,
+      "etag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "truth": {
+      "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+      "bytes": 80000,
+      "etag": "\"04fc7819a26ce9b269bd25b23b514607\"",
+      "sha256": "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c"
+    },
+    "provenance": "Exact frozen membership-admission-a0001 bootstrap GET keys/ETags; authenticated historical SHA pins remain unchanged",
+    "head_observed_utc": "2026-10-09T14:21:31.161859+00:00",
+    "head_size_etag_match": true,
+    "new_body_authentication": false,
+    "next_step": "Conditional If-Match GET on admitted remote host, whole body SHA/EOF check, then mechanically compute first32 prefix SHA without decoding truth."
+  },
+  "qualified_preparer": {
+    "name": "prepare_cohere_native_cohort",
+    "bytes": 10015160,
+    "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+    "terminated_before_collection": true,
+    "local_path": "/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/derivation-qualification-a0002-preparation/remote-results/binaries/prepare_cohere_native_cohort"
+  },
+  "updated_utc": "2026-10-09T15:16:22.256153+00:00"
+}
