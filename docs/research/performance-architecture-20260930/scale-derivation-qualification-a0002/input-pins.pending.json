@@ -1,0 +1,18 @@
+{
+  "source-files.sha256": {
+    "bytes": 280890,
+    "sha256": "7bb8545b6af14bf50c1bdd853077d9fd976e30b967d3743e5bd759e8a104cdc6"
+  },
+  "candidate-contract.json": {
+    "bytes": 122780,
+    "sha256": "b2ec727cc7efc34c15b1c54c6044df7ca10f85c59570eaf828bff657fca33460"
+  },
+  "gates.sh": {
+    "bytes": 4087,
+    "sha256": "2413668bc3c11124adac7f3bb304ac59261f91befbcfcd498d38de6df8320b59"
+  },
+  "native-source.json": {
+    "bytes": 47762,
+    "sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91"
+  }
+}

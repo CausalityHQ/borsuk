@@ -1,0 +1,15 @@
+{
+  "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+  "candidate": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "instance_id": "i-0e7aa614cb21c3e8a",
+  "terminated_before_collection": true,
+  "stages": 7,
+  "tests": 139,
+  "release_binaries": 6,
+  "source_file_count": 426,
+  "native_source_identity_sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91",
+  "full_source_before_after_root_match": true,
+  "verifier_exit": 0,
+  "ann_run": false,
+  "performance_claim": false
+}

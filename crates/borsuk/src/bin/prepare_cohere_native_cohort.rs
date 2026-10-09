@@ -1,4 +1,4 @@
-//! Offline, fixed Cohere cohort extraction and independent exhaustive cosine truth.
+//! Offline, explicitly configured Cohere cohort extraction and independent exhaustive cosine truth.
 //! A complete receipt seals data identity only; it makes no ANN quality claim.
 
 use arrow_array::{
@@ -33,7 +33,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 const CONFIG_CAP: u64 = 65536;
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-cohort-config-v1";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-cohort-config-v3";
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 const PAGE_HEADER_BYTES: u64 = 65536;
@@ -48,6 +48,7 @@ struct Shard {
     path: PathBuf,
     bytes: u64,
     sha256: String,
+    rows: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -74,6 +75,10 @@ struct Resources {
     batch_rows: usize,
     max_batch_bytes: u64,
     max_id_bytes: usize,
+    truth_block_rows: usize,
+    caller_memory_bytes: u64,
+    caller_scratch_bytes: u64,
+    temporary_reserve_bytes: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -84,12 +89,16 @@ struct Config {
     revision: String,
     embedding_column: String,
     document_id_column: String,
+    geometry: Geometry,
+    corpus_intervals: Vec<SourceInterval>,
+    reserved_query_interval: SourceInterval,
     shards: Vec<Shard>,
     output_parent: OutputParent,
     resources: Resources,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct Geometry {
     corpus: usize,
     queries: usize,
@@ -98,18 +107,126 @@ struct Geometry {
 }
 
 impl Geometry {
-    const PRODUCTION: Self = Self {
-        corpus: 100_000,
-        queries: 1000,
-        dimensions: 1024,
-        k: 10,
-    };
-    fn rows(self) -> usize {
-        self.corpus + self.queries
+    fn rows(self) -> Result<usize> {
+        self.corpus
+            .checked_add(self.queries)
+            .ok_or_else(|| "population addition overflow".into())
     }
-    fn vector_bytes(self, rows: usize) -> u64 {
-        rows as u64 * self.dimensions as u64 * 4
+    fn vector_bytes(self, rows: usize) -> Result<u64> {
+        times(rows as u64, times(self.dimensions as u64, 4)?)
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SourceInterval {
+    start: usize,
+    end: usize,
+}
+impl Config {
+    fn source_end(&self) -> Result<usize> {
+        Ok(self
+            .corpus_intervals
+            .last()
+            .ok_or("corpus intervals required")?
+            .end
+            .max(self.reserved_query_interval.end))
+    }
+    fn corpus_ordinal(&self, source: usize) -> Option<usize> {
+        let mut ordinal = 0;
+        for interval in &self.corpus_intervals {
+            if (interval.start..interval.end).contains(&source) {
+                return Some(ordinal + source - interval.start);
+            }
+            ordinal += interval.end - interval.start;
+        }
+        None
+    }
+}
+fn validate_geometry(c: &Config, g: Geometry) -> Result<()> {
+    require(
+        c.geometry == g
+            && g.corpus > 0
+            && g.corpus <= 1_000_000
+            && g.queries > 0
+            && g.queries <= 1000
+            && g.dimensions > 0
+            && g.dimensions <= 1024
+            && g.k > 0
+            && g.k <= g.corpus
+            && g.k <= 10,
+        "explicit bounded geometry",
+    )?;
+    let reserved = c.reserved_query_interval;
+    let query_end = reserved
+        .start
+        .checked_add(g.queries)
+        .ok_or("query interval overflow")?;
+    require(
+        reserved.start < reserved.end
+            && reserved.end - reserved.start <= 1000
+            && query_end <= reserved.end,
+        "selected query prefix inside explicit reserved interval",
+    )?;
+    require(
+        !c.corpus_intervals.is_empty() && c.corpus_intervals.len() <= 2,
+        "bounded corpus intervals",
+    )?;
+    let mut count = 0_usize;
+    let mut previous = 0;
+    for interval in &c.corpus_intervals {
+        require(
+            interval.start < interval.end
+                && interval.start >= previous
+                && (interval.end <= reserved.start || interval.start >= reserved.end),
+            "nonoverlapping ordered corpus/query intervals",
+        )?;
+        count = count
+            .checked_add(interval.end - interval.start)
+            .ok_or("corpus count overflow")?;
+        previous = interval.end;
+    }
+    require(
+        count == g.corpus && c.source_end()? <= 1_001_000,
+        "exact bounded source population",
+    )?;
+    if !cfg!(test) {
+        let expected = if g.corpus == 100_000 {
+            vec![SourceInterval {
+                start: 0,
+                end: 100_000,
+            }]
+        } else {
+            vec![
+                SourceInterval {
+                    start: 0,
+                    end: 100_000,
+                },
+                SourceInterval {
+                    start: 101_000,
+                    end: g
+                        .corpus
+                        .checked_add(1000)
+                        .ok_or("source population overflow")?,
+                },
+            ]
+        };
+        require(
+            g.corpus >= 100_000
+                && g.dimensions == 1024
+                && g.k == 10
+                && reserved
+                    == (SourceInterval {
+                        start: 100_000,
+                        end: 101_000,
+                    })
+                && c.corpus_intervals == expected,
+            "historical query exclusion and explicit scale corpus",
+        )?;
+    }
+    times(g.corpus as u64, times(g.dimensions as u64, 4)?)?;
+    times(g.queries as u64, times(g.k as u64, 8)?)?;
+    Ok(())
 }
 
 fn require(ok: bool, message: &str) -> Result<()> {
@@ -189,10 +306,7 @@ fn read_config(path: &Path, sha: &str) -> Result<(Config, u64)> {
 }
 
 fn validate_config(c: &Config, g: Geometry) -> Result<()> {
-    require(
-        g == Geometry::PRODUCTION || cfg!(test),
-        "production geometry is fixed",
-    )?;
+    validate_geometry(c, g)?;
     require(
         c.schema == CONFIG_SCHEMA && c.dataset == DATASET && c.revision == REVISION,
         "pinned schema/dataset/revision",
@@ -205,34 +319,38 @@ fn validate_config(c: &Config, g: Geometry) -> Result<()> {
         "explicit embedding/document-ID columns",
     )?;
     require(
-        c.shards.len() == 2 && c.output_parent.path.is_absolute(),
-        "two shards/output parent",
+        (1..=32).contains(&c.shards.len()) && c.output_parent.path.is_absolute(),
+        "bounded shards/output parent",
     )?;
+    let mut paths = BTreeSet::new();
+    let mut declared_rows = 0;
     for (i, shard) in c.shards.iter().enumerate() {
         require(
-            shard.publisher_path == ["en/0000.parquet", "en/0001.parquet"][i]
+            shard.publisher_path == format!("en/{i:04}.parquet")
                 && shard.path.is_absolute()
+                && paths.insert(&shard.path)
                 && shard.bytes > 12
                 && shard.bytes <= 256 * MIB
-                && valid_sha(&shard.sha256),
-            "ordered whole-shard descriptors",
+                && valid_sha(&shard.sha256)
+                && shard.rows > 0
+                && shard.rows <= 1_001_000,
+            "ordered whole-shard descriptors with explicit expected rows",
         )?;
-        if g == Geometry::PRODUCTION {
-            require(
-                shard.bytes == [216_612_385, 216_746_705][i],
-                "pinned whole-shard byte counts",
-            )?;
-        }
+        declared_rows = plus(declared_rows, shard.rows)?;
     }
-    require(c.shards[0].path != c.shards[1].path, "distinct shard paths")?;
+    require(
+        declared_rows >= c.source_end()? as u64,
+        "insufficient declared source rows",
+    )?;
     let r = &c.resources;
     require(
-        r.cpu_limit == 4
-            && r.actual_memory_bytes == 8 * GIB
+        (1..=4).contains(&r.cpu_limit)
+            && (1..=8 * GIB).contains(&r.actual_memory_bytes)
             && r.swap_bytes == 0
-            && r.scratch_bytes == 8 * GIB
-            && r.timeout_seconds == 2400,
-        "frozen prospective execution envelope",
+            && r.scratch_bytes > 0
+            && (1..=2400).contains(&r.timeout_seconds)
+            && (1..=4096).contains(&r.truth_block_rows),
+        "explicit execution/resource limits",
     )?;
     require(
         r.modeled_memory_bytes > 0
@@ -397,14 +515,37 @@ fn authenticate(file: &mut File, bytes: u64, sha: &str, monitor: &Monitor) -> Re
 }
 
 fn resident_charge(c: &Config, g: Geometry) -> Result<u64> {
-    let vectors = g.vector_bytes(g.rows());
-    let norms = times(g.corpus as u64, 8)?;
-    // BTree identity keys include string payload and a conservative node charge.
-    let ids = times(g.rows() as u64, plus(c.resources.max_id_bytes as u64, 256)?)?;
-    plus(
-        plus(plus(vectors, norms)?, ids)?,
-        plus(64 * MIB, times(128, c.resources.max_footer_bytes)?)?,
-    )
+    let r = &c.resources;
+    // Charge extraction and truth coexistence conservatively; decoder admission adds its peak.
+    let ids = times(c.source_end()? as u64, plus(r.max_id_bytes as u64, 256)?)?;
+    let queries = g.vector_bytes(g.queries)?;
+    let block = g.vector_bytes(r.truth_block_rows)?;
+    let top = times(
+        times(g.queries as u64, g.k as u64)?,
+        std::mem::size_of::<Candidate>() as u64,
+    )?;
+    let query_norms = times(g.queries as u64, std::mem::size_of::<f64>() as u64)?;
+    let heap_headers = times(
+        g.queries as u64,
+        std::mem::size_of::<BinaryHeap<Candidate>>() as u64,
+    )?;
+    let sorted_output = times(g.k as u64, std::mem::size_of::<Candidate>() as u64)?;
+    let metadata = times(c.shards.len() as u64, times(128, r.max_footer_bytes)?)?;
+    [
+        ids,
+        queries,
+        block,
+        top,
+        query_norms,
+        heap_headers,
+        sorted_output,
+        metadata,
+        g.vector_bytes(2)?,
+        64 * MIB,
+        r.caller_memory_bytes,
+    ]
+    .into_iter()
+    .try_fold(0, plus)
 }
 
 fn admit(charge: u64, resources: &Resources) -> Result<()> {
@@ -781,6 +922,10 @@ fn pin_shard(
         "string/integer document-ID schema required",
     )?;
     let rows = u64::try_from(metadata.metadata().file_metadata().num_rows())?;
+    require(
+        rows == shard.rows,
+        "authenticated footer matches explicit shard rows",
+    )?;
     let mut first_row = 0;
     let mut left = remaining;
     let mut plans = Vec::new();
@@ -1139,58 +1284,106 @@ impl Ord for Candidate {
 }
 
 fn exact_truth(
-    corpus: &[f32],
+    corpus: &mut File,
     queries: &[f32],
-    norms: &[f64],
     g: Geometry,
+    block_rows: usize,
     output: &mut OutputFile,
     monitor: &Monitor,
 ) -> Result<()> {
-    // Deliberately sequential: frozen original-f32 scalar f64 arithmetic, no ANN,
-    // normalization, parallel reductions, SIMD quality proxy, or query selection.
+    require(
+        (1..=4096).contains(&block_rows)
+            && (1..=1024).contains(&g.dimensions)
+            && (1..=1000).contains(&g.queries)
+            && (1..=10).contains(&g.k)
+            && g.corpus <= 1_000_000
+            && g.k <= g.corpus
+            && queries.len()
+                == g.queries
+                    .checked_mul(g.dimensions)
+                    .ok_or("query coordinates overflow")?
+            && corpus.metadata()?.len() == g.vector_bytes(g.corpus)?,
+        "truth exact input geometry",
+    )?;
+    let stamp = corpus.metadata()?;
+    let block_bytes = usize::try_from(g.vector_bytes(block_rows)?)?;
+    let mut block = Vec::new();
+    block.try_reserve_exact(block_bytes)?;
+    block.resize(block_bytes, 0_u8);
+    let mut vector = Vec::new();
+    vector.try_reserve_exact(g.dimensions)?;
+    vector.resize(g.dimensions, 0_f32);
+    let mut query_norms = Vec::new();
+    query_norms.try_reserve_exact(g.queries)?;
+    let mut tops: Vec<BinaryHeap<Candidate>> = Vec::new();
+    tops.try_reserve_exact(g.queries)?;
     for query in queries.chunks_exact(g.dimensions) {
+        query_norms.push(squared_norm(query)?.sqrt());
+        let mut heap = BinaryHeap::new();
+        heap.try_reserve_exact(g.k)?;
+        tops.push(heap);
+    }
+    corpus.seek(SeekFrom::Start(0))?;
+    let row_bytes = usize::try_from(g.vector_bytes(1)?)?;
+    let mut ordinal = 0;
+    // One corpus scan; each query's dot keeps the original sequential f64 coordinate order.
+    while ordinal < g.corpus {
         monitor.check()?;
-        let query_norm = squared_norm(query)?.sqrt();
-        let mut top = BinaryHeap::with_capacity(g.k);
-        for (ordinal, vector) in corpus.chunks_exact(g.dimensions).enumerate() {
-            if ordinal % 1024 == 0 {
-                monitor.time()?;
+        let bytes = usize::try_from(g.vector_bytes(block_rows.min(g.corpus - ordinal))?)?;
+        corpus.read_exact(&mut block[..bytes])?;
+        for encoded in block[..bytes].chunks_exact(row_bytes) {
+            monitor.time()?;
+            for (value, bits) in vector.iter_mut().zip(encoded.chunks_exact(4)) {
+                *value = f32::from_le_bytes(bits.try_into()?);
             }
-            let mut dot = 0.0_f64;
-            for (&x, &y) in vector.iter().zip(query) {
-                dot += f64::from(x) * f64::from(y);
+            let norm = squared_norm(&vector)?.sqrt();
+            for ((query, &query_norm), top) in queries
+                .chunks_exact(g.dimensions)
+                .zip(&query_norms)
+                .zip(&mut tops)
+            {
+                let mut dot = 0.0_f64;
+                for (&x, &y) in vector.iter().zip(query) {
+                    dot += f64::from(x) * f64::from(y);
+                }
+                let distance = 1.0 - dot / (norm * query_norm);
+                require(distance.is_finite(), "nonfinite cosine distance")?;
+                let candidate = Candidate {
+                    distance,
+                    ordinal: ordinal as u64,
+                };
+                if top.len() < g.k {
+                    top.push(candidate);
+                } else if candidate < *top.peek().ok_or("top-k heap")? {
+                    *top.peek_mut().ok_or("top-k heap")? = candidate;
+                }
             }
-            let distance = 1.0 - dot / (norms[ordinal] * query_norm);
-            require(distance.is_finite(), "nonfinite cosine distance")?;
-            let candidate = Candidate {
-                distance,
-                ordinal: ordinal as u64,
-            };
-            if top.len() < g.k {
-                top.push(candidate);
-            } else if candidate < *top.peek().ok_or("top-k heap")? {
-                *top.peek_mut().ok_or("top-k heap")? = candidate;
-            }
+            ordinal += 1;
         }
-        require(top.len() == g.k, "exhaustive top-k cardinality")?;
+        unchanged(corpus, &stamp)?;
+    }
+    require(
+        corpus.read(&mut [0])? == 0 && ordinal == g.corpus,
+        "truth exact corpus EOF/count",
+    )?;
+    for top in tops {
+        require(top.len() == g.k, "exhaustive per-query top-k cardinality")?;
+        // Consumes the heap allocation; only this query's sorted output exists at a time.
         for candidate in top.into_sorted_vec() {
             output.write(&candidate.ordinal.to_le_bytes())?;
         }
     }
-    Ok(())
+    monitor.check()?;
+    unchanged(corpus, &stamp)
 }
 
-fn prepare(
-    config_path: &Path,
-    config_sha: &str,
-    output: &Path,
-    g: Geometry,
-) -> Result<serde_json::Value> {
+fn prepare(config_path: &Path, config_sha: &str, output: &Path) -> Result<serde_json::Value> {
     let (c, config_bytes) = read_config(config_path, config_sha)?;
+    let g = c.geometry;
     validate_config(&c, g)?;
     let r = &c.resources;
     let monitor = Monitor::new(r.actual_memory_bytes, r.timeout_seconds);
-    let enforcement = if g == Geometry::PRODUCTION {
+    let enforcement = if !cfg!(test) {
         runtime_limits(r)?
     } else {
         serde_json::json!({"enforcement":"private-test-geometry"})
@@ -1199,49 +1392,59 @@ fn prepare(
     let resident = resident_charge(&c, g)?;
     admit(resident, r)?;
     let id_cap = times(
-        g.rows() as u64,
+        c.source_end()? as u64,
         plus(times(6, r.max_id_bytes as u64)?, 1024)?,
     )?;
-    let source_bytes = plus(c.shards[0].bytes, c.shards[1].bytes)?;
+    let source_bytes = c
+        .shards
+        .iter()
+        .try_fold(0, |n, shard| plus(n, shard.bytes))?;
     let output_cap = plus(
         plus(
-            g.vector_bytes(g.rows()),
+            g.vector_bytes(g.rows()?)?,
             times((g.queries * g.k) as u64, 8)?,
         )?,
         plus(id_cap, CONFIG_CAP)?,
     )?;
     require(
-        plus(source_bytes, output_cap)? <= r.scratch_bytes,
+        plus(
+            plus(source_bytes, output_cap)?,
+            plus(r.caller_scratch_bytes, r.temporary_reserve_bytes)?,
+        )? <= r.scratch_bytes,
         "source/output scratch admission",
     )?;
     let mut pinned = Vec::new();
-    let mut remaining = g.rows();
+    let mut remaining = c.source_end()?;
     for shard in &c.shards {
+        require(
+            remaining > 0,
+            "every declared shard must intersect the admitted source prefix",
+        )?;
         let source = pin_shard(shard, &c, g, remaining, resident, &monitor)?;
         remaining -= source.plans.iter().map(|p| p.take).sum::<usize>();
         pinned.push(source);
     }
     require(remaining == 0, "missing declared cohort rows")?;
-    if g == Geometry::PRODUCTION {
-        require(pinned[0].rows == 100_000, "first shard row count is pinned")?;
-    }
-    require(
-        (pinned[0].device, pinned[0].inode) != (pinned[1].device, pinned[1].inode),
-        "distinct shard inodes",
-    )?;
-    require(
-        pinned[0]
-            .metadata
-            .schema()
-            .field_with_name(&c.document_id_column)?
-            .data_type()
-            == pinned[1]
+    let mut inodes = BTreeSet::new();
+    for source in &pinned {
+        require(
+            inodes.insert((source.device, source.inode)),
+            "distinct shard inodes",
+        )?;
+        require(
+            source
                 .metadata
                 .schema()
                 .field_with_name(&c.document_id_column)?
-                .data_type(),
-        "consistent publisher ID type across shards",
-    )?;
+                .data_type()
+                == pinned[0]
+                    .metadata
+                    .schema()
+                    .field_with_name(&c.document_id_column)?
+                    .data_type(),
+            "consistent publisher ID type across shards",
+        )?;
+    }
     let parent = directory(&c.output_parent.path)?;
     let parent_stat = parent.metadata()?;
     require(
@@ -1264,15 +1467,14 @@ fn prepare(
         Mode::empty(),
     )?);
     let result = (|| -> Result<serde_json::Value> {
-        let mut corpus = Vec::new();
-        corpus.try_reserve_exact(g.corpus * g.dimensions)?;
         let mut queries = Vec::new();
         queries.try_reserve_exact(g.queries * g.dimensions)?;
-        let mut norms = Vec::new();
-        norms.try_reserve_exact(g.corpus)?;
+        let mut corpus_rows = 0;
         let mut ids = BTreeSet::new();
-        let mut corpus_output = OutputFile::new(&dir, "corpus.f32", g.vector_bytes(g.corpus))?;
-        let mut query_output = OutputFile::new(&dir, "queries.f32", g.vector_bytes(g.queries))?;
+        let mut reserved_query_digest = Sha256::new();
+        let mut reserved_query_rows = 0_usize;
+        let mut corpus_output = OutputFile::new(&dir, "corpus.f32", g.vector_bytes(g.corpus)?)?;
+        let mut query_output = OutputFile::new(&dir, "queries.f32", g.vector_bytes(g.queries)?)?;
         let mut corpus_ids = OutputFile::new(&dir, "corpus.ids.jsonl", id_cap)?;
         let mut query_ids = OutputFile::new(&dir, "queries.ids.jsonl", id_cap)?;
         let mut source_ordinal = 0;
@@ -1326,23 +1528,35 @@ fn prepare(
                         .ok_or("document ID batch field")?;
                     for row in 0..batch.num_rows() {
                         require(
-                            row_in_group < plan.take && source_ordinal < g.rows(),
+                            row_in_group < plan.take && source_ordinal < c.source_end()?,
                             "declared source interval only",
                         )?;
                         let values = embedding(embeddings.as_ref(), row, g.dimensions)?;
-                        let norm = squared_norm(values.values())?.sqrt();
+                        squared_norm(values.values())?;
                         let id = document_id(documents.as_ref(), row, r.max_id_bytes)?;
                         require(!ids.contains(&id), "duplicate publisher document ID")?;
                         for (j, value) in values.values().iter().enumerate() {
                             encoded_vector[j * 4..j * 4 + 4]
                                 .copy_from_slice(&value.to_bits().to_le_bytes());
                         }
-                        let is_corpus = source_ordinal < g.corpus;
+                        if (c.reserved_query_interval.start..c.reserved_query_interval.end)
+                            .contains(&source_ordinal)
+                        {
+                            reserved_query_digest.update(&encoded_vector);
+                            reserved_query_rows = reserved_query_rows
+                                .checked_add(1)
+                                .ok_or("reserved query row overflow")?;
+                        }
+                        let corpus_ordinal = c.corpus_ordinal(source_ordinal);
+                        let query_ordinal = (c.reserved_query_interval.start
+                            ..c.reserved_query_interval.start + g.queries)
+                            .contains(&source_ordinal)
+                            .then(|| source_ordinal - c.reserved_query_interval.start);
                         let identity = Identity {
-                            service_id: source_ordinal as u64,
+                            service_id: corpus_ordinal.unwrap_or(source_ordinal) as u64,
                             source_ordinal: source_ordinal as u64,
-                            corpus_ordinal: is_corpus.then_some(source_ordinal as u64),
-                            query_ordinal: (!is_corpus).then(|| (source_ordinal - g.corpus) as u64),
+                            corpus_ordinal: corpus_ordinal.map(|n| n as u64),
+                            query_ordinal: query_ordinal.map(|n| n as u64),
                             publisher_id: &id,
                             shard: &shard.publisher_path,
                             shard_row: plan.first_row + row_in_group as u64,
@@ -1353,12 +1567,19 @@ fn prepare(
                             encoded_id.len() as u64 <= r.max_id_bytes as u64 * 6 + 1024,
                             "identity row byte cap",
                         )?;
-                        if is_corpus {
-                            corpus.extend_from_slice(values.values());
-                            norms.push(norm);
+                        if let Some(ordinal) = corpus_ordinal {
+                            require(ordinal == corpus_rows, "ascending corpus ordinal")?;
+                            corpus_rows += 1;
                             corpus_output.write(&encoded_vector)?;
+                            if !cfg!(test) && corpus_rows == 100_000 {
+                                require(
+                                    format!("{:x}", corpus_output.digest.clone().finalize())
+                                        == "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c",
+                                    "historical original corpus prefix SHA256",
+                                )?;
+                            }
                             corpus_ids.write(&encoded_id)?;
-                        } else {
+                        } else if query_ordinal.is_some() {
                             queries.extend_from_slice(values.values());
                             query_output.write(&encoded_vector)?;
                             query_ids.write(&encoded_id)?;
@@ -1374,16 +1595,28 @@ fn prepare(
             }
         }
         require(
-            source_ordinal == g.rows()
-                && corpus.len() == g.corpus * g.dimensions
+            source_ordinal == c.source_end()?
+                && corpus_rows == g.corpus
                 && queries.len() == g.queries * g.dimensions
-                && ids.len() == g.rows(),
+                && ids.len() == c.source_end()?,
             "fixed original cohort cardinality",
         )?;
+        require(
+            reserved_query_rows == c.reserved_query_interval.end - c.reserved_query_interval.start,
+            "all reserved query rows validated, including unselected suffix",
+        )?;
+        let reserved_queries_sha256 = format!("{:x}", reserved_query_digest.finalize());
+        if !cfg!(test) {
+            require(
+                reserved_queries_sha256
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+                "historical full reserved query bytes SHA256",
+            )?;
+        }
         let mut seals = Vec::new();
         require(
-            corpus_output.bytes == g.vector_bytes(g.corpus)
-                && query_output.bytes == g.vector_bytes(g.queries),
+            corpus_output.bytes == g.vector_bytes(g.corpus)?
+                && query_output.bytes == g.vector_bytes(g.queries)?,
             "exact original vector byte counts",
         )?;
         for file in [corpus_output, query_output, corpus_ids, query_ids] {
@@ -1391,7 +1624,33 @@ fn prepare(
         }
         drop(ids);
         let mut truth = OutputFile::new(&dir, "truth.u64", (g.queries * g.k * 8) as u64)?;
-        exact_truth(&corpus, &queries, &norms, g, &mut truth, &monitor)?;
+        let mut corpus = File::from(openat(
+            &dir,
+            "corpus.f32",
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        let corpus_seal = &seals[0];
+        authenticate(
+            &mut corpus,
+            corpus_seal.bytes,
+            &corpus_seal.sha256,
+            &monitor,
+        )?;
+        exact_truth(
+            &mut corpus,
+            &queries,
+            g,
+            r.truth_block_rows,
+            &mut truth,
+            &monitor,
+        )?;
+        authenticate(
+            &mut corpus,
+            corpus_seal.bytes,
+            &corpus_seal.sha256,
+            &monitor,
+        )?;
         require(
             truth.bytes == (g.queries * g.k * 8) as u64,
             "exact ground-truth byte count",
@@ -1409,22 +1668,50 @@ fn prepare(
             )?;
             unchanged(&source.file, &source.stamp)?;
         }
+        for seal in &seals {
+            let mut file = File::from(openat(
+                &dir,
+                seal.name.as_str(),
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            )?);
+            authenticate(&mut file, seal.bytes, &seal.sha256, &monitor)?;
+        }
         sync(&dir, "before_marker")?;
         sync(&parent, "parent_before_marker")?;
         let peak = monitor.check()?;
         let sources = pinned.iter().zip(&c.shards).map(|(s, a)| serde_json::json!({"publisher_path":a.publisher_path,"path":a.path,"bytes":a.bytes,"sha256":a.sha256,"rows":s.rows,"footer_bytes":s.footer_bytes,"device":s.device,"inode":s.inode})).collect::<Vec<_>>();
+        let resource_accounting = serde_json::json!({
+            "id_state_bytes":times(c.source_end()? as u64, plus(r.max_id_bytes as u64, 256)?)?,
+            "retained_query_vector_bytes":g.vector_bytes(g.queries)?,
+            "truth_vector_block_bytes":g.vector_bytes(r.truth_block_rows)?,
+            "truth_all_query_top_k_bytes":times(times(g.queries as u64, g.k as u64)?, std::mem::size_of::<Candidate>() as u64)?,
+            "truth_query_norm_bytes":times(g.queries as u64, std::mem::size_of::<f64>() as u64)?,
+            "truth_heap_header_bytes":times(g.queries as u64, std::mem::size_of::<BinaryHeap<Candidate>>() as u64)?,
+            "truth_single_sorted_output_reserve_bytes":times(g.k as u64, std::mem::size_of::<Candidate>() as u64)?,
+            "retained_shard_metadata_bytes":times(c.shards.len() as u64, times(128, r.max_footer_bytes)?)?,
+            "encoded_and_decoded_row_bytes":g.vector_bytes(2)?,
+            "control_output_and_failure_buffers_bytes":64 * MIB,
+            "caller_memory_bytes":r.caller_memory_bytes,"resident_peak_bytes":resident,
+            "admitted_decoder_peak_bytes":modeled_peak.checked_sub(resident).ok_or("decoder peak accounting")?,
+            "source_bytes":source_bytes,"output_cap_bytes":output_cap,
+            "caller_scratch_bytes":r.caller_scratch_bytes,"temporary_and_failure_reserve_bytes":r.temporary_reserve_bytes,
+            "failure_outputs_retained_within_output_cap":true,"process_rss_is_separate":true
+        });
         let receipt = serde_json::json!({
-            "schema":"borsuk-cohere-native-cohort-receipt-v1", "status":"COMPLETE",
+            "schema":"borsuk-cohere-native-cohort-receipt-v3", "status":"COMPLETE",
             "dataset":DATASET, "revision":REVISION,
             "columns":{"embedding":c.embedding_column,"document_id":c.document_id_column},
             "config":{"path":config_path,"bytes":config_bytes,"sha256":config_sha},
             "sources":sources,"outputs":seals,"output_parent":c.output_parent,
-            "geometry":{"corpus_rows":g.corpus,"query_rows":g.queries,"dimensions":g.dimensions,"k":g.k,"corpus_source_ordinals":[0,g.corpus],"query_source_ordinals":[g.corpus,g.rows()]},
+            "reserved_queries_sha256":reserved_queries_sha256,
+            "geometry":{"corpus_rows":g.corpus,"query_rows":g.queries,"dimensions":g.dimensions,"k":g.k,"corpus_intervals":c.corpus_intervals,"reserved_query_interval":c.reserved_query_interval,"query_source_ordinals":[c.reserved_query_interval.start,c.reserved_query_interval.start+g.queries]},
             "values":"original publisher Float32 bits, little endian, unnormalized",
-            "service_ids":"stable corpus ordinal as unsigned integer; query records use source ordinal",
+            "service_ids":"stable corpus ordinal as unsigned integer; query source ordinals belong to a separate query metadata namespace and are not corpus service keys",
             "metric":"cosine", "truth_arithmetic":"sequential f64 dot and squared-norm sums over original f32; 1-dot/(sqrt(cnorm2)*sqrt(qnorm2))",
-            "truth_ties":"ascending corpus ordinal", "truth_method":"independent exhaustive scan with bounded top-k max heap; no ANN inputs",
-            "resources":r,"runtime_limits":enforcement,"modeled_peak_bytes":modeled_peak,
+            "truth_ties":"ascending corpus ordinal", "truth_method":"independent single corpus block-major exhaustive scan with bounded per-query top-k heaps; no ANN inputs",
+            "resources":r,"runtime_limits":enforcement,
+            "resource_accounting":resource_accounting,"modeled_peak_bytes":modeled_peak,
             "observed_peak_rss_at_receipt_bytes":peak,"elapsed_seconds_at_receipt":monitor.started.elapsed().as_secs_f64(),
             "readiness":"data identity only"
         });
@@ -1488,12 +1775,7 @@ fn main() {
             "usage: prepare_cohere_native_cohort CONFIG CONFIG_SHA NEW_OUTPUT_DIR",
         )?;
         let sha = args[2].to_str().ok_or("config SHA UTF8")?;
-        let receipt = prepare(
-            Path::new(&args[1]),
-            sha,
-            Path::new(&args[3]),
-            Geometry::PRODUCTION,
-        )?;
+        let receipt = prepare(Path::new(&args[1]), sha, Path::new(&args[3]))?;
         println!(
             "{}",
             serde_json::json!({"status":"COMPLETE", "receipt_sha256":hash(&serde_json::to_vec(&receipt)?)})
@@ -1542,7 +1824,7 @@ mod tests {
         Arc::new(b.finish())
     }
 
-    fn vectors(values: &[[f32; 2]]) -> ArrayRef {
+    fn vectors<const D: usize>(values: &[[f32; D]]) -> ArrayRef {
         lists(
             &values
                 .iter()
@@ -1570,6 +1852,7 @@ mod tests {
             path: path.into(),
             bytes: body.len() as u64,
             sha256: hash(&body),
+            rows: batch.num_rows() as u64,
         }
     }
 
@@ -1593,6 +1876,9 @@ mod tests {
             revision: REVISION.into(),
             embedding_column: "emb".into(),
             document_id_column: "doc_id".into(),
+            geometry: TINY,
+            corpus_intervals: vec![SourceInterval { start: 0, end: 5 }],
+            reserved_query_interval: SourceInterval { start: 5, end: 7 },
             shards: vec![first, second],
             output_parent: OutputParent {
                 path: parent.into(),
@@ -1613,6 +1899,10 @@ mod tests {
                 batch_rows: 2,
                 max_batch_bytes: 16 * MIB,
                 max_id_bytes: 1024,
+                truth_block_rows: 2,
+                caller_memory_bytes: 0,
+                caller_scratch_bytes: 0,
+                temporary_reserve_bytes: CONFIG_CAP,
             },
         }
     }
@@ -1621,7 +1911,7 @@ mod tests {
         let body = serde_json::to_vec(c)?;
         let config_path = c.output_parent.path.join("config.json");
         fs::write(&config_path, &body)?;
-        prepare(&config_path, &hash(&body), output, TINY)
+        prepare(&config_path, &hash(&body), output)
     }
 
     fn scalar_oracle(corpus: &[f32], queries: &[f32]) -> Vec<u64> {
@@ -1696,6 +1986,265 @@ mod tests {
             .unwrap(),
             receipt
         );
+    }
+
+    #[test]
+    fn excluded_middle_three_shards_nonidentity_ids_and_truth_tail() {
+        let t = tempfile::tempdir().unwrap();
+        let mut c = fixture(t.path());
+        c.reserved_query_interval = SourceInterval { start: 2, end: 4 };
+        c.corpus_intervals = vec![
+            SourceInterval { start: 0, end: 2 },
+            SourceInterval { start: 4, end: 7 },
+        ];
+        let rows = [
+            vec![[2.0, 0.0], [0.0, 3.0]],
+            vec![[3.0, 0.0], [0.0, 5.0], [-4.0, 0.0]],
+            vec![[1.0, 1.0], [6.0, -0.0]],
+        ];
+        let names = [vec!["a", "b"], vec!["q0", "q1", "c"], vec!["d", "e"]];
+        c.shards = rows
+            .iter()
+            .zip(&names)
+            .enumerate()
+            .map(|(i, (rows, ids))| {
+                let mut shard = parquet(
+                    &t.path().join(format!("{i}.parquet")),
+                    vectors(rows),
+                    Arc::new(StringArray::from(ids.clone())),
+                );
+                shard.publisher_path = format!("en/{i:04}.parquet");
+                shard
+            })
+            .collect();
+        let expected = [2.0_f32, 0.0, 0.0, 3.0, -4.0, 0.0, 1.0, 1.0, 6.0, -0.0];
+        let queries = [3.0_f32, 0.0, 0.0, 5.0];
+        for block_rows in [1, 2, 3, 5, 8] {
+            c.resources.truth_block_rows = block_rows;
+            let out = t.path().join(format!("middle-{block_rows}"));
+            let receipt = run(&c, &out).unwrap();
+            assert_eq!(
+                fs::read(out.join("corpus.f32")).unwrap(),
+                expected
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                fs::read(out.join("queries.f32")).unwrap(),
+                queries
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>()
+            );
+            let truth = fs::read(out.join("truth.u64"))
+                .unwrap()
+                .chunks_exact(8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                truth,
+                scalar_oracle(&expected, &queries),
+                "block_rows={block_rows}"
+            );
+            assert_eq!(
+                receipt["resource_accounting"]["truth_all_query_top_k_bytes"],
+                2 * 3 * std::mem::size_of::<Candidate>()
+            );
+            assert_eq!(
+                receipt["resource_accounting"]["truth_query_norm_bytes"],
+                2 * std::mem::size_of::<f64>()
+            );
+        }
+        let out = t.path().join("middle-1");
+        let ids = fs::read_to_string(out.join("corpus.ids.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids[2]["service_id"], 2);
+        assert_eq!(ids[2]["source_ordinal"], 4);
+        assert_eq!(ids[4]["publisher_id"]["value"], "e");
+        assert_eq!(ids[4]["shard_row"], 1);
+        for case in [
+            "overlap",
+            "query-overlap",
+            "overflow",
+            "rows",
+            "block",
+            "caller",
+            "scratch",
+            "duplicate",
+        ] {
+            let mut bad = c.clone();
+            match case {
+                "overlap" => bad.corpus_intervals[1].start = 1,
+                "query-overlap" => bad.corpus_intervals[0].end = 3,
+                "overflow" => bad.reserved_query_interval.start = usize::MAX,
+                "rows" => bad.shards[2].rows += 1,
+                "block" => bad.resources.truth_block_rows = 0,
+                "caller" => bad.resources.caller_memory_bytes = u64::MAX,
+                "scratch" => bad.resources.caller_scratch_bytes = u64::MAX,
+                "duplicate" => {
+                    let mut shard = parquet(
+                        &t.path().join("duplicate.parquet"),
+                        vectors(&rows[2]),
+                        Arc::new(StringArray::from(vec!["d", "q0"])),
+                    );
+                    shard.publisher_path = "en/0002.parquet".into();
+                    bad.shards[2] = shard;
+                }
+                _ => unreachable!(),
+            }
+            let out = t.path().join(case);
+            assert!(run(&bad, &out).is_err(), "{case}");
+            assert!(!out.join("complete.json").exists());
+        }
+    }
+
+    #[test]
+    fn three_coordinate_rounding_near_tie_requires_sequential_dot_order() {
+        let t = tempfile::tempdir().unwrap();
+        let mut c = fixture(t.path());
+        c.geometry = Geometry {
+            corpus: 2,
+            queries: 1,
+            dimensions: 3,
+            k: 2,
+        };
+        c.corpus_intervals = vec![SourceInterval { start: 0, end: 2 }];
+        c.reserved_query_interval = SourceInterval { start: 2, end: 3 };
+        let large = 67_108_864_f32; // 2^26: each half is lost after the 2^52 dot term.
+        let corpus = [[large, 0.0, 0.0], [large, 0.5, 0.5]];
+        let query = [large, 1.0, 1.0];
+        c.shards = vec![
+            parquet(
+                &t.path().join("0.parquet"),
+                vectors(&corpus),
+                Arc::new(StringArray::from(vec!["large", "halves"])),
+            ),
+            parquet(
+                &t.path().join("1.parquet"),
+                vectors(&[query]),
+                Arc::new(StringArray::from(vec!["query"])),
+            ),
+        ];
+        for (i, shard) in c.shards.iter_mut().enumerate() {
+            shard.publisher_path = format!("en/{i:04}.parquet");
+        }
+        // Independent three-coordinate norm and full-sort oracle; reverse dots expose rounding.
+        let norm = |v: [f32; 3]| {
+            let [x, y, z] = v.map(f64::from);
+            ((x * x + y * y) + z * z).sqrt()
+        };
+        let scalar_rank = |order: [usize; 3]| {
+            let mut distances = corpus
+                .iter()
+                .enumerate()
+                .map(|(ordinal, &vector)| {
+                    let mut dot = 0.0_f64;
+                    for j in order {
+                        dot += f64::from(vector[j]) * f64::from(query[j]);
+                    }
+                    (1.0 - dot / (norm(vector) * norm(query)), ordinal as u64)
+                })
+                .collect::<Vec<_>>();
+            distances.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+            distances
+                .into_iter()
+                .map(|(_, ordinal)| ordinal)
+                .collect::<Vec<_>>()
+        };
+        let expected = scalar_rank([0, 1, 2]);
+        assert_eq!(expected, [0, 1]);
+        assert_eq!(scalar_rank([2, 1, 0]), [1, 0]);
+        for block_rows in [1, 2] {
+            c.resources.truth_block_rows = block_rows;
+            let out = t.path().join(format!("rounding-{block_rows}"));
+            run(&c, &out).unwrap();
+            let truth = fs::read(out.join("truth.u64"))
+                .unwrap()
+                .chunks_exact(8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            assert_eq!(truth, expected, "block_rows={block_rows}");
+        }
+    }
+
+    #[test]
+    fn selected_prefix_validates_and_excludes_entire_reserved_suffix() {
+        let t = tempfile::tempdir().unwrap();
+        let mut c = fixture(t.path());
+        c.geometry.queries = 1;
+        let out = t.path().join("prefix");
+        let receipt = run(&c, &out).unwrap();
+        let expected_query = [1.0_f32, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<_>>();
+        let reserved = [1.0_f32, 0.0, 0.0, 2.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<_>>();
+        assert_eq!(fs::read(out.join("queries.f32")).unwrap(), expected_query);
+        assert_eq!(receipt["reserved_queries_sha256"], hash(&reserved));
+        assert_eq!(
+            receipt["geometry"]["reserved_query_interval"],
+            serde_json::json!({"start":5,"end":7})
+        );
+        assert_eq!(
+            fs::read_to_string(out.join("queries.ids.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        let corpus = fs::read(out.join("corpus.f32"))
+            .unwrap()
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let truth = fs::read(out.join("truth.u64"))
+            .unwrap()
+            .chunks_exact(8)
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(truth, scalar_oracle(&corpus, &[1.0, 0.0]));
+        for case in [
+            "duplicate-suffix",
+            "invalid-suffix",
+            "reserved-overlap",
+            "prefix-outside",
+        ] {
+            let mut bad = c.clone();
+            match case {
+                "duplicate-suffix" | "invalid-suffix" => {
+                    let tail = if case == "invalid-suffix" {
+                        [0.0, 0.0]
+                    } else {
+                        [0.0, 2.0]
+                    };
+                    let id = if case == "duplicate-suffix" {
+                        "a"
+                    } else {
+                        "q1"
+                    };
+                    let mut shard = parquet(
+                        &t.path().join(format!("{case}.parquet")),
+                        vectors(&[[6.0, -0.0], [1.0, 0.0], tail]),
+                        Arc::new(StringArray::from(vec!["e", "q0", id])),
+                    );
+                    shard.publisher_path = "en/0001.parquet".into();
+                    bad.shards[1] = shard;
+                }
+                "reserved-overlap" => bad.reserved_query_interval.start = 4,
+                "prefix-outside" => bad.geometry.queries = 3,
+                _ => unreachable!(),
+            }
+            let out = t.path().join(case);
+            assert!(run(&bad, &out).is_err(), "{case}");
+            assert!(!out.join("complete.json").exists());
+        }
     }
 
     #[test]

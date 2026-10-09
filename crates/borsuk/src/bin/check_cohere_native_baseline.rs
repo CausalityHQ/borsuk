@@ -40,9 +40,9 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-// v4 adds the required explicit `execution` (full or diagnostic panel); v3 and older refuse.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v4";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v4";
+// v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v7";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v7";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -218,6 +218,57 @@ struct NativeSource {
     sq8_sha256: String,
     source_order_sha256: String,
 }
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ProducerAuthority {
+    source_commit: String,
+    executable_sha256: String,
+    producer_source_sha256: String,
+    sq8_source_sha256: String,
+    source_order_source_sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DerivationSeal {
+    bytes: usize,
+    sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DerivationOutputs {
+    normalized: DerivationSeal,
+    source_order: DerivationSeal,
+    sq8: DerivationSeal,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DerivationAdmission {
+    wrapper_payload_bytes: usize,
+    normalization_api_payload_bytes: usize,
+    flat_fit_api_payload_upper_bound_bytes: usize,
+    sq8_api_payload_bytes: usize,
+    peak_payload_upper_bound_bytes: usize,
+    aggregate_scratch_upper_bound_bytes: usize,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DerivationReceipt {
+    schema: String,
+    producer_config_sha256: String,
+    status: String,
+    recipe: String,
+    query_or_truth_used: bool,
+    original_corpus: DerivationSeal,
+    rows: usize,
+    dimensions: usize,
+    corpus_intervals: Vec<SourceInterval>,
+    outputs: DerivationOutputs,
+    low_f32_bits: Vec<u32>,
+    step_f32_bits: Vec<u32>,
+    producer_authority: ProducerAuthority,
+    source_identity_qualification: String,
+    admission: DerivationAdmission,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -226,6 +277,11 @@ struct Config {
     revision: String,
     metric: String,
     tie_rule: String,
+    corpus_intervals: Vec<SourceInterval>,
+    reserved_query_interval: SourceInterval,
+    cohort_receipt: Artifact,
+    derivation_receipt: Artifact,
+    producer_authority: ProducerAuthority,
     corpus_source_first: usize,
     query_source_first: usize,
     rows: usize,
@@ -246,6 +302,232 @@ struct Config {
     serving: Serving,
     execution: Execution,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SourceInterval {
+    start: usize,
+    end: usize,
+}
+
+fn population(c: &Config, shape: Shape) -> Shape {
+    if cfg!(test) {
+        shape
+    } else {
+        Shape {
+            rows: c.rows,
+            count: c.count,
+            #[cfg(test)]
+            returned_limit: K,
+        }
+    }
+}
+
+fn validate_population(c: &Config) -> Result<()> {
+    require(
+        c.rows >= K
+            && c.rows <= 1_000_000
+            && c.count > 0
+            && c.count <= 1000
+            && matches!(
+                c.profile,
+                SemanticProfile::Native100k | SemanticProfile::Scale1m
+            )
+            && c.profile.valid_geometry(c.rows, D),
+        "explicit bounded population/profile",
+    )?;
+    let query_end = c
+        .query_source_first
+        .checked_add(c.count)
+        .ok_or("query interval overflow")?;
+    let reserved = c.reserved_query_interval;
+    require(
+        reserved.start < reserved.end
+            && reserved.end - reserved.start <= 1000
+            && c.query_source_first == reserved.start
+            && query_end <= reserved.end,
+        "selected query prefix inside explicit reserved interval",
+    )?;
+    require(
+        !c.corpus_intervals.is_empty() && c.corpus_intervals.len() <= 2,
+        "explicit corpus intervals",
+    )?;
+    let mut count = 0_usize;
+    let mut previous = 0;
+    for interval in &c.corpus_intervals {
+        require(
+            interval.start < interval.end
+                && interval.start >= previous
+                && (interval.end <= reserved.start || interval.start >= reserved.end),
+            "nonoverlapping corpus/query intervals",
+        )?;
+        count = count
+            .checked_add(interval.end - interval.start)
+            .ok_or("corpus interval overflow")?;
+        previous = interval.end;
+    }
+    require(count == c.rows, "exact corpus interval count")?;
+    if !cfg!(test) {
+        let expected = if c.rows == 100_000 {
+            vec![SourceInterval {
+                start: 0,
+                end: 100_000,
+            }]
+        } else {
+            vec![
+                SourceInterval {
+                    start: 0,
+                    end: 100_000,
+                },
+                SourceInterval {
+                    start: 101_000,
+                    end: c.rows.checked_add(1000).ok_or("corpus source overflow")?,
+                },
+            ]
+        };
+        require(
+            c.rows >= 100_000
+                && reserved
+                    == (SourceInterval {
+                        start: 100_000,
+                        end: 101_000,
+                    })
+                && c.corpus_intervals == expected,
+            "permanent historical query exclusion",
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ReceiptBinding {
+    reserved_queries_sha256: String,
+    low_f32_bits: Vec<u32>,
+    step_f32_bits: Vec<u32>,
+}
+fn validate_receipts(c: &Config) -> Result<ReceiptBinding> {
+    let body = checked(&c.cohort_receipt, CONFIG_CAP)?.0;
+    let receipt: Value = serde_json::from_slice(&body)?;
+    require(
+        receipt["schema"] == "borsuk-cohere-native-cohort-receipt-v3"
+            && receipt["status"] == "COMPLETE"
+            && receipt["dataset"] == c.dataset
+            && receipt["revision"] == c.revision
+            && receipt["geometry"]["corpus_rows"] == c.rows
+            && receipt["geometry"]["query_rows"] == c.count
+            && receipt["geometry"]["dimensions"] == D
+            && receipt["geometry"]["k"] == K
+            && receipt["geometry"]["corpus_intervals"] == json!(c.corpus_intervals)
+            && receipt["geometry"]["reserved_query_interval"] == json!(c.reserved_query_interval)
+            && receipt["geometry"]["query_source_ordinals"]
+                == json!([c.query_source_first, c.query_source_first + c.count]),
+        "authenticated original cohort geometry",
+    )?;
+    let reserved_sha = receipt["reserved_queries_sha256"]
+        .as_str()
+        .ok_or("full reserved query digest")?;
+    require(
+        valid_sha(reserved_sha)
+            && (cfg!(test)
+                || reserved_sha
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"),
+        "authenticated full historical reserved query body",
+    )?;
+    require(
+        c.count != c.reserved_query_interval.end - c.reserved_query_interval.start
+            || c.requests.sha256 == reserved_sha,
+        "full selected request/reserved query digest binding",
+    )?;
+    let outputs = receipt["outputs"].as_array().ok_or("cohort output seals")?;
+    let output = |name: &str| -> Result<&Value> {
+        let mut found = outputs.iter().filter(|v| v["name"] == name);
+        let seal = found.next().ok_or("missing original cohort output seal")?;
+        require(
+            found.next().is_none() && seal["sha256"].as_str().is_some_and(valid_sha),
+            "unique output seal/SHA",
+        )?;
+        Ok(seal)
+    };
+    for (name, artifact) in [("queries.f32", &c.requests), ("truth.u64", &c.truth)] {
+        let seal = output(name)?;
+        require(
+            seal["bytes"] == artifact.bytes && seal["sha256"] == artifact.sha256,
+            "cohort request/truth identity binding",
+        )?;
+    }
+    let corpus = output("corpus.f32")?;
+    require(
+        corpus["bytes"] == c.rows.checked_mul(D * 4).ok_or("corpus bytes overflow")?,
+        "original corpus geometry",
+    )?;
+    let body = checked(&c.derivation_receipt, CONFIG_CAP)?.0;
+    // Refuse the obsolete Q-specific receipt explicitly; the producer now binds
+    // source bytes independently of the selected query prefix.
+    let schema: Value = serde_json::from_slice(&body)?;
+    require(
+        schema["schema"] == "borsuk-native-scale-derivation-receipt-v2",
+        "derivation receipt v2 required; v1 is incompatible",
+    )?;
+    drop(schema);
+    let derivation: DerivationReceipt = serde_json::from_slice(&body)?;
+    require(
+        derivation.schema == "borsuk-native-scale-derivation-receipt-v2"
+            && valid_sha(&derivation.producer_config_sha256)
+            && derivation.status == "COMPLETE"
+            && derivation.recipe == "normalize_then_flat_fit_then_sq8"
+            && !derivation.query_or_truth_used
+            && derivation.rows == c.rows
+            && derivation.dimensions == D
+            && derivation.corpus_intervals == c.corpus_intervals
+            && json!(derivation.original_corpus.bytes) == corpus["bytes"]
+            && derivation.original_corpus.sha256
+                == corpus["sha256"].as_str().ok_or("original corpus SHA")?
+            && derivation.outputs.normalized.bytes == derivation.original_corpus.bytes
+            && derivation.outputs.normalized.sha256 == c.native_source.source_sha256
+            && derivation.outputs.source_order.bytes
+                == c.rows.checked_mul(8).ok_or("order bytes overflow")?
+            && derivation.outputs.source_order.sha256 == c.native_source.source_order_sha256
+            && derivation.outputs.sq8.bytes
+                == c.rows.checked_mul(D + 12).ok_or("SQ8 bytes overflow")?
+            && derivation.outputs.sq8.sha256 == c.native_source.sq8_sha256,
+        "authenticated source-only original/normalized/fit/SQ8 derivation",
+    )?;
+    require(
+        derivation.producer_authority == c.producer_authority
+            && derivation.source_identity_qualification
+                == "external_frozen_prerequisite_not_self_certified",
+        "root-frozen derivation producer authority",
+    )?;
+    require(
+        derivation.low_f32_bits.len() == D
+            && derivation.step_f32_bits.len() == D
+            && derivation
+                .low_f32_bits
+                .iter()
+                .all(|&b| f32::from_bits(b).is_finite())
+            && derivation
+                .step_f32_bits
+                .iter()
+                .all(|&b| f32::from_bits(b).is_finite() && f32::from_bits(b) > 0.0),
+        "derivation exact f32 calibration bits",
+    )?;
+    let admission = derivation.admission;
+    require(
+        admission.wrapper_payload_bytes > 0
+            && admission.normalization_api_payload_bytes > 0
+            && admission.flat_fit_api_payload_upper_bound_bytes > 0
+            && admission.sq8_api_payload_bytes > 0
+            && admission.peak_payload_upper_bound_bytes <= 8 * 1024 * 1024 * 1024
+            && admission.peak_payload_upper_bound_bytes >= admission.wrapper_payload_bytes
+            && admission.aggregate_scratch_upper_bound_bytes >= derivation.original_corpus.bytes,
+        "producer declared payload/scratch admission; external gate still required",
+    )?;
+    Ok(ReceiptBinding {
+        reserved_queries_sha256: reserved_sha.to_owned(),
+        low_f32_bits: derivation.low_f32_bits,
+        step_f32_bits: derivation.step_f32_bits,
+    })
+}
+
 fn selected_len(c: &Config) -> usize {
     match &c.execution {
         Execution::Full {} => c.count,
@@ -411,13 +693,15 @@ fn bounded_path(path: &Path) -> Result<()> {
     )
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    validate_population(c)?;
+    let shape = population(c, shape);
     require(
         matches!(c.fetch_parallelism, 16 | 32),
         "fetch_parallelism must be 16 or 32",
     )?;
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v4; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v7; older formats refuse",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -443,16 +727,20 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.metric == "cosine"
             && c.tie_rule == "corpus_ordinal_ascending"
             && c.corpus_source_first == 0
-            && c.query_source_first == shape.rows
             && c.rows == shape.rows
             && c.dimensions == D
             && c.count == shape.count
             && c.k == K
-            && c.profile == SemanticProfile::Native100k
             && c.max_memory_bytes == MEMORY_CAP,
         "fixed Cohere corpus/query/D1024/k10/profile/cap",
     )?;
-    for path in [&c.scratch_parent, &c.requests.path, &c.truth.path] {
+    for path in [
+        &c.scratch_parent,
+        &c.requests.path,
+        &c.truth.path,
+        &c.cohort_receipt.path,
+        &c.derivation_receipt.path,
+    ] {
         bounded_path(path)?;
     }
     match &c.backend {
@@ -513,6 +801,12 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.truth.bytes == shape.count * K * 8,
         "request/truth exact geometry/distinct paths",
     )?;
+    for receipt in [&c.cohort_receipt, &c.derivation_receipt] {
+        require(
+            receipt.bytes > 0 && receipt.bytes <= CONFIG_CAP && valid_sha(&receipt.sha256),
+            "explicit receipt descriptor",
+        )?;
+    }
     require(valid_key(&c.generation_prefix), "generation prefix")?;
     for sha in [
         &c.generation_root_sha256,
@@ -523,6 +817,22 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         &c.native_source.source_order_sha256,
     ] {
         require(valid_sha(sha), "lowercase SHA256 required")?;
+    }
+    require(
+        c.producer_authority.source_commit.len() == 40
+            && c.producer_authority
+                .source_commit
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "producer source commit",
+    )?;
+    for pin in [
+        &c.producer_authority.executable_sha256,
+        &c.producer_authority.producer_source_sha256,
+        &c.producer_authority.sq8_source_sha256,
+        &c.producer_authority.source_order_source_sha256,
+    ] {
+        require(valid_sha(pin), "root-frozen producer SHA256")?;
     }
     Ok(())
 }
@@ -633,18 +943,75 @@ async fn metadata<T: serde::de::DeserializeOwned>(
     // Neither root nor plane body survives this call.
     Ok(serde_json::from_slice(&result?)?)
 }
-async fn bind_source(c: &Config, store: &dyn ObjectStore, charge: &mut Charge) -> Result<()> {
+// Decode exactly D coefficients with a fallible, fixed reservation. A malformed
+// manifest cannot grow the calibration vectors beyond the caller's admission.
+fn manifest_coefficients<'de, De: serde::Deserializer<'de>>(
+    deserializer: De,
+) -> std::result::Result<Vec<f32>, De::Error> {
+    struct Coefficients;
+    impl<'de> serde::de::Visitor<'de> for Coefficients {
+        type Value = Vec<f32>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "exactly {D} finite calibration coefficients")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(D)
+                .map_err(serde::de::Error::custom)?;
+            for _ in 0..D {
+                let v: f32 = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::custom("manifest calibration length"))?;
+                if !v.is_finite() {
+                    return Err(serde::de::Error::custom("manifest calibration finite"));
+                }
+                values.push(v);
+            }
+            if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom("manifest calibration length"));
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_seq(Coefficients)
+}
+async fn bind_source(
+    c: &Config,
+    receipt: &ReceiptBinding,
+    store: &dyn ObjectStore,
+    charge: &mut Charge,
+) -> Result<()> {
     #[derive(Deserialize)]
     struct Root {
         plane_manifest_sha256: String,
         sq8_object_sha256: String,
         sq8_object_key: String,
         sq8_etag: String,
+        #[serde(deserialize_with = "manifest_coefficients")]
+        low: Vec<f32>,
+        #[serde(deserialize_with = "manifest_coefficients")]
+        step: Vec<f32>,
     }
     let root: Root = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
     require(
         root.sq8_object_sha256 == c.native_source.sq8_sha256,
         "root SQ8 source binding",
+    )?;
+    require(
+        root.low
+            .iter()
+            .zip(&receipt.low_f32_bits)
+            .all(|(v, &bits)| v.to_bits() == bits)
+            && root
+                .step
+                .iter()
+                .zip(&receipt.step_f32_bits)
+                .all(|(v, &bits)| v.to_bits() == bits),
+        "generation/producer exact calibration binding",
     )?;
     if let Backend::S3 {
         sq8_object_key,
@@ -711,6 +1078,13 @@ fn caller_bytes(c: &Config) -> usize {
             &c.native_source.source_sha256,
             &c.native_source.sq8_sha256,
             &c.native_source.source_order_sha256,
+            &c.cohort_receipt.sha256,
+            &c.derivation_receipt.sha256,
+            &c.producer_authority.source_commit,
+            &c.producer_authority.executable_sha256,
+            &c.producer_authority.producer_source_sha256,
+            &c.producer_authority.sq8_source_sha256,
+            &c.producer_authority.source_order_source_sha256,
         ]
         .iter()
         .map(|s| s.capacity())
@@ -724,6 +1098,9 @@ fn caller_bytes(c: &Config) -> usize {
             Execution::Full {} => 0,
             Execution::DiagnosticPanel { ordinals, .. } => ordinals.capacity() * size_of::<usize>(),
         }
+        + c.corpus_intervals.capacity() * size_of::<SourceInterval>()
+        + c.cohort_receipt.path.capacity()
+        + c.derivation_receipt.path.capacity()
         + size_of::<Reader>();
     // Returned trace/result remain caller-owned while streaming, then drop before the next query.
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
@@ -734,7 +1111,7 @@ fn caller_bytes(c: &Config) -> usize {
     // Reduction drops generation/requests first: one capped JSONL line, one truth body,
     // 8KiB reader, k hits. Authentication uses one 64KiB stack block.
     let reduction = LINE_CAP + 1 + c.truth.bytes + 8192 + 2 * K * size_of::<Hit>();
-    // Four capped receipt/config bodies cover sequential authentication/decoding; identity,
+    // Capped receipt/config bodies cover sequential authentication/decoding; identity,
     // descriptors duplicated by store/path/runtime setup fit another CONFIG_CAP.
     // Native histogram has 900 possible codes; allow doubled Vec capacity and a
     // transient snapshot alongside the retained before/after pair. The fixed process
@@ -745,7 +1122,14 @@ fn caller_bytes(c: &Config) -> usize {
     } else {
         0
     };
-    descriptors + transport + size_of::<Progress>() + 5 * CONFIG_CAP + BLOCK + query.max(reduction)
+    // Producer bit vectors and bounded manifest f32 vectors coexist during source binding.
+    descriptors
+        + transport
+        + size_of::<Progress>()
+        + 5 * CONFIG_CAP
+        + BLOCK
+        + 4 * D * size_of::<u32>()
+        + query.max(reduction)
 }
 const ACTIVE_QUERIES: usize = 1;
 // SQ8 ranges one traced query can plan: the baseline SQ8 cap or the explicit direct cap.
@@ -1536,7 +1920,7 @@ fn seal(c: &Config, out: &mut Output, p: &mut Progress, requests: FileIdentity) 
     let prefix_bytes = out.bytes;
     let prefix_sha256 = out.sha();
     out.emit(&json!({"phase":"all_queries_sealed","count":p.completed,
-        "selected_count":selected_len(c),"population_count":c.count,"truth_opened":false,
+        "selected_count":selected_len(c),"population_count":c.count,"reserved_query_count":c.reserved_query_interval.end-c.reserved_query_interval.start,"truth_opened":false,
         "prefix_bytes":prefix_bytes,"prefix_sha256":prefix_sha256,
         "requests_sha256":c.requests.sha256,"generation_root_sha256":c.generation_root_sha256,
         "requires_successful_sync":true,"requires_successful_directory_sync":true}))?;
@@ -1585,6 +1969,7 @@ async fn query_and_seal_with(
     reader: impl FnOnce() -> Result<Reader>,
 ) -> Result<Seal> {
     validate_config(c, shape)?;
+    let receipt = validate_receipts(c)?;
     if c.execution.panel() {
         out.admit_panel_lines(PANEL_LINE_CAP);
     }
@@ -1638,7 +2023,8 @@ async fn query_and_seal_with(
     let store = reader.store();
     p.stage = "native_source";
     p.transport.begin(&reader, p.stage, None);
-    let binding = bind_source(c, store, &mut p.binding_charge).await;
+    let binding = bind_source(c, &receipt, store, &mut p.binding_charge).await;
+    drop(receipt);
     p.transport.finish(&reader);
     out.emit(
         &json!({"phase":"source_binding","transport":p.transport,"charges":p.binding_charge,"success":binding.is_ok(),
@@ -1662,7 +2048,7 @@ async fn query_and_seal_with(
     require(
         generation.rows() == c.rows
             && generation.discovery_mode() == DiscoveryMode::Semantic
-            && generation.semantic_profile() == Some(SemanticProfile::Native100k),
+            && generation.semantic_profile() == Some(c.profile),
         "generation geometry/profile",
     )?;
     out.emit(
@@ -2092,14 +2478,20 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
     summary["selected_count"] = json!(selected);
     summary["executed_count"] = json!(queries);
     summary["population_count"] = json!(c.count);
+    summary["reserved_query_count"] =
+        json!(c.reserved_query_interval.end - c.reserved_query_interval.start);
+    summary["diagnostic_prefix"] =
+        json!(c.count < c.reserved_query_interval.end - c.reserved_query_interval.start);
+    summary["population_percentiles_valid"] = json!(!c.execution.panel() && c.count == 1000);
+    summary["full_cohort_qualification"] = json!(false);
     summary["diagnostic_panel"] = json!(c.execution.panel());
-    if c.execution.panel() {
-        // A panel measures the selected ordinals only: its denominators and any percentile
+    if c.execution.panel() || c.count < 1000 {
+        // A panel or prefix measures the selected ordinals only: its denominators and any percentile
         // over it describe that enriched selection, never the population.
         summary["population_percentiles_valid"] = json!(false);
         summary["full_cohort_qualification"] = json!(false);
         summary["scope_note"] = json!(
-            "diagnostic panel of the selected original ordinals; not population p99, population recall or full-cohort qualification"
+            "diagnostic selected original ordinals or prefix; not population p99, population recall or full-cohort qualification"
         );
     }
     Ok(summary)
@@ -2175,6 +2567,11 @@ fn execute_paths_status(
         identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
         out.emit(&identity)?;
         let c = configured?;
+        let shape = population(&c, shape);
+        let ReceiptBinding {
+            reserved_queries_sha256,
+            ..
+        } = validate_receipts(&c)?;
         let mut bound = json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
             "fetch_parallelism":c.fetch_parallelism,"source_cache":"off","serving":c.serving,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
@@ -2186,6 +2583,13 @@ fn execute_paths_status(
             "truth_bytes":c.truth.bytes,"truth_sha256":c.truth.sha256,
             "native_source_sha256":c.native_source.source_sha256,"native_sq8_sha256":c.native_source.sq8_sha256,
             "native_order_sha256":c.native_source.source_order_sha256,"truth_opened":false});
+        bound["corpus_intervals"] = json!(c.corpus_intervals);
+        bound["reserved_query_interval"] = json!(c.reserved_query_interval);
+        bound["reserved_queries_sha256"] = json!(reserved_queries_sha256);
+        bound["cohort_receipt_sha256"] = json!(c.cohort_receipt.sha256);
+        bound["derivation_receipt_sha256"] = json!(c.derivation_receipt.sha256);
+        bound["producer_authority"] = json!(c.producer_authority);
+        bound["max_memory_bytes"] = json!(c.max_memory_bytes);
         bound["execution"] = json!(c.execution);
         bound["selected_count"] = json!(selected_len(&c));
         out.emit(&bound)?;
@@ -2276,6 +2680,44 @@ fn main() {
     }
 }
 
+// The bounded producer/consumer test uses the actual existing example module,
+// retaining its executable/embedded identity and unmodified v2 receipt bytes.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../examples/build_sq8_source.rs"]
+mod scale_derivation_producer;
+
+// Shared by the reducer's native integration test; all execution stays in the root test gate.
+#[cfg(test)]
+pub(crate) fn scale_reducer_native_fixture(
+    prefix: bool,
+    panel: bool,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    let shape = Shape {
+        count: if prefix { 1 } else { 2 },
+        ..Shape::tiny(32)
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (dir, mut value) =
+        runtime.block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
+    value["reserved_query_interval"] = json!({"start":32,"end":34});
+    if panel {
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[if prefix { 0 } else { 1 }],"trace":false});
+    }
+    let (config, sha) = tests::write_config(dir.path(), &value);
+    let result = dir.path().join("scale-native-result.jsonl");
+    let status = execute_paths_status(&config, &sha, &result, shape, |c, shape, out, progress| {
+        runtime.block_on(query_and_seal(c, shape, out, progress))
+    })?;
+    require(
+        matches!(status, Status::Measured),
+        "real native scale fixture must finish and seal",
+    )?;
+    Ok((dir, result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2289,9 +2731,10 @@ mod tests {
         json!({"path":path,"bytes":bytes.len(),"sha256":hash(bytes)})
     }
     fn config_value(dir: &Path, shape: Shape) -> Value {
-        json!({"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
+        let mut value = json!({"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
             "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
-            "corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
+            "reserved_query_interval":{"start":shape.rows,"end":shape.rows+shape.count},
+            "corpus_intervals":[{"start":0,"end":shape.rows}],"corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
             "dimensions":D,"count":shape.count,"k":K,"profile":"native100k",
             "backend":{"kind":"local","store_root":dir.join("store")},"generation_prefix":"semantic/index",
             "generation_root_sha256":"a".repeat(64),"scratch_parent":dir.join("scratch"),
@@ -2299,14 +2742,197 @@ mod tests {
             "truth":{"path":dir.join("truth.u64"),"bytes":shape.count*K*8,"sha256":"c".repeat(64)},
             "native_source":{"source_sha256":"d".repeat(64),"sq8_sha256":"e".repeat(64),
                 "source_order_sha256":"f".repeat(64)},"max_memory_bytes":MEMORY_CAP,
-            "serving":{"mode":"baseline"},"execution":{"mode":"full"}})
+            "serving":{"mode":"baseline"},"execution":{"mode":"full"}});
+        fixture_receipts(dir, &mut value);
+        value
     }
-    fn write_config(dir: &Path, value: &Value) -> (PathBuf, String) {
+    fn fixture_receipts(dir: &Path, value: &mut Value) {
+        if value.get("producer_authority").is_none() {
+            value["producer_authority"] = json!({"source_commit":"4".repeat(40),
+                "executable_sha256":"5".repeat(64),"producer_source_sha256":"6".repeat(64),
+                "sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)});
+        }
+        let reserved_count = value["reserved_query_interval"]["end"].as_u64().unwrap()
+            - value["reserved_query_interval"]["start"].as_u64().unwrap();
+        let reserved_sha = if value["count"] == reserved_count {
+            value["requests"]["sha256"].clone()
+        } else {
+            json!("3".repeat(64))
+        };
+        let receipt = json!({"schema":"borsuk-cohere-native-cohort-receipt-v3","status":"COMPLETE",
+            "dataset":DATASET,"revision":REVISION,"reserved_queries_sha256":reserved_sha,"geometry":{"reserved_query_interval":value["reserved_query_interval"],"corpus_rows":value["rows"],"query_rows":value["count"],
+                "dimensions":D,"k":K,"corpus_intervals":value["corpus_intervals"],
+                "query_source_ordinals":[value["query_source_first"].as_u64().unwrap(),value["query_source_first"].as_u64().unwrap()+value["count"].as_u64().unwrap()]},
+            "outputs":[{"name":"corpus.f32","bytes":value["rows"].as_u64().unwrap()*D as u64*4,"sha256":"1".repeat(64)},
+                {"name":"queries.f32","bytes":value["requests"]["bytes"],"sha256":value["requests"]["sha256"]},
+                {"name":"truth.u64","bytes":value["truth"]["bytes"],"sha256":value["truth"]["sha256"]}]});
+        value["cohort_receipt"] = artifact(
+            &dir.join("cohort.json"),
+            &serde_json::to_vec(&receipt).unwrap(),
+        );
+        let derivation = json!({"schema":"borsuk-native-scale-derivation-receipt-v2","producer_config_sha256":"9".repeat(64),"status":"COMPLETE",
+            "recipe":"normalize_then_flat_fit_then_sq8","query_or_truth_used":false,
+            "rows":value["rows"],"dimensions":D,"corpus_intervals":value["corpus_intervals"],
+            "original_corpus":{"bytes":value["rows"].as_u64().unwrap()*D as u64*4,"sha256":"1".repeat(64)},
+            "outputs":{"normalized":{"bytes":value["rows"].as_u64().unwrap()*D as u64*4,"sha256":value["native_source"]["source_sha256"]},
+                "source_order":{"bytes":value["rows"].as_u64().unwrap()*8,"sha256":value["native_source"]["source_order_sha256"]},
+                "sq8":{"bytes":value["rows"].as_u64().unwrap()*(D as u64+12),"sha256":value["native_source"]["sq8_sha256"]}},
+            "low_f32_bits":vec![(-1.0_f32).to_bits();D],"step_f32_bits":vec![(1.0_f32/16.0).to_bits();D],
+            "producer_authority":value["producer_authority"],
+            "source_identity_qualification":"external_frozen_prerequisite_not_self_certified",
+            "admission":{"wrapper_payload_bytes":1,"normalization_api_payload_bytes":1,
+                "flat_fit_api_payload_upper_bound_bytes":1,"sq8_api_payload_bytes":1,
+                "peak_payload_upper_bound_bytes":8*1024*1024,"aggregate_scratch_upper_bound_bytes":8_000_000_000_u64}});
+        value["derivation_receipt"] = artifact(
+            &dir.join("derivation.json"),
+            &serde_json::to_vec(&derivation).unwrap(),
+        );
+    }
+    pub(super) fn write_config(dir: &Path, value: &Value) -> (PathBuf, String) {
+        let mut value = value.clone();
+        fixture_receipts(dir, &mut value);
         let path = dir.join("config.json");
-        let body = serde_json::to_vec(value).unwrap();
+        let body = serde_json::to_vec(&value).unwrap();
         std::fs::write(&path, &body).unwrap();
         (path, hash(&body))
     }
+    #[test]
+    fn full_selected_requests_require_equal_reserved_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = config_value(dir.path(), Shape::tiny(32));
+        let good: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_receipts(&good).unwrap();
+        let mut cohort: Value =
+            serde_json::from_slice(&std::fs::read(&good.cohort_receipt.path).unwrap()).unwrap();
+        cohort["reserved_queries_sha256"] = json!("8".repeat(64));
+        value["cohort_receipt"] = artifact(
+            &good.cohort_receipt.path,
+            &serde_json::to_vec(&cohort).unwrap(),
+        );
+        let bad: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            validate_receipts(&bad).unwrap_err().to_string(),
+            "full selected request/reserved query digest binding"
+        );
+    }
+
+    #[test]
+    fn source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let mut full = config_value(
+            dir.path(),
+            Shape {
+                rows: 100_000,
+                count: 1000,
+                returned_limit: K,
+            },
+        );
+        let full_c: Config = serde_json::from_value(full.clone()).unwrap();
+        validate_receipts(&full_c).unwrap();
+        let producer = std::fs::read(&full_c.derivation_receipt.path).unwrap();
+        let producer_pin = full["derivation_receipt"].clone();
+        let full_cohort_pin = full["cohort_receipt"].clone();
+        full["count"] = json!(32);
+        full["requests"]["bytes"] = json!(32 * D * 4);
+        full["truth"]["bytes"] = json!(32 * K * 8);
+        fixture_receipts(dir.path(), &mut full);
+        assert_ne!(full["cohort_receipt"], full_cohort_pin);
+        assert_eq!(
+            std::fs::read(&full_c.derivation_receipt.path).unwrap(),
+            producer
+        );
+        assert_eq!(full["derivation_receipt"], producer_pin);
+        let prefix: Config = serde_json::from_value(full.clone()).unwrap();
+        validate_receipts(&prefix).unwrap();
+        for fault in ["v1", "authority", "corpus", "calibration"] {
+            let mut value = full.clone();
+            let mut receipt: Value = serde_json::from_slice(&producer).unwrap();
+            let expected = match fault {
+                "v1" => {
+                    receipt["schema"] = json!("borsuk-native-scale-derivation-receipt-v1");
+                    "derivation receipt v2 required; v1 is incompatible"
+                }
+                "authority" => {
+                    receipt["producer_authority"]["executable_sha256"] = json!("0".repeat(64));
+                    "root-frozen derivation producer authority"
+                }
+                "corpus" => {
+                    receipt["original_corpus"]["sha256"] = json!("0".repeat(64));
+                    "authenticated source-only original/normalized/fit/SQ8 derivation"
+                }
+                "calibration" => {
+                    receipt["step_f32_bits"][0] = json!(0);
+                    "derivation exact f32 calibration bits"
+                }
+                _ => unreachable!(),
+            };
+            value["derivation_receipt"] = artifact(
+                &prefix.derivation_receipt.path,
+                &serde_json::to_vec(&receipt).unwrap(),
+            );
+            let bad: Config = serde_json::from_value(value).unwrap();
+            assert_eq!(
+                validate_receipts(&bad).unwrap_err().to_string(),
+                expected,
+                "{fault}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_scale_population_receipts_and_negative_geometry() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape {
+            rows: 1_000_000,
+            count: 1000,
+            returned_limit: K,
+        };
+        let mut value = config_value(dir.path(), shape);
+        value["query_source_first"] = json!(100_000);
+        value["reserved_query_interval"] = json!({"start":100_000,"end":101_000});
+        value["corpus_intervals"] =
+            json!([{"start":0,"end":100_000},{"start":101_000,"end":1_001_000}]);
+        value["profile"] = json!("scale1m");
+        fixture_receipts(dir.path(), &mut value);
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        validate_receipts(&c).unwrap();
+        for count in [1, 32, 1000] {
+            let shape = Shape { count, ..shape };
+            let mut prefix = value.clone();
+            prefix["count"] = json!(count);
+            prefix["requests"]["bytes"] = json!(count * D * 4);
+            prefix["truth"]["bytes"] = json!(count * K * 8);
+            fixture_receipts(dir.path(), &mut prefix);
+            let c: Config = serde_json::from_value(prefix).unwrap();
+            validate_config(&c, shape).unwrap();
+            validate_receipts(&c).unwrap();
+        }
+        fixture_receipts(dir.path(), &mut value);
+        for (key, changed) in [
+            ("profile", json!("native100k")),
+            ("count", json!(1001)),
+            (
+                "reserved_query_interval",
+                json!({"start":100_000,"end":100_032}),
+            ),
+            ("query_source_first", json!(usize::MAX)),
+            ("rows", json!(usize::MAX)),
+            ("corpus_intervals", json!([{"start":0,"end":1_000_000}])),
+        ] {
+            let mut bad = value.clone();
+            bad[key] = changed;
+            assert!(
+                validate_config(&serde_json::from_value::<Config>(bad).unwrap(), shape).is_err(),
+                "{key}"
+            );
+        }
+        let mut bad: Config = serde_json::from_value(value).unwrap();
+        bad.requests.sha256 = "0".repeat(64);
+        assert!(validate_receipts(&bad).is_err());
+    }
+
     #[test]
     fn cold_fetch_parallelism_selector_is_explicit_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
@@ -2386,10 +3012,17 @@ mod tests {
         }
         v
     }
-    async fn fixture(shape: Shape) -> (tempfile::TempDir, Value) {
+    pub(super) async fn fixture(shape: Shape) -> (tempfile::TempDir, Value) {
+        fixture_with_profile(shape, SemanticProfile::Native100k).await
+    }
+    pub(super) async fn fixture_with_profile(
+        shape: Shape,
+        profile: SemanticProfile,
+    ) -> (tempfile::TempDir, Value) {
         assert!(shape.rows >= 32);
         let dir = tempfile::tempdir().unwrap();
         let mut c = config_value(dir.path(), shape);
+        c["profile"] = json!(profile);
         let store_root = dir.path().join("store");
         std::fs::create_dir(&store_root).unwrap();
         std::fs::create_dir(dir.path().join("scratch")).unwrap();
@@ -2448,7 +3081,7 @@ mod tests {
             sq8_object_key: key.as_ref(),
             sq8_etag: &etag,
         }
-        .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+        .build_with_semantic_profile(Some(&order), profile, &root, 128_000_000)
         .unwrap();
         let native: SourcePlaneReceipt =
             serde_json::from_slice(&std::fs::read(root.join("plane/manifest.json")).unwrap())
@@ -2485,7 +3118,241 @@ mod tests {
         .await
         .unwrap();
         c["generation_prefix"] = json!(head.metadata_prefix().to_string());
+        fixture_receipts(dir.path(), &mut c);
         (dir, c)
+    }
+    #[tokio::test]
+    async fn actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch()
+     {
+        let shape = Shape::tiny(32);
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("actual-original.f32");
+        let mut corpus = Vec::new();
+        for row in 0..shape.rows {
+            for coordinate in 0..D {
+                let v = if coordinate == row % 4 {
+                    (row + 2) as f32
+                } else {
+                    0.0
+                };
+                corpus.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        std::fs::write(&original, &corpus).unwrap();
+        // Freeze actual executable/embedded partial-source identity before run.
+        // The producer's fixture source_commit remains explicitly declared;
+        // complete binary/build provenance is a separate root gate.
+        let producer_config =
+            scale_derivation_producer::derive::fixture_config(&original, shape.rows, D).unwrap();
+        let config_bytes = serde_json::to_vec(&producer_config).unwrap();
+        let config_path = dir.path().join("actual-producer-config.json");
+        std::fs::write(&config_path, &config_bytes).unwrap();
+        let derived = dir.path().join("actual-derived");
+        scale_derivation_producer::derive::run(&config_path, &hash(&config_bytes), &derived)
+            .unwrap();
+        let receipt_path = derived.join("derivation.json");
+        let receipt_bytes = std::fs::read(&receipt_path).unwrap();
+        let producer: Value = serde_json::from_slice(&receipt_bytes).unwrap();
+        let normalized = derived.join("normalized.f32");
+        let sq8 = derived.join("sq8.bin");
+        let order_bytes = std::fs::read(derived.join("order.u64")).unwrap();
+        let order = order_bytes
+            .chunks_exact(8)
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let coefficients = |key: &str| {
+            producer[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| f32::from_bits(u32::try_from(v.as_u64().unwrap()).unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let low = coefficients("low_f32_bits");
+        let step = coefficients("step_f32_bits");
+        assert_eq!((low.len(), step.len()), (D, D));
+        let raw_sha = producer["outputs"]["normalized"]["sha256"]
+            .as_str()
+            .unwrap();
+        let sq8_sha = producer["outputs"]["sq8"]["sha256"].as_str().unwrap();
+        let store_root = dir.path().join("store");
+        std::fs::create_dir(&store_root).unwrap();
+        std::fs::create_dir(dir.path().join("scratch")).unwrap();
+        let store = LocalFileSystem::new_with_prefix(&store_root).unwrap();
+        let sq8_key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        store
+            .put(&sq8_key, std::fs::read(&sq8).unwrap().into())
+            .await
+            .unwrap();
+        let etag = store.head(&sq8_key).await.unwrap().e_tag.unwrap();
+        let mut value = config_value(dir.path(), shape);
+        value["native_source"] = json!({"source_sha256":raw_sha,"sq8_sha256":sq8_sha,
+            "source_order_sha256":producer["outputs"]["source_order"]["sha256"]});
+        value["producer_authority"] = producer["producer_authority"].clone();
+        // Do not rewrite or fabricate any field in the produced receipt.
+        value["derivation_receipt"] =
+            json!({"path":receipt_path,"bytes":receipt_bytes.len(),"sha256":hash(&receipt_bytes)});
+        let requests = (0..shape.count)
+            .flat_map(|q| (0..D).map(move |d| if d == q { (3 + q * 2) as f32 } else { 0.0 }))
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        value["requests"] = artifact(&dir.path().join("actual-requests.f32"), &requests);
+        let exact_ids = [
+            [0_u64, 4, 8, 12, 16, 20, 24, 28, 1, 2],
+            [1, 5, 9, 13, 17, 21, 25, 29, 0, 2],
+        ];
+        let truth = exact_ids
+            .into_iter()
+            .flatten()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>();
+        value["truth"] = artifact(&dir.path().join("actual-truth.u64"), &truth);
+        let cohort = json!({"schema":"borsuk-cohere-native-cohort-receipt-v3","status":"COMPLETE",
+            "dataset":DATASET,"revision":REVISION,"reserved_queries_sha256":value["requests"]["sha256"],
+            "geometry":{"reserved_query_interval":value["reserved_query_interval"],"corpus_rows":shape.rows,"query_rows":shape.count,
+                "dimensions":D,"k":K,"corpus_intervals":value["corpus_intervals"],"query_source_ordinals":[shape.rows,shape.rows+shape.count]},
+            "outputs":[{"name":"corpus.f32","bytes":corpus.len(),"sha256":hash(&corpus)},
+                {"name":"queries.f32","bytes":requests.len(),"sha256":hash(&requests)},
+                {"name":"truth.u64","bytes":truth.len(),"sha256":hash(&truth)}]});
+        value["cohort_receipt"] = artifact(
+            &dir.path().join("actual-cohort.json"),
+            &serde_json::to_vec(&cohort).unwrap(),
+        );
+        for changed in [false, true] {
+            let mut generation_step = step.clone();
+            if changed {
+                generation_step[0] = f32::from_bits(step[0].to_bits() ^ 1);
+                assert!(generation_step[0].is_finite() && generation_step[0] > 0.0);
+                assert_eq!(generation_step[0].to_bits() ^ step[0].to_bits(), 1);
+            }
+            let root = dir.path().join(if changed {
+                "one-bit-generation"
+            } else {
+                "actual-generation"
+            });
+            let root_sha = TwoBitGenerationBuilder {
+                source: TwoBitSource {
+                    raw: &normalized,
+                    raw_sha256: raw_sha,
+                    sq8: &sq8,
+                    sq8_sha256: sq8_sha,
+                    rows: shape.rows,
+                    dimensions: D,
+                },
+                base_epoch: 0,
+                generation: 1,
+                low: &low,
+                step: &generation_step,
+                sq8_object_key: sq8_key.as_ref(),
+                sq8_etag: &etag,
+            }
+            .build_with_semantic_profile(
+                Some(&order),
+                SemanticProfile::Native100k,
+                &root,
+                128_000_000,
+            )
+            .unwrap();
+            value["generation_root_sha256"] = json!(root_sha);
+            let before_publish: Config = serde_json::from_value(value.clone()).unwrap();
+            let head = publish_two_bit_generation(
+                &store,
+                &ObjectPath::from(if changed {
+                    "semantic/wrong"
+                } else {
+                    "semantic/right"
+                }),
+                &root,
+                &root_sha,
+                limits(&before_publish).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+            value["generation_prefix"] = json!(head.metadata_prefix().to_string());
+            let c: Config = serde_json::from_value(value.clone()).unwrap();
+            validate_config(&c, shape).unwrap();
+            let receipt = validate_receipts(&c).unwrap();
+            if changed {
+                let output = dir.path().join("actual-one-bit-refusal.jsonl");
+                let mut out = Output::create(&output).unwrap();
+                let mut p = Progress::default();
+                let error = query_and_seal(&c, shape, &mut out, &mut p)
+                    .await
+                    .err()
+                    .unwrap()
+                    .to_string();
+                assert_eq!(error, "generation/producer exact calibration binding");
+                assert_eq!(p.completed, 0);
+                assert!(!p.sealed && !p.truth_opened);
+                assert!(!records(&output).iter().any(|r| matches!(
+                    r["phase"].as_str(),
+                    Some("query" | "all_queries_sealed" | "recall")
+                )));
+            } else {
+                let mut charge = Charge::default();
+                bind_source(&c, &receipt, &store, &mut charge)
+                    .await
+                    .unwrap();
+                TwoBitGeneration::open_remote(
+                    &store,
+                    &ObjectPath::from(c.generation_prefix.clone()),
+                    &c.generation_root_sha256,
+                    limits(&c).unwrap(),
+                    &c.scratch_parent,
+                )
+                .await
+                .unwrap();
+            }
+            assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt_bytes);
+            for (name, seal) in [
+                ("normalized.f32", "normalized"),
+                ("order.u64", "source_order"),
+                ("sq8.bin", "sq8"),
+            ] {
+                let bytes = std::fs::read(derived.join(name)).unwrap();
+                assert_eq!(
+                    hash(&bytes),
+                    producer["outputs"][seal]["sha256"].as_str().unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    fn generation_calibration_mismatch_refuses_before_query_seal_or_truth() {
+        let shape = Shape::tiny(32);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (dir, mut value) = runtime.block_on(fixture(shape));
+        let good: Config = serde_json::from_value(value.clone()).unwrap();
+        let mut receipt: Value =
+            serde_json::from_slice(&std::fs::read(&good.derivation_receipt.path).unwrap()).unwrap();
+        // Both values are finite and positive. The producer receipt and frozen
+        // config pin stay coherent; only the generation disagrees with them.
+        receipt["step_f32_bits"][0] = json!((1.0_f32 / 8.0).to_bits());
+        value["derivation_receipt"] = artifact(
+            &good.derivation_receipt.path,
+            &serde_json::to_vec(&receipt).unwrap(),
+        );
+        let c: Config = serde_json::from_value(value).unwrap();
+        validate_config(&c, shape).unwrap();
+        validate_receipts(&c).unwrap();
+        let output = dir.path().join("wrong-calibration.jsonl");
+        let mut out = Output::create(&output).unwrap();
+        let mut progress = Progress::default();
+        let error = runtime
+            .block_on(query_and_seal(&c, shape, &mut out, &mut progress))
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(error, "generation/producer exact calibration binding");
+        assert_eq!(progress.completed, 0);
+        assert!(!progress.sealed && !progress.truth_opened);
+        let body = std::fs::read_to_string(output).unwrap();
+        assert!(!body.contains("all_queries_sealed") && !body.contains("\"phase\":\"query\""));
+        assert!(body.contains("\"success\":false"));
     }
     #[test]
     fn production_contract_rejects_unknown_hash_geometry_and_caps() {
@@ -2627,6 +3494,27 @@ mod tests {
             codec.prepare_query(&[1.; D], allowance).unwrap();
         }
     }
+    #[tokio::test]
+    async fn actual_generation_profile_mismatch_refuses_before_seal_or_truth() {
+        let shape = Shape::tiny(32);
+        for (actual, requested) in [
+            (SemanticProfile::Native100k, SemanticProfile::Scale1m),
+            (SemanticProfile::Scale1m, SemanticProfile::Native100k),
+        ] {
+            let (dir, value) = fixture_with_profile(shape, actual).await;
+            let mut c: Config = serde_json::from_value(value).unwrap();
+            c.profile = requested;
+            let mut out = Output::create(&dir.path().join("profile-mismatch")).unwrap();
+            let mut progress = Progress::default();
+            let error = query_and_seal(&c, shape, &mut out, &mut progress)
+                .await
+                .err()
+                .expect("profile mismatch must refuse");
+            assert!(error.to_string().contains("generation geometry/profile"));
+            assert!(!progress.sealed && !progress.truth_opened && progress.completed == 0);
+        }
+    }
+
     #[tokio::test]
     async fn actual_native_queries_seal_and_reduce_against_literal_oracles() {
         let shape = Shape::tiny(257);
@@ -2831,6 +3719,50 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open() {
+        let shape = Shape::tiny(32);
+        let (dir, base) = fixture(shape).await;
+        for (name, expected) in [
+            (
+                "requests",
+                "full selected request/reserved query digest binding",
+            ),
+            ("truth", "cohort request/truth identity binding"),
+            (
+                "source",
+                "authenticated source-only original/normalized/fit/SQ8 derivation",
+            ),
+            ("derivation", "artifact identity/SHA"),
+        ] {
+            let mut value = base.clone();
+            match name {
+                "requests" => value["requests"]["sha256"] = json!("0".repeat(64)),
+                "truth" => value["truth"]["sha256"] = json!("0".repeat(64)),
+                "source" => value["native_source"]["source_sha256"] = json!("0".repeat(64)),
+                "derivation" => value["derivation_receipt"]["sha256"] = json!("0".repeat(64)),
+                _ => unreachable!(),
+            }
+            // Keep the original receipts: these cases specifically test their refusal layer.
+            let c: Config = serde_json::from_value(value).unwrap();
+            let mut out = Output::create(&dir.path().join(format!("stale-{name}"))).unwrap();
+            let mut p = Progress::default();
+            let opened = std::cell::Cell::new(false);
+            let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
+                opened.set(true);
+                Reader::new(&c.backend)
+            })
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(error.contains(expected), "{name}: {error}");
+            assert!(!opened.get(), "{name}");
+            assert_eq!((p.completed, p.sealed, p.truth_opened), (0, false, false));
+            assert_eq!(out.bytes, 0);
+        }
+    }
+
+    #[tokio::test]
     async fn source_binding_and_all_request_rows_fail_before_queries() {
         let shape = Shape::tiny(32);
         let (dir, value) = fixture(shape).await;
@@ -2846,11 +3778,25 @@ mod tests {
                 }
                 invalid["requests"] = artifact(&request_path, &bytes);
             }
+            fixture_receipts(dir.path(), &mut invalid);
             let c: Config = serde_json::from_value(invalid).unwrap();
+            validate_receipts(&c).unwrap();
             let mut out =
                 Output::create(&dir.path().join(format!("early-invalid-{index}"))).unwrap();
             let mut p = Progress::default();
-            assert!(query_and_seal(&c, shape, &mut out, &mut p).await.is_err());
+            let error = query_and_seal(&c, shape, &mut out, &mut p)
+                .await
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains(if wrong_source {
+                    "native source receipt binding"
+                } else {
+                    "request 1"
+                }),
+                "{error}"
+            );
             assert_eq!(p.completed, 0);
             assert!(!p.sealed && !p.truth_opened);
         }
@@ -3211,6 +4157,7 @@ mod tests {
                 "order" => value["native_source"]["source_order_sha256"] = json!("0".repeat(64)),
                 _ => (),
             }
+            fixture_receipts(dir.path(), &mut value);
             recorded.reads.lock().unwrap().clear();
             *recorded.stats.lock().unwrap() = initial.clone();
             *recorded.fault.lock().unwrap() = fault;
@@ -3221,6 +4168,7 @@ mod tests {
                 continue;
             }
             let config = parsed.unwrap();
+            validate_receipts(&config).unwrap();
             let mut out = Output::create(&dir.path().join(format!("stub-{fault}"))).unwrap();
             if fault == "output" {
                 out.cap = 1;
@@ -4393,7 +5341,9 @@ mod tests {
         for (name, bytes, row) in [("zero", zero_row, 2), ("nan-tail", nan_tail, 4)] {
             let mut value = with_panel(base.clone(), &[0, 1], true);
             value["requests"] = artifact(&dir.path().join(format!("bad-{name}")), &bytes);
+            fixture_receipts(dir.path(), &mut value);
             let c: Config = serde_json::from_value(value).unwrap();
+            validate_receipts(&c).unwrap();
             let mut out = Output::create(&dir.path().join(format!("early-{name}"))).unwrap();
             let mut p = Progress::default();
             let opened = std::cell::Cell::new(false);

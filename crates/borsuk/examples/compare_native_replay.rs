@@ -432,6 +432,385 @@ fn validate_v2_inputs(i: &Inputs, raw: &Value) -> Result<()> {
     )
 }
 
+const SCALE_CONFIG_SCHEMA: &str = "borsuk-completed-native-reduction-config-v4";
+const SCALE_REPORT_SCHEMA: &str = "borsuk-completed-native-reduction-v4";
+
+fn scale_ordinals(raw: &Value, count: usize) -> Result<Vec<usize>> {
+    require(
+        (1..=1000).contains(&count),
+        "bounded query population before allocation",
+    )?;
+    let execution = &raw["execution"];
+    match execution["mode"].as_str() {
+        Some("full") => {
+            fields(execution, "mode")?;
+            Ok((0..count).collect())
+        }
+        Some("diagnostic_panel") => {
+            fields(execution, "mode ordinals trace")?;
+            require(
+                execution["trace"] == false,
+                "scale reducer requires untraced baseline execution",
+            )?;
+            let ordinals = execution["ordinals"]
+                .as_array()
+                .ok_or("explicit diagnostic ordinals")?
+                .iter()
+                .map(|n| usize::try_from(n.as_u64().ok_or("integer ordinal")?).map_err(Into::into))
+                .collect::<Result<Vec<_>>>()?;
+            require(
+                (1..=128).contains(&ordinals.len())
+                    && ordinals.windows(2).all(|a| a[0] < a[1])
+                    && ordinals.last().is_some_and(|n| *n < count),
+                "bounded unique diagnostic ordinals",
+            )?;
+            Ok(ordinals)
+        }
+        _ => Err("explicit full/diagnostic execution required".into()),
+    }
+}
+
+fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
+    require(
+        i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
+            && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
+            && i.metric == "cosine"
+            && i.tie_rule == "corpus_ordinal_ascending"
+            && !i.truth_opened
+            && (K..=1_000_000).contains(&i.rows)
+            && i.dimensions == 1024
+            && i.k == K
+            && (1..=1000).contains(&i.count)
+            && matches!(i.profile.as_str(), "native100k" | "scale1m")
+            && (i.profile != "native100k" || i.rows <= 100_000)
+            && i.requests_bytes == i.count as u64 * 1024 * 4
+            && i.truth_bytes == i.count as u64 * K as u64 * 8
+            && raw["serving"] == json!({"mode":"baseline"})
+            && raw["source_cache"] == "off"
+            && raw["max_memory_bytes"] == 512 * 1024 * 1024_u64,
+        "explicit scale input geometry/profile/cap",
+    )?;
+    fields(&raw["reserved_query_interval"], "start end")?;
+    let reserved_start = raw["reserved_query_interval"]["start"]
+        .as_u64()
+        .ok_or("reserved start")?;
+    let reserved_end = raw["reserved_query_interval"]["end"]
+        .as_u64()
+        .ok_or("reserved end")?;
+    require(
+        reserved_start < reserved_end
+            && reserved_end <= 1_001_000
+            && reserved_end - reserved_start <= 1000
+            && i.query_source_first as u64 == reserved_start
+            && (i.count as u64)
+                .checked_add(reserved_start)
+                .is_some_and(|end| end <= reserved_end),
+        "selected prefix within full reserved interval",
+    )?;
+    let reserved_sha = raw["reserved_queries_sha256"]
+        .as_str()
+        .ok_or("reserved query SHA")?;
+    require(
+        valid_sha(reserved_sha)
+            && (cfg!(test)
+                || reserved_sha
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"),
+        "full reserved query digest",
+    )?;
+    require(
+        i.count as u64 != reserved_end - reserved_start || i.requests_sha256 == reserved_sha,
+        "full selected request/reserved query digest binding",
+    )?;
+    let intervals = raw["corpus_intervals"]
+        .as_array()
+        .ok_or("explicit corpus intervals")?;
+    require(
+        !intervals.is_empty() && intervals.len() <= 2,
+        "bounded corpus intervals",
+    )?;
+    let mut previous = 0;
+    let mut count = 0_u64;
+    for interval in intervals {
+        fields(interval, "start end")?;
+        let start = interval["start"].as_u64().ok_or("interval start")?;
+        let end = interval["end"].as_u64().ok_or("interval end")?;
+        require(
+            start < end
+                && start >= previous
+                && end <= 1_001_000
+                && (end <= reserved_start || start >= reserved_end),
+            "ordered excluded-query intervals",
+        )?;
+        count = plus(count, end - start)?;
+        previous = end;
+    }
+    require(
+        count == i.rows as u64 && i.corpus_source_first == 0,
+        "exact corpus count",
+    )?;
+    if !cfg!(test) {
+        let expected = if i.rows == 100_000 {
+            json!([{"start":0,"end":100_000}])
+        } else {
+            json!([{"start":0,"end":100_000},{"start":101_000,"end":i.rows+1000}])
+        };
+        require(
+            i.rows >= 100_000
+                && reserved_start == 100_000
+                && reserved_end == 101_000
+                && raw["corpus_intervals"] == expected,
+            "historical query exclusion",
+        )?;
+    }
+    let ordinals = scale_ordinals(raw, i.count)?;
+    require(
+        raw["selected_count"] == ordinals.len(),
+        "explicit selected query count",
+    )?;
+    for pin in [
+        &i.generation_root_sha256,
+        &i.requests_sha256,
+        &i.truth_sha256,
+        &i.native_source_sha256,
+        &i.native_sq8_sha256,
+        &i.native_order_sha256,
+    ] {
+        require(valid_sha(pin), "scale input/root SHA256")?;
+    }
+    for key in ["cohort_receipt_sha256", "derivation_receipt_sha256"] {
+        require(
+            raw[key].as_str().is_some_and(valid_sha),
+            "original/derived receipt SHA256",
+        )?;
+    }
+    let authority = &raw["producer_authority"];
+    fields(
+        authority,
+        "source_commit executable_sha256 producer_source_sha256 sq8_source_sha256 source_order_source_sha256",
+    )?;
+    require(
+        authority["source_commit"].as_str().is_some_and(|s| {
+            s.len() == 40
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }),
+        "producer source commit",
+    )?;
+    for key in [
+        "executable_sha256",
+        "producer_source_sha256",
+        "sq8_source_sha256",
+        "source_order_source_sha256",
+    ] {
+        require(
+            authority[key].as_str().is_some_and(valid_sha),
+            "root-frozen producer SHA256",
+        )?;
+    }
+    require(
+        !i.generation_prefix.is_empty() && i.generation_prefix.len() <= 512,
+        "generation prefix",
+    )?;
+    match raw["backend"]["kind"].as_str() {
+        Some("local") => {
+            fields(&raw["backend"], "kind store_root")?;
+            require(
+                raw["credential_source"].is_null()
+                    && raw["backend"]["store_root"]
+                        .as_str()
+                        .is_some_and(|p| Path::new(p).is_absolute() && p.len() <= 4096),
+                "local backend descriptor",
+            )?;
+        }
+        Some("s3") => {
+            fields(
+                &raw["backend"],
+                "kind bucket region physical_prefix sq8_object_key sq8_etag",
+            )?;
+            require(
+                raw["credential_source"] == "imds_instance_role_only",
+                "S3 credential source",
+            )?;
+            for key in [
+                "bucket",
+                "region",
+                "physical_prefix",
+                "sq8_object_key",
+                "sq8_etag",
+            ] {
+                require(
+                    raw["backend"][key]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty() && s.len() <= 512),
+                    "S3 descriptor",
+                )?;
+            }
+            require(
+                raw["backend"]["sq8_object_key"]
+                    .as_str()
+                    .is_some_and(|s| s.ends_with(&format!("/objects/{}", i.native_sq8_sha256))),
+                "SQ8 key/SHA",
+            )?;
+        }
+        _ => return Err("scale backend required".into()),
+    }
+    Ok(())
+}
+
+fn validate_scale_row(line: &[u8], phase: &str) -> Result<()> {
+    let UniqueJson(mut raw) = serde_json::from_slice(line)?;
+    if phase == "diagnostic_admission" {
+        fields(
+            &raw,
+            "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes trace_peak_charged_by_library_at_traced_admission range_state_pinned_by_runner_bytes range_state_both_paths_bytes",
+        )?;
+        require(
+            raw["trace"] == false
+                && raw["truth_opened"] == false
+                && raw["max_active_queries"] == 1
+                && raw["charged_in_caller_pinned_bytes"] == true
+                && raw["population_percentiles_valid"] == false
+                && raw["full_cohort_qualification"] == false,
+            "untraced diagnostic admission scope",
+        )?;
+        return Ok(());
+    }
+    let extras: &[&str] = match phase {
+        "identity" => &[
+            "serving",
+            "execution",
+            "sq8_range_source_sha256",
+            "returned_source_sha256",
+        ],
+        "bound_inputs" => &[
+            "serving",
+            "execution",
+            "selected_count",
+            "corpus_intervals",
+            "reserved_query_interval",
+            "reserved_queries_sha256",
+            "cohort_receipt_sha256",
+            "derivation_receipt_sha256",
+            "producer_authority",
+            "max_memory_bytes",
+        ],
+        "startup" => &["serving"],
+        "query" => &[
+            "serving",
+            "source_nomination_skipped",
+            "planning_scope",
+            "plan",
+        ],
+        "all_queries_sealed" => &["selected_count", "population_count", "reserved_query_count"],
+        "terminal" => &[],
+        _ => &[],
+    };
+    if matches!(phase, "identity" | "bound_inputs" | "startup" | "query") {
+        require(
+            raw["serving"] == json!({"mode":"baseline"}),
+            "scale baseline serving required",
+        )?;
+    }
+    if phase == "identity" {
+        require(
+            raw["schema"] == "borsuk-cohere-native-baseline-result-v7",
+            "scale result v7 required",
+        )?;
+        for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
+            require(
+                raw[key].as_str().is_some_and(valid_sha),
+                "runner component SHA256",
+            )?;
+        }
+    }
+    if phase == "query" {
+        require(
+            raw["source_nomination_skipped"] == false
+                && raw["planning_scope"] == "source_nomination_and_cover",
+            "baseline native planning",
+        )?;
+        fields(
+            &raw["plan"],
+            "selected_pages ranges planned_bytes target_pages target_shortfall primary_pages_retained covered_pages bridge_pages",
+        )?;
+        for key in [
+            "planned_bytes",
+            "target_pages",
+            "target_shortfall",
+            "primary_pages_retained",
+            "covered_pages",
+            "bridge_pages",
+        ] {
+            require(raw["plan"][key].as_u64().is_some(), "native plan integer")?;
+        }
+        let pages = raw["plan"]["selected_pages"]
+            .as_array()
+            .ok_or("native plan pages")?;
+        require(
+            pages.iter().all(|p| p.as_u64().is_some()),
+            "native page ordinal",
+        )?;
+        let mut end = 0;
+        let mut bytes = 0;
+        for range in raw["plan"]["ranges"].as_array().ok_or("native ranges")? {
+            let pair = range.as_array().ok_or("native range pair")?;
+            require(pair.len() == 2, "native range pair length")?;
+            let start = pair[0].as_u64().ok_or("native range start")?;
+            let next = pair[1].as_u64().ok_or("native range end")?;
+            require(
+                start >= end && next > start,
+                "ordered nonoverlapping native ranges",
+            )?;
+            bytes = plus(bytes, next - start)?;
+            end = next;
+        }
+        require(
+            raw["plan"]["planned_bytes"] == bytes && bytes <= 16_773_120,
+            "native plan byte total/cap",
+        )?;
+        if let Some(slot) = raw
+            .as_object_mut()
+            .ok_or("query object")?
+            .remove("selected_slot")
+        {
+            require(slot.as_u64().is_some(), "selected slot integer")?;
+        }
+    }
+    if phase == "terminal" {
+        let t = raw["summary"].as_object_mut().ok_or("terminal object")?;
+        for name in [
+            "serving",
+            "direct_memory",
+            "execution",
+            "selected_count",
+            "executed_count",
+            "population_count",
+            "diagnostic_panel",
+            "reserved_query_count",
+            "diagnostic_prefix",
+        ] {
+            require(t.remove(name).is_some(), "scale terminal field required")?;
+        }
+        for name in [
+            "population_percentiles_valid",
+            "full_cohort_qualification",
+            "scope_note",
+        ] {
+            t.remove(name);
+        }
+    }
+    for name in extras {
+        require(
+            raw.as_object_mut()
+                .ok_or("scale row object")?
+                .remove(*name)
+                .is_some(),
+            "scale row field required",
+        )?;
+    }
+    validate_v2_row(&serde_json::to_vec(&raw)?, phase)
+}
+
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct TransportStats {
@@ -520,6 +899,7 @@ struct CompletedEvidence {
     stage_samples: [Vec<u64>; 4],
     startup: Value,
     terminal: Value,
+    local_boundary: Value,
 }
 impl CompletedEvidence {
     fn new(binding_charge: Charge) -> Self {
@@ -529,7 +909,42 @@ impl CompletedEvidence {
             stage_samples: std::array::from_fn(|_| Vec::with_capacity(COUNT)),
             startup: Value::Null,
             terminal: Value::Null,
+            local_boundary: Value::Null,
         }
+    }
+    fn transport_scale(
+        &mut self,
+        line: &[u8],
+        stage: &str,
+        ordinal: Option<usize>,
+        local: bool,
+    ) -> Result<()> {
+        if !local {
+            return self.transport(line, stage, ordinal);
+        }
+        let raw: Value = serde_json::from_slice(line)?;
+        let span = &raw["transport"];
+        fields(span, "stage ordinal before after")?;
+        require(
+            span["stage"] == stage
+                && span["ordinal"] == json!(ordinal)
+                && span["before"].is_null()
+                && span["after"].is_null(),
+            "local transport boundary",
+        )?;
+        let mut compact = span.clone();
+        compact["scope"] = json!("cumulative_process_native_transport");
+        compact["status_counts_omitted_from_terminal"] = json!(true);
+        for key in [
+            "wire_bytes",
+            "unread_bytes",
+            "billed_bytes",
+            "billed_requests",
+        ] {
+            compact[key] = Value::Null;
+        }
+        self.local_boundary = compact;
+        Ok(())
     }
     fn transport(&mut self, line: &[u8], stage: &str, ordinal: Option<usize>) -> Result<()> {
         #[derive(Deserialize)]
@@ -929,6 +1344,7 @@ struct Rows {
     digest: Sha256,
     original: FileIdentity,
     v2: bool,
+    scale: bool,
 }
 
 impl Rows {
@@ -946,6 +1362,7 @@ impl Rows {
             digest: Sha256::new(),
             original,
             v2: false,
+            scale: false,
         })
     }
 
@@ -974,7 +1391,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
-        if self.v2 {
+        if self.scale {
+            validate_scale_row(&self.line, phase)?;
+        } else if self.v2 {
             validate_v2_row(&self.line, phase)?;
         }
         // Two direct struct passes avoid internally-tagged enum Content buffering of traces.
@@ -1037,6 +1456,8 @@ fn read_run_observed(
     require(valid_sha(sha), "result lowercase SHA256")?;
     let mut rows = Rows::open(path)?;
     rows.v2 = expected.is_some();
+    let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
+    rows.scale = scale;
     if let Some(c) = expected {
         require(rows.original.len == c.input.bytes, "expected result bytes")?;
     }
@@ -1046,35 +1467,87 @@ fn read_run_observed(
             serde_json::from_slice::<Value>(&rows.line)? == c.expected_identity,
             "expected v2 identity pins",
         )?;
-        validate_v2_identity(&identity, &c.expected_identity)?;
+        if scale {
+            require(
+                identity.schema == "borsuk-cohere-native-baseline-result-v7",
+                "scale result schema",
+            )?;
+            let mut raw = c.expected_identity.clone();
+            raw["schema"] = json!("borsuk-cohere-native-baseline-result-v2");
+            let identity: Identity = serde_json::from_value(raw.clone())?;
+            validate_v2_identity(&identity, &raw)?;
+        } else {
+            validate_v2_identity(&identity, &c.expected_identity)?;
+        }
     } else {
         identity.validate()?;
     }
     let inputs: Inputs = rows.row("bound_inputs")?;
+    let local =
+        scale && expected.is_some_and(|c| c.expected_bound_inputs["backend"]["kind"] == "local");
+    let ordinals = if scale {
+        scale_ordinals(
+            &expected.ok_or("scale config")?.expected_bound_inputs,
+            inputs.count,
+        )?
+    } else {
+        (0..COUNT).collect()
+    };
+    let count = ordinals.len();
+    let panel = scale
+        && expected
+            .is_some_and(|c| c.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel");
     let mut completed = if let Some(c) = expected {
         require(
             serde_json::from_slice::<Value>(&rows.line)? == c.expected_bound_inputs,
             "expected v2 input/root/backend pins",
         )?;
-        validate_v2_inputs(&inputs, &c.expected_bound_inputs)?;
+        if scale {
+            validate_scale_inputs(&inputs, &c.expected_bound_inputs)?;
+            require(
+                c.expected_identity["execution"] == c.expected_bound_inputs["execution"]
+                    && c.expected_identity["serving"] == c.expected_bound_inputs["serving"],
+                "identity execution agreement",
+            )?;
+        } else {
+            validate_v2_inputs(&inputs, &c.expected_bound_inputs)?;
+        }
         require(
             c.expected_identity.get("fetch_parallelism")
                 == c.expected_bound_inputs.get("fetch_parallelism"),
             "identity/input fetch_parallelism agreement",
         )?;
+        if panel {
+            // The native untraced panel emits admission before any source or generation open.
+            let admission: Value = rows.row("diagnostic_admission")?;
+            require(
+                admission["truth_opened"] == false
+                    && admission["selected_count"] == count
+                    && admission["population_count"] == inputs.count
+                    && admission["execution"] == c.expected_bound_inputs["execution"]
+                    && admission["trace"] == false
+                    && admission["population_percentiles_valid"] == false
+                    && admission["full_cohort_qualification"] == false,
+                "panel admission geometry/scope",
+            )?;
+        }
         let binding: Value = rows.row("source_binding")?;
         let binding_charge: Charge = serde_json::from_value(binding["charges"].clone())?;
         binding_charge.validate()?;
         require(
-            binding_charge.submitted_gets == 2
-                && binding_charge.verified_bytes > 0
+            binding_charge.submitted_gets == if local { 0 } else { 2 }
+                && (if local {
+                    binding_charge.verified_bytes == 0
+                } else {
+                    binding_charge.verified_bytes > 0
+                })
                 && binding_charge.failed_gets == 0,
             "successful source binding charges",
         )?;
         let mut evidence = CompletedEvidence::new(binding_charge);
-        evidence.transport(&rows.line, "native_source", None)?;
+        evidence.transport_scale(&rows.line, "native_source", None, local)?;
         rows.row::<IgnoredAny>("generation_open")?;
-        evidence.transport(&rows.line, "generation_open", None)?;
+        evidence.transport_scale(&rows.line, "generation_open", None, local)?;
         Some(evidence)
     } else {
         inputs.validate()?;
@@ -1089,13 +1562,54 @@ fn read_run_observed(
     if let Some(e) = &mut completed {
         e.startup = serde_json::from_slice(&rows.line)?;
     }
-    let mut samples = Vec::with_capacity(COUNT);
+    let mut samples = Vec::with_capacity(count);
     let mut charges = Charges::default();
     let mut stages = StageTotals::default();
     let (mut wall, mut cpu) = (0, 0);
     let mut underfilled = 0;
-    for ordinal in 0..COUNT {
+    for (slot, &ordinal) in ordinals.iter().enumerate() {
         let q: Query = rows.row("query")?;
+        if scale {
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            let plan = &raw["plan"];
+            let page_count = inputs.rows.div_ceil(256) as u64;
+            let pages = plan["selected_pages"].as_array().ok_or("native pages")?;
+            let mut unique = BTreeSet::new();
+            require(
+                pages.iter().all(|p| {
+                    p.as_u64()
+                        .is_some_and(|p| p < page_count && unique.insert(p))
+                }),
+                "native unique bounded pages",
+            )?;
+            require(
+                plan["ranges"]
+                    .as_array()
+                    .ok_or("native ranges")?
+                    .iter()
+                    .all(|r| {
+                        r[1].as_u64().is_some_and(|end| {
+                            end <= inputs.rows as u64 * (inputs.dimensions as u64 + 12)
+                        })
+                    }),
+                "native range corpus bound",
+            )?;
+            require(
+                q.charges.source.submitted_gets <= 128
+                    && q.charges.source.verified_bytes <= 64 * 1024 * 1024
+                    && q.charges.sq8.submitted_gets <= 32
+                    && q.charges.sq8.verified_bytes <= 16_773_120,
+                "baseline SOURCE/SQ8 query caps",
+            )?;
+            require(
+                if panel {
+                    raw["selected_slot"] == slot
+                } else {
+                    raw.get("selected_slot").is_none()
+                },
+                "selected slot sequence",
+            )?;
+        }
         let trace_sha256 = if completed.is_some() {
             // Native v2 Record emits transport AFTER trace. Hash the complete
             // validated trace object, preserving every array's order. Runtime
@@ -1146,7 +1660,7 @@ fn read_run_observed(
         charges.add(q.charges)?;
         stages.add(&q.stages, q.query_wall_ns)?;
         if let Some(e) = &mut completed {
-            e.transport(&rows.line, "query", Some(ordinal))?;
+            e.transport_scale(&rows.line, "query", Some(ordinal), local)?;
             for (samples, interval) in e.stage_samples.iter_mut().zip([
                 &q.stages.discovery,
                 &q.stages.source,
@@ -1170,7 +1684,7 @@ fn read_run_observed(
     let (prefix_bytes, prefix_sha) = (rows.bytes, rows.sha());
     let seal: Seal = rows.row("all_queries_sealed")?;
     require(
-        seal.count == COUNT
+        seal.count == count
             && !seal.truth_opened
             && seal.prefix_bytes == prefix_bytes
             && seal.prefix_sha256 == prefix_sha
@@ -1180,12 +1694,25 @@ fn read_run_observed(
             && seal.requires_successful_directory_sync,
         "authenticated query seal",
     )?;
+    if scale {
+        let raw: Value = serde_json::from_slice(&rows.line)?;
+        let reserved =
+            &expected.ok_or("scale config")?.expected_bound_inputs["reserved_query_interval"];
+        let reserved_count = reserved["end"].as_u64().ok_or("reserved end")?
+            - reserved["start"].as_u64().ok_or("reserved start")?;
+        require(
+            raw["selected_count"] == count
+                && raw["population_count"] == inputs.count
+                && raw["reserved_query_count"] == reserved_count,
+            "scale seal counts",
+        )?;
+    }
     let (sealed_bytes, sealed_sha) = (rows.bytes, rows.sha());
     let mut hits = 0;
     for (ordinal, sample) in samples.iter_mut().enumerate() {
         let recall: Recall = rows.row("recall")?;
         require(
-            recall.ordinal == ordinal
+            recall.ordinal == ordinals[ordinal]
                 && recall.hits10 <= sample.returned.len() as u64
                 && recall.recall10 == recall.hits10 as f64 / K as f64
                 && recall.returned_count == sample.returned.len()
@@ -1208,12 +1735,12 @@ fn read_run_observed(
     require(
         t.status == "MEASURED"
             && t.complete
-            && t.queries == COUNT
+            && t.queries == count
             && t.k == K
             && t.total_hits10 == hits
             && t.recall_numerator == hits
-            && t.recall_denominator == (COUNT * K) as u64
-            && t.mean_recall10 == hits as f64 / (COUNT * K) as f64
+            && t.recall_denominator == (count * K) as u64
+            && t.mean_recall10 == hits as f64 / (count * K) as f64
             && t.underfilled_queries == underfilled
             && t.all_queries_sealed
             && !t.physical_s3_measured
@@ -1242,6 +1769,40 @@ fn read_run_observed(
     if let Some(e) = &mut completed {
         let raw: Value = serde_json::from_slice(&rows.line)?;
         e.terminal = raw["summary"].clone();
+        if scale {
+            let t = &e.terminal;
+            let c = expected.ok_or("scale config")?;
+            let reserved_count = c.expected_bound_inputs["reserved_query_interval"]["end"]
+                .as_u64()
+                .ok_or("reserved end")?
+                - c.expected_bound_inputs["reserved_query_interval"]["start"]
+                    .as_u64()
+                    .ok_or("reserved start")?;
+            require(
+                t["reserved_query_count"] == reserved_count
+                    && t["diagnostic_prefix"] == ((inputs.count as u64) < reserved_count)
+                    && t["population_percentiles_valid"] == (!panel && inputs.count == 1000)
+                    && t["full_cohort_qualification"] == false,
+                "reserved population and diagnostic prefix scope",
+            )?;
+            require(
+                t["execution"] == c.expected_bound_inputs["execution"]
+                    && t["serving"] == c.expected_bound_inputs["serving"]
+                    && t["direct_memory"].is_null()
+                    && t["selected_count"] == count
+                    && t["executed_count"] == count
+                    && t["population_count"] == inputs.count
+                    && t["diagnostic_panel"] == panel,
+                "scale terminal geometry/execution",
+            )?;
+            if panel || inputs.count < 1000 {
+                require(
+                    t["population_percentiles_valid"] == false
+                        && t["full_cohort_qualification"] == false,
+                    "diagnostic terminal scope",
+                )?;
+            }
+        }
         let binding_charge: Charge = serde_json::from_value(e.terminal["binding_charge"].clone())?;
         binding_charge.validate()?;
         require(
@@ -1250,7 +1811,11 @@ fn read_run_observed(
         )?;
         require(
             e.terminal["transport_last_boundary"]
-                == e.last.as_ref().ok_or("missing transport")?.compact(),
+                == if local {
+                    e.local_boundary.clone()
+                } else {
+                    e.last.as_ref().ok_or("missing transport")?.compact()
+                },
             "terminal cumulative transport boundary",
         )?;
     }
@@ -1351,6 +1916,33 @@ fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
     Ok(report)
 }
 
+fn reduce_scale(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (CompletedConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == SCALE_CONFIG_SCHEMA,
+        "scale reduction config v4 required",
+    )?;
+    let run = read_run_with(&c.input.path, &c.input.sha256, Some(&c))?;
+    let mut report = completed_report(&c, &run)?;
+    report["schema"] = json!(SCALE_REPORT_SCHEMA);
+    report["config_path"] = json!(config_path);
+    report["config_sha256"] = json!(config_sha);
+    report["config_bytes"] = json!(config_bytes);
+    let population = c.expected_bound_inputs["execution"]["mode"] == "full"
+        && run.inputs.count == 1000
+        && run.samples.len() == 1000;
+    report["population_percentiles_valid"] = json!(population);
+    report["diagnostic_only"] = json!(!population);
+    report["cold_s3_claim"] = json!(false);
+    if !population {
+        report["statistics"] = Value::Null;
+        report["stage_statistics"] = Value::Null;
+        report["diagnostic_query_wall_ns"] = json!(run.terminal.query_wall_ns);
+        report["diagnostic_query_count"] = json!(run.samples.len());
+    }
+    Ok(report)
+}
+
 fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
     let e = run.completed.as_ref().ok_or("missing completed evidence")?;
     let stats = statistics(&run.samples.iter().map(|s| s.wall_ns).collect::<Vec<_>>())?;
@@ -1366,8 +1958,7 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
             "p50_ns":p50,"p90_ns":p90,"p95_ns":p95,"p99_ns":p99,
             "p50_ms":p50 as f64/1e6,"p90_ms":p90 as f64/1e6,"p95_ms":p95 as f64/1e6,"p99_ms":p99 as f64/1e6}));
     }
-    Ok(
-        json!({"schema":COMPLETED_SCHEMA,"status":"MEASURED","complete":true,
+    let mut report = json!({"schema":COMPLETED_SCHEMA,"status":"MEASURED","complete":true,
         "result_path":c.input.path,"result_bytes":run.file_identity.len,"result_sha256":c.input.sha256,
         "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"statistics":stats,
         "percentile_method":"nearest_rank","sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
@@ -1378,8 +1969,12 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
         "transport_scope":"cumulative process SDK observations including S3 and IMDS credential requests including PUT; not per-query logical charges or wire/billed accounting",
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
         "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
-        "vendor_or_scientific_win_claim":false,"performance_pass_claim":false}),
-    )
+        "vendor_or_scientific_win_claim":false,"performance_pass_claim":false});
+    if c.schema == SCALE_CONFIG_SCHEMA {
+        report["reduction_reads_local_files_only"] = json!(true);
+        report["producer_backend_kind"] = c.expected_bound_inputs["backend"]["kind"].clone();
+    }
+    Ok(report)
 }
 
 const SOURCE_UTILIZATION_SCHEMA: &str = "borsuk-source-utilization-evidence-v1";
@@ -2470,6 +3065,18 @@ fn main() {
                 )
             });
         }
+        if args.get(1).is_some_and(|arg| arg == "--completed-scale") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --completed-scale CONFIG CONFIG_SHA256 NEW_OUTPUT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), SCALE_REPORT_SCHEMA, || {
+                reduce_scale(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--completed-v2") {
             require(
                 args.len() == 5,
@@ -2507,6 +3114,11 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../src/bin/check_cohere_native_baseline.rs"]
+mod scale_native_runner;
 
 #[cfg(test)]
 mod tests {
@@ -3476,6 +4088,361 @@ mod tests {
             rows.last_mut().unwrap()["summary"]["process_cpu_ns"] = json!(1100 + i);
             write_fixture(dir, &format!("run-{i}"), rows)
         })
+    }
+
+    fn scale_config(dir: &Path, path: &Path, rows: &[Value]) -> (PathBuf, String) {
+        let bytes = std::fs::read(path).unwrap();
+        let config = json!({"schema":SCALE_CONFIG_SCHEMA,"input":{"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)},
+            "expected_identity":rows[0],"expected_bound_inputs":rows[1]});
+        let body = serde_json::to_vec(&config).unwrap();
+        let path = dir.join("scale-reduction.json");
+        std::fs::write(&path, &body).unwrap();
+        (path, sha(&body))
+    }
+
+    #[test]
+    fn obsolete_scale_reduction_config_reports_exact_v4_requirement() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = v2_fixture();
+        let run = dir.path().join("unused-run");
+        std::fs::write(&run, encode(&rows)).unwrap();
+        let (path, _) = scale_config(dir.path(), &run, &rows);
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["schema"] = json!("borsuk-completed-native-reduction-config-v3");
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_scale(&path, &sha(&bytes)).unwrap_err().to_string(),
+            "scale reduction config v4 required"
+        );
+    }
+    #[test]
+    fn scale_report_distinguishes_local_reduction_from_authenticated_s3_producer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = v2_fixture();
+        authenticate(&mut rows);
+        let (path, pin) = v2_config(dir.path(), &encode(&rows), &rows);
+        let (mut config, _): (CompletedConfig, _) = read_config(&path, &pin).unwrap();
+        let run = read_run_with(&config.input.path, &config.input.sha256, Some(&config)).unwrap();
+        let historical = completed_report(&config, &run).unwrap();
+        assert_eq!(historical["local_file_only"], true);
+        assert!(historical.get("producer_backend_kind").is_none());
+        // Reuse authenticated S3 evidence to check only the new report fields.
+        config.schema = SCALE_CONFIG_SCHEMA.into();
+        let report = completed_report(&config, &run).unwrap();
+        assert_eq!(report["local_file_only"], true);
+        assert_eq!(report["reduction_reads_local_files_only"], true);
+        assert_eq!(report["producer_backend_kind"], "s3");
+        assert_eq!(report["external_resources_and_cost_gate_required"], true);
+        assert_eq!(report["qualified"], false);
+    }
+
+    #[test]
+    fn source_bound_full_population_scale_report_and_frozen_config_mismatches() {
+        let dir = tempfile::tempdir().unwrap();
+        // Frozen authority is independent of the producer rows constructed below.
+        let expected_identity = json!({"phase":"identity","schema":"borsuk-cohere-native-baseline-result-v7",
+            "config_sha256":"9".repeat(64),"binary_sha256":"9".repeat(64),
+            "runner_source_sha256":"9".repeat(64),"generation_source_sha256":"9".repeat(64),
+            "router_source_sha256":"9".repeat(64),"codec_source_sha256":"9".repeat(64),
+            "source_plane_source_sha256":"9".repeat(64),"sq8_range_source_sha256":"9".repeat(64),
+            "returned_source_sha256":"9".repeat(64),"scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+            "physical_s3_measured":false,"io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
+            "s3_credential_source":"imds_instance_role_only","native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
+            "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
+            "external_gate_required":true,"truth_opened":false,"serving":{"mode":"baseline"},
+            "execution":{"mode":"full"},"fetch_parallelism":16});
+        let expected_bound_inputs = json!({"phase":"bound_inputs",
+            "dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","metric":"cosine","tie_rule":"corpus_ordinal_ascending",
+            "rows":100_000,"dimensions":1024,"count":1000,"k":10,"corpus_source_first":0,"query_source_first":100_000,
+            "profile":"native100k","generation_prefix":"retained","generation_root_sha256":"a".repeat(64),
+            "requests_bytes":4_096_000,"requests_sha256":"c".repeat(64),"truth_bytes":80_000,"truth_sha256":"d".repeat(64),
+            "native_source_sha256":"e".repeat(64),"native_sq8_sha256":"f".repeat(64),"native_order_sha256":"b".repeat(64),
+            "credential_source":"imds_instance_role_only","backend":{"kind":"s3","bucket":"fixture-bucket","region":"test-region-1",
+                "physical_prefix":"fixture/run","sq8_object_key":format!("fixture/objects/{}", "f".repeat(64)),"sq8_etag":"\"fixture-etag\""},
+            "corpus_intervals":[{"start":0,"end":100_000}],"reserved_query_interval":{"start":100_000,"end":101_000},
+            "reserved_queries_sha256":"c".repeat(64),"serving":{"mode":"baseline"},"source_cache":"off","fetch_parallelism":16,
+            "execution":{"mode":"full"},"selected_count":1000,"max_memory_bytes":536_870_912,
+            "cohort_receipt_sha256":"1".repeat(64),"derivation_receipt_sha256":"2".repeat(64),
+            "producer_authority":{"source_commit":"4".repeat(40),"executable_sha256":"5".repeat(64),
+                "producer_source_sha256":"6".repeat(64),"sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)},"truth_opened":false});
+        let mut rows = v2_fixture();
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v7");
+        for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
+            rows[0][key] = json!("9".repeat(64));
+        }
+        rows[0]["serving"] = json!({"mode":"baseline"});
+        rows[0]["execution"] = json!({"mode":"full"});
+        rows[0]["fetch_parallelism"] = json!(16);
+        let inputs = &mut rows[1];
+        inputs["dataset"] = json!("CohereLabs/wikipedia-2023-11-embed-multilingual-v3");
+        inputs["revision"] = json!("ade45fb52bd549f5e8c065636fe4160a43c2af36");
+        inputs["rows"] = json!(100_000);
+        inputs["dimensions"] = json!(1024);
+        inputs["query_source_first"] = json!(100_000);
+        inputs["requests_bytes"] = json!(4_096_000);
+        inputs["corpus_intervals"] = json!([{"start":0,"end":100_000}]);
+        inputs["reserved_query_interval"] = json!({"start":100_000,"end":101_000});
+        inputs["reserved_queries_sha256"] = inputs["requests_sha256"].clone();
+        inputs["serving"] = json!({"mode":"baseline"});
+        inputs["source_cache"] = json!("off");
+        inputs["fetch_parallelism"] = json!(16);
+        inputs["execution"] = json!({"mode":"full"});
+        inputs["selected_count"] = json!(1000);
+        inputs["max_memory_bytes"] = json!(512 * 1024 * 1024_u64);
+        inputs["cohort_receipt_sha256"] = json!("1".repeat(64));
+        inputs["derivation_receipt_sha256"] = json!("2".repeat(64));
+        inputs["producer_authority"] = json!({"source_commit":"4".repeat(40),"executable_sha256":"5".repeat(64),
+            "producer_source_sha256":"6".repeat(64),"sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)});
+        for row in &mut rows {
+            match row["phase"].as_str().unwrap() {
+                "startup" => row["serving"] = json!({"mode":"baseline"}),
+                "query" => {
+                    row["serving"] = json!({"mode":"baseline"});
+                    row["source_nomination_skipped"] = json!(false);
+                    row["planning_scope"] = json!("source_nomination_and_cover");
+                    row["plan"] = json!({"selected_pages":[0],"ranges":[[0,100]],
+                        "planned_bytes":100,"target_pages":1,"target_shortfall":0,
+                        "primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
+                }
+                "all_queries_sealed" => {
+                    row["selected_count"] = json!(1000);
+                    row["population_count"] = json!(1000);
+                    row["reserved_query_count"] = json!(1000);
+                }
+                "terminal" => {
+                    let summary = &mut row["summary"];
+                    summary["serving"] = json!({"mode":"baseline"});
+                    summary["direct_memory"] = Value::Null;
+                    summary["execution"] = json!({"mode":"full"});
+                    for key in [
+                        "selected_count",
+                        "executed_count",
+                        "population_count",
+                        "reserved_query_count",
+                    ] {
+                        summary[key] = json!(1000);
+                    }
+                    summary["diagnostic_panel"] = json!(false);
+                    summary["diagnostic_prefix"] = json!(false);
+                    summary["population_percentiles_valid"] = json!(true);
+                    summary["full_cohort_qualification"] = json!(false);
+                }
+                _ => (),
+            }
+        }
+        let (result, _) = write_fixture(dir.path(), "scale-full-population.jsonl", rows.clone());
+        let body = std::fs::read(&result).unwrap();
+        let config = dir.path().join("scale-reduction.json");
+        let frozen_config = json!({"schema":SCALE_CONFIG_SCHEMA,
+            "input":{"path":result,"bytes":body.len(),"sha256":sha(&body)},
+            "expected_identity":expected_identity,"expected_bound_inputs":expected_bound_inputs});
+        let config_bytes = serde_json::to_vec(&frozen_config).unwrap();
+        std::fs::write(&config, &config_bytes).unwrap();
+        let pin = sha(&config_bytes);
+        let report = reduce_scale(&config, &pin).unwrap();
+        assert_eq!(report["population_percentiles_valid"], true);
+        assert_eq!(report["diagnostic_only"], false);
+        assert!(!report["statistics"].is_null() && !report["stage_statistics"].is_null());
+        assert_eq!(report["statistics"]["p99_ms"], 990.0);
+        assert_eq!(report["native_terminal"]["queries"], 1000);
+        assert_eq!(report["producer_backend_kind"], "s3");
+        assert_eq!(report["cold_s3_claim"], false);
+        assert_eq!(report["qualified"], false);
+        let frozen: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        for key in ["derivation_receipt_sha256", "backend", "producer_authority"] {
+            let mut mismatched = frozen.clone();
+            match key {
+                "backend" => {
+                    mismatched["expected_bound_inputs"][key] =
+                        json!({"kind":"local","store_root":"/synthetic/store"})
+                }
+                "producer_authority" => {
+                    mismatched["expected_bound_inputs"][key]["executable_sha256"] =
+                        json!("0".repeat(64))
+                }
+                _ => mismatched["expected_bound_inputs"][key] = json!("8".repeat(64)),
+            }
+            let bytes = serde_json::to_vec(&mismatched).unwrap();
+            std::fs::write(&config, &bytes).unwrap();
+            let error = reduce_scale(&config, &sha(&bytes)).unwrap_err().to_string();
+            assert_eq!(error, "expected v2 input/root/backend pins", "{key}");
+            assert_eq!(
+                std::fs::read(&result).unwrap(),
+                body,
+                "run untouched: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_million_population_geometry_and_allocation_bounds() {
+        let rows = v2_fixture();
+        let mut raw = rows[1].clone();
+        raw["dataset"] = json!("CohereLabs/wikipedia-2023-11-embed-multilingual-v3");
+        raw["revision"] = json!("ade45fb52bd549f5e8c065636fe4160a43c2af36");
+        raw["rows"] = json!(1_000_000);
+        raw["dimensions"] = json!(1024);
+        raw["profile"] = json!("scale1m");
+        raw["query_source_first"] = json!(100_000);
+        raw["requests_bytes"] = json!(4_096_000);
+        raw["truth_bytes"] = json!(80_000);
+        raw["corpus_intervals"] =
+            json!([{"start":0,"end":100_000},{"start":101_000,"end":1_001_000}]);
+        raw["reserved_query_interval"] = json!({"start":100_000,"end":101_000});
+        raw["reserved_queries_sha256"] = raw["requests_sha256"].clone();
+        raw["serving"] = json!({"mode":"baseline"});
+        raw["source_cache"] = json!("off");
+        raw["execution"] = json!({"mode":"full"});
+        raw["selected_count"] = json!(1000);
+        raw["max_memory_bytes"] = json!(512 * 1024 * 1024);
+        raw["cohort_receipt_sha256"] = json!("1".repeat(64));
+        raw["derivation_receipt_sha256"] = json!("2".repeat(64));
+        raw["producer_authority"] = json!({"source_commit":"4".repeat(40),"executable_sha256":"5".repeat(64),
+            "producer_source_sha256":"6".repeat(64),"sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)});
+        let inputs: Inputs = serde_json::from_value(raw.clone()).unwrap();
+        validate_scale_inputs(&inputs, &raw).unwrap();
+        for count in [1, 32, 1000] {
+            let mut prefix = raw.clone();
+            prefix["count"] = json!(count);
+            prefix["selected_count"] = json!(count);
+            prefix["requests_bytes"] = json!(count * 1024 * 4);
+            prefix["truth_bytes"] = json!(count * 10 * 8);
+            validate_scale_inputs(
+                &serde_json::from_value::<Inputs>(prefix.clone()).unwrap(),
+                &prefix,
+            )
+            .unwrap();
+        }
+        let mut wrong_digest = raw.clone();
+        wrong_digest["reserved_queries_sha256"] = json!("8".repeat(64));
+        assert_eq!(
+            validate_scale_inputs(&inputs, &wrong_digest)
+                .unwrap_err()
+                .to_string(),
+            "full selected request/reserved query digest binding"
+        );
+        assert!(scale_ordinals(&raw, usize::MAX).is_err());
+        for (key, value) in [
+            ("rows", json!(1_000_001)),
+            ("profile", json!("native100k")),
+            ("query_source_first", json!(usize::MAX)),
+            ("count", json!(usize::MAX)),
+            ("selected_count", json!(32)),
+            (
+                "reserved_query_interval",
+                json!({"start":100_000,"end":100_032}),
+            ),
+            ("corpus_intervals", json!([{"start":0,"end":1_000_000}])),
+        ] {
+            let mut bad = raw.clone();
+            bad[key] = value;
+            assert!(
+                validate_scale_inputs(
+                    &serde_json::from_value::<Inputs>(bad.clone()).unwrap(),
+                    &bad
+                )
+                .is_err(),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_native_scale_runner_reducer_seal_count_mismatches() {
+        for (prefix, panel) in [(false, false), (false, true), (true, false)] {
+            let (dir, result) =
+                scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
+            let body = std::fs::read_to_string(&result).unwrap();
+            let rows = body
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            let (config, pin) = scale_config(dir.path(), &result, &rows);
+            let report = reduce_scale(&config, &pin).unwrap();
+            assert_eq!(report["diagnostic_only"], true);
+            assert_eq!(report["population_percentiles_valid"], false);
+            assert_eq!(report["local_file_only"], true);
+            assert_eq!(report["reduction_reads_local_files_only"], true);
+            assert_eq!(report["producer_backend_kind"], "local");
+            assert_eq!(report["cold_s3_claim"], false);
+            assert_eq!(report["external_resources_and_cost_gate_required"], true);
+            assert!(report["statistics"].is_null() && report["stage_statistics"].is_null());
+            assert_eq!(
+                report["native_terminal"]["queries"],
+                if prefix || panel { 1 } else { 2 }
+            );
+            let seal = rows
+                .iter()
+                .position(|r| r["phase"] == "all_queries_sealed")
+                .unwrap();
+            let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+            for case in [
+                "seal",
+                "count",
+                "population",
+                "geometry",
+                "terminal",
+                "query",
+                "profile",
+                "receipt",
+                "producer",
+                "old",
+                "reserved",
+                "reserved-count",
+                "diagnostic-prefix",
+            ] {
+                let mut bad = rows.clone();
+                match case {
+                    "seal" => bad[seal]["prefix_sha256"] = json!("0".repeat(64)),
+                    "count" => bad[seal]["count"] = json!(3),
+                    "population" => bad[seal]["population_count"] = json!(3),
+                    "geometry" => bad[1]["rows"] = json!(33),
+                    "terminal" => bad.last_mut().unwrap()["summary"]["selected_count"] = json!(3),
+                    "query" => bad[query]["ordinal"] = json!(3),
+                    "profile" => bad[1]["profile"] = json!("fresh1m"),
+                    "receipt" => bad[1]["cohort_receipt_sha256"] = json!("invalid"),
+                    "producer" => {
+                        bad[1]["producer_authority"]["executable_sha256"] = json!("invalid")
+                    }
+                    "reserved" => bad[1]["reserved_query_interval"]["start"] = json!(33),
+                    "reserved-count" => bad[seal]["reserved_query_count"] = json!(3),
+                    "diagnostic-prefix" => {
+                        let terminal = bad.iter_mut().find(|v| v["phase"] == "terminal").unwrap();
+                        terminal["summary"]["diagnostic_prefix"] = json!(!prefix);
+                    }
+                    "old" => bad[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v5"),
+                    _ => unreachable!(),
+                }
+                // Restore surrounding seals for semantic contradictions; leave hash corruption explicit.
+                if case != "seal" {
+                    authenticate(&mut bad);
+                }
+                let expected_error = match case {
+                    "seal" | "count" => "authenticated query seal",
+                    "population" | "reserved-count" => "scale seal counts",
+                    "geometry" => "exact corpus count",
+                    "terminal" => "scale terminal geometry/execution",
+                    "query" => "query order/truth/count/underfill",
+                    "profile" => "explicit scale input geometry/profile/cap",
+                    "receipt" => "original/derived receipt SHA256",
+                    "producer" => "root-frozen producer SHA256",
+                    "reserved" => "selected prefix within full reserved interval",
+                    "diagnostic-prefix" => "reserved population and diagnostic prefix scope",
+                    "old" => "scale result v7 required",
+                    _ => unreachable!(),
+                };
+                let path = dir.path().join(case);
+                std::fs::write(&path, encode(&bad)).unwrap();
+                let (config, pin) = scale_config(dir.path(), &path, &bad);
+                let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+                assert_eq!(
+                    error, expected_error,
+                    "{case} prefix={prefix} panel={panel}"
+                );
+            }
+        }
     }
 
     fn v2_fixture() -> Vec<Value> {
