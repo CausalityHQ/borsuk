@@ -1,0 +1,71 @@
+{
+  "schema":"borsuk-next1m-build-envelope-proposal-v1",
+  "status":"PENDING_COMPOSITION_CANARY_QUOTE_AND_EXACT_FREEZE",
+  "phase_deadlines_seconds":{
+    "regenerate_preparation":2400,
+    "derive":3600,
+    "stage_sq8":300,
+    "build_generation":2700,
+    "publish_local":1800,
+    "baseline_q32":900
+  },
+  "phase_sum_seconds":11700,
+  "transport_deadline_seconds":900,
+  "setup_deadline_seconds":900,
+  "phase_cleanup_total_reserve_seconds":360,
+  "terminal_publication_reserve_seconds":240,
+  "machine_local_stop_seconds":14400,
+  "external_hard_stop_seconds":15000,
+  "termination_grace_seconds":120,
+  "compute":{
+    "instance_type":"c7i.2xlarge",
+    "region":"eu-central-1",
+    "availability_zone":"eu-central-1c",
+    "market":"spot",
+    "maximum_usd_per_hour":0.60,
+    "maximum_compute_usd":2.50,
+    "maximum_ancillary_usd":0.15,
+    "total_reserved_usd":2.65,
+    "fresh_quote_required":true,
+    "actual_spend_measured":false
+  },
+  "construction_limits":{
+    "cpu_quota_percent":400,
+    "allowed_cpus":"0-3",
+    "memory_bytes":8589934592,
+    "swap_bytes":0,
+    "pids":128
+  },
+  "serving_library_memory_bytes":536870912,
+  "scratch":{
+    "root_volume_gib":80,
+    "separate_scratch_volume_gib":40,
+    "type":"gp3",
+    "encrypted":true,
+    "delete_on_termination":true,
+    "proposed_retained_data_and_reserves_bytes":27581982055,
+    "free_space_before_transport_required_bytes":30064771072,
+    "filesystem_identity_and_capacity_required":true,
+    "optional_deletions":false,
+    "sampled_high_water_claim_complete":false
+  },
+  "closure":{
+    "one_native_process_at_a_time":true,
+    "automatic_retries":false,
+    "stop_first_failure":true,
+    "original_all_phase_exits_required":true,
+    "publish_small_terminal_evidence_before_termination":true,
+    "collect_after_terminated_and_waited":true,
+    "multi_gigabyte_corpus_retained_after_termination":false,
+    "no_idle_instance_retention":true,
+    "interrupted_measurement_cell":"INVALID_PRESERVE_THEN_ROOT_DECIDES_NEW_ATTEMPT"
+  },
+  "admission_order":[
+    "Authenticate exact qualified source/binaries and real input pins; existing real1M source admission is referenced, not repeated as a separate campaign.",
+    "Disposable staging composition canary: real transport/environment/CLI/exit/cleanup; synthetic phase bodies explicitly labelled, no ANN quality claim.",
+    "Freeze exact source/config/caps/asset roster and cost quote after canary passes.",
+    "Single Spot chain regenerates all five preparation seals and validates them before derive.",
+    "Run sequential native chain and independent closed replay; apply preregistered Q32 screen only after complete authenticated output."
+  ],
+  "performance_claim":false
+}
