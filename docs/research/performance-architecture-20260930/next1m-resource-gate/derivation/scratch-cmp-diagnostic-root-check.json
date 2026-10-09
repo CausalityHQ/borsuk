@@ -1,0 +1,18 @@
+{
+  "source_commit": "618efe6975eb9acc5a66b8b96792935f49c07a77",
+  "source_sha256": "e7625ddc2b0b31c503532ee674f1d16b87a80cf336529fef1f5bfd86e731432e",
+  "assembly": {
+    "assembly_only": true,
+    "launch_authorized": false,
+    "diagnostic_trace": true,
+    "diagnostic_cmp_rc": true,
+    "bytes": 13005,
+    "sha256": "45dc8132a00fa463f4edfe9d7fa45561290db2f326e04d39c082aa31dde3783f",
+    "untraced_bytes": 12592,
+    "untraced_sha256": "e856087244c2cbf0d5dd5363f4085e779069f8c104d9acee01e31e1630f88f4b"
+  },
+  "inverse_original_exact": true,
+  "bash_syntax_exit": 0,
+  "native_run": false,
+  "launch_authorized": false
+}
