@@ -1,0 +1,14 @@
+{
+  "additional_primary_doc_constraint": "RuntimeMaxSec has no effect on Type=oneshot; explicit activation/stop and whole-batch deadlines required",
+  "engineering_id": "5aee94067a0d496b",
+  "group_id": "0553f38d14984d7c",
+  "launch_admitted": false,
+  "launch_request_sha256": "56acf51f10dac60c8cb8b379668953ea92845f7ad45b3ef62d7a02474073fe58",
+  "new_review_reason": "new one-boot private-bind cloud-init protocol, not the previously reviewed production bootstrap",
+  "performance_claim": false,
+  "plan_sha256": "096dfec16c5c8c64490e8f35e2987a47534c5e272c6250370c587d9978885786",
+  "research_id": "f43ecc2824624064",
+  "runtime_verified": false,
+  "schema": "borsuk-next1m-canary-design-review-pending-v1",
+  "status": "INDEPENDENT_REVIEW_RUNNING"
+}
