@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-scale-maintenance-qualification-closed-v1",
+  "instance_id": "i-0765ed97e9b2f6610",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "qualification_exit": 0,
+  "source_commit": "481f4518a3faffab604be3fd57941378d7790f5e",
+  "native_source_file_count": 426,
+  "native_source_identity_sha256": "9210ac2b4b60a0536544d1423bae42c8f782af1caca29ad984b16dbd01709aae",
+  "source_archive_sha256": "087cddcb3b933191d66937c5e8ddc6ae59328d31812dac711863de75ced551ca",
+  "evidence": {
+    "bytes": 611416,
+    "sha256": "54d1dc2d9391a8b9e3750553920dedc94fb6a4326861168a37498e8b14f18535"
+  },
+  "scope": "compiler and synthetic correctness qualification only",
+  "ann_run": false,
+  "performance_claim": false,
+  "quality_claim": false
+}

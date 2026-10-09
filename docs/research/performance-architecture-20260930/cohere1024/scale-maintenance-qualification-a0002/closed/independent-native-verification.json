@@ -1,0 +1,62 @@
+{
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "481f4518a3faffab604be3fd57941378d7790f5e",
+  "source_file_count": 426,
+  "native_source_identity_sha256": "9210ac2b4b60a0536544d1423bae42c8f782af1caca29ad984b16dbd01709aae",
+  "all_archive_files_authenticated_before_after": 2465,
+  "mandatory_tests_passed_once": 11,
+  "stages_passed": 7,
+  "terminated": true,
+  "instance_id": "i-0765ed97e9b2f6610",
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "memory_peak_bytes": 8589934592,
+  "memory_max_events": 151,
+  "performance_claim": false,
+  "real_1m_run": false,
+  "stages": [
+    {
+      "name": "application-id-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1"
+    },
+    {
+      "name": "semantic-router-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib semantic_unit_router:: -- --test-threads=1"
+    },
+    {
+      "name": "two-bit-library-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib two_bit_ -- --test-threads=1"
+    },
+    {
+      "name": "generation-integration-tests",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo test --locked -p borsuk --test two_bit_generation -- --test-threads=1"
+    },
+    {
+      "name": "release",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo build --release --locked -p borsuk --lib --bin publish_two_bit_generation --bin check_cohere_native_baseline"
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    },
+    {
+      "name": "test-build",
+      "exit": 0,
+      "tee_exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+    }
+  ],
+  "full_source_before_after_root_match": true
+}

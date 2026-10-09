@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use tokio::io::AsyncWriteExt;
 
@@ -348,6 +348,53 @@ pub async fn prepare_two_bit_compaction(
     output: &Path,
     limits: TwoBitCompactionLimits,
 ) -> std::result::Result<TwoBitCompactionSource, CanonicalRecoveryFailure> {
+    prepare_compaction(store, base, snapshot, output, None, limits).await
+}
+
+/// The compaction worker owns this exact staging path under its authenticated
+/// job and lock; retries reclaim it before allocating replacement scratch.
+pub(crate) async fn prepare_two_bit_compaction_in_job(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+    snapshot: &TwoBitMutationSnapshot,
+    output: &Path,
+    staging: &Path,
+    limits: TwoBitCompactionLimits,
+) -> std::result::Result<TwoBitCompactionSource, CanonicalRecoveryFailure> {
+    prepare_compaction(store, base, snapshot, output, Some(staging), limits).await
+}
+
+struct CompactionStage {
+    path: PathBuf,
+    temporary: Option<tempfile::TempDir>,
+}
+impl CompactionStage {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn close(mut self) -> std::io::Result<()> {
+        match self.temporary.take() {
+            Some(temporary) => temporary.close(),
+            None => std::fs::remove_dir_all(&self.path),
+        }
+    }
+}
+impl Drop for CompactionStage {
+    fn drop(&mut self) {
+        if self.temporary.is_none() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+async fn prepare_compaction(
+    store: &dyn ObjectStore,
+    base: &TwoBitHead,
+    snapshot: &TwoBitMutationSnapshot,
+    output: &Path,
+    staging: Option<&Path>,
+    limits: TwoBitCompactionLimits,
+) -> std::result::Result<TwoBitCompactionSource, CanonicalRecoveryFailure> {
     let mut stats = CanonicalRecoveryStats::default();
     let result = async {
         let bad = TwoBitStoreError::Invalid;
@@ -386,7 +433,23 @@ pub async fn prepare_two_bit_compaction(
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let staged = tempfile::tempdir_in(parent)?;
+        let staged = if let Some(path) = staging {
+            if path.parent() != Some(parent) {
+                return Err(bad("compaction staging namespace"));
+            }
+            std::fs::create_dir(path)?;
+            CompactionStage {
+                path: path.to_path_buf(),
+                temporary: None,
+            }
+        } else {
+            let temporary = tempfile::tempdir_in(parent)?;
+            CompactionStage {
+                path: temporary.path().to_path_buf(),
+                temporary: Some(temporary),
+            }
+        };
+
         let source = staged.path().join("canonical.bin");
         let (recovery, canonical) = recover_canonical(
             store,
@@ -503,6 +566,9 @@ pub async fn prepare_two_bit_compaction(
                     .unwrap_or(Path::new(".")),
             )?
             .sync_all()?;
+            // Release canonical scratch before the generation build can begin.
+            // Cleanup failure must not admit another phase alongside old scratch.
+            staged.close()?;
             Ok(receipt)
         })
         .await

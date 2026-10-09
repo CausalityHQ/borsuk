@@ -370,6 +370,81 @@ pub fn repackage_semantic_router(
     finish_root(output, &body)
 }
 
+/// Shared pre-allocation build admission; caller pins/IDs are separate charges.
+pub(crate) fn admit_build_payload(
+    rows: usize,
+    dimensions: usize,
+    ordered: bool,
+    mode: DiscoveryMode,
+    profile: SemanticProfile,
+    max_build_payload_bytes: usize,
+) -> Result<usize> {
+    let bad = TwoBitGenerationError::Invalid;
+    if rows == 0
+        || dimensions == 0
+        || (mode == DiscoveryMode::Semantic && !profile.valid_geometry(rows, dimensions))
+    {
+        return Err(bad("build inputs"));
+    }
+    let units = rows.div_ceil(32);
+    let pages = rows.div_ceil(256);
+    let page_bytes = dimensions
+        .checked_add(12)
+        .and_then(|n| n.checked_mul(256))
+        .ok_or(bad("page geometry"))?;
+    // Covers f16 blob/f32 decode/build copies, adjacency (levels capped17
+    // in the existing builder), visit/order arrays, heap and serialization.
+    // Conservative model; measured process RSS is a separate qualification.
+    let graph_bytes = dimensions
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(16384))
+        .and_then(|n| n.checked_mul(units))
+        .ok_or(bad("graph build memory"))?;
+    let modeled = dimensions
+        .checked_mul(128)
+        .and_then(|n| {
+            n.checked_add(if mode == DiscoveryMode::Graph {
+                graph_bytes
+            } else {
+                0
+            })
+        })
+        .and_then(|n| n.checked_add(pages.checked_mul(32)?))
+        .and_then(|n| n.checked_add(page_bytes))
+        .and_then(|n| n.checked_add(262144))
+        .and_then(|n| n.checked_add(if ordered { rows.checked_mul(8)? } else { 0 }))
+        .ok_or(bad("build memory"))?;
+    let semantic_memory = if mode == DiscoveryMode::Semantic {
+        let geometry = crate::semantic_unit_router::Geometry {
+            rows,
+            dimensions,
+            units,
+            blob_bytes: units
+                .checked_mul(dimensions)
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| n.checked_add(32))
+                .ok_or(bad("centroid geometry"))?,
+        };
+        crate::semantic_unit_router::admit(
+            geometry,
+            max_build_payload_bytes.min(profile.allocation_cap()),
+            profile,
+        )
+        .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?
+    } else {
+        0
+    };
+    if modeled
+        .checked_add(semantic_memory)
+        .is_none_or(|n| n > max_build_payload_bytes)
+        || units > u32::MAX as usize
+        || (mode == DiscoveryMode::Semantic && !profile.valid_geometry(rows, dimensions))
+    {
+        return Err(bad("build memory budget"));
+    }
+    Ok(semantic_memory)
+}
+
 impl TwoBitGenerationBuilder<'_> {
     /// Build in a new directory and return the completed root SHA. Root is
     /// renamed last; failures leave unpublished scratch for caller cleanup.
@@ -496,64 +571,19 @@ impl TwoBitGenerationBuilder<'_> {
         {
             return Err(bad("build inputs"));
         }
-        let units = rows.div_ceil(32);
+        let semantic_memory = admit_build_payload(
+            rows,
+            dimensions,
+            order.is_some(),
+            mode,
+            profile,
+            max_build_payload_bytes,
+        )?;
         let pages = rows.div_ceil(256);
         let page_bytes = dimensions
             .checked_add(12)
             .and_then(|n| n.checked_mul(256))
             .ok_or(bad("page geometry"))?;
-        // Covers f16 blob/f32 decode/build copies, adjacency (levels capped17
-        // in the existing builder), visit/order arrays, heap and serialization.
-        // Conservative model; measured process RSS is a separate qualification.
-        let graph_bytes = dimensions
-            .checked_mul(32)
-            .and_then(|n| n.checked_add(16384))
-            .and_then(|n| n.checked_mul(units))
-            .ok_or(bad("graph build memory"))?;
-        let modeled = dimensions
-            .checked_mul(128)
-            .and_then(|n| {
-                n.checked_add(if mode == DiscoveryMode::Graph {
-                    graph_bytes
-                } else {
-                    0
-                })
-            })
-            .and_then(|n| n.checked_add(pages.checked_mul(32)?))
-            .and_then(|n| n.checked_add(page_bytes))
-            .and_then(|n| n.checked_add(262144))
-            .and_then(|n| {
-                n.checked_add(if order.is_some() {
-                    rows.checked_mul(8)?
-                } else {
-                    0
-                })
-            })
-            .ok_or(bad("build memory"))?;
-        let semantic_memory = if mode == DiscoveryMode::Semantic {
-            let geometry = crate::semantic_unit_router::Geometry {
-                rows,
-                dimensions,
-                units,
-                blob_bytes: 32 + units * dimensions * 2,
-            };
-            crate::semantic_unit_router::admit(
-                geometry,
-                max_build_payload_bytes.min(profile.allocation_cap()),
-                profile,
-            )
-            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?
-        } else {
-            0
-        };
-        if modeled
-            .checked_add(semantic_memory)
-            .is_none_or(|n| n > max_build_payload_bytes)
-            || units > u32::MAX as usize
-            || (mode == DiscoveryMode::Semantic && !profile.valid_geometry(rows, dimensions))
-        {
-            return Err(bad("build memory budget"));
-        }
         fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
         match order {
             Some(order) => {

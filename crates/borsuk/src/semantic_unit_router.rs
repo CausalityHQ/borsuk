@@ -32,20 +32,23 @@ pub enum SemanticProfile {
     Native100k,
     /// Fresh research arm: exactly one million rows and 768 coordinates.
     Fresh1m,
+    /// Generic explicit scale geometry: 1–1,000,000 rows, 1–1024 coordinates.
+    /// Uses existing scale algorithm/caps; geometry is not runtime qualification.
+    Scale1m,
 }
 impl SemanticProfile {
     /// Construction payload ceiling, independently of measured process RSS.
     pub const fn allocation_cap(self) -> usize {
         match self {
             Self::Native100k => ALLOCATION_CAP,
-            Self::Fresh1m => 512 * 1024 * 1024,
+            Self::Fresh1m | Self::Scale1m => 512 * 1024 * 1024,
         }
     }
     /// Maximum encoded root length.
     pub const fn root_cap(self) -> usize {
         match self {
             Self::Native100k => 1024 * 1024,
-            Self::Fresh1m => 4 * 1024 * 1024,
+            Self::Fresh1m | Self::Scale1m => 4 * 1024 * 1024,
         }
     }
     /// Whether the supplied source geometry belongs to this profile.
@@ -53,18 +56,23 @@ impl SemanticProfile {
         match self {
             Self::Native100k => (1..=100_000).contains(&rows) && (1..=1024).contains(&dimensions),
             Self::Fresh1m => rows == 1_000_000 && dimensions == 768,
+            Self::Scale1m => (1..=1_000_000).contains(&rows) && (1..=1024).contains(&dimensions),
         }
     }
     pub(crate) const fn selected_leaf_limit(self) -> usize {
         match self {
             Self::Native100k => 16,
-            Self::Fresh1m => 48,
+            Self::Fresh1m | Self::Scale1m => 48,
         }
     }
-    pub(crate) const fn selected_leaf_bytes(self) -> usize {
+    pub(crate) fn selected_leaf_bytes(self, dimensions: usize) -> Result<usize> {
         match self {
-            Self::Native100k => 16 * LEAF_UNITS * (4 + 1024 * 2),
-            Self::Fresh1m => 48 * LEAF_UNITS * (4 + 768 * 2),
+            Self::Native100k => Ok(16 * LEAF_UNITS * (4 + 1024 * 2)),
+            Self::Fresh1m => Ok(48 * LEAF_UNITS * (4 + 768 * 2)),
+            Self::Scale1m => {
+                require((1..=1024).contains(&dimensions), "selected leaf dimensions")?;
+                product(&[48, LEAF_UNITS, sum(&[4, product(&[dimensions, 2])?])?])
+            }
         }
     }
     pub(crate) const fn walk_unit_limit(self) -> usize {
@@ -73,25 +81,27 @@ impl SemanticProfile {
     pub(crate) const fn closure_page_limit(self) -> usize {
         match self {
             Self::Native100k => 1024,
-            Self::Fresh1m => 512,
+            Self::Fresh1m | Self::Scale1m => 512,
         }
     }
     pub(crate) const fn source_unit_limit(self) -> usize {
         match self {
             Self::Native100k => 2544,
-            Self::Fresh1m => 4096,
+            Self::Fresh1m | Self::Scale1m => 4096,
         }
     }
     fn code(self) -> u32 {
         match self {
             Self::Native100k => 1,
             Self::Fresh1m => 2,
+            Self::Scale1m => 3,
         }
     }
     fn from_code(code: u32) -> Result<Self> {
         match code {
             1 => Ok(Self::Native100k),
             2 => Ok(Self::Fresh1m),
+            3 => Ok(Self::Scale1m),
             _ => Err("unknown semantic profile".into()),
         }
     }
@@ -1078,7 +1088,11 @@ impl SemanticUnitRouter {
             require(selected.insert(id), "duplicate selected leaf")?;
             bytes = sum(&[bytes, body.len()])?;
             require(
-                bytes <= self.manifest.profile.selected_leaf_bytes(),
+                bytes
+                    <= self
+                        .manifest
+                        .profile
+                        .selected_leaf_bytes(self.manifest.dimensions)?,
                 "selected leaf byte cap",
             )?;
             for unit in self.validate_leaf(id, body)? {
@@ -1226,6 +1240,7 @@ fn rank_leaves<'a>(
     ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     let mut count = match profile {
         SemanticProfile::Native100k => ranked.len().min(8),
+        SemanticProfile::Scale1m => ranked.len().min(48),
         SemanticProfile::Fresh1m => {
             require(ranked.len() >= 48, "fresh selected leaf count")?;
             48
@@ -1253,6 +1268,7 @@ pub fn seed_walk(
         match profile {
             SemanticProfile::Native100k => (1..=100_000).contains(&rows),
             SemanticProfile::Fresh1m => rows == 1_000_000,
+            SemanticProfile::Scale1m => (1..=1_000_000).contains(&rows),
         } && !units.is_empty()
             && units.len() <= profile.selected_leaf_limit() * LEAF_UNITS
             && units.last().is_some_and(|&u| u < rows.div_ceil(32)),
@@ -1283,6 +1299,99 @@ pub fn seed_walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scale_profile_dimension_population_leaf_and_million_row_arithmetic_bounds() {
+        let profile = SemanticProfile::Scale1m;
+        assert_eq!(
+            profile.allocation_cap(),
+            SemanticProfile::Fresh1m.allocation_cap()
+        );
+        assert_eq!(profile.root_cap(), SemanticProfile::Fresh1m.root_cap());
+        for dimensions in [1, 3, 255, 257, 768, 1024] {
+            for rows in [1, 31, 32, 33, 100_001, 999_999, 1_000_000] {
+                assert!(profile.valid_geometry(rows, dimensions));
+            }
+            assert_eq!(
+                profile.selected_leaf_bytes(dimensions).unwrap(),
+                48 * 64 * (4 + dimensions * 2)
+            );
+            let prototypes = vec![vec![0.; dimensions]; 3];
+            assert_eq!(
+                rank_leaves(
+                    &vec![1.; dimensions],
+                    prototypes.iter().map(Vec::as_slice),
+                    profile
+                )
+                .unwrap(),
+                [0, 1, 2]
+            );
+        }
+        for (rows, dimensions) in [
+            (0, 1),
+            (1_000_001, 1),
+            (1, 0),
+            (1, 1025),
+            (usize::MAX, usize::MAX),
+        ] {
+            assert!(!profile.valid_geometry(rows, dimensions));
+        }
+        assert!(profile.selected_leaf_bytes(1025).is_err());
+        let geometry = Geometry {
+            rows: 1_000_000,
+            dimensions: 1024,
+            units: 31250,
+            blob_bytes: 64_000_032,
+        };
+        let peak = admit(geometry, profile.allocation_cap(), profile).unwrap();
+        assert_eq!(peak, 506_729_928);
+        assert!(admit(geometry, peak - 1, profile).is_err());
+        assert_eq!(512 + (2 * 489 - 1) * (64 + 4 * 1024), 4_064_832);
+        assert!(4_064_832 <= profile.root_cap());
+        assert_eq!(profile.selected_leaf_bytes(1024).unwrap(), 6_303_744);
+        assert!(
+            admit(
+                Geometry {
+                    dimensions: 1025,
+                    ..geometry
+                },
+                profile.allocation_cap(),
+                profile
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn scale_profile_build_and_nomination_support_singleton_and_partial_pages() {
+        for rows in [1, 31, 33, 257] {
+            let blob = blob(rows);
+            let digest = hash(&blob);
+            let input = SourceIdentity {
+                profile: SemanticProfile::Scale1m,
+                centroids_sha256: &digest,
+                ..source(&blob)
+            };
+            let artifacts = build(&blob, &input, input.profile.allocation_cap()).unwrap();
+            validate_publication(
+                &artifacts.manifest,
+                &artifacts.membership,
+                &artifacts.leaves,
+                &input,
+                &blob,
+            )
+            .unwrap();
+            let router = open(&artifacts, &input);
+            let ids = router.nominate(&[1., 0.]).unwrap();
+            assert_eq!(ids, [0]);
+            let nomination = router
+                .validate_selected(&ids, &parts(&router, &artifacts.leaves, &ids))
+                .unwrap();
+            assert_eq!(nomination.units, (0..rows.div_ceil(32)).collect());
+            assert_eq!(nomination.page_closure, (0..rows.div_ceil(256)).collect());
+            assert_eq!(router.manifest().profile, SemanticProfile::Scale1m);
+        }
+    }
 
     fn blob(rows: usize) -> Vec<u8> {
         let mut bytes = b"BORSUCP1".to_vec();

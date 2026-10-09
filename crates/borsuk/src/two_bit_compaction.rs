@@ -1,19 +1,20 @@
 //! Callable in-process compaction with a durable ready point and immutable uploads.
 use crate::{
     canonical_source::{
-        TwoBitCompactionLimits, TwoBitCompactionSource, prepare_two_bit_compaction,
+        TwoBitCompactionLimits, TwoBitCompactionSource, prepare_two_bit_compaction_in_job,
     },
     object_native_generation::valid_object_key,
     resident_graph_generation::{Artifact, valid_sha256},
     resident_graph_store::upload_authenticated_file,
     rotated_two_bit::RotatedTwoBitCodec,
+    semantic_unit_router::SemanticProfile,
     sq8_source::build_sq8_source_with_ids,
     two_bit_build::TwoBitGenerationBuilder,
     two_bit_generation::{DiscoveryMode, Manifest, TwoBitGenerationError, TwoBitGenerationLimits},
     two_bit_mutations::{TwoBitMutationLimits, read_two_bit_mutations, seal_two_bit_mutations},
     two_bit_source::{SourceBuildError, TwoBitSource, read_authenticated},
     two_bit_store::{
-        EmptyRoot, TwoBitHead, TwoBitStoreError, discovery_profile, publish_empty_with_mode,
+        EmptyRoot, TwoBitHead, TwoBitStoreError, discovery_profile, publish_empty_with_profile,
         publish_two_bit_generation, read_two_bit_head,
     },
 };
@@ -40,7 +41,9 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Phase caps; runtime/allocator/transport and other query pins are caller charges.
+/// Phase caps; runtime/allocator/transport are caller charges.
+/// Declare all retained generations/query pins in generation.already_pinned_bytes;
+/// these pins also count against source-phase memory, without expanding any cap.
 #[derive(Clone, Copy)]
 pub struct TwoBitCompactionOptions {
     /// Bounded recovery/sealing payload, no greater than source maintenance cap.
@@ -62,7 +65,11 @@ struct Job {
     mutation_sha256: String,
     mutation_revision: u64,
     base_discovery: DiscoveryMode,
+    #[serde(deserialize_with = "Option::deserialize")]
+    base_profile: Option<SemanticProfile>,
     discovery: DiscoveryMode,
+    #[serde(deserialize_with = "Option::deserialize")]
+    profile: Option<SemanticProfile>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -189,6 +196,7 @@ fn validate_target(
         || root.generation != generation
         || root.base_epoch != job.base_epoch
         || root.discovery.mode() != job.discovery
+        || root.discovery.semantic_profile() != job.profile
         || root.canonical.rows != input.rows
         || root.canonical.dimensions != input.dimensions
     {
@@ -342,6 +350,25 @@ pub async fn compact_two_bit_index(
 ) -> Result<TwoBitHead> {
     compact_two_bit_index_with_discovery(store, prefix, maintenance_directory, options, None).await
 }
+/// Compact into an explicitly selected semantic profile, captured for restart.
+/// Geometry 1–1M / D1–1024 still requires existing memory/disk admission.
+pub async fn compact_two_bit_index_with_semantic_profile(
+    store: Arc<dyn ObjectStore>,
+    prefix: &ObjectPath,
+    maintenance_directory: &Path,
+    options: TwoBitCompactionOptions,
+    profile: SemanticProfile,
+) -> Result<TwoBitHead> {
+    compact_with_profile(
+        store,
+        prefix,
+        maintenance_directory,
+        options,
+        Some(DiscoveryMode::Semantic),
+        Some(profile),
+    )
+    .await
+}
 /// Compact with an explicit mode change, authenticated in the durable job.
 /// None inherits the base mode (or a previously captured job on restart).
 pub async fn compact_two_bit_index_with_discovery(
@@ -351,12 +378,47 @@ pub async fn compact_two_bit_index_with_discovery(
     options: TwoBitCompactionOptions,
     requested: Option<DiscoveryMode>,
 ) -> Result<TwoBitHead> {
+    compact_with_profile(
+        store,
+        prefix,
+        maintenance_directory,
+        options,
+        requested,
+        None,
+    )
+    .await
+}
+async fn compact_with_profile(
+    store: Arc<dyn ObjectStore>,
+    prefix: &ObjectPath,
+    maintenance_directory: &Path,
+    options: TwoBitCompactionOptions,
+    requested: Option<DiscoveryMode>,
+    requested_profile: Option<SemanticProfile>,
+) -> Result<TwoBitHead> {
     let base = read_two_bit_head(store.as_ref(), prefix)
         .await?
         .ok_or(bad("compaction index absent"))?;
     let (base_discovery, profile) = discovery_profile(store.as_ref(), &base).await?;
-    reject_unsupported_profile(profile)?;
-    admit_compaction_dimensions(requested.unwrap_or(base_discovery), base.dimensions())?;
+    // Read the captured target before creating any maintenance state. This
+    // preliminary read grants no authority; the owned worker rebinds under lock.
+    let job_path = maintenance_directory
+        .join(base.root_sha256())
+        .join("job.json");
+    let captured = if job_path.exists() {
+        Some(read_json::<Job>(&job_path)?.0)
+    } else {
+        None
+    };
+    let (discovery, target_profile) = resolve_target(
+        base_discovery,
+        profile,
+        captured.as_ref(),
+        requested,
+        requested_profile,
+    );
+    admit_compaction_dimensions(discovery, target_profile, base.dimensions())?;
+    drop(base);
     let prefix = prefix.clone();
     let directory = maintenance_directory.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -380,6 +442,7 @@ pub async fn compact_two_bit_index_with_discovery(
             &directory,
             options,
             requested,
+            requested_profile,
         ));
         drop(lock);
         result
@@ -388,20 +451,42 @@ pub async fn compact_two_bit_index_with_discovery(
     .map_err(|_| bad("compaction worker failed"))?
 }
 
-fn reject_unsupported_profile(
-    profile: Option<crate::semantic_unit_router::SemanticProfile>,
-) -> Result<()> {
-    if profile == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m) {
-        return Err(bad("Fresh1m maintenance is unsupported"));
-    }
-    Ok(())
+fn resolve_target(
+    base_discovery: DiscoveryMode,
+    base_profile: Option<SemanticProfile>,
+    captured: Option<&Job>,
+    requested: Option<DiscoveryMode>,
+    requested_profile: Option<SemanticProfile>,
+) -> (DiscoveryMode, Option<SemanticProfile>) {
+    let discovery = requested
+        .or(captured.map(|job| job.discovery))
+        .unwrap_or(base_discovery);
+    let profile = if discovery == DiscoveryMode::Semantic {
+        Some(
+            requested_profile
+                .or(captured
+                    .filter(|job| job.discovery == discovery)
+                    .and_then(|job| job.profile))
+                .or(base_profile)
+                .unwrap_or(SemanticProfile::Native100k),
+        )
+    } else {
+        None
+    };
+    (discovery, profile)
 }
 
-fn admit_compaction_dimensions(discovery: DiscoveryMode, dimensions: usize) -> Result<()> {
-    // build_with_discovery uses Native100k. Validate its dimension bound before
-    // sealing; the builder admits the actual merged row count (or an empty root).
+fn admit_compaction_dimensions(
+    discovery: DiscoveryMode,
+    profile: Option<SemanticProfile>,
+    dimensions: usize,
+) -> Result<()> {
+    let profile = profile.unwrap_or(SemanticProfile::Native100k);
+    if discovery == DiscoveryMode::Semantic && profile == SemanticProfile::Fresh1m {
+        return Err(bad("Fresh1m maintenance is unsupported"));
+    }
     if discovery == DiscoveryMode::Semantic
-        && !crate::semantic_unit_router::SemanticProfile::Native100k.valid_geometry(1, dimensions)
+        && !(profile.valid_geometry(1, dimensions) || profile.valid_geometry(1_000_000, dimensions))
     {
         return Err(bad("semantic compaction dimensions"));
     }
@@ -414,6 +499,7 @@ async fn compact_owned(
     directory: &Path,
     options: TwoBitCompactionOptions,
     requested: Option<DiscoveryMode>,
+    requested_profile: Option<SemanticProfile>,
 ) -> Result<TwoBitHead> {
     if options.mutations.max_memory_bytes > options.source.max_memory_bytes
         || options.source.max_memory_bytes < 262144
@@ -431,8 +517,69 @@ async fn compact_owned(
     let base = read_two_bit_head(store, prefix)
         .await?
         .ok_or(bad("compaction index absent"))?;
-    let (base_discovery, profile) = discovery_profile(store, &base).await?;
-    reject_unsupported_profile(profile)?;
+    let (base_discovery, base_profile) = discovery_profile(store, &base).await?;
+    // Caller pins and the actual retained old head coexist with every phase.
+    let retained = options
+        .generation
+        .already_pinned_bytes
+        .checked_add(base.retained_root_bytes())
+        .and_then(|n| n.checked_add(262144))
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or(bad("compaction coexistence memory"))?;
+    let phase_memory = options
+        .source
+        .max_memory_bytes
+        .checked_sub(retained)
+        .ok_or(bad("compaction coexistence memory"))?;
+    let options = TwoBitCompactionOptions {
+        mutations: TwoBitMutationLimits {
+            max_memory_bytes: options.mutations.max_memory_bytes.min(phase_memory),
+            ..options.mutations
+        },
+        source: TwoBitCompactionLimits {
+            max_memory_bytes: phase_memory,
+            ..options.source
+        },
+        ..options
+    };
+
+    let target_generation = base
+        .generation()
+        .checked_add(1)
+        .ok_or(bad("compaction generation overflow"))?;
+    let job_dir = directory.join(base.root_sha256());
+    let job_path = job_dir.join("job.json");
+    let captured = if job_path.exists() {
+        let previous = read_json::<Job>(&job_path)?.0;
+        if previous.schema != "borsuk-two-bit-compaction-job-v4"
+            || previous.index_prefix != prefix.as_ref()
+            || previous.base_root_sha256 != base.root_sha256()
+            || previous.base_generation != base.generation()
+            || previous.dimensions != base.dimensions()
+            || previous.base_discovery != base_discovery
+            || previous.base_profile != base_profile
+            || (previous.discovery == DiscoveryMode::Semantic) != previous.profile.is_some()
+        {
+            return Err(bad("compaction job changed"));
+        }
+        Some(previous)
+    } else {
+        None
+    };
+    let (discovery, profile) = resolve_target(
+        base_discovery,
+        base_profile,
+        captured.as_ref(),
+        requested,
+        requested_profile,
+    );
+    if captured.as_ref().is_some_and(|previous| {
+        (previous.discovery, previous.profile) != (discovery, profile)
+            && job_dir.join("ready.json").exists()
+    }) {
+        return Err(bad("compaction job changed"));
+    }
+    admit_compaction_dimensions(discovery, profile, base.dimensions())?;
     // Local generations are not query caches. Discard only recognized obsolete
     // jobs, under the directory lock; never touch caller/unrecognized files.
     for entry in fs::read_dir(directory)? {
@@ -454,7 +601,7 @@ async fn compact_owned(
             return Err(bad("unmanaged compaction path"));
         }
         let (job, _): (Job, _) = read_json(&entry.path().join("job.json"))?;
-        if job.schema != "borsuk-two-bit-compaction-job-v3"
+        if job.schema != "borsuk-two-bit-compaction-job-v4"
             || job.index_prefix != prefix.as_ref()
             || job.base_root_sha256 != name
             || job.base_generation >= base.generation()
@@ -463,33 +610,62 @@ async fn compact_owned(
         }
         fs::remove_dir_all(entry.path())?;
     }
-    let target_generation = base
-        .generation()
-        .checked_add(1)
-        .ok_or(bad("compaction generation overflow"))?;
-    let job_dir = directory.join(base.root_sha256());
-    let job_path = job_dir.join("job.json");
-    let captured = if job_path.exists() {
-        Some(read_json::<Job>(&job_path)?.0.discovery)
-    } else {
-        None
-    };
-    let discovery = requested.or(captured).unwrap_or(base_discovery);
-    admit_compaction_dimensions(discovery, base.dimensions())?;
+
     let latest = read_two_bit_mutations(store, &base, base.dimensions(), options.mutations).await?;
     let Some(latest) = latest else {
-        if requested.is_some_and(|mode| mode != base_discovery) {
+        if requested.is_some_and(|mode| mode != base_discovery)
+            || requested_profile.is_some_and(|p| base_profile != Some(p))
+        {
             return Err(bad("discovery change requires a mutation snapshot"));
         }
         return Ok(base);
     };
+    let base_rows = if base.is_empty() {
+        0
+    } else {
+        let root: Manifest = serde_json::from_slice(
+            base.authenticated_root(&base.metadata_prefix(), base.root_sha256())?,
+        )
+        .map_err(|_| bad("compaction base schema"))?;
+        root.canonical.rows
+    };
+    // Conservative prospective output count also covers recovery of all old rows.
+    // Updates/deletes may reduce it; exact merged geometry is checked before IDs/build.
+    let upper_rows = base_rows
+        .checked_add(latest.put_rows())
+        .ok_or(bad("compaction row count"))?;
+    if disk_bound(upper_rows, base.dimensions())? > options.source.max_disk_bytes {
+        return Err(bad("compaction build disk cap"));
+    }
+    if upper_rows > 0 {
+        let budget = options
+            .source
+            .max_memory_bytes
+            .checked_sub(latest.resident_payload_bytes())
+            .and_then(|n| n.checked_sub(upper_rows.checked_mul(8)?))
+            .ok_or(bad("compaction build memory"))?;
+        let build_rows = profile.map_or(upper_rows, |p| {
+            upper_rows.min(match p {
+                SemanticProfile::Native100k => 100_000,
+                SemanticProfile::Fresh1m | SemanticProfile::Scale1m => 1_000_000,
+            })
+        });
+        crate::two_bit_build::admit_build_payload(
+            build_rows,
+            base.dimensions(),
+            true,
+            discovery,
+            profile.unwrap_or(SemanticProfile::Native100k),
+            budget,
+        )?;
+    }
     let sealed = seal_two_bit_mutations(store, &base, Some(&latest), options.mutations).await?;
     drop(latest);
     fs::create_dir_all(&job_dir)?;
     let (authority, _) =
         crate::two_bit_mutations::require_sealed_two_bit_mutations(store, &base).await?;
     let job = Job {
-        schema: "borsuk-two-bit-compaction-job-v3".into(),
+        schema: "borsuk-two-bit-compaction-job-v4".into(),
         index_prefix: prefix.as_ref().into(),
         base_root_sha256: base.root_sha256().into(),
         base_generation: base.generation(),
@@ -498,7 +674,9 @@ async fn compact_owned(
         mutation_sha256: sealed.sha256().into(),
         mutation_revision: sealed.revision(),
         base_discovery,
+        base_profile,
         discovery,
+        profile,
     };
     let ready_path = job_dir.join("ready.json");
     let job_bytes = serde_json::to_vec(&job).map_err(|_| bad("compaction job"))?;
@@ -507,10 +685,12 @@ async fn compact_owned(
         if bytes != job_bytes {
             let old_epoch = previous.base_epoch;
             previous.base_epoch = job.base_epoch;
-            let replace_mode =
-                requested.is_some() && previous.discovery != job.discovery && !ready_path.exists();
+            let replace_mode = (requested.is_some() || requested_profile.is_some())
+                && (previous.discovery, previous.profile) != (job.discovery, job.profile)
+                && !ready_path.exists();
             if replace_mode {
                 previous.discovery = job.discovery;
+                previous.profile = job.profile;
             }
             if old_epoch > job.base_epoch
                 || (old_epoch == job.base_epoch && !replace_mode)
@@ -531,7 +711,7 @@ async fn compact_owned(
     let generation_dir = job_dir.join("generation");
     let recovered_ready = if ready_path.exists() {
         let (ready, _): (Ready, _) = read_json(&ready_path)?;
-        if ready.schema != "borsuk-two-bit-compaction-ready-v1"
+        if ready.schema != "borsuk-two-bit-compaction-ready-v2"
             || ready.job_sha256 != hash(&job_bytes)
             || !valid_sha256(&ready.target_root_sha256)
         {
@@ -586,6 +766,16 @@ async fn compact_owned(
     let ready = if let Some(ready) = recovered_ready {
         ready
     } else {
+        // job.json has been bound to the authenticated base, sealed mutation,
+        // epoch and requested target above, under the compaction lock. Reclaim
+        // only this recognized job-owned crash staging; never scan temp prefixes.
+        let preparation = job_dir.join("preparation");
+        match fs::symlink_metadata(&preparation) {
+            Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir_all(&preparation)?,
+            Ok(_) => return Err(bad("compaction preparation path")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         for path in [&input_dir, &generation_dir] {
             if path.exists() {
                 fs::remove_dir_all(path)?;
@@ -595,9 +785,16 @@ async fn compact_owned(
         if sq8_path.exists() {
             fs::remove_file(&sq8_path)?;
         }
-        let input = prepare_two_bit_compaction(store, &base, &sealed, &input_dir, options.source)
-            .await
-            .map_err(|e| e.error)?;
+        let input = prepare_two_bit_compaction_in_job(
+            store,
+            &base,
+            &sealed,
+            &input_dir,
+            &preparation,
+            options.source,
+        )
+        .await
+        .map_err(|e| e.error)?;
         if disk_bound(input.rows, input.dimensions)? > options.source.max_disk_bytes {
             return Err(bad("compaction build disk cap"));
         }
@@ -605,11 +802,12 @@ async fn compact_owned(
         let target = if input.rows == 0 {
             hash(
                 &serde_json::to_vec(&EmptyRoot {
-                    schema: "borsuk-two-bit-empty-generation-v3".into(),
+                    schema: "borsuk-two-bit-empty-generation-v4".into(),
                     generation: target_generation,
                     dimensions: base.dimensions(),
                     base_epoch: job.base_epoch,
                     discovery: job.discovery,
+                    profile: job.profile,
                 })
                 .map_err(|_| bad("empty root"))?,
             )
@@ -634,7 +832,16 @@ async fn compact_owned(
             {
                 return Err(bad("compaction ID memory"));
             }
+            crate::two_bit_build::admit_build_payload(
+                input.rows,
+                input.dimensions,
+                true,
+                job.discovery,
+                job.profile.unwrap_or(SemanticProfile::Native100k),
+                build_budget,
+            )?;
             let mut bytes = File::open(input_dir.join("ids.i64"))?;
+
             let mut ids = Vec::new();
             ids.try_reserve_exact(input.rows)
                 .map_err(|_| bad("compaction ID memory"))?;
@@ -702,7 +909,7 @@ async fn compact_owned(
                 .await?
                 .e_tag
                 .ok_or(bad("compaction SQ8 ETag"))?;
-            let root = TwoBitGenerationBuilder {
+            let builder = TwoBitGenerationBuilder {
                 base_epoch: job.base_epoch,
                 source: TwoBitSource {
                     raw: &raw,
@@ -717,17 +924,25 @@ async fn compact_owned(
                 step: &encoding.step,
                 sq8_object_key: key.as_ref(),
                 sq8_etag: &etag,
+            };
+            if let Some(profile) = job.profile {
+                builder.build_with_semantic_profile(
+                    Some(&order),
+                    profile,
+                    &generation_dir,
+                    build_budget,
+                )?
+            } else {
+                builder.build_with_discovery(
+                    Some(&order),
+                    job.discovery,
+                    &generation_dir,
+                    build_budget,
+                )?
             }
-            .build_with_discovery(
-                Some(&order),
-                job.discovery,
-                &generation_dir,
-                build_budget,
-            )?;
-            root
         };
         let ready = Ready {
-            schema: "borsuk-two-bit-compaction-ready-v1".into(),
+            schema: "borsuk-two-bit-compaction-ready-v2".into(),
             job_sha256: hash(&job_bytes),
             input_sha256: input_sha,
             target_root_sha256: target,
@@ -739,24 +954,26 @@ async fn compact_owned(
     let published = if ready.rows == 0 {
         let expected = hash(
             &serde_json::to_vec(&EmptyRoot {
-                schema: "borsuk-two-bit-empty-generation-v3".into(),
+                schema: "borsuk-two-bit-empty-generation-v4".into(),
                 generation: target_generation,
                 dimensions: base.dimensions(),
                 base_epoch: job.base_epoch,
                 discovery: job.discovery,
+                profile: job.profile,
             })
             .map_err(|_| bad("empty root"))?,
         );
         if ready.target_root_sha256 != expected {
             return Err(bad("empty ready root"));
         }
-        publish_empty_with_mode(
+        publish_empty_with_profile(
             store,
             prefix,
             base.dimensions(),
             target_generation,
             Some(&base),
             Some(job.discovery),
+            job.profile,
         )
         .await?
     } else {
@@ -768,6 +985,7 @@ async fn compact_owned(
             || root.canonical.dimensions != base.dimensions()
             || root.base_epoch != job.base_epoch
             || root.discovery.mode() != job.discovery
+            || root.discovery.semantic_profile() != job.profile
             || root.schema != crate::two_bit_generation::SCHEMA
         {
             return Err(bad("compaction target binding"));
@@ -777,6 +995,7 @@ async fn compact_owned(
                 .generation
                 .already_pinned_bytes
                 .checked_add(sealed.resident_payload_bytes() as u64)
+                .and_then(|n| n.checked_add(262144))
                 .ok_or(bad("compaction publication memory"))?,
             ..options.generation
         };
@@ -800,113 +1019,84 @@ async fn compact_owned(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn fresh_profile_rejects_compaction_and_empty_replacement_before_side_effects() {
-        use crate::two_bit_generation::SCHEMA;
-        use futures_util::TryStreamExt;
-        use object_store::{PutPayload, memory::InMemory};
-        let store = Arc::new(InMemory::new());
-        let prefix = ObjectPath::from("fresh-test");
-        let sha = "1".repeat(64);
-        let root = serde_json::json!({"schema":SCHEMA,"generation":1,"base_epoch":0,"plane_manifest_sha256":sha,"page_manifest_sha256":sha,
-            "sq8_object_sha256":sha,"sq8_object_key":format!("fresh-test/objects/{sha}"),"sq8_etag":"etag","low":vec![0.;768],"step":vec![1.;768],
-            "canonical":{"rows":1000000,"dimensions":768,"bytes":3080000000_u64,"sha256":sha,"object_key":format!("fresh-test/objects/{sha}")},
-            "discovery":{"mode":"semantic","profile":"fresh1m","root_sha256":sha,"root_bytes":512+489*3136,"membership_sha256":sha,"membership_bytes":125000,
-                "leaves_sha256":sha,"leaves_bytes":48125000,"input_schema":"test","input_root_sha256":sha,"centroids_sha256":sha,
-                "source_sha256":sha,"source_order_sha256":sha,"mean_sha256":sha,"records_sha256":sha,"sq8_sha256":sha}});
-        let body = serde_json::to_vec(&root).unwrap();
-        let digest = hash(&body);
-        store
-            .put(
-                &prefix
-                    .clone()
-                    .join("generations")
-                    .join(digest.as_str())
-                    .join("manifest.json"),
-                PutPayload::from(body),
-            )
-            .await
-            .unwrap();
-        let control = serde_json::json!({"schema":"borsuk-two-bit-head-v2","epoch":1,"generation":1,"root_sha256":digest,"mutation":null,"fence":null});
-        store
-            .put(
-                &prefix.clone().join("head.json"),
-                PutPayload::from(serde_json::to_vec(&control).unwrap()),
-            )
-            .await
-            .unwrap();
-        let options = TwoBitCompactionOptions {
-            mutations: TwoBitMutationLimits {
-                max_memory_bytes: 1000000,
-                max_snapshot_bytes: 100000,
-            },
-            source: TwoBitCompactionLimits {
-                max_memory_bytes: 1000000,
-                max_disk_bytes: 1000000,
-                max_source_chunk_bytes: 65536,
-            },
-            generation: TwoBitGenerationLimits {
-                max_memory_bytes: 1000000,
-                max_active_queries: 1,
-                max_query_bytes: 100000,
-                max_query_gets: 32,
-                max_parallel_gets: 16,
-                max_source_bytes: 100000,
-                max_source_gets: 128,
-                max_parallel_source_gets: 16,
-                max_query_scratch_bytes: RotatedTwoBitCodec::required_query_scratch_bytes(768)
-                    .unwrap(),
-                already_pinned_bytes: 0,
-            },
-        };
-        let scratch = tempfile::tempdir().unwrap();
-        let maintenance = scratch.path().join("absent");
-        for requested in [
-            None,
-            Some(DiscoveryMode::Graph),
-            Some(DiscoveryMode::Semantic),
-        ] {
-            let error = compact_two_bit_index_with_discovery(
-                store.clone(),
-                &prefix,
-                &maintenance,
-                options,
-                requested,
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(
-                error,
-                TwoBitStoreError::Invalid("Fresh1m maintenance is unsupported")
-            ));
-            assert!(!maintenance.exists());
-        }
-        let head = read_two_bit_head(store.as_ref(), &prefix)
-            .await
-            .unwrap()
-            .unwrap();
-        let error = publish_empty_with_mode(
-            store.as_ref(),
-            &prefix,
-            768,
-            2,
-            Some(&head),
-            Some(DiscoveryMode::Graph),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            TwoBitStoreError::Invalid("Fresh1m maintenance is unsupported")
-        ));
+    #[test]
+    fn scale_profile_compaction_million_row_payload_and_disk_arithmetic() {
+        let profile = SemanticProfile::Scale1m;
+        let build = 515_513_384;
         assert_eq!(
-            store
-                .list(Some(&prefix))
-                .try_collect::<Vec<_>>()
-                .await
-                .unwrap()
-                .len(),
-            2
+            crate::two_bit_build::admit_build_payload(
+                1_000_000,
+                1024,
+                true,
+                DiscoveryMode::Semantic,
+                profile,
+                build
+            )
+            .unwrap(),
+            506_729_928
+        );
+        assert!(
+            crate::two_bit_build::admit_build_payload(
+                1_000_000,
+                1024,
+                true,
+                DiscoveryMode::Semantic,
+                profile,
+                build - 1
+            )
+            .is_err()
+        );
+        assert_eq!(build + 8_000_000 + 262144, 523_775_528);
+        assert_eq!(profile.allocation_cap() - 523_775_528, 13_095_384);
+        assert_eq!(disk_bound(1_000_000, 1024).unwrap(), 11_052_387_168);
+    }
+
+    #[test]
+    fn empty_and_job_profiles_are_required_and_old_formats_refuse() {
+        let root = EmptyRoot {
+            schema: "borsuk-two-bit-empty-generation-v4".into(),
+            generation: 1,
+            dimensions: 257,
+            base_epoch: 0,
+            discovery: DiscoveryMode::Semantic,
+            profile: Some(SemanticProfile::Scale1m),
+        };
+        assert!(root.valid());
+        let mut value = serde_json::to_value(&root).unwrap();
+        value.as_object_mut().unwrap().remove("profile");
+        assert!(serde_json::from_value::<EmptyRoot>(value).is_err());
+        let mut value = serde_json::to_value(&root).unwrap();
+        value["profile"] = serde_json::Value::Null;
+        assert!(!serde_json::from_value::<EmptyRoot>(value).unwrap().valid());
+        let mut value = serde_json::to_value(&root).unwrap();
+        value["schema"] = "borsuk-two-bit-empty-generation-v3".into();
+        assert!(!serde_json::from_value::<EmptyRoot>(value).unwrap().valid());
+        let job = Job {
+            schema: "borsuk-two-bit-compaction-job-v4".into(),
+            index_prefix: "test".into(),
+            base_root_sha256: "1".repeat(64),
+            base_generation: 1,
+            base_epoch: 0,
+            dimensions: 257,
+            mutation_sha256: "2".repeat(64),
+            mutation_revision: 1,
+            base_discovery: DiscoveryMode::Semantic,
+            base_profile: Some(SemanticProfile::Scale1m),
+            discovery: DiscoveryMode::Semantic,
+            profile: Some(SemanticProfile::Scale1m),
+        };
+        for key in ["profile", "base_profile"] {
+            let mut value = serde_json::to_value(&job).unwrap();
+            value.as_object_mut().unwrap().remove(key);
+            assert!(serde_json::from_value::<Job>(value).is_err());
+        }
+        assert!(
+            admit_compaction_dimensions(
+                DiscoveryMode::Semantic,
+                Some(SemanticProfile::Scale1m),
+                1025
+            )
+            .is_err()
         );
     }
 
@@ -950,7 +1140,7 @@ mod tests {
                 recovery: Default::default(),
             };
             let job = Job {
-                schema: "borsuk-two-bit-compaction-job-v3".into(),
+                schema: "borsuk-two-bit-compaction-job-v4".into(),
                 index_prefix: "test".into(),
                 base_root_sha256: input.base_root_sha256.clone(),
                 base_generation: 1,
@@ -959,7 +1149,9 @@ mod tests {
                 mutation_sha256: input.mutation_sha256.clone(),
                 mutation_revision: 1,
                 base_discovery: DiscoveryMode::Graph,
+                base_profile: None,
                 discovery: DiscoveryMode::Graph,
+                profile: None,
             };
             let generation = temp.path().join("generation");
             TwoBitGenerationBuilder {

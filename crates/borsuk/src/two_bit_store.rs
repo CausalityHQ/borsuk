@@ -71,13 +71,23 @@ pub(crate) struct EmptyRoot {
     pub(crate) dimensions: usize,
     pub(crate) base_epoch: u64,
     pub(crate) discovery: DiscoveryMode,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(crate) profile: Option<crate::semantic_unit_router::SemanticProfile>,
 }
 impl EmptyRoot {
     pub(crate) fn valid(&self) -> bool {
-        self.schema == "borsuk-two-bit-empty-generation-v3"
+        self.schema == "borsuk-two-bit-empty-generation-v4"
             && self.generation > 0
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
+            && match (self.discovery, self.profile) {
+                (DiscoveryMode::Graph, None) => true,
+                (DiscoveryMode::Semantic, Some(profile)) => {
+                    profile.valid_geometry(1, self.dimensions)
+                        || profile.valid_geometry(1_000_000, self.dimensions)
+                }
+                _ => false,
+            }
     }
 }
 #[derive(Deserialize)]
@@ -324,7 +334,7 @@ pub(crate) async fn discovery_profile(
         serde_json::from_slice(&body).map_err(|_| TwoBitStoreError::Invalid("discovery schema"))?;
     match root {
         Root::Empty(root) if root.valid() && root.generation == head.generation => {
-            Ok((root.discovery, None))
+            Ok((root.discovery, root.profile))
         }
         Root::Populated(root)
             if root.schema == crate::two_bit_generation::SCHEMA
@@ -333,10 +343,7 @@ pub(crate) async fn discovery_profile(
                     .discovery
                     .valid(root.canonical.rows, root.canonical.dimensions) =>
         {
-            let profile = match &root.discovery {
-                Discovery::Semantic { profile, .. } => Some(*profile),
-                _ => None,
-            };
+            let profile = root.discovery.semantic_profile();
             Ok((root.discovery.mode(), profile))
         }
         _ => Err(TwoBitStoreError::Invalid("discovery authority")),
@@ -382,7 +389,7 @@ async fn validate_owned_object(
     .await?;
     let claim: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| TwoBitStoreError::Invalid("maintenance claim schema"))?;
-    if claim["schema"] != "borsuk-two-bit-compaction-job-v3"
+    if claim["schema"] != "borsuk-two-bit-compaction-job-v4"
         || claim["index_prefix"].as_str() != Some(prefix.as_ref())
         || claim["base_epoch"].as_u64() != Some(epoch)
     {
@@ -1125,6 +1132,14 @@ pub async fn publish_two_bit_generation(
     if expected.is_some_and(|h| h.prefix != *prefix) {
         return Err(TwoBitStoreError::Invalid("head namespace"));
     }
+    // The old authenticated head remains live through new validation and upload.
+    let limits = TwoBitGenerationLimits {
+        already_pinned_bytes: limits
+            .already_pinned_bytes
+            .checked_add(expected.map_or(0, TwoBitHead::retained_root_bytes))
+            .ok_or(TwoBitStoreError::Invalid("publication coexistence memory"))?,
+        ..limits
+    };
     let authority = if let Some(previous) = expected {
         Some(crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?)
     } else {
@@ -1406,6 +1421,27 @@ pub async fn publish_empty_two_bit_generation(
 ) -> Result<TwoBitHead> {
     publish_empty_with_mode(store, prefix, dimensions, generation, expected, None).await
 }
+/// Create or replace an empty semantic base with an explicit profile.
+/// The dimension ceiling is 1024; replacements require a sealed mutation head.
+pub async fn publish_empty_two_bit_generation_with_semantic_profile(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+    profile: crate::semantic_unit_router::SemanticProfile,
+) -> Result<TwoBitHead> {
+    publish_empty_with_profile(
+        store,
+        prefix,
+        dimensions,
+        generation,
+        expected,
+        Some(DiscoveryMode::Semantic),
+        Some(profile),
+    )
+    .await
+}
 pub(crate) async fn publish_empty_with_mode(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
@@ -1414,32 +1450,55 @@ pub(crate) async fn publish_empty_with_mode(
     expected: Option<&TwoBitHead>,
     mode: Option<DiscoveryMode>,
 ) -> Result<TwoBitHead> {
+    publish_empty_with_profile(store, prefix, dimensions, generation, expected, mode, None).await
+}
+pub(crate) async fn publish_empty_with_profile(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+    mode: Option<DiscoveryMode>,
+    profile: Option<crate::semantic_unit_router::SemanticProfile>,
+) -> Result<TwoBitHead> {
     let bad = TwoBitStoreError::Invalid;
-    let mut root = EmptyRoot {
-        schema: "borsuk-two-bit-empty-generation-v3".into(),
-        generation,
-        dimensions,
-        base_epoch: 0,
-        discovery: mode.unwrap_or(DiscoveryMode::Graph),
-    };
-    if !root.valid()
+    if dimensions == 0
+        || generation == 0
+        || u32::try_from(dimensions).is_err()
         || expected.is_some_and(|h| {
             h.prefix != *prefix || h.generation >= generation || h.dimensions != dimensions
         })
     {
         return Err(bad("empty generation namespace/order/dimensions"));
     }
-    if let Some(previous) = expected {
-        if discovery_profile(store, previous).await?.1
-            == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m)
-        {
-            return Err(bad("Fresh1m maintenance is unsupported"));
-        }
+    let inherited = if let Some(previous) = expected {
+        discovery_profile(store, previous).await?
+    } else {
+        (DiscoveryMode::Graph, None)
+    };
+    let discovery = mode.unwrap_or(inherited.0);
+    let profile = if discovery == DiscoveryMode::Semantic {
+        Some(
+            profile
+                .or(inherited.1)
+                .unwrap_or(crate::semantic_unit_router::SemanticProfile::Native100k),
+        )
+    } else {
+        None
+    };
+    if profile == Some(crate::semantic_unit_router::SemanticProfile::Fresh1m) {
+        return Err(bad("Fresh1m maintenance is unsupported"));
     }
-    if mode.is_none()
-        && let Some(previous) = expected
-    {
-        root.discovery = discovery_mode(store, previous).await?;
+    let mut root = EmptyRoot {
+        schema: "borsuk-two-bit-empty-generation-v4".into(),
+        generation,
+        dimensions,
+        base_epoch: 0,
+        discovery,
+        profile,
+    };
+    if !root.valid() {
+        return Err(bad("empty generation namespace/order/dimensions"));
     }
     let authority = if let Some(previous) = expected {
         Some(crate::two_bit_mutations::require_sealed_two_bit_mutations(store, previous).await?)

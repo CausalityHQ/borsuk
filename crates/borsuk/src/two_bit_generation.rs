@@ -299,6 +299,12 @@ pub(crate) enum Discovery {
     },
 }
 impl Discovery {
+    pub(crate) fn semantic_profile(&self) -> Option<SemanticProfile> {
+        match self {
+            Self::Semantic { profile, .. } => Some(*profile),
+            Self::Graph { .. } => None,
+        }
+    }
     pub(crate) fn mode(&self) -> DiscoveryMode {
         match self {
             Self::Graph { .. } => DiscoveryMode::Graph,
@@ -949,10 +955,7 @@ impl TwoBitGeneration {
     }
     /// Explicit semantic profile, absent for graph discovery.
     pub fn semantic_profile(&self) -> Option<SemanticProfile> {
-        match &self.manifest.discovery {
-            Discovery::Semantic { profile, .. } => Some(*profile),
-            _ => None,
-        }
+        self.manifest.discovery.semantic_profile()
     }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
@@ -2850,6 +2853,7 @@ mod source_walk_tests {
         reads: std::sync::Mutex<Vec<(String, bool, std::ops::Range<u64>, Option<String>)>>,
         writes: std::sync::Mutex<Vec<String>>,
         fail_head: std::sync::atomic::AtomicUsize,
+        fail_claim: std::sync::atomic::AtomicBool,
         metadata_fault: std::sync::Mutex<Option<&'static str>>,
         root_read_budget: std::sync::Mutex<Option<(String, usize)>>,
         bad_etag_suffix: std::sync::Mutex<Option<&'static str>>,
@@ -2986,6 +2990,16 @@ mod source_walk_tests {
             body: object_store::PutPayload,
             options: object_store::PutOptions,
         ) -> object_store::Result<object_store::PutResult> {
+            if path.as_ref().ends_with("/claim.json")
+                && self
+                    .fail_claim
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(object_store::Error::Generic {
+                    store: "recorded",
+                    source: std::io::Error::other("post-preparation claim failure").into(),
+                });
+            }
             if path.as_ref().ends_with("/head.json")
                 && self
                     .fail_head
@@ -3210,6 +3224,7 @@ mod source_walk_tests {
         let rows = match profile {
             SemanticProfile::Native100k => 32_768_usize,
             SemanticProfile::Fresh1m => 1_000_000,
+            SemanticProfile::Scale1m => 98_304,
         };
         // Encode unit means directly; no full canonical vector fixture is needed.
         let mut blob = b"BORSUCP1".to_vec();
@@ -5666,22 +5681,31 @@ mod source_walk_tests {
         .await
         .unwrap();
         // A failed, unready semantic job can explicitly recover in graph mode.
+        store
+            .fail_claim
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let failed = compact_two_bit_index_with_discovery(
             store.clone(),
             &empty_prefix,
             &directory,
-            TwoBitCompactionOptions {
-                source: crate::canonical_source::TwoBitCompactionLimits {
-                    max_disk_bytes: 262144,
-                    ..options.source
-                },
-                ..options
-            },
+            options,
             Some(DiscoveryMode::Semantic),
         )
         .await
         .unwrap_err();
+        assert!(
+            matches!(
+                failed,
+                crate::two_bit_store::TwoBitStoreError::Store(object_store::Error::Generic {
+                    store: "recorded",
+                    ..
+                })
+            ),
+            "{failed:?}"
+        );
+        assert!(!store.fail_claim.load(std::sync::atomic::Ordering::SeqCst));
         let job_dir = directory.join(empty.root_sha256());
+
         assert!(!job_dir.join("ready.json").exists());
         assert!(job_dir.join("input").exists(), "{failed:?}");
         let job_path = job_dir.join("job.json");
