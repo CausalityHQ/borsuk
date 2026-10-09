@@ -1,0 +1,385 @@
+{
+  "status": "SOURCE_RESOURCE_LIFECYCLE_FROZEN_PREREGISTRATION_PENDING_NATIVE_UNRUN",
+  "candidate_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "source_identity_sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91",
+  "compiler_resource_proposal_not_frozen": {
+    "instance_type": "c7i.2xlarge",
+    "region": "eu-central-1",
+    "availability_zone": "eu-central-1c",
+    "cpu_quota_percent": 200,
+    "allowed_cpus": "0,1",
+    "memory_max_bytes": 8589934592,
+    "swap_max_bytes": 0,
+    "pids_max": 512,
+    "jobs": 1,
+    "gate_deadline_seconds": 7200,
+    "unit_deadline_seconds": 7440,
+    "machine_deadline_seconds": 9000,
+    "ebs_gib": 80,
+    "resource_basis": "Same bounded compiler envelope previously executed and closed on OWN7 a0002; applicability to final OWN4 remains to be qualified, not assumed."
+  },
+  "compiler_cost_proposal_not_frozen": {
+    "read_only_quote_observed_at": "2026-10-09T13:08:14Z",
+    "provider_quote_timestamp": "2026-10-09T08:00:00+00:00",
+    "spot_usd_per_hour": 0.2044,
+    "quote_command_exit": 0,
+    "query": "aws --profile causality --region eu-central-1 ec2 describe-spot-price-history --instance-types c7i.2xlarge --product-descriptions Linux/UNIX --availability-zone eu-central-1c --max-items 1 --query SpotPriceHistory[0] --output json",
+    "maximum_spot_bid_usd_per_hour": 0.6,
+    "maximum_compute_reservation_usd": 1.5,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 1.65,
+    "remaining": "Final source/review, exact native archive and input/output inventory, lifecycle and fresh prelaunch quote must be frozen before any paid launch. This proposal authorizes no instance."
+  },
+  "mandatory_names": {
+    "prepare_cohere_native_cohort": [
+      "tests::two_shard_original_bits_scalar_truth_and_locators",
+      "tests::excluded_middle_three_shards_nonidentity_ids_and_truth_tail",
+      "tests::three_coordinate_rounding_near_tie_requires_sequential_dot_order",
+      "tests::selected_prefix_validates_and_excludes_entire_reserved_suffix",
+      "tests::fixed_list_and_integer_ids",
+      "tests::invalid_embeddings_and_duplicate_ids",
+      "tests::strict_config_and_missing_columns",
+      "tests::secure_hash_eof_link_fifo_inputs",
+      "tests::metadata_and_batch_memory_caps",
+      "tests::missing_rows_and_occupied_output",
+      "tests::sync_failure_removes_complete_marker"
+    ],
+    "check_cohere_native_baseline": [
+      "tests::full_selected_requests_require_equal_reserved_digest",
+      "tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority",
+      "tests::explicit_scale_population_receipts_and_negative_geometry",
+      "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch",
+      "tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth",
+      "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "tests::scratch_formula_keeps_codec_and_trace_separate",
+      "tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth",
+      "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open",
+      "tests::source_binding_and_all_request_rows_fail_before_queries",
+      "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+      "tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+      "tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid",
+      "tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+      "tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+      "tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record",
+      "tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+      "tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+      "tests::panel_authenticates_every_original_request_row_before_any_open",
+      "tests::panel_selector_refusals_precede_every_open_and_publication",
+      "tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+      "tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+      "tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+      "tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+      "tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+      "tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed"
+    ],
+    "compare_native_replay": [
+      "tests::source_utilization_unwalked_winner_full_completion_and_partial_tail",
+      "tests::source_utilization_shared_cover_tied_gaps_same_128_gets",
+      "tests::source_utilization_trace_and_charge_refusals",
+      "tests::source_utilization_authenticated_report_and_legacy_preservation",
+      "tests::source_utilization_report_cap_refuses_before_publication",
+      "tests::source_utilization_positive_bound_at_historical_completion_cap",
+      "tests::source_utilization_direct_closure_sq8_hand_counted_costs",
+      "tests::source_utilization_direct_closure_sq8_charge_refusals",
+      "tests::source_utilization_config_pins_duplicates_and_unknowns",
+      "tests::source_utilization_payload_sha_eof_seals_and_descriptor_mutations",
+      "tests::obsolete_scale_reduction_config_reports_exact_v4_requirement",
+      "tests::scale_report_distinguishes_local_reduction_from_authenticated_s3_producer",
+      "tests::source_bound_full_population_scale_report_and_frozen_config_mismatches",
+      "tests::explicit_million_population_geometry_and_allocation_bounds",
+      "tests::actual_native_scale_runner_reducer_seal_count_mismatches",
+      "tests::membership_abba_v2_parity_screens_and_refusals",
+      "tests::paired_v2_sealed_native_rows_statistics_and_create_only",
+      "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes",
+      "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures",
+      "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files",
+      "tests::completed_v2_quantiles_stages_and_create_only_report",
+      "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper",
+      "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows",
+      "tests::completed_v2_rejects_pins_sums_and_transport_contradictions",
+      "tests::nearest_rank_and_sequential_qps_literal_golden",
+      "tests::four_authenticated_native_runs_and_completed_no_win",
+      "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+      "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+    ],
+    "build_sq8_source": [
+      "derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ],
+    "compare_native_replay_inherited_runner": [
+      "scale_native_runner::tests::full_selected_requests_require_equal_reserved_digest",
+      "scale_native_runner::tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority",
+      "scale_native_runner::tests::explicit_scale_population_receipts_and_negative_geometry",
+      "scale_native_runner::tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "scale_native_runner::tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch",
+      "scale_native_runner::tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth",
+      "scale_native_runner::tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "scale_native_runner::tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "scale_native_runner::tests::scratch_formula_keeps_codec_and_trace_separate",
+      "scale_native_runner::tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth",
+      "scale_native_runner::tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "scale_native_runner::tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "scale_native_runner::tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "scale_native_runner::tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open",
+      "scale_native_runner::tests::source_binding_and_all_request_rows_fail_before_queries",
+      "scale_native_runner::tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "scale_native_runner::tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "scale_native_runner::tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+      "scale_native_runner::tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+      "scale_native_runner::tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid",
+      "scale_native_runner::tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+      "scale_native_runner::tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+      "scale_native_runner::tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record",
+      "scale_native_runner::tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+      "scale_native_runner::tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+      "scale_native_runner::tests::panel_authenticates_every_original_request_row_before_any_open",
+      "scale_native_runner::tests::panel_selector_refusals_precede_every_open_and_publication",
+      "scale_native_runner::tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+      "scale_native_runner::tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+      "scale_native_runner::tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+      "scale_native_runner::tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+      "scale_native_runner::tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+      "scale_native_runner::tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed"
+    ],
+    "check_cohere_native_baseline_inherited_producer": [
+      "scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ],
+    "compare_native_replay_inherited_producer": [
+      "scale_native_runner::scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "scale_native_runner::scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "scale_native_runner::scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ]
+  },
+  "owned_file_pins": {
+    "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs": {
+      "bytes": 101102,
+      "sha256": "96555b442dd3852b4674207cea02c9969a1dce5388d69bd0c31b50cab3237fe6"
+    },
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+      "bytes": 246102,
+      "sha256": "3cce30fbaa2b6cb50e7d5aa660a819964c0c34118ba02a8b3f6bdc4939a67a22"
+    },
+    "crates/borsuk/examples/compare_native_replay.rs": {
+      "bytes": 263931,
+      "sha256": "85fc84617cb6eff71680db17b8dfd78a863871d55fc0948826e17e17dc20ad2f"
+    },
+    "crates/borsuk/examples/build_sq8_source.rs": {
+      "bytes": 47963,
+      "sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd"
+    }
+  },
+  "supersedes_for_prospective_execution": "next-scale-native-gates-9b516f58-complete-chain.pending.json",
+  "stages": [
+    {
+      "name": "preparer-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "prepare_cohere_native_cohort",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "derivation-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "build_sq8_source",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "baseline-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "reducer-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "release",
+      "argv": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--bin",
+        "prepare_cohere_native_cohort",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--bin",
+        "build_two_bit_generation",
+        "--bin",
+        "publish_two_bit_generation",
+        "--example",
+        "build_sq8_source",
+        "--example",
+        "compare_native_replay"
+      ]
+    },
+    {
+      "name": "clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "test-build",
+      "argv": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "CARGO_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "execution": "One serial jobs1 remote qualification from final reviewed OWN4 source; preserve original status/time/tee and full source before/after evidence. No local execution.",
+  "required_release_artifacts": [
+    "prepare_cohere_native_cohort",
+    "check_cohere_native_baseline",
+    "build_two_bit_generation",
+    "publish_two_bit_generation",
+    "examples/build_sq8_source",
+    "examples/compare_native_replay"
+  ],
+  "remaining": [
+    "Commit preregistration on main from current parent; preserve reviewed candidate commit separately",
+    "Authenticate create-only S3 assets and fresh no-live check",
+    "Launch exactly one bounded Spot compiler qualification",
+    "Collect original terminal, terminate/wait, verify all required evidence",
+    "Actual-input parity/staging canary before any performance run"
+  ],
+  "performance_claim": false,
+  "cold_s3_claim": false,
+  "launched": false,
+  "mandatory_test_executions_by_stage": {
+    "preparer-tests": 11,
+    "derivation-tests": 8,
+    "baseline-tests": 41,
+    "reducer-tests": 69
+  },
+  "contract_sha256": "6dea6895741c08e1a87eb330add8bde0a707e88370bab360b6b9f1bfbb7efc59",
+  "campaign": "scale-derivation-qualification-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/scale-derivation-qualification-a0001",
+  "source_archive": {
+    "bytes": 15590067,
+    "sha256": "0131c8fdfd4a7fbdbb89fa33eba1dd5345494ecd9c5c433ebceb084a9d14736e"
+  },
+  "input_pins": {
+    "source-files.sha256": {
+      "sha256": "7bb8545b6af14bf50c1bdd853077d9fd976e30b967d3743e5bd759e8a104cdc6",
+      "bytes": 280890
+    },
+    "candidate-contract.json": {
+      "sha256": "6dea6895741c08e1a87eb330add8bde0a707e88370bab360b6b9f1bfbb7efc59",
+      "bytes": 121397
+    },
+    "gates.sh": {
+      "sha256": "3ccfba98257ff7b774e48932da1ad17b597e99ff883687281ae5cf4e5a36bc25",
+      "bytes": 4059
+    },
+    "native-source.json": {
+      "sha256": "06feadd3e45389e70cd56450d00bc3d62ae874c59d1a35b58b2c3f8eb65fdb91",
+      "bytes": 47762
+    }
+  },
+  "bootstrap": {
+    "bytes": 7357,
+    "sha256": "0fd84910e762ee6d608d4daaf3942165857065fe12256cb105e590efdcd3a4ef"
+  },
+  "quote": {
+    "observed_utc": "2026-10-09T14:06:05.470286+00:00",
+    "provider_timestamp": "2026-10-09T08:00:00+00:00",
+    "spot_usd_hour": "0.204400",
+    "command_exit": 0,
+    "max_bid_usd_hour": "0.60",
+    "compute_reservation_usd": 1.5,
+    "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 1.65
+  },
+  "launch": {
+    "image": "ami-0b8a830d6339a9758",
+    "image_state_verified": "available",
+    "instance_type": "c7i.2xlarge",
+    "subnet": "subnet-0a12dbed0ca6fac25",
+    "security_group": "sg-0b1fd3e4fbde4af0d",
+    "instance_profile": "borsuk-bench-profile",
+    "client_token": "borsuk-scale-derivation-qualification-a0001",
+    "matching_nonterminal_instances": [],
+    "terminate_on_shutdown": true,
+    "imds_v2_required": true
+  },
+  "acceptance": "All 129 mandatory test executions exactly once in their owning stages; seven original native and tee exits0; complete 2465-source inventory before=after; six release ELF hashes; resource/closure evidence authenticated after SAME instance termination and wait. No compiler result establishes performance.",
+  "failure_policy": "Preserve original attempt and terminal; compiler/environment/test failure INVALID; no automatic paid retry. Spot interruption preserves partial evidence and requires a new recorded attempt.",
+  "collection_policy": "Observe only original terminal/infrastructure. Terminate and wait original instance before collecting authenticated terminal/evidence and six binaries. No incomplete measurement files exist in this compiler-only campaign."
+}

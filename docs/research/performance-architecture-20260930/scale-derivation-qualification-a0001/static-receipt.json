@@ -1,0 +1,284 @@
+{
+  "schema": "borsuk-scale-source-static-receipt-v2",
+  "status": "STATIC_ONLY_PASS_NATIVE_UNRUN",
+  "working_tree": false,
+  "base_commit": "42420eb2c6842fc6dd0766003af85bd4ecd19cf8",
+  "prior_commit": "5098c6aaaa4af9a7e1e9dbc6c6dbc4a21efaf2e1",
+  "final_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "unit_name": "borsuk-scale-source-static-bc3082a8-20261009.service",
+  "systemd_invocation_id": "d695fd2438b34e919b2cb44e075d8abb",
+  "resource_properties": {
+    "WorkingDirectory": "/home/rb/worktrees/borsuk-scale-cohort-streaming-native",
+    "CPUQuota": "100%",
+    "AllowedCPUs": "0",
+    "MemoryMax": "256M",
+    "MemorySwapMax": "0",
+    "TasksMax": "128",
+    "RuntimeMaxSec": "120"
+  },
+  "check_exit_code": 0,
+  "checks": [
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "42420eb2c6842fc6dd0766003af85bd4ecd19cf8",
+        "--",
+        "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+        "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+        "crates/borsuk/examples/compare_native_replay.rs",
+        "crates/borsuk/examples/build_sq8_source.rs"
+      ],
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt",
+        "--edition",
+        "2024",
+        "--check",
+        "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+        "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+        "crates/borsuk/examples/compare_native_replay.rs",
+        "crates/borsuk/examples/build_sq8_source.rs"
+      ],
+      "exit_code": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "owned_files": {
+    "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs": {
+      "bytes": 101102,
+      "sha256": "96555b442dd3852b4674207cea02c9969a1dce5388d69bd0c31b50cab3237fe6"
+    },
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+      "bytes": 246102,
+      "sha256": "3cce30fbaa2b6cb50e7d5aa660a819964c0c34118ba02a8b3f6bdc4939a67a22"
+    },
+    "crates/borsuk/examples/compare_native_replay.rs": {
+      "bytes": 263931,
+      "sha256": "85fc84617cb6eff71680db17b8dfd78a863871d55fc0948826e17e17dc20ad2f"
+    },
+    "crates/borsuk/examples/build_sq8_source.rs": {
+      "bytes": 47963,
+      "sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd"
+    }
+  },
+  "unchanged_public_library_files": {
+    "crates/borsuk/src/sq8_source.rs": {
+      "bytes": 15552,
+      "sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+    },
+    "crates/borsuk/src/source_order.rs": {
+      "bytes": 19237,
+      "sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+    }
+  },
+  "qualified_tests_by_target": {
+    "prepare_cohere_native_cohort": [
+      "tests::two_shard_original_bits_scalar_truth_and_locators",
+      "tests::excluded_middle_three_shards_nonidentity_ids_and_truth_tail",
+      "tests::three_coordinate_rounding_near_tie_requires_sequential_dot_order",
+      "tests::selected_prefix_validates_and_excludes_entire_reserved_suffix",
+      "tests::fixed_list_and_integer_ids",
+      "tests::invalid_embeddings_and_duplicate_ids",
+      "tests::strict_config_and_missing_columns",
+      "tests::secure_hash_eof_link_fifo_inputs",
+      "tests::metadata_and_batch_memory_caps",
+      "tests::missing_rows_and_occupied_output",
+      "tests::sync_failure_removes_complete_marker"
+    ],
+    "check_cohere_native_baseline": [
+      "tests::full_selected_requests_require_equal_reserved_digest",
+      "tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority",
+      "tests::explicit_scale_population_receipts_and_negative_geometry",
+      "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch",
+      "tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth",
+      "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "tests::scratch_formula_keeps_codec_and_trace_separate",
+      "tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth",
+      "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open",
+      "tests::source_binding_and_all_request_rows_fail_before_queries",
+      "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+      "tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+      "tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid",
+      "tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+      "tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+      "tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record",
+      "tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+      "tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+      "tests::panel_authenticates_every_original_request_row_before_any_open",
+      "tests::panel_selector_refusals_precede_every_open_and_publication",
+      "tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+      "tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+      "tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+      "tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+      "tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+      "tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed"
+    ],
+    "compare_native_replay": [
+      "tests::source_utilization_unwalked_winner_full_completion_and_partial_tail",
+      "tests::source_utilization_shared_cover_tied_gaps_same_128_gets",
+      "tests::source_utilization_trace_and_charge_refusals",
+      "tests::source_utilization_authenticated_report_and_legacy_preservation",
+      "tests::source_utilization_report_cap_refuses_before_publication",
+      "tests::source_utilization_positive_bound_at_historical_completion_cap",
+      "tests::source_utilization_direct_closure_sq8_hand_counted_costs",
+      "tests::source_utilization_direct_closure_sq8_charge_refusals",
+      "tests::source_utilization_config_pins_duplicates_and_unknowns",
+      "tests::source_utilization_payload_sha_eof_seals_and_descriptor_mutations",
+      "tests::obsolete_scale_reduction_config_reports_exact_v4_requirement",
+      "tests::scale_report_distinguishes_local_reduction_from_authenticated_s3_producer",
+      "tests::source_bound_full_population_scale_report_and_frozen_config_mismatches",
+      "tests::explicit_million_population_geometry_and_allocation_bounds",
+      "tests::actual_native_scale_runner_reducer_seal_count_mismatches",
+      "tests::membership_abba_v2_parity_screens_and_refusals",
+      "tests::paired_v2_sealed_native_rows_statistics_and_create_only",
+      "tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes",
+      "tests::paired_v2_rejects_pins_selectors_unknowns_and_failures",
+      "tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files",
+      "tests::completed_v2_quantiles_stages_and_create_only_report",
+      "tests::completed_v2_rejects_prefix_seal_and_full_file_tamper",
+      "tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows",
+      "tests::completed_v2_rejects_pins_sums_and_transport_contradictions",
+      "tests::nearest_rank_and_sequential_qps_literal_golden",
+      "tests::four_authenticated_native_runs_and_completed_no_win",
+      "tests::invalid_tampered_out_of_order_and_semantic_mismatch",
+      "tests::bounded_files_reject_links_fifo_oversize_and_duplicate_evidence"
+    ],
+    "build_sq8_source": [
+      "derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ],
+    "compare_native_replay_inherited_runner": [
+      "scale_native_runner::tests::full_selected_requests_require_equal_reserved_digest",
+      "scale_native_runner::tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority",
+      "scale_native_runner::tests::explicit_scale_population_receipts_and_negative_geometry",
+      "scale_native_runner::tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+      "scale_native_runner::tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch",
+      "scale_native_runner::tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth",
+      "scale_native_runner::tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+      "scale_native_runner::tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+      "scale_native_runner::tests::scratch_formula_keeps_codec_and_trace_separate",
+      "scale_native_runner::tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth",
+      "scale_native_runner::tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+      "scale_native_runner::tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+      "scale_native_runner::tests::prefix_or_requests_tampering_blocks_first_truth_open",
+      "scale_native_runner::tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open",
+      "scale_native_runner::tests::source_binding_and_all_request_rows_fail_before_queries",
+      "scale_native_runner::tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+      "scale_native_runner::tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+      "scale_native_runner::tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+      "scale_native_runner::tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+      "scale_native_runner::tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid",
+      "scale_native_runner::tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+      "scale_native_runner::tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+      "scale_native_runner::tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record",
+      "scale_native_runner::tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+      "scale_native_runner::tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+      "scale_native_runner::tests::panel_authenticates_every_original_request_row_before_any_open",
+      "scale_native_runner::tests::panel_selector_refusals_precede_every_open_and_publication",
+      "scale_native_runner::tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+      "scale_native_runner::tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+      "scale_native_runner::tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+      "scale_native_runner::tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+      "scale_native_runner::tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+      "scale_native_runner::tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed"
+    ],
+    "check_cohere_native_baseline_inherited_producer": [
+      "scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ],
+    "compare_native_replay_inherited_producer": [
+      "scale_native_runner::scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+      "scale_native_runner::scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+      "scale_native_runner::scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+      "scale_native_runner::scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt"
+    ]
+  },
+  "integer_only_resource_models": [
+    {
+      "rows": 4,
+      "dimensions": 2,
+      "wrapper_no_caller": 4277120,
+      "normalize": 135200,
+      "fit_upper_bound": 328224,
+      "sq8": 131169,
+      "peak_no_caller": 4605344,
+      "scratch_no_caller_or_temp": 131288
+    },
+    {
+      "rows": 100000,
+      "dimensions": 1024,
+      "wrapper_no_caller": 4309824,
+      "normalize": 151552,
+      "fit_upper_bound": 117445248,
+      "sq8": 976340,
+      "peak_no_caller": 121755072,
+      "scratch_no_caller_or_temp": 1334131072
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 1024,
+      "wrapper_no_caller": 4309824,
+      "normalize": 151552,
+      "fit_upper_bound": 1142200704,
+      "sq8": 8288840,
+      "peak_no_caller": 1146510528,
+      "scratch_no_caller_or_temp": 13340131072
+    }
+  ],
+  "static_assertions": [
+    "OWN4 exact scope and Roman attribution; preparer unchanged from repaired1ed",
+    "historical producer modes unchanged except --derive dispatch",
+    "strict source-only config; corpus-only v2 authority independent of Q; incompatible v1 refused",
+    "existing direct rustix dependency; no Cargo/dependency or library edits",
+    "normalize then ordinary flat fit then SQ8 API composition and source/order/output independent seals",
+    "cumulative payload and aggregate scratch/partial-file preflight before output and APIs",
+    "fallible bounded config, receipt and calibration reservations; no read_to_end growth",
+    "actual mapped executable SHA and embedded source identity compared with root-frozen authority; external qualification required",
+    "immutable source/output stamps and exact pre/post hashes; receipt installation precedes final sync; original failure plus pinned revocation outcomes preserved; COMPLETE may survive failure and ORIGINAL process exit0 mandatory",
+    "authenticated generation calibration compared bitwise using existing root GET; fixed-D fallible manifest vectors and retained calibration coexistence charged",
+    "full historical reserved exclusion/digest and original-f32 block-major sequential truth remain unchanged",
+    "receipt-coherent malformed-row/source fixtures; semantic mutations restore surrounding seals; deliberate hash negatives preserved",
+    "fullQ1000 positive has independent frozen authority including producer pins; mismatched producer/backend/derivation expected-config negatives leave measured output unchanged",
+    "tiny actual producer API parity, refusal, mutation/partial publication and Q32/Q1000 receipt reuse fixtures authored; UNRUN",
+    "D1024 actual unmodified producer receipt/outputs compose native generation; valid one-bit changed generation coefficient refuses before query/seal/GT; UNRUN",
+    "post-install directory/parent/unlink/revocation-sync faults and namespace drift preserve original error and pinned cleanup outcomes; UNRUN",
+    "executable hardlink metadata/hash admission separate from unchanged source/output single-link refusal; UNRUN",
+    "preparer full11 includes additional-attribute metadata test; all async and inherited producer/runner names accounted",
+    "reducer obsolete config diagnostic says exact v4 with source fixture"
+  ],
+  "native_checks": "NOT_RUN_LOCAL_FORBIDDEN"
+}
