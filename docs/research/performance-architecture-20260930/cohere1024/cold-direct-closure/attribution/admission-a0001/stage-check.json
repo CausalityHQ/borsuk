@@ -1,0 +1,48 @@
+{
+  "status": "SOURCE_BOUND_SHELL_MOCK_PASS_ONLY",
+  "source_sha256": "ee88dd1064000af2bac63dc8c2505450c37a6f2669a4d3145ff8cf66b4c60f0d",
+  "cases": [
+    {
+      "case": "success",
+      "exit": 0,
+      "native_fake_calls": 8
+    },
+    {
+      "case": "fail-first",
+      "exit": 17,
+      "native_fake_calls": 1
+    },
+    {
+      "case": "fail-fourth",
+      "exit": 2,
+      "native_fake_calls": 4
+    },
+    {
+      "case": "pin-drift",
+      "exit": 1,
+      "native_fake_calls": 1
+    },
+    {
+      "case": "bad-cap",
+      "exit": 1,
+      "native_fake_calls": 0
+    },
+    {
+      "case": "scratch-leak",
+      "exit": 96,
+      "native_fake_calls": 8
+    }
+  ],
+  "real": [
+    "shell ordering",
+    "timeout/time",
+    "config pin authentication",
+    "stop at native exit",
+    "scratch cleanup"
+  ],
+  "mocked": [
+    "native runner",
+    "cgroup reads"
+  ],
+  "native_runtime_validation": false
+}

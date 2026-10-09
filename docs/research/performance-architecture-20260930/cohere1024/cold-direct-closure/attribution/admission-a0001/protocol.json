@@ -1,0 +1,259 @@
+{
+  "status": "FROZEN_REAL_INPUT_ADMISSION_NOT_LAUNCHED",
+  "scope": "SEMANTIC_AND_RESOURCE_ADMISSION_NOT_PERFORMANCE",
+  "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "integration_commit": "fd408f6f6868cc38c0208f94ad27cadd4dd0b769",
+  "qualification": {
+    "status": "NATIVE_QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS_ONLY",
+    "candidate": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+    "instance_id": "i-0e7d720533f3b43a6",
+    "terminated": true,
+    "source_file_count": 425,
+    "native_source_identity_sha256": "ac878008affeaab7115e463038b68a59ef220feea865f195c0920d42d394af77",
+    "full_source_before_after_root_match": true,
+    "stages": [
+      {
+        "name": "range-inventory",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "rank-inventory",
+        "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "lib-inventory",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --list",
+        "exit": 0
+      },
+      {
+        "name": "bin-inventory",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --list",
+        "exit": 0
+      },
+      {
+        "name": "affected-ranges",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-ranking",
+        "command": "cargo test --locked -p borsuk --lib returned_sq8::tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "range-layout",
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --nocapture --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-lib",
+        "command": "cargo test --locked -p borsuk --lib source_walk_tests -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "affected-bin",
+        "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+        "exit": 0
+      },
+      {
+        "name": "release",
+        "command": "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline",
+        "exit": 0
+      },
+      {
+        "name": "clippy",
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "exit": 0
+      },
+      {
+        "name": "test-build",
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+        "exit": 0
+      }
+    ],
+    "test_counts": {
+      "ranges": 18,
+      "ranking": 6,
+      "generation": 30,
+      "bin": 26
+    },
+    "binary": {
+      "bytes": 16843992,
+      "sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836"
+    },
+    "ann_run": false,
+    "performance_claim": false,
+    "quality_claim": false
+  },
+  "binary": {
+    "bytes": 16843992,
+    "sha256": "e39b0bfd18a6a98c2830046ae2d0bbe386991bd86812fed9810fa3d8232fb836"
+  },
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261009/sq8-attribution-native-admission-a0001",
+  "inputs": {
+    "stage.sh": {
+      "bytes": 7571,
+      "sha256": "ee88dd1064000af2bac63dc8c2505450c37a6f2669a4d3145ff8cf66b4c60f0d"
+    },
+    "A_last-untraced.config.json": {
+      "bytes": 2678,
+      "sha256": "4bf9a3eb7f8da4f374cd6d001add82ddba57ce0e103050bb80fda44dda06c4af"
+    },
+    "B_first-untraced.config.json": {
+      "bytes": 2725,
+      "sha256": "c640852f29a8d3e90135775c031387feb84afb37a51e9445dc7f8731a030cdbe"
+    },
+    "A_first-trace.config.json": {
+      "bytes": 2660,
+      "sha256": "1798d86af0fa04e1ba5ae73bb90bcd0eab77a1b8bd2df0761da925ee12162ee8"
+    },
+    "B_last-trace.config.json": {
+      "bytes": 2735,
+      "sha256": "0c150b56af62b134cea6c0d19e75493f9105f7cbd52e8a63a4c435005b77b93d"
+    },
+    "A_last-trace.config.json": {
+      "bytes": 2674,
+      "sha256": "39851dae1f57b97f51135d5e63f24a01c376b8f8520dde6ccac2ebb4c97041a2"
+    },
+    "B_first-trace.config.json": {
+      "bytes": 2721,
+      "sha256": "cf4fdf981b279865d5d5949bbea63f8c01df3f27355b15e02f22039cfb5f9acd"
+    },
+    "B_last-untraced.config.json": {
+      "bytes": 2739,
+      "sha256": "7dca28380675a84fe56c2031819b546b2eab5951e6673288bfe28a6739330e71"
+    },
+    "A_first-untraced.config.json": {
+      "bytes": 2664,
+      "sha256": "456a2245ff414d497b81427c5cc29e931d07bc2456ebc921f6db4d1db4a2e9a5"
+    }
+  },
+  "order": [
+    "A_first-untraced",
+    "A_first-trace",
+    "B_first-untraced",
+    "B_first-trace",
+    "B_last-untraced",
+    "B_last-trace",
+    "A_last-untraced",
+    "A_last-trace"
+  ],
+  "native_envelope": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "swap": 0,
+    "pids": 256,
+    "arm_seconds": 300,
+    "unit_seconds": 2460,
+    "machine_seconds": 3720,
+    "scratch_tmpfs_bytes": 67108864
+  },
+  "cost_caps_usd": {
+    "compute": 0.5,
+    "ancillary": 0.15
+  },
+  "spot_bid_usd_per_hour": 0.45,
+  "maximum_compute_from_bid_and_machine_deadline_usd": 0.465,
+  "acceptance": [
+    "all eight selected64 native runs complete MEASURED and seal before truth",
+    "all selected original-ordinal IDs/scorebits/charges/plan/trace equal immutable corresponding baseline/direct cold records",
+    "trace on/off semantic parity",
+    "all1000 original request rows authenticated by native validator",
+    "all diagnostic lines <=65536 bytes; no omitted successful diagnostics; no truncation",
+    "pins/resource enforcement/scratch cleanup/terminated-before-collection"
+  ],
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "backend_cache": "uncontrolled",
+  "application_payload_cache": "off",
+  "failure_policy": {
+    "environment_config_transport": "INVALID_fix_and_rerun_unchanged_algorithm_limits",
+    "valid_input_enforced_memory_or_bytes": "RESOURCE_REJECT",
+    "quality": "QUALITY_REJECT"
+  },
+  "next_required": "separate disposable environment and trace overhead canary before measurement",
+  "userdata": {
+    "bytes": 10400,
+    "sha256": "e7997bb9f88ebcf50d6de8b8f46feb79af3c7cf651d56e6170856b61e8315f5d"
+  },
+  "frozen_at": "2026-10-09T00:56:11.847384+00:00",
+  "checks": {
+    "stage-check.json": {
+      "status": "SOURCE_BOUND_SHELL_MOCK_PASS_ONLY",
+      "source_sha256": "ee88dd1064000af2bac63dc8c2505450c37a6f2669a4d3145ff8cf66b4c60f0d",
+      "cases": [
+        {
+          "case": "success",
+          "exit": 0,
+          "native_fake_calls": 8
+        },
+        {
+          "case": "fail-first",
+          "exit": 17,
+          "native_fake_calls": 1
+        },
+        {
+          "case": "fail-fourth",
+          "exit": 2,
+          "native_fake_calls": 4
+        },
+        {
+          "case": "pin-drift",
+          "exit": 1,
+          "native_fake_calls": 1
+        },
+        {
+          "case": "bad-cap",
+          "exit": 1,
+          "native_fake_calls": 0
+        },
+        {
+          "case": "scratch-leak",
+          "exit": 96,
+          "native_fake_calls": 8
+        }
+      ],
+      "real": [
+        "shell ordering",
+        "timeout/time",
+        "config pin authentication",
+        "stop at native exit",
+        "scratch cleanup"
+      ],
+      "mocked": [
+        "native runner",
+        "cgroup reads"
+      ],
+      "native_runtime_validation": false
+    },
+    "asset-head-admission.json": {
+      "status": "HEAD_IDENTITIES_MATCH_NOT_BODY_RUNTIME_VALIDATION",
+      "observed_at": "2026-10-09T00:58:13.864920+00:00",
+      "objects": {
+        "requests": {
+          "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+          "bytes": 4096000,
+          "etag": "\"1553426815b5dbf6d916ccd12f1c227a\""
+        },
+        "truth": {
+          "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/truth.u64",
+          "bytes": 80000,
+          "etag": "\"04fc7819a26ce9b269bd25b23b514607\""
+        },
+        "runner": {
+          "key": "research/semantic-router/20261009/sq8-attribution-qualification-a0001/supplemental/check_cohere_native_baseline",
+          "bytes": 16843992,
+          "etag": "\"9f9567f0102f8095d5f44752c92b3d18-3\""
+        },
+        "sq8": {
+          "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/store/semantic/objects/07a14360b06add9a35f82b97f4e031690ff878ff497ee047902818823992337b",
+          "bytes": 103600000,
+          "etag": "\"f808095a3a2e788df2ae7d7d0e5423fa\""
+        }
+      }
+    }
+  }
+}
