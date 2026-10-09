@@ -1,0 +1,58 @@
+{
+  "status": "DESCRIPTIVE_CLOSED_OPERATION_COUNTS",
+  "source_commit": "516ee0fd1faf79498ebf2818accd7985c6549f62",
+  "scope": "first traced process call per immutable configuration; operation-count hypothesis only, no timing/causality/overhead-win claim",
+  "clock_model": "current source reads elapsed clock twice around stream.next, once for chunk, twice around each copy; EOF/fixed boundaries additional",
+  "records": {
+    "A_first": {
+      "artifact": "q00-2.jsonl",
+      "artifact_sha256": "ed4bf2e1625368ed4573b15ac12b0bc7c0323c3d00ad4e323ace3bda0f467545",
+      "queries": 64,
+      "median_body_chunks": 1980.0,
+      "maximum_body_chunks": 2040,
+      "median_copy_count": 1980.0,
+      "median_ranges": 28.0,
+      "median_rank_ranges": 28.0,
+      "modeled_chunk_clock_reads_median": 9900.0,
+      "modeled_copy_clock_reads_median": 3960.0
+    },
+    "B_first": {
+      "artifact": "q01-2.jsonl",
+      "artifact_sha256": "46c0b59bc16bfc8fe74b64a74f1695b7f9bc633cf8c6d3fb361f3dd2b916352c",
+      "queries": 64,
+      "median_body_chunks": 4764.0,
+      "maximum_body_chunks": 5729,
+      "median_copy_count": 4764.0,
+      "median_ranges": 32.0,
+      "median_rank_ranges": 32.0,
+      "modeled_chunk_clock_reads_median": 23820.0,
+      "modeled_copy_clock_reads_median": 9528.0
+    },
+    "A_last": {
+      "artifact": "q02-2.jsonl",
+      "artifact_sha256": "c20f74e8a8efb7b4f01f410ef87eb0604f2faf4cc9cec01bdf90a26cd215bf53",
+      "queries": 64,
+      "median_body_chunks": 1985.5,
+      "maximum_body_chunks": 2017,
+      "median_copy_count": 1985.5,
+      "median_ranges": 28.0,
+      "median_rank_ranges": 28.0,
+      "modeled_chunk_clock_reads_median": 9927.5,
+      "modeled_copy_clock_reads_median": 3971.0
+    },
+    "B_last": {
+      "artifact": "q03-2.jsonl",
+      "artifact_sha256": "7d2c312ef9b5de003fd95dec86b07eeac049ba31d535d84636302bd489302ea3",
+      "queries": 64,
+      "median_body_chunks": 4697.0,
+      "maximum_body_chunks": 5231,
+      "median_copy_count": 4697.0,
+      "median_ranges": 32.0,
+      "median_rank_ranges": 32.0,
+      "modeled_chunk_clock_reads_median": 23485.0,
+      "modeled_copy_clock_reads_median": 9394.0
+    }
+  },
+  "native_runs": 0,
+  "paid_jobs": 0
+}
