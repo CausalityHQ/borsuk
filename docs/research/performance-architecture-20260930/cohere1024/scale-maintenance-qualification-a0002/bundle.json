@@ -1,0 +1,20 @@
+{
+  "status": "REPAIRED_SOURCE_BUNDLE_CREATED_NATIVE_UNRUN",
+  "commit": "481f4518a3faffab604be3fd57941378d7790f5e",
+  "parent": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "native_file_count": 426,
+  "native_identity_sha256": "9210ac2b4b60a0536544d1423bae42c8f782af1caca29ad984b16dbd01709aae",
+  "native_identity_encoding": "UTF-8 sorted-key compact JSON of complete path-to-SHA256 map",
+  "source_files": 2465,
+  "source_bytes": 58420219,
+  "archive": {
+    "path": "/data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/source.tar.gz",
+    "bytes": 16966116,
+    "sha256": "087cddcb3b933191d66937c5e8ddc6ae59328d31812dac711863de75ced551ca"
+  },
+  "changed_paths": [
+    "crates/borsuk/tests/two_bit_application_ids.rs"
+  ],
+  "roundtrip_all_file_hashes_verified": true,
+  "paid_launch": false
+}

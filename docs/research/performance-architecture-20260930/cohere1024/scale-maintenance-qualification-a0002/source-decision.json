@@ -1,0 +1,14 @@
+{
+  "status": "SOURCE_REPAIR_INDEPENDENTLY_VERIFIED_NATIVE_UNRUN",
+  "commit": "481f4518a3faffab604be3fd57941378d7790f5e",
+  "parent": "6de2799d746bf0da30727e5a1178761c7c3eb667",
+  "repair_owned_paths": [
+    "crates/borsuk/tests/two_bit_application_ids.rs"
+  ],
+  "production_files_unchanged": true,
+  "seven_owned_hashes_match_git_and_map": true,
+  "mandatory_names": 11,
+  "archive_roundtrip": true,
+  "prior_failure_preserved": true,
+  "paid_launch": false
+}
