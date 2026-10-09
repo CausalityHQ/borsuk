@@ -1,0 +1,17 @@
+{
+  "all_checks_exit": 0,
+  "bash_syntax_exit": 0,
+  "claims": "Source-bound metadata predicate and syntax only; AWS dispatch remains unrun.",
+  "head_cap_cases": 4,
+  "inverse_to_prior_watcher_exact": true,
+  "original_a0001_watcher_unchanged": true,
+  "predicate_checks": [
+    "recorded failed bootstrap",
+    "normal exit99 handoff",
+    "foreign instance",
+    "missing source schema",
+    "bool exit"
+  ],
+  "remote_runtime_qualified": false,
+  "source_sha256": "e1d2a0a869e8fadab915a839307c94f59424ead412d0d0ca4a3ccf359b11e7bd"
+}

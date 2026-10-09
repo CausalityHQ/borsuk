@@ -91,6 +91,18 @@ while (( $(date +%s) < hard_stop )); do
     reason=terminal
     break
   fi
+  # A setup failure publishes no coordinator verdict; stop on its bounded immutable terminal marker.
+  if aws_call s3api head-object --bucket "$bucket" --key "$prefix/terminal.json" > remote-results/bootstrap.head.json 2>remote-results/bootstrap.head.stderr; then
+    if jq -e '(.ContentLength | type == "number" and floor == . and . > 0 and . <= 65536) and (.ETag | type == "string" and length > 0 and length <= 256)' remote-results/bootstrap.head.json > /dev/null; then
+      bootstrap_etag=$(jq -r .ETag remote-results/bootstrap.head.json)
+      if aws_call s3api get-object --bucket "$bucket" --key "$prefix/terminal.json" --if-match "$bootstrap_etag" remote-results/bootstrap-terminal.json > remote-results/bootstrap.get.json 2>remote-results/bootstrap.get.stderr; then
+        if jq -e --arg i "$instance" '.schema == "borsuk-native-scale-build-bootstrap-closed-v1" and .instance_id == $i and .performance_claim == false and (.original_exit | type == "number" and floor == . and . >= 1 and . <= 255) and (.exit | type == "number" and floor == . and . >= 90 and . <= 99)' remote-results/bootstrap-terminal.json > /dev/null; then
+          reason=bootstrap_failure
+          break
+        fi
+      fi
+    fi
+  fi
   state=$(state_of) || state=unknown
   case $state in terminated|stopped|stopping|shutting-down) reason=instance_$state; break;; esac
   nap "$hard_stop" 15
