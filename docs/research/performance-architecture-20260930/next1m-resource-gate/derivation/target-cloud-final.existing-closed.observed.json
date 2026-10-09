@@ -1,0 +1,38 @@
+{
+  "archive": {
+    "bytes": 17016,
+    "sha256": "3c14117730f8cec3cc499f5583e68a94713c14bad70ead2dd60bc0e1be8626ec"
+  },
+  "artifacts_manifest_sha256": "b8ac3e8a4976372718c98552ad94e7d86405cc663680d002604240c0748eb2fa",
+  "bootstrap_manager": {
+    "sha256": "ea2a1ccf31c33f60869efd5f317c7532608ee774e155c226b2b869d072e4906c",
+    "value": {
+      "exit_code": "exited",
+      "exit_status": "0",
+      "final_exit": "0",
+      "instance_id": "i-034348c725b8a4fca",
+      "schema": "borsuk-parity-bootstrap-exit-v1",
+      "service_result": "success",
+      "terminal_sha256": "7120bb3ecb9264e6427308030e39c88be6e8cc36d4ec11f3762f0426cb8fc05b"
+    }
+  },
+  "cloud_final_unit_member": {
+    "bytes": 1012,
+    "exec_start": "/usr/bin/cloud-init modules --mode=final",
+    "path": "./cloud-final-unit.txt",
+    "sha256": "9277f3e5d26620ecba7c3b7f870c3a53dd6efd18fc1867917ca29562399d7fd9"
+  },
+  "instance_id": "i-034348c725b8a4fca",
+  "local_devbox_socket_shim_is_not_this_target": true,
+  "native_or_ann_measurement": false,
+  "new_paid_run": false,
+  "original_campaign": "actual1m-q32-admission-a0001",
+  "qualifies_nonzero_mapping": false,
+  "remaining": [
+    "new canary target unit/source capture",
+    "actual original script 2/3 versus cloud-init and systemd exits"
+  ],
+  "schema": "borsuk-next1m-existing-cloud-final-evidence-v1",
+  "status": "EXISTING_CLOSED_ZERO_CASE_ONLY",
+  "terminal_sha256": "7120bb3ecb9264e6427308030e39c88be6e8cc36d4ec11f3762f0426cb8fc05b"
+}
