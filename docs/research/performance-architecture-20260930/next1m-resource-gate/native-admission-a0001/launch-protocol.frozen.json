@@ -1,0 +1,17 @@
+{
+  "status": "FROZEN_FOR_SINGLE_NATIVE_SOURCE_ADMISSION",
+  "campaign": "actual1m-q32-admission-a0001",
+  "external_deadline_seconds": 4200,
+  "watcher_runtime_seconds": 5700,
+  "spot_max_bid_usd_hour": 0.6,
+  "compute_reserve_usd": 0.7,
+  "ancillary_reserve_usd": 0.15,
+  "total_reserve_usd": 0.85,
+  "volume_gib": 80,
+  "support_manifest_sha256": "b8e25257f51d5e0cfe9ea760591e5a178647f871bd7e41db5bbabfb838e2989f",
+  "no_automatic_repeat": true,
+  "ann_run": false,
+  "performance_claim": false,
+  "watcher_scope": "4200s hard experiment deadline plus bounded termination and closed collection; no experiment extension",
+  "smoke_verified_commit": "a4a5a59560c484f297814582603be589949ffb2e"
+}

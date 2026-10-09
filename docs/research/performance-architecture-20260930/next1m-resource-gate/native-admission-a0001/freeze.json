@@ -1,0 +1,45 @@
+{
+  "status": "SUPPORT_BYTES_FROZEN_LAUNCH_PENDING",
+  "support_manifest_sha256": "b8e25257f51d5e0cfe9ea760591e5a178647f871bd7e41db5bbabfb838e2989f",
+  "user_data_sha256": "f036bdc12884e96e933a29ff103e49b61e480fc52d340b371a4aa523ed41f672",
+  "source_commit": "a4a5a59560c484f297814582603be589949ffb2e",
+  "items": [
+    {
+      "path": "config-template.json",
+      "bytes": 3991,
+      "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba"
+    },
+    {
+      "path": "run_actual_cohort_admission.sh",
+      "bytes": 22040,
+      "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008"
+    },
+    {
+      "path": "service-stop.sh",
+      "bytes": 1925,
+      "sha256": "7d4c7156a1950fa243c538e6e9c05e2665c9429a07bcf4d6f0cf7075a2de9881"
+    },
+    {
+      "path": "support.sha256",
+      "bytes": 431,
+      "sha256": "b8e25257f51d5e0cfe9ea760591e5a178647f871bd7e41db5bbabfb838e2989f"
+    },
+    {
+      "path": "transport-pins.json",
+      "bytes": 4575,
+      "sha256": "f2292ba30d9ead64110309929e6cb0cb5c5237937699c0efb2b4ac0b6444ae90"
+    },
+    {
+      "path": "transport.py",
+      "bytes": 3654,
+      "sha256": "1732bb177eb91e8e82396663ac54ab733ddf3c2de24e7e8fff514212f8f3df12"
+    },
+    {
+      "path": "user-data.sh",
+      "bytes": 10895,
+      "sha256": "f036bdc12884e96e933a29ff103e49b61e480fc52d340b371a4aa523ed41f672"
+    }
+  ],
+  "ann_run": false,
+  "performance_claim": false
+}
