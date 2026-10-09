@@ -1,4 +1,4 @@
-"""One-shot byte assembly only; no AWS calls or launch authority."""
+"""One-shot byte assembly only; no AWS calls or launch authority. Canary-only scratch xtrace diagnostic (scratch-trace.log)."""
 import hashlib
 import json
 import pathlib
@@ -15,6 +15,24 @@ def blob(revision, path):
 
 def sha(body):
     return hashlib.sha256(body).hexdigest()
+
+# Canary-only scratch diagnostic: xtrace of the existing admission commands to its own fd/file between `ident before` and
+# `ident after`, stopped in finish() only AFTER original=$? is captured. Three exact whole-line anchors, each exactly once.
+TRACE_ON = b"exec 3> evidence-root/scratch-trace.log; BASH_XTRACEFD=3; PS4='+scratch:${LINENO}:${FUNCNAME[0]:-main}: '; set -x\n"
+TRACE_OFF = b'set +x; unset BASH_XTRACEFD\n'
+TRACE_EDITS = [
+    (b'ident before\n', b'ident before\n' + TRACE_ON),
+    (b'ident after\n', b'ident after\n' + TRACE_OFF),
+    (b' original=$?; trap - EXIT TERM INT HUP PIPE; set +e\n', b' original=$?; set +x; unset BASH_XTRACEFD; trap - EXIT TERM INT HUP PIPE; set +e\n'),
+]
+
+def trace_edit(body, forward):
+    for plain, traced in TRACE_EDITS:
+        old, new = (plain, traced) if forward else (traced, plain)
+        if body.count(b'\n' + old) != 1:
+            raise ValueError('trace anchor ' + old.decode().splitlines()[0])
+        body = body.replace(b'\n' + old, b'\n' + new)
+    return body
 
 def main():
     if len(sys.argv) != 3:
@@ -65,16 +83,27 @@ def main():
         raise ValueError('tail coordinator binding')
     # H5 adds one line before the original cut; all other hooks replace one line.
     result = b''.join(lines[:160]).replace(b'PENDING_ROOT_FREEZE_RUN_PREFIX', cfg['prefix'].encode()).replace(b'PENDING_ROOT_FREEZE_SUPPORT_SHA256', cfg['support_sha256'].encode())
+    untraced_prefix = result
+    result = trace_edit(result, True)
+    if trace_edit(result, False) != untraced_prefix:
+        raise ValueError('trace inverse')
+    on = result.index(b'\n' + TRACE_ON)
+    off = result.index(b'\n' + TRACE_OFF)
+    if not on < off < result.index(b'\nphase=transport\n') or b'aws ' in result[on:off]:
+        raise ValueError('trace window')
+    if result.count(b'set -x') != 1 or result.count(b'BASH_XTRACEFD=3') != 1 or result.count(b'\n original=$?; set +x;') != 1:
+        raise ValueError('trace tokens')
     stub = '\nphase=canary\n'
     for name, field in [('canary-tail.sh', 'tail_sha256'), ('canary-coordinator.sh', 'coordinator_sha256'), ('wrapper-canary.sh', 'wrapper_sha256')]:
         stub += f"get {name} 64\nprintf '%s  {name}\\n' {cfg[field]} | sha256sum --strict -c -\n"
     stub += f'bash "$root/canary-tail.sh" "$root" "$bucket" "$prefix" "$instance" "$boot_epoch" "$local_stop_epoch" {cfg["fragment_sha256"]}\nexit 99\n'
     result += stub.encode()
+    untraced = untraced_prefix + stub.encode()
     if b'PENDING_' in result or len(result) > 16384:
         raise ValueError('pending marker or EC2 raw user-data size')
     with pathlib.Path(sys.argv[2]).open('xb') as output:
         output.write(result)
-    print(json.dumps({'assembly_only': True, 'launch_authorized': False, 'bytes': len(result), 'sha256': sha(result)}))
+    print(json.dumps({'assembly_only': True, 'launch_authorized': False, 'diagnostic_trace': True, 'bytes': len(result), 'sha256': sha(result), 'untraced_bytes': len(untraced), 'untraced_sha256': sha(untraced)}))
 
 if __name__ == '__main__':
     main()

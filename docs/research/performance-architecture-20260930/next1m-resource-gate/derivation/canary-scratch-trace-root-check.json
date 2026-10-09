@@ -1,0 +1,13 @@
+{
+  "all_original_guard_and_deadline_bytes_preserved": true,
+  "assembler_sha256": "fbf11d6cd707789b6c61d06529cd373f0bc3bf10c004c2b56bcc8b77ebca87e5",
+  "bash_syntax_exit": 0,
+  "candidate_commit": "a79a5cff951f31b7e67f5b0f74d4a0ef13ea7cd1",
+  "failure_status_capture_before_trace_stop": true,
+  "inverse_exact_to_original": true,
+  "performance_claim": false,
+  "raw_bytes": 12763,
+  "raw_sha256": "6f72c35e47648f300abe40669e735dd0e2442bc122192c676e20229e92bc05c0",
+  "remote_runtime_qualified": false,
+  "status": "SOURCE_ONLY_VERIFIED"
+}
