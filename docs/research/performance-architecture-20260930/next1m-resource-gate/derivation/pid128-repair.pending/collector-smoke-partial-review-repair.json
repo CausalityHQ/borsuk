@@ -1,0 +1,22 @@
+{
+  "status": "VERIFIED_PARTIAL_REVIEW_FINDINGS_REPAIRED_SOURCE_ONLY",
+  "review_group": "fe86c3258f2a4710",
+  "reviewed_commit": "0fe4f9b5e0b685d8bc5557558e7777de4791135f",
+  "full_reports_pending": true,
+  "script_sha256": "d2ee40d671eff6649b4deaf45714e1211a7a4082e6babf0cf83f9593a2c51349",
+  "changes": [
+    "capture original launch status then attempt exact invocation-ID capture even on failed start response; missing original identity is cleanup-unproven",
+    "seal descendant PID/cgroup/stat BEFORE manifest to avoid refusal at wrong branch",
+    "record live populated cgroup and actual MainPID condition before populated/deadline cases",
+    "require collector failure-cleanup.exit0 and actual MainPID0/drain BEFORE independent harness cleanup"
+  ],
+  "static": {
+    "unit": "run-p600943-i713490056.service",
+    "invocation_id": "00516656000a4b2890acb80e483bf6db",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0
+  },
+  "runtime_executed": false,
+  "launch_authorized": false,
+  "performance_claim": false
+}

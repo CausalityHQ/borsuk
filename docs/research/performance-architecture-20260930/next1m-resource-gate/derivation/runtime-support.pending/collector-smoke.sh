@@ -16,7 +16,8 @@ manager() { timeout -k 1 5 "$@"; }
 # Cleanup fences the exact invocation; never stop a replacement under an old ID.
 cleanup_unit() {
  local show reported
- [[ -n $owned && -n $owned_id ]] || return 0
+ [[ -n $owned ]] || return 0
+ [[ -n $owned_id ]] || return 1
  show=$(manager systemctl show "$owned" -p InvocationID -p MainPID -p ControlGroup) || return 1
  reported=$(sed -n 's/^InvocationID=//p' <<< "$show")
  if [[ -z $reported && ! -e /sys/fs/cgroup/system.slice/$owned && ! -L /sys/fs/cgroup/system.slice/$owned ]]; then
@@ -59,15 +60,21 @@ jq -n --arg sha "$sha" --argjson code "$code" '{schema:"borsuk-native-scale-buil
 printf '0\n' > "$evidence/cleanup.exit"
 printf '%s\n' "$code" > "$evidence/wrapper.exit"
 printf 'synthetic fixture; no phases or native program executed\n' > "$evidence/synthetic.txt"
+if [[ $mode == descendant ]]; then
+ /bin/sleep 60 </dev/null >/dev/null 2>&1 &
+ child=$!
+ printf '%s\n' "$child" > "$evidence/descendant.pid"
+ cat "/proc/$child/cgroup" > "$evidence/descendant.cgroup"
+ cat "/proc/$child/stat" > "$evidence/descendant.stat"
+fi
 (cd "$evidence"; find . -type f ! -name closure.sha256 ! -name wrapper.exit -print0 | sort -z | xargs -0 sha256sum) > "$evidence/closure.sha256"
-if [[ $mode == descendant ]]; then /bin/sleep 60 </dev/null >/dev/null 2>&1 & fi
 if [[ $mode == deadline ]]; then exec /bin/sleep 60; fi
 exit "$code"
 RECIPE
 recipe_sha=$(sha256sum "$out/recipe.sh"); recipe_sha=${recipe_sha%% *}
 sha256sum "$collector" "$observer" "$out/recipe.sh" > "$out/source.sha256"
 start_unit() {
- local code=$1 mode=$2
+ local code=$1 mode=$2 launch_rc=0
  owned=borsuk-pid128-observer-$(cat /proc/sys/kernel/random/uuid).service
  printf '%s\n' "$owned" > "$case_dir/unit"
  jq -n --argjson code "$code" --arg mode "$mode" '{synthetic_metadata:true,exit:$code,mode:$mode}' > "$case_dir/config.json"
@@ -77,10 +84,12 @@ start_unit() {
   -p RuntimeMaxSec=45 -p TimeoutStopSec=3 -p KillMode=control-group -p LimitCORE=0 \
   -p BindsTo=borsuk-next1m-canary.service -p After=borsuk-next1m-canary.service \
   /bin/bash "$observer" "$out/recipe.sh" "$case_dir/config.json" "$config_sha" \
-  "$root/evidence-chain" "$root/evidence-root/chain-actual.exit" > "$case_dir/launch.stdout" 2> "$case_dir/launch.stderr"
+  "$root/evidence-chain" "$root/evidence-root/chain-actual.exit" > "$case_dir/launch.stdout" 2> "$case_dir/launch.stderr" || launch_rc=$?
+ printf '%s\n' "$launch_rc" > "$case_dir/launch.exit"
  manager systemctl show "$owned" -p Id -p InvocationID -p ControlGroup > "$case_dir/launch.identity"
  owned_id=$(sed -n 's/^InvocationID=//p' "$case_dir/launch.identity")
  [[ $owned_id =~ ^[0-9a-f]{32}$ ]]
+ ((launch_rc==0)) || return 1
  wait_end=$((SECONDS+8))
  until [[ -f $root/evidence-root/chain-actual.exit || $mode == deadline ]]; do
   ((SECONDS<wait_end)) || return 1
@@ -115,6 +124,25 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
    [[ $owned_id =~ ^[0-9a-f]{32}$ && $owned_id != "$old_id" ]]
    supplied_id=$old_id;;
  esac
+ if [[ $case_name == populated || $case_name == deadline ]]; then
+  witness_end=$((SECONDS+3))
+  while :; do
+   manager systemctl show "$owned" -p InvocationID -p MainPID -p ActiveState -p SubState > "$case_dir/live.before"
+   grep -Fx "InvocationID=$owned_id" "$case_dir/live.before" >/dev/null
+   main=$(sed -n 's/^MainPID=//p' "$case_dir/live.before")
+   if [[ $case_name == populated && $main == 0 ]] || [[ $case_name == deadline && $main =~ ^[1-9][0-9]*$ ]]; then break; fi
+   ((SECONDS<witness_end)) || exit 94
+   sleep 0.05
+  done
+  cat "/sys/fs/cgroup/system.slice/$owned/cgroup.events" > "$case_dir/live.before.events"
+  grep -Fx 'populated 1' "$case_dir/live.before.events" >/dev/null
+  if [[ $case_name == populated ]]; then
+   child=$(< "$root/evidence-chain/descendant.pid")
+   [[ $child =~ ^[1-9][0-9]*$ ]]
+   kill -0 "$child"
+   grep -Fx "0::/system.slice/$owned" "$root/evidence-chain/descendant.cgroup" >/dev/null
+  fi
+ fi
  deadline=$(( $(date +%s)+12 )); [[ $case_name != deadline ]] || deadline=$(( $(date +%s)+4 ))
  rc=0
  timeout -k 2 28 bash "$collector" "$owned" "$supplied_id" "$root/evidence-chain" \
@@ -127,6 +155,18 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
    jq -e --argjson code "$code" --arg id "$supplied_id" '.status=="CLOSED" and .actual_outer_exit==$code and .invocation_id==$id and .drained==true' "$root/evidence-root/chain-outer/outer-closure.json" > "$case_dir/assert";;
   *) [[ $rc != 0 && $rc != 124 && $rc != 137 && ! -e $root/evidence-root/chain-outer/outer-closure.json ]];;
  esac
+ if [[ $case_name == populated || $case_name == deadline ]]; then
+  # This must be checked BEFORE the smoke's independent safety cleanup.
+  [[ $(< "$root/evidence-root/chain-outer/failure-cleanup.exit") == 0 ]]
+  manager systemctl show "$owned" -p InvocationID -p MainPID -p ActiveState > "$case_dir/collector-cleanup.after"
+  grep -Fx MainPID=0 "$case_dir/collector-cleanup.after" >/dev/null
+  if [[ -e /sys/fs/cgroup/system.slice/$owned/cgroup.events ]]; then
+   cat "/sys/fs/cgroup/system.slice/$owned/cgroup.events" > "$case_dir/collector-cleanup.after.events"
+   grep -Fx 'populated 0' "$case_dir/collector-cleanup.after.events" >/dev/null
+  else
+   printf '%s\n' '/sys/fs/cgroup/system.slice/'"$owned" > "$case_dir/collector-cleanup.removed"
+  fi
+ fi
  if [[ $case_name == replaced ]]; then
   manager systemctl show "$owned" -p InvocationID -p MainPID -p ActiveState > "$case_dir/replacement.after"
   grep -Fx "InvocationID=$owned_id" "$case_dir/replacement.after" >/dev/null
