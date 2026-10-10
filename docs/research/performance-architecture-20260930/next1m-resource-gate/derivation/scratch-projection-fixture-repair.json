@@ -1,0 +1,18 @@
+{
+  "source_base": "22f025cd58bcd6fd747c3dae378e868b49f4761b",
+  "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/scratch-owner-unrun-fixtures/scratch-admission-mock.sh",
+  "old_sha256": "5f4b7dfac9553b0b4fcf45953a4fe57a6b9cafbdc2f36c03281c4a8dd776bfb4",
+  "new_sha256": "e56ec9a35c5a015f72f3a1a5b8417ad810c4740e5b071003c60ca87216ab4d3f",
+  "fixes": [
+    "project root-device comparison into the same mock namespace",
+    "add findmnt source negative",
+    "isolate name guard from serial guard in section-only fixture",
+    "enforce byte-exact inverse for section and serial substitutions"
+  ],
+  "production_source_changed": false,
+  "assertions_removed_or_weakened": false,
+  "local_runtime_executed": false,
+  "bash_syntax": "PASS",
+  "remote_rerun": "UNRUN",
+  "scenario_count": 15
+}
