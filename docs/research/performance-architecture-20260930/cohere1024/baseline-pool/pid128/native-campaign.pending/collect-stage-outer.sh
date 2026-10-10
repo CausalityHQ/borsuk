@@ -7,7 +7,7 @@ umask 077
 export LC_ALL=C
 [[ $# == 9 && $EUID == 0 ]] || exit 98
 unit=$1 id=$2 admission=$3 out=$4 actual_exit=$5 recipe_sha=$6 config_sha=$7 deadline=$8 mode=$9
-case $mode in staging) expected_code=0; expected_result=success; expected_status=NATIVE_STAGING_SMOKE_ROOT_GATE_REQUIRED;; widths) expected_code=0; expected_result=success; expected_status=PID128_MECHANICS_CLOSED_ROOT_REPLAY_REQUIRED;; negative) expected_code=98; expected_result=exit-code; expected_status=INVALID;; *) exit 98;; esac
+case $mode in platform) expected_code=0; expected_result=success; expected_status=PLATFORM_CANARY_ROOT_GATE_REQUIRED;; staging) expected_code=0; expected_result=success; expected_status=NATIVE_STAGING_SMOKE_ROOT_GATE_REQUIRED;; widths) expected_code=0; expected_result=success; expected_status=PID128_MECHANICS_CLOSED_ROOT_REPLAY_REQUIRED;; negative) expected_code=98; expected_result=exit-code; expected_status=INVALID;; *) exit 98;; esac
 [[ $unit =~ ^borsuk-pid128-observer-[a-z0-9-]+\.service$ && $id =~ ^[0-9a-f]{32}$ &&
    $recipe_sha =~ ^[0-9a-f]{64}$ && $config_sha =~ ^[0-9a-f]{64}$ && $deadline =~ ^[0-9]{10}$ ]] || exit 98
 [[ $admission == /* && $out == /* && $actual_exit == /* &&
