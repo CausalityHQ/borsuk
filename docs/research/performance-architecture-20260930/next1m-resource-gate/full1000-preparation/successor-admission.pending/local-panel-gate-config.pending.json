@@ -1,0 +1,124 @@
+{
+  "schema": "borsuk-full1000-local-panel-gate-config-v1",
+  "scratch_root": "/mnt/borsuk-scale1m/prepared-parent",
+  "disk_proposal_bytes": 27586214240,
+  "disk_min_available_bytes": 23284968777,
+  "deadline_seconds": 10000,
+  "prepared": {
+    "complete": {
+      "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/complete.json",
+      "bytes": 6238,
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    },
+    "outputs": {
+      "corpus.f32": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/corpus.f32",
+        "bytes": 4096000000,
+        "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+      },
+      "queries.f32": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/queries.f32",
+        "bytes": 4096000,
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      },
+      "corpus.ids.jsonl": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/corpus.ids.jsonl",
+        "bytes": 200873446,
+        "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+      },
+      "queries.ids.jsonl": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/queries.ids.jsonl",
+        "bytes": 196017,
+        "sha256": "f0e6e974c3dfe45fae7db3a9a5146891541d1f3c0d605674d115b6c580a87f68"
+      },
+      "truth.u64": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/truth.u64",
+        "bytes": 80000,
+        "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+      }
+    }
+  },
+  "binaries": {
+    "baseline": {
+      "path": "/mnt/borsuk-scale1m/assets/bin/check_cohere_native_baseline",
+      "bytes": 17029632,
+      "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+    },
+    "generation": {
+      "path": "/mnt/borsuk-scale1m/assets/bin/build_two_bit_generation",
+      "bytes": 4444504,
+      "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+    },
+    "publish": {
+      "path": "/mnt/borsuk-scale1m/assets/bin/publish_two_bit_generation",
+      "bytes": 15964832,
+      "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+    },
+    "derive": {
+      "path": "/mnt/borsuk-scale1m/assets/bin/build_sq8_source",
+      "bytes": 4273936,
+      "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+    }
+  },
+  "derive_config": {
+    "path": "/mnt/borsuk-scale1m/derivation-config.json",
+    "bytes": 1145,
+    "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+  },
+  "producer_authority": {
+    "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+    "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+    "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+    "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+  },
+  "namespaces": {
+    "derive_dir": "/mnt/borsuk-scale1m/prepared-parent/derived",
+    "store_dir": "/mnt/borsuk-scale1m/prepared-parent/store",
+    "generation_dir": "/mnt/borsuk-scale1m/prepared-parent/generation",
+    "publish_receipt": "/mnt/borsuk-scale1m/prepared-parent/publication-receipt.json",
+    "query_dir": "/mnt/borsuk-scale1m/prepared-parent/query"
+  },
+  "generation": {
+    "max_memory_bytes": 1073741824
+  },
+  "publish": {
+    "limits": {
+      "max_memory_bytes": 536870912,
+      "max_active_queries": 1,
+      "max_query_bytes": 16773120,
+      "max_query_gets": 32,
+      "max_parallel_gets": 16,
+      "max_source_bytes": 67108864,
+      "max_source_gets": 128,
+      "max_parallel_source_gets": 16,
+      "max_query_scratch_bytes": 594520,
+      "already_pinned_bytes": 0
+    }
+  },
+  "baseline": {
+    "fetch_parallelism": 16
+  },
+  "phases": {
+    "derive": {
+      "timeout_seconds": 3600,
+      "stdout_cap_bytes": 1048576
+    },
+    "stage": {
+      "timeout_seconds": 300,
+      "stdout_cap_bytes": 1048576
+    },
+    "generation": {
+      "timeout_seconds": 2700,
+      "stdout_cap_bytes": 1048576
+    },
+    "publish": {
+      "timeout_seconds": 1800,
+      "stdout_cap_bytes": 1048576
+    },
+    "baseline": {
+      "timeout_seconds": 900,
+      "stdout_cap_bytes": 1048576
+    }
+  }
+}

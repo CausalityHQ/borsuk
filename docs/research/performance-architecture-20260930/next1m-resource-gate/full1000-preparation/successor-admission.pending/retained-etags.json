@@ -1,0 +1,8 @@
+{
+  "corpus.f32": "\"9145b25e2623622923edde74cd8d1c3a\"",
+  "queries.f32": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+  "corpus.ids.jsonl": "\"37146950e40f7754512bd02dc49e4d3d\"",
+  "queries.ids.jsonl": "\"cf5b7567fde9af1a360ee730e2b04154\"",
+  "truth.u64": "\"09946f4a1d247107e8efd679998954ec\"",
+  "complete.json": "\"1ca69646050c39474eca16dc7165b4af\""
+}

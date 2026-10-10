@@ -1,0 +1,110 @@
+{
+  "schema": "borsuk-cohere-native-baseline-config-v7",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "metric": "cosine",
+  "tie_rule": "corpus_ordinal_ascending",
+  "corpus_intervals": [
+    {
+      "start": 0,
+      "end": 100000
+    },
+    {
+      "start": 101000,
+      "end": 1001000
+    }
+  ],
+  "reserved_query_interval": {
+    "start": 100000,
+    "end": 101000
+  },
+  "cohort_receipt": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/complete.json",
+    "bytes": 6238,
+    "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+  },
+  "derivation_receipt": {
+    "path": "PENDING_AUTHENTICATED_NEW_DERIVATION_RECEIPT",
+    "bytes": null,
+    "sha256": null
+  },
+  "producer_authority": {
+    "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+    "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+    "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+    "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+  },
+  "corpus_source_first": 0,
+  "query_source_first": 100000,
+  "rows": 1000000,
+  "dimensions": 1024,
+  "count": 1000,
+  "k": 10,
+  "profile": "scale1m",
+  "backend": {
+    "kind": "local",
+    "store_root": "PENDING_AUTHENTICATED_LOCAL_STORE"
+  },
+  "generation_prefix": "PENDING_AUTHENTICATED_METADATA_PREFIX",
+  "generation_root_sha256": null,
+  "scratch_parent": "/mnt/borsuk-scale1m/admission/local-scratch",
+  "requests": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  },
+  "native_source": {
+    "source_sha256": null,
+    "sq8_sha256": null,
+    "source_order_sha256": null
+  },
+  "max_memory_bytes": 536870912,
+  "fetch_parallelism": 16,
+  "serving": {
+    "mode": "baseline"
+  },
+  "execution": {
+    "mode": "diagnostic_panel",
+    "ordinals": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "trace": false
+  }
+}

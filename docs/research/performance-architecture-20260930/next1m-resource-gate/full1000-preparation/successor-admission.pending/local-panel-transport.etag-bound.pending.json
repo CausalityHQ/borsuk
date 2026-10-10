@@ -1,0 +1,92 @@
+[
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/pid128-native-inputs/59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3/baseline",
+    "etag": "\"0d19638df7eb46fa2ed1c7f0b1ac4d20\"",
+    "relative_path": "bin/check_cohere_native_baseline",
+    "bytes": 17029632,
+    "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_two_bit_generation",
+    "etag": "\"107f2acf759373861d4e76405506b6cc\"",
+    "relative_path": "bin/build_two_bit_generation",
+    "bytes": 4444504,
+    "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/publish_two_bit_generation",
+    "etag": "\"52190475b221cc1726998401c3933b15-2\"",
+    "relative_path": "bin/publish_two_bit_generation",
+    "bytes": 15964832,
+    "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_sq8_source",
+    "etag": "\"d7a1c95a131c8097eb0cf27b4cd84b9f\"",
+    "relative_path": "bin/build_sq8_source",
+    "bytes": 4273936,
+    "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/corpus.f32",
+    "relative_path": "prepared/corpus.f32",
+    "bytes": 4096000000,
+    "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+    "etag": "\"9145b25e2623622923edde74cd8d1c3a\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32",
+    "relative_path": "prepared/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "etag": "\"1553426815b5dbf6d916ccd12f1c227a\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/corpus.ids.jsonl",
+    "relative_path": "prepared/corpus.ids.jsonl",
+    "bytes": 200873446,
+    "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067",
+    "etag": "\"37146950e40f7754512bd02dc49e4d3d\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.ids.jsonl",
+    "relative_path": "prepared/queries.ids.jsonl",
+    "bytes": 196017,
+    "sha256": "f0e6e974c3dfe45fae7db3a9a5146891541d1f3c0d605674d115b6c580a87f68",
+    "etag": "\"cf5b7567fde9af1a360ee730e2b04154\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64",
+    "relative_path": "prepared/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "etag": "\"09946f4a1d247107e8efd679998954ec\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/complete.json",
+    "relative_path": "prepared/complete.json",
+    "bytes": 6238,
+    "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+    "etag": "\"1ca69646050c39474eca16dc7165b4af\""
+  }
+]
