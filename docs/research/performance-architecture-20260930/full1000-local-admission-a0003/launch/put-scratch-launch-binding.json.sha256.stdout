@@ -1,0 +1,6 @@
+{
+    "ETag": "\"b013404e9f0006233a9f41f389d86324\"",
+    "ChecksumCRC64NVME": "y7lBNocOLDs=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+}
