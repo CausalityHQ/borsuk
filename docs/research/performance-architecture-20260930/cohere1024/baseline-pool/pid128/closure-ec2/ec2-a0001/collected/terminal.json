@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-validator-ec2-v1",
+  "status": "SYNTHETIC_CLOSURE_CHECKS_ONLY",
+  "phase": "closed",
+  "instance_id": "i-0967b3175322229db",
+  "prefix": "research/semantic-router/20261010/pid128-closure/borsuk-closure-300eae0f62fa4b9c815de421fc015411",
+  "bootstrap_sha256": "eab2fad0e55bfb3f287d24b052975da9664211b3c75f89ebd9f86bdd5fbf6b52",
+  "bootstrap_exit": 0,
+  "test_exit": 0,
+  "native_executed": false,
+  "performance_claim": false,
+  "evidence_sha256": "2152ec39a006cbcdf9cdf3a6fbaf9c9fc97ceac2c7102bba6b74ac2c775fbb2a",
+  "evidence_bytes": 75661
+}

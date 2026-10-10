@@ -1,0 +1,32 @@
+{
+  "status": "SYNTHETIC_CLOSURE_CHECKS_ACCEPTED_ONLY",
+  "cases": {
+    "positive": 0,
+    "unrelated_observer": 1,
+    "wrong_invocation": 1,
+    "wrong_snapshot": 1,
+    "nested_wrapper": 1,
+    "nested_closure": 1,
+    "manager_duplicate": 98,
+    "manager_failed": 98,
+    "wrong_outer_exit": 98,
+    "populated_one": 98,
+    "multi_document_outer": 98,
+    "same_device": 0,
+    "different_device": 98,
+    "first_stat_nonzero": 98,
+    "second_stat_nonzero": 98
+  },
+  "instance_id": "i-0967b3175322229db",
+  "evidence_sha256": "2152ec39a006cbcdf9cdf3a6fbaf9c9fc97ceac2c7102bba6b74ac2c775fbb2a",
+  "original_root_observer_exit": 0,
+  "terminated": true,
+  "root_volume_absent": true,
+  "native_executed": false,
+  "performance_claim": false,
+  "remaining": [
+    "real-input admission",
+    "separate staging",
+    "actual native PID128 query gate"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "prefix": "research/semantic-router/20261010/pid128-closure/borsuk-closure-300eae0f62fa4b9c815de421fc015411",
+  "assets": "research/semantic-router/20261010/pid128-closure/borsuk-closure-300eae0f62fa4b9c815de421fc015411/inputs",
+  "client_token": "borsuk-closure-300eae0f62fa4b9c815de421fc015411",
+  "bootstrap_sha256": "eab2fad0e55bfb3f287d24b052975da9664211b3c75f89ebd9f86bdd5fbf6b52",
+  "bootstrap_bytes": 8425,
+  "worker_sha256": "84238b041b58c1e0c0f159b1059d280daafeb56d4d93b614758f8db645cc9d2b",
+  "watch_sha256": "6a4d86274023f9110f14cafafbe1ad99bb997adb3ef0b0f060f71628025ed33c",
+  "cases": 15,
+  "instance_type": "c7a.large",
+  "compute_allowance_usd": 0.035,
+  "ancillary_allowance_usd": 0.015,
+  "observer_retained_until_root_capture": true,
+  "launch_executed": false,
+  "source_changes": [
+    [
+      "3e63380b93320f00dd5888497cd582bc448b5954edce7b8349a66f2dadd5734d",
+      "ee8327efb4f744d5acc6d8b2665867ca1a3f8a80908e45a83b0a650168baad65"
+    ],
+    [
+      "ffcc7e26b5c37e519b6368ebdf76582c6f6e1df042b7e394f4018ec3b24011df",
+      "1e641c01ee224d817f4788232d8a1ea01e054e4a08bed3fc5b9a123de625f2b5"
+    ],
+    [
+      "expected_bytes=61729; else expected_bytes=6850",
+      "expected_bytes=61940; else expected_bytes=9749"
+    ],
+    [
+      ".status==\"SYNTHETIC_VALIDATOR_CHECKS_ONLY\" and .passed==9",
+      ".status==\"SYNTHETIC_CLOSURE_CHECKS_ONLY\" and .passed==15"
+    ],
+    [
+      "phase=closed state=SYNTHETIC_VALIDATOR_CHECKS_ONLY",
+      "phase=closed state=SYNTHETIC_CLOSURE_CHECKS_ONLY"
+    ]
+  ]
+}
