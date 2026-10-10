@@ -1,0 +1,78 @@
+{
+  "schema": "borsuk-pid128-native-transport-draft-v1",
+  "status": "ROOT_TRANSPORT_LOCATORS_FROZEN",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "assets": [
+    {
+      "path": "/mnt/borsuk-pool-pid/input/en/0000.parquet",
+      "bytes": 216612385,
+      "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3",
+      "kind": "https",
+      "locator": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0000.parquet",
+      "source": "original frozen publisher revision",
+      "redirect_policy": "HTTPS only; max4 hops; exact bytes and SHA before publication"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/input/en/0001.parquet",
+      "bytes": 216746705,
+      "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b",
+      "kind": "https",
+      "locator": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0001.parquet",
+      "source": "original frozen publisher revision",
+      "redirect_policy": "HTTPS only; max4 hops; exact bytes and SHA before publication"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/prepare_cohere_native_cohort",
+      "bytes": 10015160,
+      "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+      "kind": "s3",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/prepare_cohere_native_cohort",
+      "source": "qualified ELF body",
+      "root_upload_required": false
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/build_sq8_source",
+      "bytes": 4273936,
+      "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+      "kind": "s3",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_sq8_source",
+      "source": "qualified ELF body",
+      "root_upload_required": false
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/build_two_bit_generation",
+      "bytes": 4444504,
+      "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe",
+      "kind": "s3",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_two_bit_generation",
+      "source": "qualified ELF body",
+      "root_upload_required": false
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/publish_two_bit_generation",
+      "bytes": 15964832,
+      "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982",
+      "kind": "s3",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/publish_two_bit_generation",
+      "source": "qualified ELF body",
+      "root_upload_required": false
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/check_cohere_native_baseline",
+      "bytes": 17029632,
+      "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3",
+      "kind": "s3",
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "key": "research/semantic-router/20261010/pid128-native-inputs/59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3/baseline",
+      "source": "qualified ELF body",
+      "root_upload_required": true
+    }
+  ],
+  "native_executed": false,
+  "launch_authority": false
+}

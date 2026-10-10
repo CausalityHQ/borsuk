@@ -1,0 +1,8 @@
+{
+  "source_revision": "4402ace589903e841e97e08b0bbada6ba441d507",
+  "client_token": "borsuk-pid128-native-a0001-58c3384482714d9d",
+  "prefix": "research/semantic-router/20261010/borsuk-pid128-native-a0001-58c3384482714d9d/run",
+  "assets": "research/semantic-router/20261010/borsuk-pid128-native-a0001-58c3384482714d9d/assets",
+  "watch_unit": "borsuk-pid128-native-a0001-58c3384482714d9d.service",
+  "launch_authority": false
+}

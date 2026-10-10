@@ -1,0 +1,19 @@
+{
+  "status": "ORIGINAL_INSTANCE_LIVE_TERMINAL_PENDING",
+  "instance_id": "i-098477877e462a70d",
+  "watch_unit": "borsuk-pid128-native-a0001-58c3384482714d9d.service",
+  "watch_invocation": "d586090c878f43e084e88a2e0a240fbf",
+  "launch_source_revision": "4402ace589903e841e97e08b0bbada6ba441d507",
+  "qualified_rust_revision": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/semantic-router/20261010/borsuk-pid128-native-a0001-58c3384482714d9d/run",
+  "bootstrap_bytes": 15480,
+  "bootstrap_sha256": "c666f6a2c61615ecff6771dc9cec61899946f16c011b49f39af679e9d89fb97e",
+  "launched_epoch": 1791630725,
+  "run_instances_count": 1,
+  "performance_claim": false,
+  "cold_claim": false,
+  "local_native_execution": false,
+  "bg_wait": true
+}

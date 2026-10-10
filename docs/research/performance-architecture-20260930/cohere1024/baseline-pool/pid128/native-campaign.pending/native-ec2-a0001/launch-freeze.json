@@ -1,0 +1,109 @@
+{
+  "source_revision": "4402ace589903e841e97e08b0bbada6ba441d507",
+  "client_token": "borsuk-pid128-native-a0001-58c3384482714d9d",
+  "prefix": "research/semantic-router/20261010/borsuk-pid128-native-a0001-58c3384482714d9d/run",
+  "assets": "research/semantic-router/20261010/borsuk-pid128-native-a0001-58c3384482714d9d/assets",
+  "watch_unit": "borsuk-pid128-native-a0001-58c3384482714d9d.service",
+  "launch_authority": true,
+  "launched_epoch": 1791630725,
+  "bootstrap_sha256": "c666f6a2c61615ecff6771dc9cec61899946f16c011b49f39af679e9d89fb97e",
+  "watch_sha256": "74a94f56ac27409ed8c02d140c4fbf1c90827b6dc8c37e7d9a30924d21687d1b",
+  "request_sha256": "bbb4738ee20d634a0f7acc30f3777f4a117cf053cd9ac4dc35a07fab8ad7cc1e",
+  "support_roster": [
+    {
+      "name": "run-native-pid128-r7.sh",
+      "bytes": 71250,
+      "sha256": "f0273d2353b198030dd9df4718a142a88c009b6e78861f8cf9d5b9f1dd9639d3"
+    },
+    {
+      "name": "run-staging-native.sh",
+      "bytes": 7419,
+      "sha256": "79cf1dc7949fdd6f7aba834afae66da6695d4b43e46addc59d85dd5a770e7054"
+    },
+    {
+      "name": "run-cleanup-negative.sh",
+      "bytes": 7009,
+      "sha256": "852eaa6f59ab0e6b57e2eebc3fdd949bb0cfb9fb6f1951584191a36afba6659c"
+    },
+    {
+      "name": "staging-library.sh",
+      "bytes": 44094,
+      "sha256": "4f2943c8dd73df94fee7d1b7569e6af186424bbeefeec14c47bd9f502f36cc1c"
+    },
+    {
+      "name": "timeout-descendant.sh",
+      "bytes": 992,
+      "sha256": "1bda564e59d140aa5f28fa82b046d6678504ead9133b262c4513e6e8ce7b4436"
+    },
+    {
+      "name": "observer-command.sh",
+      "bytes": 643,
+      "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    },
+    {
+      "name": "collect-admission-outer.sh",
+      "bytes": 8148,
+      "sha256": "f6e123ee06474a10def135b9121444e09627334f9114942b0282dd3b9c882f79"
+    },
+    {
+      "name": "collect-stage-outer.sh",
+      "bytes": 14630,
+      "sha256": "ac51d8b718acff95158c83dafd14d1da5a3919f3ed80077c3e071596ffdf5023"
+    },
+    {
+      "name": "run-finite-campaign.sh",
+      "bytes": 10344,
+      "sha256": "789d42f9aa14e396c544fe4a5d773ddcd0c0f79963ffd45ec578435646682279"
+    },
+    {
+      "name": "cohort-template.json",
+      "bytes": 1722,
+      "sha256": "d55e2c941d3b10432e291c61a7e9d9d084da99e5e9331face0b9a17104c38820"
+    },
+    {
+      "name": "derivation-template.json",
+      "bytes": 1025,
+      "sha256": "0a8ea237c350cece31596cb194ecd14c3e003332c9d28b847389bdae87b7906a"
+    },
+    {
+      "name": "producer-admission.json",
+      "bytes": 2479,
+      "sha256": "f9d3490cf3de71ae837b7f1a47d7907d4bdbb1a707fc947cbf08d7f6fc646984"
+    },
+    {
+      "name": "baseline-admission.json",
+      "bytes": 598,
+      "sha256": "7ad7d0db4a5e4533aa617f90b9f0d728c0ab0b8e39982f9131e8daf2621dee84"
+    },
+    {
+      "name": "input-manifest.json",
+      "bytes": 1826,
+      "sha256": "b49dd5d8119b7653c00578855627de5837af8cd9d9f8bc2a2d9f1cf221355bc2"
+    },
+    {
+      "name": "admission-root-gate.json",
+      "bytes": 352,
+      "sha256": "c42a766a6c8313ba6a13493f946b62a9b71b9a3083be065471e5456bb4d284e8"
+    },
+    {
+      "name": "admission-config.json",
+      "bytes": 1829,
+      "sha256": "a696c3370a49c5e87cc96ebdc5cae51698f62e0a26db4414cf9e7a38d1cba6b5"
+    },
+    {
+      "name": "campaign-config.json",
+      "bytes": 1894,
+      "sha256": "faa0346832037c15fc26d5618dcdbf1642162e8ac498c3fc1a80237e1ed8f98e"
+    },
+    {
+      "name": "transport-manifest.json",
+      "bytes": 3609,
+      "sha256": "29bdf201bca2fc02933583beddd152cbf607ec5854482f7b06dbd1d18ba08ee9"
+    },
+    {
+      "name": "transport-native-inputs.sh",
+      "bytes": 4831,
+      "sha256": "6bcb6305644d8d015deefdcaa81e20028134fa039a12c9800c9fde488c877c87"
+    }
+  ]
+}

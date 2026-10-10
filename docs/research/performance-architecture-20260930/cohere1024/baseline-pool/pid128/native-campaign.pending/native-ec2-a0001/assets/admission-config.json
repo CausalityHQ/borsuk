@@ -1,0 +1,56 @@
+{
+  "schema": "borsuk-native-pid128-config-v2",
+  "status": "ROOT_FROZEN",
+  "stage": "admission",
+  "recipe_sha256": "f0273d2353b198030dd9df4718a142a88c009b6e78861f8cf9d5b9f1dd9639d3",
+  "input_manifest": {
+    "path": "/mnt/borsuk-native-support/input-manifest.json",
+    "bytes": 1826,
+    "sha256": "b49dd5d8119b7653c00578855627de5837af8cd9d9f8bc2a2d9f1cf221355bc2"
+  },
+  "cohort_template": {
+    "path": "/mnt/borsuk-native-support/cohort-template.json",
+    "bytes": 1722,
+    "sha256": "d55e2c941d3b10432e291c61a7e9d9d084da99e5e9331face0b9a17104c38820"
+  },
+  "derivation_template": {
+    "path": "/mnt/borsuk-native-support/derivation-template.json",
+    "bytes": 1025,
+    "sha256": "0a8ea237c350cece31596cb194ecd14c3e003332c9d28b847389bdae87b7906a"
+  },
+  "scratch": {
+    "caller_scratch_bytes": 2147483648,
+    "max_aggregate_scratch_bytes": 8589934592,
+    "minimum_free_bytes": 17179869184,
+    "total_cap_bytes": 17179869184,
+    "evidence_reserve_bytes": 1073741824,
+    "evidence_root": "/mnt/borsuk-pid-evidence",
+    "phase_peak_bytes": {
+      "prepare": 17179869184,
+      "derive": 17179869184,
+      "copy": 17179869184,
+      "generation": 17179869184,
+      "publish": 17179869184,
+      "diagnostic": 17179869184,
+      "query16": 17179869184,
+      "query32": 17179869184
+    },
+    "phase_transient_reserve_bytes": {
+      "prepare": 1073741824,
+      "derive": 1073741824,
+      "copy": 1073741824,
+      "generation": 1073741824,
+      "publish": 1073741824,
+      "diagnostic": 1073741824,
+      "query16": 1073741824,
+      "query32": 1073741824
+    }
+  },
+  "root_gate": {
+    "path": "/mnt/borsuk-native-support/admission-root-gate.json",
+    "bytes": 352,
+    "sha256": "c42a766a6c8313ba6a13493f946b62a9b71b9a3083be065471e5456bb4d284e8"
+  },
+  "admission": null,
+  "admission_closure": null
+}

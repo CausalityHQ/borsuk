@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-native-pid128-inputs-v1",
+  "status": "ROOT_FROZEN",
+  "assets": [
+    {
+      "path": "/mnt/borsuk-pool-pid/input/en/0000.parquet",
+      "bytes": 216612385,
+      "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/input/en/0001.parquet",
+      "bytes": 216746705,
+      "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/prepare_cohere_native_cohort",
+      "bytes": 10015160,
+      "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/build_sq8_source",
+      "bytes": 4273936,
+      "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/build_two_bit_generation",
+      "bytes": 4444504,
+      "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/publish_two_bit_generation",
+      "bytes": 15964832,
+      "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+    },
+    {
+      "path": "/mnt/borsuk-pool-pid/assets/bin/check_cohere_native_baseline",
+      "bytes": 17029632,
+      "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+    }
+  ],
+  "producer_admission": {
+    "path": "/mnt/borsuk-native-support/producer-admission.json",
+    "bytes": 2479,
+    "sha256": "f9d3490cf3de71ae837b7f1a47d7907d4bdbb1a707fc947cbf08d7f6fc646984"
+  },
+  "baseline_admission": {
+    "path": "/mnt/borsuk-native-support/baseline-admission.json",
+    "bytes": 598,
+    "sha256": "7ad7d0db4a5e4533aa617f90b9f0d728c0ab0b8e39982f9131e8daf2621dee84"
+  }
+}
