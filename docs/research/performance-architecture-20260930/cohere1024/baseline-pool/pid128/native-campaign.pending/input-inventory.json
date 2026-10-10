@@ -1,0 +1,60 @@
+{
+  "status": "OPAQUE_LOCAL_INPUT_INVENTORY_ONLY",
+  "source_commit": "835d6edf26d01bafbb5284019703bbd2c98c882f",
+  "artifacts": [
+    {
+      "path": "/tmp/borsuk-root-pid128-repair-r3/run-native-pid128.sh",
+      "bytes": 61940,
+      "sha256": "ee8327efb4f744d5acc6d8b2665867ca1a3f8a80908e45a83b0a650168baad65"
+    },
+    {
+      "path": "/tmp/borsuk-pool-100k32-cohort-config.pending.json",
+      "bytes": 1722,
+      "sha256": "d55e2c941d3b10432e291c61a7e9d9d084da99e5e9331face0b9a17104c38820"
+    },
+    {
+      "path": "/tmp/borsuk-pool-100k32-derivation-config.pending.json",
+      "bytes": 1025,
+      "sha256": "0a8ea237c350cece31596cb194ecd14c3e003332c9d28b847389bdae87b7906a"
+    },
+    {
+      "path": "/tmp/borsuk-pool-producer-assets-admission.json",
+      "bytes": 2479,
+      "sha256": "f9d3490cf3de71ae837b7f1a47d7907d4bdbb1a707fc947cbf08d7f6fc646984"
+    },
+    {
+      "path": "/tmp/borsuk-pool-baseline-elf-admission.json",
+      "bytes": 598,
+      "sha256": "7ad7d0db4a5e4533aa617f90b9f0d728c0ab0b8e39982f9131e8daf2621dee84"
+    },
+    {
+      "path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/build_sq8_source",
+      "bytes": 4273936,
+      "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+    },
+    {
+      "path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/prepare_cohere_native_cohort",
+      "bytes": 10015160,
+      "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb"
+    },
+    {
+      "path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/build_two_bit_generation",
+      "bytes": 4444504,
+      "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+    },
+    {
+      "path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/check_cohere_native_baseline",
+      "bytes": 17029632,
+      "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+    },
+    {
+      "path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/publish_two_bit_generation",
+      "bytes": 15964832,
+      "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+    }
+  ],
+  "native_executed": false,
+  "corpus_or_truth_opened": false,
+  "launch_authority": false,
+  "planning_consultation": "bb0ea1d45b91443a"
+}

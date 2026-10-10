@@ -1,0 +1,8 @@
+{
+    "type": "c7a.2xlarge",
+    "cpu": 8,
+    "memory_mib": 16384,
+    "architecture": [
+        "x86_64"
+    ]
+}
