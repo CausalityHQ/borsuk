@@ -1,0 +1,146 @@
+{
+  "schema": "borsuk-canary-ready-assets-v1",
+  "source_commit": "36242bc11a04f99cd749167f08356f53bf1a562d",
+  "assets": [
+    {
+      "name": "config-template.json",
+      "bytes": 3991,
+      "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba"
+    },
+    {
+      "name": "derivation-config.json",
+      "bytes": 1145,
+      "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+    },
+    {
+      "name": "gate-config-template.json",
+      "bytes": 4332,
+      "sha256": "270e79c439915dda8183f89b539683a95a297b8c31d165ddea138615a9019082"
+    },
+    {
+      "name": "run_actual_cohort_admission.sh",
+      "bytes": 22040,
+      "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 41373,
+      "sha256": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422"
+    },
+    {
+      "name": "service-stop.sh",
+      "bytes": 1958,
+      "sha256": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e"
+    },
+    {
+      "name": "transport-pins.json",
+      "bytes": 6201,
+      "sha256": "93995d925d71b3242d135c38203806801ea0a1d3476c45da9d798ca286dfcc82"
+    },
+    {
+      "name": "transport.py",
+      "bytes": 3654,
+      "sha256": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529"
+    },
+    {
+      "name": "canary-tail.sh",
+      "bytes": 15654,
+      "sha256": "b069a2e76805683d207988e3e9764cbefb9a92b17195b8be06e4e889b2376659"
+    },
+    {
+      "name": "canary-coordinator.sh",
+      "bytes": 32140,
+      "sha256": "983a3f16e5f3567e587729502d82d3a0c33cf90df3f7054e08559b66583f0acc"
+    },
+    {
+      "name": "wrapper-canary.sh",
+      "bytes": 6787,
+      "sha256": "bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f"
+    },
+    {
+      "name": "validate-scratch-binding.sh",
+      "bytes": 2250,
+      "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+    },
+    {
+      "name": "support.sha256",
+      "bytes": 803,
+      "sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0"
+    },
+    {
+      "name": "scratch-fixture-guest.sh",
+      "bytes": 16321,
+      "sha256": "6f624ead997e6606a3dcb3dda0de0b1c35c6f2d0105a7b2dcd1ab111d81b306e"
+    },
+    {
+      "name": "scratch-fixture-launcher.py",
+      "bytes": 11663,
+      "sha256": "48d4c79861285f9a8a60d03a635427c096b060415f5c8fc45c364d3fabf19238"
+    },
+    {
+      "name": "scratch-fixture-verifier.py",
+      "bytes": 66330,
+      "sha256": "301c882bee892578fc351491506a01e48827eab56520bdc28fdafeaea9e6c3b5"
+    },
+    {
+      "name": "scratch-admission-mock.sh",
+      "bytes": 5669,
+      "sha256": "e56ec9a35c5a015f72f3a1a5b8417ad810c4740e5b071003c60ca87216ab4d3f"
+    },
+    {
+      "name": "scratch-proof-negatives.py",
+      "bytes": 11124,
+      "sha256": "22f3c36298c0cb3916b0d9193883a211584237ca79be532c0c6095a26b152c65"
+    },
+    {
+      "name": "scratch-settle-fixture.py",
+      "bytes": 9593,
+      "sha256": "4a7b1bd0fd91c5b56187875e7b743981d5e442ed4cd03cc8844fe5bbc9062095"
+    },
+    {
+      "name": "scratch-fixture-parent-launcher.py",
+      "bytes": 9718,
+      "sha256": "cf5d1d8131b57993689ec897f61d7c901693a9f853eb3dfda379a84f71791640"
+    },
+    {
+      "name": "scratch-instance-settle-fixture.py",
+      "bytes": 9033,
+      "sha256": "2170e37be98080587dece20cc3327c04cacfb78152b1b5e5f0313df674fdd19f"
+    },
+    {
+      "name": "ff.py",
+      "bytes": 10831,
+      "sha256": "78e23213f40b362baed4c0227cb0eaac8e08e26b474928460292e44aa2b7f6ee"
+    },
+    {
+      "name": "ft.sh",
+      "bytes": 15654,
+      "sha256": "046316866e35788682c013337eba8118ec126ecfcfcd8e35aff61274842251c4"
+    },
+    {
+      "name": "fc.sh",
+      "bytes": 32102,
+      "sha256": "7c2db63dea0d935614066e44b5f67e652d2a8137a7a5d883262106a348d70392"
+    },
+    {
+      "name": "pf.py",
+      "bytes": 13353,
+      "sha256": "fc970608fd25094941a62ea3404a98ae73b0661c8ac78aa128f978053356e306"
+    },
+    {
+      "name": "bt.sh",
+      "bytes": 14558,
+      "sha256": "ba736c3d4b6c05bd6b6c242f795ad2ac138580ab66a15df9856efe23b0fb9aae"
+    },
+    {
+      "name": "bc.sh",
+      "bytes": 31593,
+      "sha256": "bff35749d957c1e76635b1170c2ef390fe97dadf5b3dc72712b65451397e6f35"
+    }
+  ],
+  "support_sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0",
+  "staged": false,
+  "launch_authorized": false,
+  "runtime_fixtures": "UNRUN",
+  "performance_claim": false
+}

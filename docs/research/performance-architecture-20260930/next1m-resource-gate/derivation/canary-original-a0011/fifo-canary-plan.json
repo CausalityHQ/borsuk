@@ -1,0 +1,59 @@
+{
+  "schema": "borsuk-scratch-fixture-canary-plan-v1",
+  "source_commit": "36242bc11a04f99cd749167f08356f53bf1a562d",
+  "purpose": "Run exact source-bound synthetic refusal fixtures before real scratch formatting, then unchanged environment canary; no ANN",
+  "assets": 21,
+  "fixture_unit": {
+    "cpu_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 120,
+    "private_network": true,
+    "kill_mode": "control-group"
+  },
+  "before_format": true,
+  "nonzero_stops_canary": true,
+  "mock_operations": "Formatting/system command functions and synthetic API bodies only; no real device mutation in fixtures",
+  "real_operations": "Subsequent launch-bound volume proof, scratch formatting and existing platform canary only after fixture exit0",
+  "addon_sha256": "b42183e38cd76c8f935c6a45ab808bb7aad610fe1d1ff9afa10d555212309275",
+  "cleanup_addition": "Add borsuk-scratch-fixtures to exact owned-unit finish stop/check list",
+  "assembly_addition": "Insert addon exactly once before phase=scratch; preserve original assembled bytes by inverse removal and exact cleanup-list inverse",
+  "compute_max_usd": 0.65,
+  "ancillary_max_usd": 0.15,
+  "machine_local_stop_seconds": 3000,
+  "external_stop_seconds": 3600,
+  "external_cleanup_seconds": 120,
+  "historical_attempts_unchanged": true,
+  "runtime_status": "UNRUN",
+  "launch_authorized": false,
+  "attachment_observation": {
+    "window_seconds": 30,
+    "max_observations": 12,
+    "spacing_seconds": 2,
+    "aws_errors_retried": false,
+    "final_state": "attached",
+    "final_evidence_basename_key": "scratch_volume_final_evidence"
+  },
+  "prior_attempt": "a0010 closed:255 fixtures/allT1..T5/W passed; exact cloud-init special path refused atC0; noANN",
+  "fixture_order": [
+    "fifo_types",
+    "platform_faults",
+    "attachment_settle",
+    "instance_mapping_settle",
+    "formatting",
+    "ownership_proof"
+  ],
+  "production_source_changed": false,
+  "root_launcher_resource": {
+    "cpu": 1,
+    "memory_mib": 256,
+    "swap": 0,
+    "runtime_max_seconds": 240,
+    "reason": "finite sequential API envelopes: dry25+run25+instance30+scratch30+puts50+watch10+cleanup25+local10=205; reserve35; machine/canary envelopes unchanged"
+  },
+  "tail_sha256": "b069a2e76805683d207988e3e9764cbefb9a92b17195b8be06e4e889b2376659",
+  "coordinator_sha256": "983a3f16e5f3567e587729502d82d3a0c33cf90df3f7054e08559b66583f0acc",
+  "moved_downloads_sha256": "2cb62123a3c5c6c025bba004deeea64c1264842a54a5e995fc8c91e85453aeba"
+}

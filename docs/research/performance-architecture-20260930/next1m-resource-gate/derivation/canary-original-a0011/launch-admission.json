@@ -1,0 +1,67 @@
+{
+  "ancillary_reserved_usd": 0.15,
+  "ann_run": false,
+  "assets_stage_sha256": "88383b503919dfc37648b4434cf069d6e8c6a104f77f64677d023d47229b8031",
+  "client_token": "borsuk-next1m-canary-a0011-1791597517",
+  "compute_reserved_usd": 0.65,
+  "conservative_all_gp3_provisioned_rates_estimate_usd": 0.08514092592592593,
+  "controller_commit": "36242bc11a04f99cd749167f08356f53bf1a562d",
+  "ebs_api_rates": [
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0952 per GB-month of General Purpose (gp3) provisioned storage - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0952000000"
+      },
+      "rateCode": "43AUDFP7M3XV6YHQ.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GB-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.006 per provisioned IOPS-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "0.0060000000"
+      },
+      "rateCode": "8AGS2P58KKNUHB49.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "IOPS-Mo"
+    },
+    {
+      "appliesTo": [],
+      "beginRange": "0",
+      "description": "$0.0476 per provisioned MiBps-month of gp3 - EU (Frankfurt)",
+      "endRange": "Inf",
+      "pricePerUnit": {
+        "USD": "48.7424000000"
+      },
+      "rateCode": "GRZF7WF5ECWS5FS2.JRTCKXETXF.6YS6EN2CT7",
+      "unit": "GiBps-mo"
+    }
+  ],
+  "external_deadline_epoch": 1791601117,
+  "instance_not_yet_launched": true,
+  "launch_count": 1,
+  "local_deadline_epoch": 1791600517,
+  "performance_claim": false,
+  "prior_attempt": "i-07f9544bbb2f0b4c2: terminated; both volumes absent; exact cloud-init FIFO path refusal preserved",
+  "purpose": "Source-bound refusal fixtures before launch-owned scratch formatting; existing environment canary; no ANN",
+  "request_encoding": "raw script string; AWS CLI RunInstances customization applies base64 once",
+  "root_authorizes_one_diagnostic_canary": true,
+  "root_launcher_resource": {
+    "cpu": 1,
+    "memory_mib": 256,
+    "reason": "finite sequential API envelopes: dry25+run25+instance30+scratch30+puts50+watch10+cleanup25+local10=205; reserve35; machine/canary envelopes unchanged",
+    "runtime_max_seconds": 240,
+    "swap": 0
+  },
+  "schema": "borsuk-canary-launch-admission-v1",
+  "started_epoch": 1791597517,
+  "termination_grace_seconds": 120,
+  "total_reserved_usd": 0.8,
+  "user_data_bytes": 16313,
+  "user_data_sha256": "25aef5399be807f239c68dcef728ab98f54c40a60d9cffeaece5bb25ca968a67",
+  "watcher_sha256": "f2033851e5a8f02f4e698685266e5e16c2a97b484b639a97ee690d8a1d75ef80"
+}
