@@ -61,3 +61,18 @@ Remaining launch requirements:
   widths remain required. No performance or cold comparator claim is admitted.
 - Only the final root-owned launch may create an attempt/token/RunInstances.
   No launch, instance, runtime fixture or paid experiment was created here.
+
+Root resource/request draft, 2026-10-10: request.pending.json retains the accepted
+platform AMI/profile/subnet/SG/IMDSv2/termination options, changes only to
+c7a.2xlarge, 48GiB encrypted gp3 root and Spot max $0.25/hour, and keeps an
+explicit PENDING_ROOT_UNIQUE_ATTEMPT token/name. It is not an admitted request.
+resource-plan.pending.json records the five-hour envelope and $1.50 planning
+allowance ($1.25 compute plus $0.25 ancillary), not a billing cap. A read-only
+causality EC2 quote in spot-quote.json returns $0.193400/hour, quoted at
+2026-10-10T08:00:00+00:00. No RunInstances call was made.
+
+One new immutable-wrapper dual review group259d91aacc8c4b8f is running against
+7cffa1552a62fab65f6c983524d027dd3e57132a. Both critics were confirmed running;
+the research critic continued through the configured usage-limit fallback.
+No duplicate group was launched. All runtime and release acceptance remains
+pending the actual reviewed findings and exact EC2 execution.
