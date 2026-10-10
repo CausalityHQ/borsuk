@@ -1,0 +1,30 @@
+{
+ "v1": {
+  "datasource": null,
+  "init": {
+   "errors": [],
+   "finished": null,
+   "recoverable_errors": {},
+   "start": null
+  },
+  "init-local": {
+   "errors": [],
+   "finished": null,
+   "recoverable_errors": {},
+   "start": null
+  },
+  "modules-config": {
+   "errors": [],
+   "finished": null,
+   "recoverable_errors": {},
+   "start": null
+  },
+  "modules-final": {
+   "errors": [],
+   "finished": 99.54,
+   "recoverable_errors": {},
+   "start": 99.52
+  },
+  "stage": null
+ }
+}

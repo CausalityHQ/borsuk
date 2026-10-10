@@ -1,0 +1,6 @@
+{
+    "ETag": "\"5b3f62e97fa3caed5818f34ea09f2086\"",
+    "ChecksumCRC64NVME": "zoldbSH5bIc=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+}

@@ -1,0 +1,9 @@
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T02:37:04+00:00",
+    "ContentLength": 814,
+    "ETag": "\"9e32d2184260838eaef1cc00c7e1377d\"",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}

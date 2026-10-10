@@ -1,0 +1,58 @@
+{
+ "v1": {
+  "datasource": null,
+  "init": {
+   "errors": [
+    "('scripts-user', RuntimeError('Runparts: 1 failures (part-001) in 1 attempted commands'))"
+   ],
+   "finished": null,
+   "recoverable_errors": {
+    "WARNING": [
+     "Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)",
+     "Running module scripts-user (<module 'cloudinit.config.cc_scripts_user' from '/usr/lib/python3/dist-packages/cloudinit/config/cc_scripts_user.py'>) failed"
+    ]
+   },
+   "start": null
+  },
+  "init-local": {
+   "errors": [
+    "('scripts-user', RuntimeError('Runparts: 1 failures (part-001) in 1 attempted commands'))"
+   ],
+   "finished": null,
+   "recoverable_errors": {
+    "WARNING": [
+     "Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)",
+     "Running module scripts-user (<module 'cloudinit.config.cc_scripts_user' from '/usr/lib/python3/dist-packages/cloudinit/config/cc_scripts_user.py'>) failed"
+    ]
+   },
+   "start": null
+  },
+  "modules-config": {
+   "errors": [
+    "('scripts-user', RuntimeError('Runparts: 1 failures (part-001) in 1 attempted commands'))"
+   ],
+   "finished": null,
+   "recoverable_errors": {
+    "WARNING": [
+     "Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)",
+     "Running module scripts-user (<module 'cloudinit.config.cc_scripts_user' from '/usr/lib/python3/dist-packages/cloudinit/config/cc_scripts_user.py'>) failed"
+    ]
+   },
+   "start": null
+  },
+  "modules-final": {
+   "errors": [
+    "('scripts-user', RuntimeError('Runparts: 1 failures (part-001) in 1 attempted commands'))"
+   ],
+   "finished": 100.33,
+   "recoverable_errors": {
+    "WARNING": [
+     "Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)",
+     "Running module scripts-user (<module 'cloudinit.config.cc_scripts_user' from '/usr/lib/python3/dist-packages/cloudinit/config/cc_scripts_user.py'>) failed"
+    ]
+   },
+   "start": 100.31
+  },
+  "stage": null
+ }
+}

@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-canary-case-v1",
+  "case": 0,
+  "class": "SUCCEEDED",
+  "systemd": {
+    "active": "active",
+    "sub": "exited",
+    "result": "success",
+    "exec_main_code": "1",
+    "exec_main_status": "0"
+  },
+  "exec_stop_post": "ExecStopPost={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-scale1m/service-stop.sh bootstrap ; ignore_errors=no ; start_time=[Sat 2026-10-10 02:36:59 UTC] ; stop_time=[Sat 2026-10-10 02:36:59 UTC] ; pid=5134 ; code=exited ; status=0 }",
+  "modules_ran": "Running module scripts-user,",
+  "probe": {
+    "modules": [
+      [
+        "scripts-user",
+        "always"
+      ]
+    ],
+    "paths": [
+      "/var/log/cloud-init-output.log",
+      "/var/log/cloud-init.log"
+    ]
+  },
+  "all_pinned_tuples_match": true,
+  "modified_copy": true,
+  "production_closure": false
+}

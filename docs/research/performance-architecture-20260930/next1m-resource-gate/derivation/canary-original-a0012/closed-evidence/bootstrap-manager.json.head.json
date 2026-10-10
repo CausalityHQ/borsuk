@@ -1,0 +1,1 @@
+{"exit": 0, "stdout": "{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-10T02:36:58+00:00\",\n    \"ContentLength\": 252,\n    \"ETag\": \"\\\"73dbe95fa114b6b339c0047589e00d1a\\\"\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n", "stderr": ""}

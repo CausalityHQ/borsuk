@@ -1,0 +1,88 @@
+{
+  "schema": "borsuk-canary-verdict-v1",
+  "instance_id": "i-0fcf312b9cbce9219",
+  "verdict": "QUALIFIED_PROVISIONAL",
+  "reasons": [],
+  "steps_completed": [
+    "C0",
+    "C1",
+    "C4",
+    "W",
+    "case0",
+    "case2",
+    "case3"
+  ],
+  "roster_publications": [
+    {
+      "name": "original.json",
+      "rc": "0"
+    },
+    {
+      "name": "admission.json",
+      "rc": "0"
+    },
+    {
+      "name": "listing-summary.json",
+      "rc": "0"
+    },
+    {
+      "name": "steps.jsonl",
+      "rc": "0"
+    },
+    {
+      "name": "case-0.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-0.manager.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-0.result.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-0.status.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-2.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-2.manager.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-2.result.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-2.status.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-3.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-3.manager.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-3.result.json",
+      "rc": "0"
+    },
+    {
+      "name": "case-3.status.json",
+      "rc": "0"
+    }
+  ],
+  "roster_writer_failure": false,
+  "verdict_publication": "its own exit status is recorded only locally in verdict.put.rc and on the console; absence of the object means NOT_COMPLETE",
+  "acceptance": "PROVISIONAL_REQUIRES_ROOT_REPLAY_TERMINATION_AND_VOLUME_DELETION",
+  "native_chain_closed": false,
+  "scientific_claim": false,
+  "performance_claim": false,
+  "finished_epoch": 1791599829
+}

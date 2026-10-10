@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "PLATFORM_QUALIFIED",
+  "source_commit": "8ca670bc833f8ac4df997bc06cb40b81757147da",
+  "instance_id": "i-0fcf312b9cbce9219",
+  "archive_authentication": {
+    "bytes": 25038,
+    "sha256": "1f2fb98ff7047e94d80fc6b8c2531a9af01156e8522b388e86cb71ce72b68d46"
+  },
+  "archive_members": 84,
+  "fixture_exit": 0,
+  "fixture_pass_lines": 312,
+  "fixture_scope": "synthetic source-bound checks, with historical inverse-copy continuity labelled separately",
+  "tail_steps": {
+    "T1": 0,
+    "T2": 0,
+    "T3": 0,
+    "T4": 0,
+    "T5": 0
+  },
+  "original_nested_exit": 99,
+  "original_cloud_final_exit": 1,
+  "cases": [
+    {
+      "case": 0,
+      "owner_errors": 0,
+      "raw_errors": 0,
+      "populated_hook_exit": 0,
+      "manager_nested_exit": 0,
+      "cloud_final_exit": 0
+    },
+    {
+      "case": 2,
+      "owner_errors": 1,
+      "raw_errors": 4,
+      "populated_hook_exit": 0,
+      "manager_nested_exit": 2,
+      "cloud_final_exit": 1
+    },
+    {
+      "case": 3,
+      "owner_errors": 1,
+      "raw_errors": 4,
+      "populated_hook_exit": 0,
+      "manager_nested_exit": 3,
+      "cloud_final_exit": 1
+    }
+  ],
+  "listing_before_after_sha256": "2df2548f219ea52036b33d5ca563ae7cc7b6c10c96b398ae56c43abecdd1694b",
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-0fcf312b9cbce9219",
+    "terminated": true,
+    "volumes": [
+      "vol-0c98f8fd684ce28d6",
+      "vol-036ed69c2d935f06b"
+    ],
+    "both_volumes_absent": true,
+    "reason": "terminal",
+    "user_data_sha256": "27416465d8130a5a62cd2d73e411720f0fb98f373840f1e1eb181cab94f3dd06",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "ann_run": false,
+  "performance_claim": false,
+  "production_closure_claim": false,
+  "next_action": "Freeze one exact-source 1M Q32 native recall falsifier after runtime-input admission; platform gate alone does not qualify ANN or scale performance"
+}
