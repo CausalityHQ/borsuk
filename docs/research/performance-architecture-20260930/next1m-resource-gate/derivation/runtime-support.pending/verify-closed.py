@@ -26,15 +26,15 @@ REVISION = 'ade45fb52bd549f5e8c065636fe4160a43c2af36'
 INTERVALS = [{'start': 0, 'end': 100000}, {'start': 101000, 'end': 1001000}]
 RESERVED_INTERVAL = {'start': 100000, 'end': 101000}
 SUPPORT_NAMES = ('config-template.json', 'derivation-config.json', 'gate-config-template.json', 'run_actual_cohort_admission.sh',
-                 'run_native_scale_build_gate.sh', 'service-stop.sh', 'transport-pins.json', 'transport.py', 'validate-scratch-binding.sh')
+                 'run_native_scale_build_gate.sh', 'observer-command.sh', 'collect-native-chain-outer.sh', 'run-native-chain-observer.sh', 'service-stop.sh', 'transport-pins.json', 'transport.py', 'validate-scratch-binding.sh')
 PHASES = ('derive', 'stage', 'generation', 'publish', 'baseline')
 PHASE_MAX = {'derive': 3600, 'stage': 300, 'generation': 2700, 'publish': 1800, 'baseline': 900}
 EXIT_FILES = ('native', 'timeout', 'time', 'tee', 'time-log', 'supervisor-stderr-log', 'native-stderr-log')
-MAX_ARCHIVE, MAX_RAW, MAX_MEMBER, MAX_HEADERS, KEEP = 268435456, 134217728, 67108864, 1024, 1048576
+MAX_ARCHIVE, MAX_RAW, MAX_MEMBER, MAX_HEADERS, KEEP = 268435456, 268435456, 67108864, 4096, 1048576
 NAME_RE = re.compile(r'[A-Za-z0-9._@+=,-]+(?:/[A-Za-z0-9._@+=,-]+)*')
 TOP = frozenset('''support.sha256 bootstrap.log bootstrap.exit environment.txt cloud-final-unit.txt scratch-before.txt scratch-after.txt
 disk-admission.txt disk-root-after.txt disk-scratch-after-prep.txt deadline-admission.txt transport-unit.exit parity-unit.exit chain-unit.exit
-transport-exit.json service-exit.json chain-exit.json systemd-after-cohort-parity.txt systemd-after-native-chain.txt
+transport-exit.json service-exit.json chain-launch.exit chain-launch.stdout chain-launch.stderr chain-launch.identity chain-observer.unit chain-actual.exit systemd-after-cohort-parity.txt systemd-after-native-chain.txt
 prepared-parent_cohort_complete.json prepared-parent_cohort_truth.u64 prepared-parent_derived_derivation.json
 prepared-parent_generation_manifest.json prepared-parent_generation_page_manifest.json prepared-parent_generation_plane_manifest.json
 prepared-parent_publication-receipt.json finalized-config.json gate-config-template.json gate-config.json chain-argv.json
@@ -335,7 +335,7 @@ def counters(value):
     return {k: int(v) for k, v in pairs}
 
 
-def check_resources(ev, P, labels, unit):
+def check_resources(ev, P, labels, unit, memory=GIB8, cores=4, cpus='0-3'):
     """Exact 4CPU 0-3 / 8GiB / swap0 / pids128, identical ancestor limits, no OOM/pids change, reclaim only monotonic."""
     lim = ('path', 'cpu_max', 'cpuset_cpus_effective', 'memory_max', 'memory_swap_max', 'pids_max')
     base, prev, prev_label = None, None, None
@@ -344,13 +344,13 @@ def check_resources(ev, P, labels, unit):
         eff = decode(eff_body)
         if base is None:
             base = eff_body
-            req(ie(eff['memory_max_bytes'], GIB8) and ie(eff['swap_max_bytes'], 0) and ie(eff['pids_max'], 128) and ie(eff['cpu_quota_cores'], 4) and eff['cpuset'] == '0-3', 'exact resource limits')
+            req(ie(eff['memory_max_bytes'], memory) and ie(eff['swap_max_bytes'], 0) and ie(eff['pids_max'], 128) and ie(eff['cpu_quota_cores'], cores) and eff['cpuset'] == cpus, 'exact resource limits')
         else:
             req(eff_body == base, 'effective limit drift ' + lab)
         recs = ev.jl(P + 'resources.%s.jsonl' % lab)
         req(len(recs) > 1 and recs[0]['path'].endswith('/' + unit), 'ancestor chain / owned unit leaf')
         leaf = recs[0]
-        req(int(leaf['memory_current']) <= GIB8 and int(leaf['memory_peak']) <= GIB8 and int(leaf['memory_swap_current']) == 0, 'leaf memory evidence')
+        req(int(leaf['memory_current']) <= memory and int(leaf['memory_peak']) <= memory and int(leaf['memory_swap_current']) == 0, 'leaf memory evidence')
         if prev is not None:
             req(len(prev) == len(recs), 'ancestor count')
             expected = []
@@ -554,11 +554,9 @@ def verify_bootstrap(ev, pins, term):
         req(ev.b(n) == ('%d\n' % e).encode(), 'original ' + n)
     ok = {'schema': 'borsuk-parity-service-exit-v1', 'exit_code': 'exited', 'exit_status': '0', 'service_result': 'success'}
     req(same(ev.j('transport-exit.json'), ok) and same(ev.j('service-exit.json'), ok), 'transport/prep manager receipts')
-    chain_mgr = ev.j('chain-exit.json')
-    req(same(chain_mgr, dict(ok, exit_status=str(exit_), service_result='success' if exit_ == 0 else 'exit-code')), 'chain unit manager receipt')
     unit = '%s/service-stop.sh bootstrap borsuk-bench-453182569524-euc1 %s/bootstrap-manager.json' % (ROOT, pins['run_prefix'])
     req('ExecStopPost=/bin/bash ' + unit in ev.t('cloud-final-unit.txt'), 'cloud-final manager drop-in')
-    for name in ('systemd-after-cohort-parity.txt', 'systemd-after-native-chain.txt'):
+    for name in ('systemd-after-cohort-parity.txt',):
         p = kv_lines(ev.t(name))  # a finished transient unit may already be collected, so only liveness is asserted here
         req(p.get('ActiveState') in ('inactive', 'failed') and p.get('MainPID', '0') == '0', 'systemd unit drained ' + name)
     env = ev.t('environment.txt')
@@ -573,7 +571,7 @@ def verify_bootstrap(ev, pins, term):
         and v['scratch_avail'] >= v['scratch_floor'] and v['root_avail'] >= v['root_floor'], 'root/scratch disk admission floors')
     rows = [l.split() for l in ev.t('deadline-admission.txt').splitlines()]
     req([r[0] for r in rows] == ['prep', 'chain'] and all(len(r) == 5 and all(x.isdigit() for x in r[1:]) for r in rows), 'deadline admission rows')
-    for r, need_s in zip(rows, (12780, 10290)):
+    for r, need_s in zip(rows, (13210, 10720)):
         boot, now, n, stop = (int(x) for x in r[1:])
         req(n == need_s and stop - boot == 14400 and boot <= now and now + n <= stop, 'remaining-absolute-time admission ' + r[0])
     req(int(rows[1][2]) >= int(rows[0][2]), 'admission order')
@@ -616,6 +614,114 @@ def verify_gate(ev, pins, sup, term, receipt):
     return final, gate_sha
 
 
+def snapshot_pair(ev, before, after, path, memory, cores, cpus):
+    b, a = ev.jl(before), ev.jl(after)
+    expected_paths = [path, '/sys/fs/cgroup/system.slice', '/sys/fs/cgroup']
+    req([r['path'] for r in b] == expected_paths and [r['path'] for r in a] == expected_paths, 'exact owned cgroup ancestry')
+    limits = ('path', 'cpu_max', 'cpuset_cpus_effective', 'memory_max', 'memory_swap_max', 'pids_max')
+    def effective(rows, key):
+        vals = [int(r[key]) for r in rows if r[key] not in ('absent', 'max')]
+        req(vals, 'missing finite ' + key)
+        return min(vals)
+    for rows in (b, a):
+        req(effective(rows, 'memory_max') == memory and effective(rows, 'memory_swap_max') == 0 and effective(rows, 'pids_max') == 128, 'snapshot effective memory/swap/PID limits')
+        quotas = []
+        for r in rows:
+            if r['cpu_max'] == 'absent':
+                continue
+            parts = r['cpu_max'].split()
+            req(len(parts) == 2 and parts[1].isdigit() and int(parts[1]) > 0, 'CPU quota syntax')
+            if parts[0] != 'max':
+                req(parts[0].isdigit(), 'finite CPU quota')
+                quotas.append(decimal.Decimal(parts[0]) / decimal.Decimal(parts[1]))
+        req(quotas and min(quotas) == cores and rows[0]['cpuset_cpus_effective'] == cpus, 'snapshot effective CPU limits')
+        req(0 <= int(rows[0]['memory_current']) <= memory and 0 <= int(rows[0]['memory_peak']) <= memory and
+            int(rows[0]['memory_swap_current']) == int(rows[0]['memory_swap_peak']) == 0 and
+            0 <= int(rows[0]['pids_current']) <= int(rows[0]['pids_peak']) <= 128, 'snapshot leaf usage')
+    for old, new in zip(b, a):
+        req(all(old[k] == new[k] for k in limits), 'snapshot limit drift')
+        req(counters(old['pids_events']) == counters(new['pids_events']), 'snapshot PID event drift')
+        old_mem, new_mem = counters(old['memory_events']), counters(new['memory_events'])
+        req(all(old_mem.get(k) == new_mem.get(k) for k in ('oom', 'oom_kill', 'oom_group_kill')) and
+            new_mem.get('max', 0) >= old_mem.get('max', 0), 'snapshot OOM or reclaim drift')
+        for r in (old, new):
+            req(r['memory_swap_current'] == 'absent' or int(r['memory_swap_current']) == 0, 'ancestor swap usage')
+            req(r['memory_swap_peak'] == 'absent' or int(r['memory_swap_peak']) == 0, 'ancestor swap peak')
+    for name in (before + '.validated', after + '.validated', after + '.events-valid'):
+        req(ev.b(name) == b'true\n', 'snapshot marker ' + name)
+
+
+def verify_outer_observer(ev, rc, config_sha, recipe_sha):
+    outer = ev.j('chain-outer/outer-closure.json')
+    unit, ident = outer['unit'], outer['invocation_id']
+    req(re.fullmatch(r'borsuk-pid128-observer-[0-9a-f-]+\.service', unit) is not None and hexs(ident, 32), 'observer identity format')
+    cg = '/sys/fs/cgroup/system.slice/' + unit
+    req(outer['schema'] == 'borsuk-native-scale-build-outer-closure-v2' and outer['status'] == 'CLOSED' and
+        outer['recipe_sha256'] == recipe_sha and outer['config_sha256'] == config_sha and
+        outer['control_group'] == '/system.slice/' + unit and ie(outer['actual_outer_exit'], rc) and
+        outer['drained'] is True and outer['performance_claim'] is False, 'outer original exit binding')
+    req(ev.b('chain-observer.unit') == (unit + '\n').encode() and ev.b('chain-launch.exit') == b'0\n' and
+        ev.b('chain-actual.exit') == ('%d\n' % rc).encode(), 'launch distinct from original exit')
+    manager = kv_lines(ev.t('chain-outer/manager.show'))
+    result = 'success' if rc == 0 else 'exit-code'
+    req(manager.get('Id') == manager.get('Description') == unit and manager.get('InvocationID') == ident and
+        manager.get('MainPID') == '0' and manager.get('ExecMainCode') == '1' and manager.get('ExecMainStatus') == str(rc) and
+        manager.get('Result') == result and manager.get('ActiveState') == ('active' if rc == 0 else 'failed') and
+        manager.get('SubState') == ('exited' if rc == 0 else 'failed'), 'original observer manager exit')
+    second = kv_lines(ev.t('chain-outer/before-stop.show'))
+    req(second.get('InvocationID') == ident and second.get('MainPID') == '0' and second.get('Result') == result and
+        second.get('ExecMainCode') == '1' and second.get('ExecMainStatus') == str(rc), 'same invocation before stop')
+    after = kv_lines(ev.t('chain-outer/after-stop.show'))
+    req(after.get('MainPID') == '0' and after.get('ActiveState') in ('inactive', 'failed'), 'observer stopped')
+    drain = ev.j('chain-outer/drain.proof.json')
+    req(drain['schema'] == 'borsuk-native-pid128-drain-v1' and drain['path'] == cg and
+        drain['invocation_id'] == ident and drain['state'] in ('empty', 'removed'), 'original observer drain path')
+    if drain['state'] == 'empty':
+        req(counters(ev.t('chain-outer/drain.events')).get('populated') == 0 and
+            manager.get('ControlGroup') == '/system.slice/' + unit, 'observer empty proof')
+    else:
+        req(drain['events'] is None and manager.get('ControlGroup') in ('', '/system.slice/' + unit), 'observer removed proof')
+    for key, name in (('manager_show', 'chain-outer/manager.show'), ('outer_exit_file', 'chain-actual.exit'),
+                      ('drain_proof', 'chain-outer/drain.proof.json')):
+        art = outer[key]
+        req(art['path'] == ROOT + '/evidence-root/' + name and
+            ie(art['bytes'], ev.meta[name][0]) and art['sha256'] == ev.meta[name][1], 'outer artifact binding ' + key)
+    for key, name in (('terminal_sha256', 'terminal.json'), ('manifest_sha256', 'closure.sha256'), ('wrapper_exit_sha256', 'wrapper.exit')):
+        req(outer[key] == ev.meta['evidence-chain/' + name][1], 'outer closure body binding ' + key)
+    identity = ev.j('evidence-chain/observer.identity.json')
+    req(identity['invocation_id'] == ident and identity['control_group'] == '/system.slice/' + unit, 'wrapper observer identity')
+    req(ev.b('evidence-chain/cleanup.exit') == b'0\n', 'owned payload cleanup completed')
+    snapshot_pair(ev, 'evidence-chain/observer.initial', 'evidence-chain/observer.closure', cg, 268435456, 1, '0')
+    return unit
+
+
+def verify_phase_observer(ev, prefix, name, want):
+    unit = ev.t(prefix + 'unit').strip()
+    req(re.fullmatch(r'borsuk-pid128-[0-9a-f-]+-' + name + r'\.service', unit) is not None, 'payload unit')
+    initial, final = (kv_lines(ev.t(prefix + f)) for f in ('manager.initial.txt', 'manager.final.txt'))
+    ident = initial.get('InvocationID')
+    req(hexs(ident, 32) and final.get('InvocationID') == ident and initial.get('Description') == final.get('Description') == unit, 'payload original invocation')
+    cg = '/sys/fs/cgroup/system.slice/' + unit
+    req(initial.get('ControlGroup') == '/system.slice/' + unit and final.get('ControlGroup') in ('', '/system.slice/' + unit), 'payload cgroup identity')
+    req(final.get('MainPID') == '0' and final.get('ExecMainCode') == '1' and final.get('ExecMainStatus') == str(want) and
+        final.get('Result') == ('success' if want == 0 else 'exit-code'), 'payload original manager exit')
+    req(ev.b(prefix + 'manager.start.exit') == ev.b(prefix + 'manager.stop.exit') == b'0\n' and
+        ev.b(prefix + 'payload.exit') == ('%d\n' % want).encode(), 'payload launch stop and original exit')
+    memory, cores, cpus = (536870912, 1, '0') if name == 'baseline' else (GIB8, 4, '0-3')
+    snapshot_pair(ev, prefix + 'resources.initial', prefix + 'resources.final', cg, memory, cores, cpus)
+    drain = ev.j(prefix + 'drain.json')
+    req(drain['schema'] == 'borsuk-native-pid128-payload-drain-v1' and drain['path'] == cg and
+        drain['invocation_id'] == ident and drain['state'] in ('empty', 'removed'), 'payload drain binding')
+    if drain['state'] == 'empty':
+        req(counters(ev.t(prefix + 'drain.events')).get('populated') == 0, 'payload descendants drained')
+    released, drained = ev.t(prefix + 'release.uptime_cs').strip(), ev.t(prefix + 'drain.uptime_cs').strip()
+    req(released.isdigit() and drained.isdigit() and int(drained) >= int(released), 'monotonic payload interval')
+    summary = kv_lines(ev.t(prefix + 'observer.txt').replace(' ', '\n'))
+    req(summary.get('cadence_ms') == '50' and summary.get('timestamps') == 'proc_uptime_centiseconds' and
+        summary.get('samples', '').isdigit() and 0 <= int(summary['samples']) <= 80000 and
+        summary.get('bytes', '').isdigit() and int(summary['bytes']) == ev.meta[prefix + 'samples.txt'][0] <= 16777216, 'observer sampling metadata (not completeness proof)')
+
+
 def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
     C, exit_ = 'evidence-chain/', term['exit']
     ct = ev.j(C + 'terminal.json')
@@ -623,7 +729,7 @@ def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
               'wrapper_exit_scope', 'actual_manager_and_outer_exit_required', 'scope', 'baseline_invoked', 'actual_query_completion_requires_external_replay',
               'instance_termination_verified', 'performance_claim'), 'chain terminal keys')
     status = 'NATIVE_CHAIN_CLOSED' if exit_ == 0 else 'BASELINE_NONZERO_EXIT'
-    req(ct['schema'] == 'borsuk-native-scale-build-gate-local-v1' and ct['status'] == status and ie(ct['intended_exit'], exit_) and ie(ct['original_exit'], exit_) and ct['signal'] is None
+    req(ct['schema'] == 'borsuk-native-scale-build-gate-local-v2' and ct['status'] == status and ie(ct['intended_exit'], exit_) and ie(ct['original_exit'], exit_) and ct['signal'] is None
         and ct['stage'] == 'native_chain_closed' and ie(ct['baseline_native_exit'], exit_) and ct['config_sha256'] == gate_sha and ct['phases_completed'] == list(PHASES)
         and ct['evidence'] == CHAIN_EVIDENCE and ct['wrapper_exit_scope'] == 'intended_exit' and ct['actual_manager_and_outer_exit_required'] is True and ct['baseline_invoked'] is True
         and ct['actual_query_completion_requires_external_replay'] is True and ct['instance_termination_verified'] is False and ct['performance_claim'] is False, 'chain wrapper terminal')
@@ -644,7 +750,8 @@ def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
     for it in pins['prep']['transport_pins']:
         if it['relative_path'].startswith('bin/') and it['relative_path'] != 'bin/prepare_cohere_native_cohort':
             req((ASSETS + '/' + it['relative_path'], it['bytes'], it['sha256']) in obs, 'chain binary pin ' + it['relative_path'])
-    check_resources(ev, C, ('before',) + tuple('after-' + p for p in PHASES) + ('closed',), 'borsuk-native-chain.service')
+    observer_unit = verify_outer_observer(ev, exit_, gate_sha, pins['support']['files']['run_native_scale_build_gate.sh'])
+    check_resources(ev, C, ('before',) + tuple('after-' + p for p in PHASES) + ('closed',), observer_unit, 268435456, 1, '0')
     # derivation receipt (frozen derive receipt v2)
     deriv_body = ev.b('prepared-parent_derived_derivation.json')
     d = decode(deriv_body)
@@ -706,9 +813,8 @@ def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
             req(len(ev.b(P + n)) <= 1048576, 'phase log cap ' + n)
         req(len(ev.b(P + 'native.stdout')) <= cap['stdout_cap_bytes'], 'phase stdout cap ' + p)
         peak, swaps, status = time_fields(ev.t(P + 'native.time.txt'))
-        req(0 < peak <= GIB8 and swaps == 0 and status == want, 'phase GNU time ceilings ' + p)
-        w = ev.t(P + 'wall.txt').split()
-        req(len(w) == 2 and all(re.fullmatch(r'\d+\.\d+', x) for x in w) and float(w[1]) >= float(w[0]), 'phase wall receipt')
+        req(0 < peak <= (536870912 if p == 'baseline' else GIB8) and swaps == 0 and status == want, 'phase GNU time ceilings ' + p)
+        verify_phase_observer(ev, P, p, want)
     req(len(ev.b(C + 'phases/stage/native.stdout')) == 0 and len(ev.b(C + 'phases/publish/native.stdout')) == 0, 'stage/publish silent success')
     # generation: config (exact f32 calibration), root, plane, page manifest
     gc = decode(cfgs['generation'])
@@ -777,7 +883,7 @@ def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
         used += int(m.group(1))
     req(used + prepared <= final['disk_proposal_bytes'], 'retained bytes under the declared total cap')
     req(ev.t(C + 'inventory.status').strip() == 'find=0 sort=0', 'retained-file inventory completed')
-    closure_inventory(ev, C, ('closure.sha256', 'wrapper.exit', 'terminal.json'))
+    closure_inventory(ev, C, ('closure.sha256', 'wrapper.exit'))
     return {'baseline_result': None if result is None else {'bytes': result[0], 'sha256': result[1]}, 'derive_sq8_sha256': qsha, 'generation_root_sha256': root_sha, 'sq8_etag': sj['etag']}
 
 
@@ -809,11 +915,11 @@ def main():
                'supplied_started_epoch', 'effective_started_epoch', 'chain_unit_exit', 'chain_disposition', 'bootstrap_exit', 'performance_claim'), 'collection keys')
     req(col['instance_id'] == instance and col['user_data_sha256'] == pins['user_data_sha256'] and col['archive_authenticated'] is True and col['manifest_verified'] is False and col['late'] is False
         and col['cost_bound'] == 'MODELED_15000_PLUS_120' and ie(col['chain_unit_exit'], exit_) and col['chain_disposition'] == disposition[exit_] and ie(col['bootstrap_exit'], exit_) and col['performance_claim'] is False, 'watcher collection (consistency only)')
-    manifest_body = bounded(R / 'artifacts.sha256', 65536)
+    manifest_body = bounded(R / 'artifacts.sha256', 2097152)
     req(sha(manifest_body) == pins['artifacts_manifest_sha256'], 'independent manifest pin')
     ev = stream_archive(R / 'evidence.tar.gz', pins, parse_manifest(manifest_body))
     tops = {n for n in ev.meta if '/' not in n}
-    req(TOP <= tops and tops <= TOP | OPTIONAL_TOP and all(n.startswith(('evidence-local/', 'evidence-chain/')) for n in ev.meta if '/' in n), 'exact archive roster')
+    req(TOP <= tops and tops <= TOP | OPTIONAL_TOP and all(n.startswith(('evidence-local/', 'evidence-chain/', 'chain-outer/')) for n in ev.meta if '/' in n), 'exact archive roster')
     sup, binding, binding_cmp = verify_bootstrap(ev, pins, term)
     state_last = bounded(R / 'state.txt', 65536).decode().split()[-1]
     req(state_last == 'terminated', 'watcher final state')
@@ -824,7 +930,7 @@ def main():
     print(json.dumps(dict(
         status='REPLAY_MECHANICS_VERIFIED', independent_replay_verified=True, scope='mechanics and source binding only', instance_id=instance, terminated=True,
         bootstrap_exit=exit_, chain_disposition=disposition[exit_], baseline_native_exit=exit_, baseline_closed_nonzero=exit_ != 0,
-        cloud_final_manager={k: manager[k] for k in ('exit_code', 'exit_status', 'service_result', 'final_exit')}, chain_unit_manager=ev.j('chain-exit.json'),
+        cloud_final_manager={k: manager[k] for k in ('exit_code', 'exit_status', 'service_result', 'final_exit')}, chain_unit_manager=kv_lines(ev.t('chain-outer/manager.show')),
         cloud_final_mapping_status='TARGET_UNVERIFIED_PROSPECTIVE_PINNED', baseline_result=chain['baseline_result'], generation_root_sha256=chain['generation_root_sha256'],
         ec2=ec2, scratch_cmp=binding_cmp, binding_schema=binding['schema'], performance_claim=False, scientific_success_asserted=False, quality_not_evaluated=True, baseline_output_opaque=True,
         open_seams=['cloud-final exit mapping unproven on the real target (canary must exercise 0,2,3)', 'volume deletion proof not supported by source',

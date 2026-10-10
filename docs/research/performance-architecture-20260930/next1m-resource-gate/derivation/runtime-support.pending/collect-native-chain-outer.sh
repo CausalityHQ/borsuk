@@ -107,7 +107,7 @@ for f in terminal.json observer.identity.json; do
 done
 jq -e --arg sha "$config_sha" --argjson rc "$observed" '
  .schema=="borsuk-native-scale-build-gate-local-v2" and .config_sha256==$sha and
- .stage=="closure" and .original_exit==$rc and .intended_exit==$rc and
+ .stage=="native_chain_closed" and .original_exit==$rc and .intended_exit==$rc and
  .baseline_native_exit==$rc and .baseline_invoked==true and .signal==null and
  .phases_completed==["derive","stage","generation","publish","baseline"] and
  (if $rc==0 then .status=="NATIVE_CHAIN_CLOSED" else .status=="BASELINE_NONZERO_EXIT" end)

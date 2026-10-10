@@ -45,7 +45,7 @@ finish() {
    n=$(stat -c %s "$src") || bad; [[ $n =~ ^[0-9]+$ ]] && (( n <= cap )) || bad; raw=$((raw + n))
   fi
  done
- (( raw + 65536 <= 134217728 )) || bad
+ (( raw + 2097152 <= 268435456 )) || bad
  for b in $bodies; do
   IFS=: read -r src cap <<< "$b"; dst=evidence-root/${src//\//_}
   if [[ -f $src ]]; then cp "$src" "$dst" && cmp -s "$src" "$dst" || status=96; fi
@@ -56,7 +56,7 @@ finish() {
  for d in evidence-local evidence-chain; do if [[ -d $d ]]; then cp -a "$d" evidence-root/ || status=96; fi; done
  sync -f evidence-root || status=96
  (cd evidence-root && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > artifacts.sha256 || status=96
- [[ $(stat -c %s artifacts.sha256) -le 65536 ]] || status=96
+ [[ $(stat -c %s artifacts.sha256) -le 2097152 ]] || status=96
  (ulimit -f 262144; tar -czf evidence.tar.gz -C evidence-root .) || bad
  bytes=$(stat -c %s evidence.tar.gz); digest=$(sha256sum evidence.tar.gz); digest=${digest%% *}
  [[ $bytes -gt 0 && $bytes -le 268435456 ]] || bad

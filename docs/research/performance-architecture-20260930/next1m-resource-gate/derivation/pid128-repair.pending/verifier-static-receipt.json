@@ -1,0 +1,45 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "unit": "run-p3743434-i708261139.service",
+  "invocation_id": "f5738fa36a1347f787f067edaf5e61bf",
+  "exit": 0,
+  "checks": [
+    "py_compile verify-closed.py",
+    "bash -n user-data.sh",
+    "shellcheck -S error user-data.sh"
+  ],
+  "envelope": {
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "runtime_executed": false,
+  "peak_memory": "46.6M",
+  "corrections": [
+    "collector terminal stage equals unchanged native_chain_closed",
+    "observer manager and actual-exit replay",
+    "per-phase original manager and resource/drain replay",
+    "terminal included in chain closure roster",
+    "baseline GNU time RSS ceiling 512MiB",
+    "remaining-deadline prep=13210 chain=10720; native phase timeouts unchanged"
+  ],
+  "prospective_evidence_envelope": {
+    "expanded_bytes": 268435456,
+    "archive_bytes": 268435456,
+    "manifest_bytes": 2097152,
+    "archive_headers": 4096,
+    "observer_samples_per_phase_bytes": 16777216
+  },
+  "capacity_is_a_fail_closed_collection_bound_not_scientific_measurement": true,
+  "remaining": [
+    "watcher manifest cap/source consistency audit",
+    "canary adaptation",
+    "independent source review",
+    "causality EC2 mechanical refusal/canary execution",
+    "real1M admission and fresh exact-source native run/replay"
+  ],
+  "performance_claim": false
+}
