@@ -1,0 +1,214 @@
+Shutdown scheduled for Sat 2026-10-10 21:49:08 UTC, use 'shutdown -c' to cancel.
+dpkg-preconfigure: unable to re-open stdin: No such file or directory
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 79226 files and directories currently installed.)
+Preparing to unpack .../curl_8.5.0-2ubuntu10.15_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...
+Preparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.15_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...
+Preparing to unpack .../libcurl3t64-gnutls_8.5.0-2ubuntu10.15_amd64.deb ...
+Unpacking libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...
+Selecting previously unselected package unzip.
+Preparing to unpack .../unzip_6.0-28ubuntu4.1_amd64.deb ...
+Unpacking unzip (6.0-28ubuntu4.1) ...
+Setting up libcurl4t64:amd64 (8.5.0-2ubuntu10.15) ...
+Setting up unzip (6.0-28ubuntu4.1) ...
+Setting up libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) ...
+Setting up curl (8.5.0-2ubuntu10.15) ...
+Processing triggers for man-db (2.12.0-4build2) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+
+Running kernel seems to be up-to-date.
+
+Restarting services...
+ systemctl restart packagekit.service
+
+No containers need to be restarted.
+
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+awscliv2.zip: OK
+You can now run: /usr/local/bin/aws --version
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:37+00:00",
+    "ContentLength": 1163,
+    "ETag": "\"274d39ae9d9d19669188dc831687cfe1\"",
+    "ChecksumCRC64NVME": "evOfcKo0WHQ=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+support.sha256: OK
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:21+00:00",
+    "ContentLength": 1145,
+    "ETag": "\"021391161a19da3f3b8db04016bfc7eb\"",
+    "ChecksumCRC64NVME": "HiKpVzztAOc=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:22+00:00",
+    "ContentLength": 4400,
+    "ETag": "\"8de7d2525a7f9160499b22ddb6a22dcc\"",
+    "ChecksumCRC64NVME": "JHH33fIpDL0=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:34+00:00",
+    "ContentLength": 62782,
+    "ETag": "\"334b9250f3ac5277e8b5fd51e6b73c95\"",
+    "ChecksumCRC64NVME": "6LWNCHFu9Wg=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:24+00:00",
+    "ContentLength": 643,
+    "ETag": "\"ef3d01b1e26c4e7e57026956049a3be2\"",
+    "ChecksumCRC64NVME": "XtaGs54nmPc=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:19+00:00",
+    "ContentLength": 10144,
+    "ETag": "\"3c8f1e025ee354f06f42a855a861022d\"",
+    "ChecksumCRC64NVME": "2/EhBJgwccw=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:31+00:00",
+    "ContentLength": 3896,
+    "ETag": "\"3fd28079dac46948168ec23e9af2cd34\"",
+    "ChecksumCRC64NVME": "rfhbzt3PM5E=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:36+00:00",
+    "ContentLength": 2739,
+    "ETag": "\"922a640fd67ff3569b233ee1b13c916b\"",
+    "ChecksumCRC64NVME": "zvBmzCbSUN8=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:39+00:00",
+    "ContentLength": 3888,
+    "ETag": "\"e86415df0d65aa55bab1a58482451fb5\"",
+    "ChecksumCRC64NVME": "eIBIIfWkxXU=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:41+00:00",
+    "ContentLength": 3655,
+    "ETag": "\"56d7c63cd1fdb2a38621656987f94284\"",
+    "ChecksumCRC64NVME": "mjZZDkW6wyU=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:43+00:00",
+    "ContentLength": 2250,
+    "ETag": "\"1635471803dfc45fc79351d1d7c231da\"",
+    "ChecksumCRC64NVME": "Z7ju2A2TARM=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:28+00:00",
+    "ContentLength": 1863,
+    "ETag": "\"91b6be62ddbf147ebc40ab18725cfe3c\"",
+    "ChecksumCRC64NVME": "Xss9j2apuUA=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:26+00:00",
+    "ContentLength": 6283,
+    "ETag": "\"2399822f30c4c564045644ca47f88e7f\"",
+    "ChecksumCRC64NVME": "9iXRvnL+jS0=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-10T19:48:17+00:00",
+    "ContentLength": 3901,
+    "ETag": "\"01d3eae9ec3c8b61154464b3d5f719d0\"",
+    "ChecksumCRC64NVME": "qoZohaHWIIE=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}
+closure-failure-support.sh: OK
+collect-native-chain-outer.sh: OK
+derivation-config.json: OK
+gate-config.json: OK
+observer-command.sh: OK
+retain-generation-source.sh: OK
+retain-panel-result.sh: OK
+run-native-chain-observer.sh: OK
+run_native_scale_build_gate.sh: OK
+service-stop.sh: OK
+transport-pins.json: OK
+transport.py: OK
+validate-scratch-binding.sh: OK
+Running as unit: borsuk-cohort-transport.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1min 24.090s
+CPU time consumed: 14.012s
+Memory peak: 1.0G
+Memory swap peak: 0B
+true
+true
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead

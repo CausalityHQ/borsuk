@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-native-scale-build-gate-local-v2",
+  "status": "INVALID",
+  "stage": "derive",
+  "intended_exit": 98,
+  "original_exit": 98,
+  "signal": null,
+  "failed_line": 0,
+  "config_sha256": "db04c8bd5e27ea74d1cc49c8bdcf842f4ee2858e7e690924bbc974f1eb00086e",
+  "baseline_native_exit": null,
+  "phases_completed": [],
+  "evidence": "/mnt/borsuk-scale1m/evidence-chain",
+  "wrapper_exit_scope": "intended_exit",
+  "actual_manager_and_outer_exit_required": true,
+  "scope": "local exact1M/full1000-panel32 derive, stage, generation, publish and baseline run; output opaque",
+  "baseline_invoked": false,
+  "actual_query_completion_requires_external_replay": true,
+  "instance_termination_verified": false,
+  "performance_claim": false
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-full1000-local-admission-failure-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-00efe837551594253",
+  "instance_terminated": true,
+  "deleted_volumes": [
+    "vol-00d648e779759c78b",
+    "vol-0745d78e8d7df0712"
+  ],
+  "transport_completed": true,
+  "transport_wall_seconds": 84.09,
+  "reported_transport_memory_peak": "1.0GiB",
+  "transport_swap_bytes": 0,
+  "transport_native_body_admission": true,
+  "baseline_invoked": false,
+  "derive_native_invoked": false,
+  "reason": "derive configured3600 seconds equals whole-chain3600; run_phase requires SECONDS+secs+80 < whole_deadline before argv/unit/native launch",
+  "bootstrap_exit": 96,
+  "chain_exit": 98,
+  "archive_bytes": 50083,
+  "archive_sha256": "963b1f61e99e5fac504b3eaa5496460a860b782562cb408719073645e2343e0c",
+  "performance_claim": false,
+  "next_action": "repair phase budget config from historical actual phase times; retain whole-chain3600 and host safety unchanged"
+}
