@@ -1,0 +1,35 @@
+SOURCE ONLY / runtime UNVERIFIED. Original saved brief governs this worker.
+CLI: python3 scripts/extract_closed_native_replay.py AUTHORITY AUTHORITY_SHA NEW_DEST
+AUTHORITY: canonical absolute nonsymlink regular file <=65536 bytes; strict JSON
+exact keys schema, arm, archive, manifest. Schema:
+borsuk-closed-native-replay-extraction-authority-v1. arm: historical or local.
+archive/manifest each have exactly path, bytes, sha256. Paths must be canonical
+absolute nonsymlink regular single-link files. All SHA strings are lowercase hex.
+The exact archive length/SHA and manifest SHA for each arm are frozen in source
+from the opening brief. Manifest length is supplied by root, capped at 2 MiB.
+Inputs use single open descriptors, exact bytes/SHA/EOF and final filesystem stamps.
+Compressed archive authentication completes before destination creation/extraction.
+Manifest is strict sha256sum syntax, sorted, exact full file roster. All archive
+members are streamed and authenticated, including those not selected for output.
+Caps: compressed and decompressed archive 256 MiB; member 64 MiB; headers 4096.
+Reject duplicate/path traversal/type/link/extended/sparse/file-ancestor violations.
+NEW_DEST must be canonical absolute, absent, with existing nonsymlink parent.
+Create private directories (0700), selected files create-exclusive (0600), retaining
+archive relative paths without leading ./; do not preserve archive mode or ownership.
+Exactly 12 selected files: the historical prepared-parent_query_baseline-result.jsonl
+or local baseline-result.jsonl, plus evidence-chain/configs/baseline.json,
+prepared-parent_cohort_complete.json, prepared-parent_cohort_truth.u64,
+prepared-parent_derived_derivation.json, prepared-parent_generation_manifest.json,
+prepared-parent_publication-receipt.json, evidence-chain/terminal.json,
+chain-outer/outer-closure.json, chain-outer/manager.show,
+chain-outer/drain.proof.json, chain-actual.exit.
+Success: exit 0 and one stdout JSON receipt, schema
+borsuk-closed-native-replay-extraction-v1, status ARCHIVE_INVENTORY_EXTRACTED,
+arm, authority_sha256, archive, manifest, inventory_files, destination, extracted.
+extracted maps selected archive relative names to absolute path/bytes/sha256.
+Receipt follows checked file/directory sync and final input/output identity checks.
+There is no on-disk success marker. Failure: exit 98, stderr reason; retain partial
+destination for evidence, no success receipt. Existence never implies acceptance.
+No native, truth, closure, provenance equivalence, ANN or quality interpretation.
+Root runs remote falsifiers/review on causality EC2. Local checks are static source
+and py_compile only; no fixtures, helpers, data opens, builds, runtime or children.

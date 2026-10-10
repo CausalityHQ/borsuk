@@ -1,0 +1,34 @@
+SOURCE-ONLY CHECKPOINT — runtime UNVERIFIED; HOLD SAME worker.
+Commit: 6915a589daadec754bbe4b3a832da83962dcd224
+Base: e0737d846251ec4ea2697b35bf1b41cb57209526
+Branch: devbox/closed-native-replay-extraction-source-e0737d84
+Old branch preserved: devbox/closed-native-replay-extraction at
+37c4adcfe8eb2cd3d464f7beb81c42bb9bfbfff5. Startup timeout unchanged.
+Only committed file: scripts/extract_closed_native_replay.py (359 lines)
+Source SHA256: 07d03849f0f8cc4700f9e95a5ae71582cb4fcb777092e57947f672e73d6138e4
+Author/committer: configured Roman Bartusiak identity; no trailers.
+Contract: /tmp/borsuk-closed-native-replay-extraction.contract.txt
+
+Static review and git diff --check passed. py_compile exit0 under CPUQuota100%,
+AllowedCPUs0, MemoryMax256M, MemorySwapMax0, TasksMax128, RuntimeMaxSec120;
+systemd invocation 77a9165f980449cc83e6865c107c2bdf, service runtime61ms,
+CPU52ms, memory peak9.3M, swap0. No functions imported/executed, payloads opened,
+fixtures/helpers/tests/Cargo/native programs run, network/reviews/children launched.
+Worktree clean after commit. No merge, push, agent_complete or archive.
+
+Implementation authenticates authority and both frozen artifact hashes, then
+streams gzip/tar through strict header/manifest bounds. Every file is hashed;
+only 12 selected files are created. Gzip CRC/EOF, two tar end blocks and zero-only
+tail are required. The raw cap includes headers/padding, not just payload bytes.
+Single retained input/output descriptors and final filesystem stamps guard drift;
+private exclusive output, checked file/directory sync, stdout receipt only.
+Failure retains partial evidence without a success receipt. Nothing interprets
+native output, truth, closure, component provenance or quality.
+
+Parent EC2 checks/review remain mandatory: both real arms; wrong authority/artifact
+SHA/bytes or cross-arm pins; duplicate JSON/manifest/header, missing/extra member,
+bad member SHA/EOF, traversal/link/sparse/extended/file-ancestor cases; truncation,
+bad gzip CRC, hidden/trailing tar bytes and cap violations; occupied/symlink output,
+input/output mutation/replacement, short writes and file/directory sync failure.
+The hardcoded arm pins stay fixed in production; any lower-level synthetic
+falsifiers belong in the parent's remote harness, never a production bypass.
