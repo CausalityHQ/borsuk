@@ -12,6 +12,7 @@ replay=${wrapper%/*}/verify-closed.py
 [[ -f $replay && ! -L $replay && $(sha256sum "$replay" | cut -d' ' -f1) == 5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e ]] || exit 125
 (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) || exit 125
 (( EUID == 0 )) || exit 125
+[[ $(< /proc/self/cgroup) == "0::/system.slice/borsuk-next1m-canary.service" ]] || exit 125
 mkdir -- "$out"
 out=$(realpath -e -- "$out")
 printf '{}\n' > "$out/invalid.json"
@@ -102,16 +103,32 @@ fi
 require_success "$phase"
 FIXTURE
 phase_case() {
- local name=$1 phase=$2 command=$3 expected=$4 carried=$5 end show rc cg
+ local name=$1 phase=$2 command=$3 expected=$4 carried=$5 end show rc cg launch_rc
  observer_unit=borsuk-pid128-observer-$(cat /proc/sys/kernel/random/uuid).service
+ [[ $(timeout -k 1 5 systemctl show "$observer_unit" -p LoadState --value) == not-found ]]
+ printf '%s\n' "$observer_unit" > "$out/$name-launch.unit"
+ sync -f "$out/$name-launch.unit"
+ sync -f "$out"
+ set +e
  timeout -k 1 10 systemd-run --expand-environment=no --quiet --unit="$observer_unit" --description="$observer_unit" --service-type=exec \
   -p RemainAfterExit=yes -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 \
   -p TasksMax=128 -p RuntimeMaxSec=120 -p TimeoutStopSec=10 -p KillMode=control-group -p LimitCORE=0 \
+  -p BindsTo=borsuk-next1m-canary.service -p After=borsuk-next1m-canary.service \
   /bin/bash "$out/phase-fixture.sh" "$out" "$config_sha" "$name" "$phase" "$command" "$carried" \
   > "$out/$name-launch.stdout" 2> "$out/$name-launch.stderr"
+ launch_rc=$?
+ set -e
+ printf '%s\n' "$launch_rc" > "$out/$name-launch.exit"
  observer_id=$(timeout -k 1 5 systemctl show "$observer_unit" -p InvocationID --value)
  [[ $observer_id =~ ^[0-9a-f]{32}$ ]]
  timeout -k 1 5 systemctl show "$observer_unit" -p Id -p Description -p InvocationID -p ControlGroup > "$out/$name-launch.identity"
+ grep -Fx "Id=$observer_unit" "$out/$name-launch.identity" >/dev/null
+ grep -Fx "Description=$observer_unit" "$out/$name-launch.identity" >/dev/null
+ grep -Fx "InvocationID=$observer_id" "$out/$name-launch.identity" >/dev/null
+ grep -Fx "ControlGroup=/system.slice/$observer_unit" "$out/$name-launch.identity" >/dev/null
+ sync -f "$out/$name-launch.identity"
+ sync -f "$out"
+ [[ $launch_rc == 0 ]]
  end=$((SECONDS+100))
  while :; do
   timeout -k 1 5 systemctl show "$observer_unit" -p InvocationID -p Description -p MainPID -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup \

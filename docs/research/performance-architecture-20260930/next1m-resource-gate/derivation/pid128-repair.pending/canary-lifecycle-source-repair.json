@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-next1m-canary-lifecycle-source-repair-v1",
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "source_parent": "b70d70dfc5bd2b346b73f8487b8e7242e650a043",
+  "files": {
+    "wrapper-canary.sh": {
+      "bytes": 16543,
+      "sha256": "3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2"
+    },
+    "next1m-canary-worker.sh": {
+      "bytes": 12403,
+      "sha256": "61c0b241af9d194c5970774eca59664032a84e77bb28f637d54424259480b637"
+    },
+    "next1m-canary-watch.sh": {
+      "bytes": 6661,
+      "sha256": "30b174ce21231e4e568d41dd55b5550e68f32717be2bc989e7ff8693e70e53df"
+    }
+  },
+  "changes": [
+    "observer name create/sync before launch; original launch status and fenced identity synced even on launch failure",
+    "canary observer BindsTo/After exact outer canary unit; standalone canary rejected",
+    "worker terminal poll requires active/exited or failed/failed; queued start not completion",
+    "cleanup uses durable pre-launch registration but refuses to invent missing ownership",
+    "existing watcher adapted to launch+2500 deadline, CLI-only terminal and 256MiB evidence; exact instance terminated and sole volume absent before collection"
+  ],
+  "static_checks": [
+    {
+      "unit": "run-p1204903-i709923060.service",
+      "invocation": "5ae332372c244733b20bdb2b847c37bd",
+      "targets": [
+        "wrapper-canary.sh",
+        "next1m-canary-worker.sh"
+      ],
+      "bash_n_exit": 0,
+      "shellcheck_exit": 0
+    },
+    {
+      "unit": "run-p1243711-i709964295.service",
+      "targets": [
+        "next1m-canary-watch.sh"
+      ],
+      "bash_n_exit": 0,
+      "shellcheck_exit": 0
+    }
+  ],
+  "runtime_executed": false,
+  "performance_claim": false,
+  "remaining": [
+    "root single-request launcher and freeze adaptation",
+    "source review and exact-source remote collector refusal coverage",
+    "EC2 smoke original exits, startup, timeout, sibling cleanup and collected evidence replay",
+    "real1M admission then new frozen unchanged-algorithm run"
+  ]
+}

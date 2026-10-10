@@ -27,7 +27,7 @@ setup() {
     timeout -k 1 "$cap" "$@"
 }
 finish() {
-    local original=$? cleanup=0 unit cg
+    local original=$? cleanup=0 unit cg registration identity tag p
     trap - EXIT; set +e
     cleanup_deadline=$((SECONDS+120))
     # Exact durable identities only; payloads are siblings, not observer children.
@@ -56,10 +56,16 @@ finish() {
         drain borsuk-next1m-canary.service "$root/parent.identity" parent || cleanup=1
     fi
     shopt -s nullglob
-    for identity in /mnt/borsuk-pid-evidence/canary/*-launch.identity; do
-        unit=$(sed -n 's/^Id=//p' "$identity")
-        tag=${identity##*/}; tag=${tag%-launch.identity}
-        drain "$unit" "$identity" "$tag-observer" || cleanup=1
+    for registration in /mnt/borsuk-pid-evidence/canary/*-launch.unit; do
+        [[ -f $registration && ! -L $registration ]] || { cleanup=1; continue; }
+        unit=$(< "$registration")
+        [[ $unit =~ ^borsuk-pid128-observer-[a-z0-9-]+\.service$ ]] || { cleanup=1; continue; }
+        tag=${registration##*/}; tag=${tag%-launch.unit}
+        identity=${registration%-launch.unit}-launch.identity
+        if [[ -d /sys/fs/cgroup/system.slice/$unit ]]; then
+            # A recorded name is not an ownership proof; never infer its InvocationID.
+            drain "$unit" "$identity" "$tag-observer" || cleanup=1
+        fi
     done
     for p in /mnt/borsuk-pid-evidence/canary/*-evidence/phases/*; do
         [[ -f $p/unit && ! -L $p/unit ]] || { cleanup=1; continue; }
@@ -115,7 +121,7 @@ phase=transport
 support=/mnt/borsuk-platform-support
 mkdir "$support" /mnt/borsuk-pool-pid /mnt/borsuk-pid-evidence
 for spec in \
-  'wrapper-canary.sh:15676:fba9bb3e1e4798ca0ba54698c23334ca8c499560873cc4624784cd91e8379ec1' \
+  'wrapper-canary.sh:16543:3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2' \
   'run_native_scale_build_gate.sh:62014:b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452' \
   'verify-closed.py:77200:5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e'; do
     name=${spec%%:*}; rest=${spec#*:}; bytes=${rest%%:*}; expected=${rest#*:}
@@ -157,7 +163,10 @@ deadline=$((SECONDS+1520))
 while :; do
     timeout -k 1 5 systemctl show borsuk-next1m-canary.service -p InvocationID -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus > "$root/parent.poll"
     [[ $(sed -n 's/^InvocationID=//p' "$root/parent.poll") == "$parent_id" ]] || exit 125
-    if grep -Fx MainPID=0 "$root/parent.poll" >/dev/null && grep -E '^ActiveState=(active|failed)$' "$root/parent.poll" >/dev/null; then break; fi
+    if grep -Fx MainPID=0 "$root/parent.poll" >/dev/null && {
+        { grep -Fx ActiveState=active "$root/parent.poll" >/dev/null && grep -Fx SubState=exited "$root/parent.poll" >/dev/null; } ||
+        { grep -Fx ActiveState=failed "$root/parent.poll" >/dev/null && grep -Fx SubState=failed "$root/parent.poll" >/dev/null; }
+    }; then break; fi
     ((SECONDS<deadline)) || { test_exit=124; exit 124; }
     sleep 1
 done
