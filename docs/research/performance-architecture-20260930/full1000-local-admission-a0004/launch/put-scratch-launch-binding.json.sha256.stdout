@@ -1,0 +1,6 @@
+{
+    "ETag": "\"09d0a8036373d2d6d6435ead1354fad0\"",
+    "ChecksumCRC64NVME": "hAR58GRNLlY=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+}
