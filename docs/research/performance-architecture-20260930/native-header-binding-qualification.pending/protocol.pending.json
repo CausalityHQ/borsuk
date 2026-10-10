@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-native-header-binding-qualification-preregistration-v1",
+  "status": "PENDING_EXECUTION_ROUTE_AND_LAUNCH_FREEZE",
+  "candidate_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "parent_commit": "6f4b94609dca5f37bcf6cb07a01481a059c6390d",
+  "changed_paths": ["crates/borsuk/examples/compare_native_replay.rs"],
+  "candidate_source_sha256": "d31d454a8e5ec5ed6f7027ea2b6af79fb0dc6ad09346799243635f9d20c393d2",
+  "source_archive": {
+    "path": "source.tar.gz", "bytes": 4215586,
+    "sha256": "a13670d429e7abe520370b07643f9d27f8509799e8aa318c6e073b694698dd01",
+    "file_count": 462,
+    "manifest": {"path": "source-files.sha256", "bytes": 51374, "sha256": "2a7d9e8df35892b9dbf71fbb0c2e83ee40e029f8d542f553b54a289b7da64b1f"},
+    "native_map": {"path": "native-source.json", "bytes": 50665, "sha256": "694e16de78f32d6382298b4f9dd9ac1f12f3489cf1b26cc26e1d220b92df45f1", "file_count": 435},
+    "scope": "All tracked Rust/Cargo files plus complete workspace crates, examples, tests, README, LICENSE and unchanged workspace test-build script. Historical native files remain immutable; no corpus or query artifacts."
+  },
+  "resources": {
+    "profile": "causality", "region": "eu-central-1", "availability_zone": "eu-central-1c",
+    "market": "spot", "instance_type": "c7i.2xlarge", "ebs_gib": 80,
+    "cpu_quota_percent": 200, "allowed_cpus": "0,1", "memory_max_bytes": 8589934592,
+    "memory_swap_max_bytes": 0, "tasks_max": 512, "cargo_jobs": 1,
+    "gate_seconds": 7200, "unit_seconds": 7440, "machine_seconds": 9000,
+    "basis": "Prior bounded compiler qualification envelope, separate from the pending replay envelope which explicitly excludes compilation."
+  },
+  "cost": {
+    "spot_quote_usd_per_hour": 0.203800,
+    "provider_quote_timestamp": "2026-10-10T19:00:00+00:00",
+    "spot_quote_exit": 0, "maximum_spot_bid_usd_per_hour": 0.6,
+    "maximum_compute_reservation_usd": 1.5, "ancillary_reservation_usd": 0.15,
+    "total_reservation_usd": 1.65,
+    "fresh_prelaunch_quote_required": true
+  },
+  "stages": [
+    {"name": "header-binding-tests", "argv": ["cargo", "test", "--locked", "-p", "borsuk", "--example", "compare_native_replay", "completed_header_binding_tests", "--", "--test-threads=1"], "expected_named_pass_count": 7},
+    {"name": "replay-regressions", "argv": ["cargo", "test", "--locked", "-p", "borsuk", "--example", "compare_native_replay", "--", "--test-threads=1"], "compiled_test_roster_required": true},
+    {"name": "release-reducer", "argv": ["cargo", "build", "--release", "--locked", "-p", "borsuk", "--example", "compare_native_replay"]},
+    {"name": "workspace-clippy", "argv": ["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "clippy::correctness", "-D", "clippy::suspicious"]},
+    {"name": "real-workspace-test-build", "argv": ["env", "-u", "BORSUK_TEST_BUILD_COMMAND", "BORSUK_TEST_BUILD_JOBS=1", "CARGO_BUILD_JOBS=1", "bash", "scripts/check_rust_test_build.sh"]}
+  ],
+  "required_binding_test_names": [
+    "completed_header_binding_tests::bind_completed_scale_independent_headers",
+    "completed_header_binding_tests::bind_completed_scale_native_default_and_full_execution",
+    "completed_header_binding_tests::bind_completed_scale_rejects_pins_geometry_and_cohort",
+    "completed_header_binding_tests::bind_completed_scale_rejects_header_value_type_unknown_and_duplicates",
+    "completed_header_binding_tests::bind_completed_scale_authenticates_whole_result",
+    "completed_header_binding_tests::bind_completed_scale_rejects_links_mutation_and_occupied_output",
+    "completed_header_binding_tests::bind_completed_scale_publication_rejects_mutation"
+  ],
+  "acceptance": {
+    "source_hashes_before_after_equal": true,
+    "every_stage_original_exit_zero": true,
+    "no_failed_ignored_or_duplicate_required_tests": true,
+    "compiled_roster_matches_executed_roster": true,
+    "release_elf_size_sha_and_source_bound": true,
+    "manager_and_native_exit_statuses_separate": true,
+    "exact_owned_cgroup_drained": true,
+    "original_instance_terminated_and_waited": true,
+    "all_receipts_authenticated_after_collection": true,
+    "mock_controller_checks_are_native_evidence": false
+  },
+  "interruption": "Spot interruption invalidates the cell; retain partial terminal receipts, terminate and wait for the exact instance. No automatic retry or continuation; a new root-recorded attempt is required.",
+  "red_falsifier": {"path": "../descriptor-red.rs", "sha256": "13a419b07ea710550f4742f2d2c6227ae30c3a08d18c82a7f2cf32ef65a429a8", "status": "PRESERVED_UNRUN", "must_not_replace_candidate_for_green_or_release": true},
+  "claims": {"native_qualified": false, "real_corpus_replay": false, "quality": false, "performance": false, "vendor_win": false},
+  "launch_authorized_by_this_pending_document": false
+}

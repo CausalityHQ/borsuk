@@ -1,0 +1,29 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "root=/mnt/borsuk-header-qualification",
+    "ev=\"$root/evidence/header-binding-tests\"",
+    "mkdir \"$ev\"",
+    "export AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1",
+    "left=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))",
+    "(( left > 30 )) || exit 124",
+    "set +e",
+    "systemd-run --unit=borsuk-header-header-binding-tests --wait --pipe -p WorkingDirectory=\"$root/source\" -p CPUQuota=200% -p AllowedCPUs=0,1 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 -p KillMode=control-group -p TimeoutStopSec=30 -p RuntimeMaxSec=\"$left\" --setenv=RUSTUP_HOME=\"$root/.rustup\" --setenv=CARGO_HOME=\"$root/.cargo\" --setenv=PATH=\"$root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\" /bin/bash -c 'set -euo pipefail\ntrap '\\''exit 97'\\'' TERM HUP INT\nroot=/mnt/borsuk-header-qualification\nev=\"$root/evidence/header-binding-tests\"\ncd \"$root/source\"\nexport CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER=\nunset BORSUK_TEST_BUILD_COMMAND RUSTFLAGS CARGO_ENCODED_RUSTFLAGS\ncg=$(awk -F: '\\''$1==0 {print $3}'\\'' /proc/self/cgroup)\nprintf \"%s\\n\" \"$cg\" > \"$ev/cgroup-path.txt\"\nfor f in cpu.max cpuset.cpus.effective memory.max memory.swap.max pids.max; do cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.before\"; done\ntest \"$(cat \"$ev/cpu.max.before\")\" = \"200000 100000\"\ntest \"$(cat \"$ev/cpuset.cpus.effective.before\")\" = \"0-1\"\ntest \"$(cat \"$ev/memory.max.before\")\" = 8589934592\ntest \"$(cat \"$ev/memory.swap.max.before\")\" = 0\ntest \"$(cat \"$ev/pids.max.before\")\" = 512\nsha256sum --check \"$root/source-files.sha256\" > \"$ev/source-before.log\"\nleft=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))\n(( left > 30 )) || exit 124\nprintf \"%s\\n\" '\\''cargo test --locked -p borsuk --example compare_native_replay completed_header_binding_tests -- --test-threads=1'\\'' > \"$ev/native-command.txt\"\ndate -u +%FT%TZ > \"$ev/native-started.txt\"\nset +e\n/usr/bin/time -v -o \"$ev/native-time.txt\" timeout --kill-after=30 \"$left\" cargo test --locked -p borsuk --example compare_native_replay completed_header_binding_tests -- --test-threads=1 > \"$ev/native.log\" 2>&1\nstatus=$?\nset -e\nprintf \"%s\\n\" \"$status\" > \"$ev/native-exit.txt\"\ndate -u +%FT%TZ > \"$ev/native-finished.txt\"\nsha256sum --check \"$root/source-files.sha256\" > \"$ev/source-after.log\"\ncmp \"$ev/source-before.log\" \"$ev/source-after.log\"\nfor f in memory.peak memory.events memory.swap.peak pids.peak cpu.stat; do if test -f \"/sys/fs/cgroup$cg/$f\"; then cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.after\"; fi; done\n(( status == 0 )) || exit \"$status\"\nsed -n \"s/^test \\(.*\\) \\.\\.\\. ok$/\\1/p\" \"$ev/native.log\" | LC_ALL=C sort > \"$ev/executed-names.txt\"\ntest \"$(wc -l < \"$ev/executed-names.txt\")\" = 7\ngrep -E \"^test result: ok\\. 7 passed; 0 failed; 0 ignored; 0 measured;\" \"$ev/native.log\" > \"$ev/test-summary.txt\"\nexit \"$status\"'",
+    "manager=$?",
+    "set -e",
+    "printf \"%s\\n\" \"$manager\" > \"$ev/manager-exit.txt\"",
+    "systemctl show borsuk-header-header-binding-tests.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup > \"$ev/systemd-after.txt\"",
+    "drained=false",
+    "if test -s \"$ev/cgroup-path.txt\"; then cg=$(cat \"$ev/cgroup-path.txt\"); if [[ \"$cg\" == /system.slice/borsuk-header-*\".service\" ]]; then if test ! -d \"/sys/fs/cgroup$cg\"; then drained=true; elif grep -qx \"populated 0\" \"/sys/fs/cgroup$cg/cgroup.events\"; then drained=true; fi; fi; fi",
+    "native=null; if test -s \"$ev/native-exit.txt\"; then native=$(cat \"$ev/native-exit.txt\"); [[ \"$native\" =~ ^[0-9]+$ ]] || native=null; fi",
+    "jq -n --arg schema borsuk-native-header-binding-stage-v1 --arg stage 'header-binding-tests' --arg source d077a54f456af30242753ed1e2e397a9416191f7 --argjson manager \"$manager\" --argjson native \"$native\" --argjson drained \"$drained\" '{schema:$schema,stage:$stage,source_commit:$source,manager_exit:$manager,native_exit:$native,owned_cgroup_drained:$drained,performance_claim:false}' > \"$ev/terminal.json\"",
+    "(cd \"$ev\" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > \"$ev/SHA256SUMS\"",
+    "for file in \"$ev\"/*; do timeout --kill-after=5 90 aws s3api put-object --bucket borsuk-bench-453182569524-euc1 --key research/semantic-router/20261010/native-header-binding-qualification-a0001/stages/header-binding-tests/\"$(basename \"$file\")\" --body \"$file\" --if-none-match \"*\" > /dev/null; done",
+    "cat \"$ev/terminal.json\"",
+    "[[ \"$native\" == 0 && \"$manager\" == 0 && \"$drained\" == true ]]"
+  ],
+  "executionTimeout": [
+    "7440"
+  ]
+}

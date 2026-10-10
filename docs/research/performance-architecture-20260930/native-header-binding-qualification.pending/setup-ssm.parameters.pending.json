@@ -1,0 +1,41 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "root=/mnt/borsuk-header-qualification",
+    "mkdir -p \"$root/evidence\" \"$root/source\"",
+    "export DEBIAN_FRONTEND=noninteractive AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1",
+    "timeout --kill-after=30 180 apt-get -qq -o DPkg::Lock::Timeout=120 update",
+    "timeout --kill-after=30 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install curl unzip jq time tar gzip util-linux binutils build-essential pkg-config libssl-dev cmake python3-dev",
+    "cd \"$root\"",
+    "curl -fsSL --connect-timeout 10 --max-time 180 --output awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip",
+    "printf '%s  awscliv2.zip\\n' 50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6 | sha256sum -c -",
+    "test \"$(stat -c %s awscliv2.zip)\" = 73022935",
+    "timeout --kill-after=30 120 unzip -q awscliv2.zip",
+    "timeout --kill-after=30 120 ./aws/install",
+    "[[ \"$(aws --version)\" == aws-cli/2.36.11\\ * ]]",
+    "timeout --kill-after=5 90 aws s3 cp s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/inputs/source.tar.gz source.tar.gz --only-show-errors",
+    "printf '%s  source.tar.gz\\n' a13670d429e7abe520370b07643f9d27f8509799e8aa318c6e073b694698dd01 | sha256sum -c -",
+    "test \"$(stat -c %s source.tar.gz)\" = 4215586",
+    "timeout --kill-after=5 90 aws s3 cp s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/inputs/source-files.sha256 source-files.sha256 --only-show-errors",
+    "printf '%s  source-files.sha256\\n' 2a7d9e8df35892b9dbf71fbb0c2e83ee40e029f8d542f553b54a289b7da64b1f | sha256sum -c -",
+    "test \"$(stat -c %s source-files.sha256)\" = 51374",
+    "timeout --kill-after=5 90 aws s3 cp s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/inputs/native-source.json native-source.json --only-show-errors",
+    "printf '%s  native-source.json\\n' 694e16de78f32d6382298b4f9dd9ac1f12f3489cf1b26cc26e1d220b92df45f1 | sha256sum -c -",
+    "test \"$(stat -c %s native-source.json)\" = 50665",
+    "tar -xzf source.tar.gz -C source",
+    "(cd source && sha256sum --check ../source-files.sha256) > evidence/source-setup.log",
+    "export RUSTUP_HOME=\"$root/.rustup\" CARGO_HOME=\"$root/.cargo\"",
+    "export PATH=\"$CARGO_HOME/bin:$PATH\"",
+    "curl -fsSL --connect-timeout 10 --max-time 180 https://sh.rustup.rs | timeout --kill-after=30 300 sh -s -- -y --profile minimal --default-toolchain 1.98.0",
+    "timeout --kill-after=30 180 rustup component add clippy --toolchain 1.98.0",
+    "rustc -vV > evidence/rustc.txt",
+    "cargo --version > evidence/cargo.txt",
+    "date +%s > gate-started.epoch",
+    "printf \"%s\\n\" \"$(( $(cat gate-started.epoch) + 7200 ))\" > gate-deadline.epoch",
+    "printf \"SETUP_SOURCE_AUTHENTICATED\\n\""
+  ],
+  "executionTimeout": [
+    "1800"
+  ]
+}
