@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-validator-ec2-v1",
+  "status": "INVALID",
+  "phase": "platform",
+  "instance_id": "i-0620f982e4698c5a2",
+  "prefix": "research/semantic-router/20261010/pid128-platform/borsuk-platform-903b9b87431d454ebaa36a002459e66d",
+  "bootstrap_sha256": "895e5442a39d83822a9c208d9314279404fc9c3c9df321c0a39105a699e29c72",
+  "bootstrap_exit": 97,
+  "test_exit": 97,
+  "cleanup_exit": 0,
+  "native_executed": false,
+  "ann_executed": false,
+  "real_platform_programs": true,
+  "performance_claim": false,
+  "production_qualification": false,
+  "evidence_sha256": "342862d86dbf7f173d272c48e0cea497fde372c02db70c7f9d00cf4ffebd9dbd",
+  "evidence_bytes": 55458
+}

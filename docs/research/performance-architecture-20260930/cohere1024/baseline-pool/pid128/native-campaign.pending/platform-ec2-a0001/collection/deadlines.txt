@@ -1,0 +1,1 @@
+termination_request_by_launch_plus_900; confirmation_wait_120s; not_a_guarantee_of_AWS_completion
