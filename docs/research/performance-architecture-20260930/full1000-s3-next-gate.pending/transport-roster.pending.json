@@ -1,0 +1,83 @@
+[
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/pid128-native-inputs/59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3/baseline",
+    "etag": "\"0d19638df7eb46fa2ed1c7f0b1ac4d20\"",
+    "relative_path": "bin/check_cohere_native_baseline",
+    "bytes": 17029632,
+    "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/pid128-native-inputs/03aca9d786119e15762add1f2f0d9331fc3c697b73214b98c8072a4b1477de4f/compare_native_replay",
+    "relative_path": "bin/compare_native_replay",
+    "bytes": 1871136,
+    "sha256": "03aca9d786119e15762add1f2f0d9331fc3c697b73214b98c8072a4b1477de4f",
+    "etag": "\"32a696bf82b506573af3ee34d2c6fe6b\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/publish_two_bit_generation",
+    "etag": "\"52190475b221cc1726998401c3933b15-2\"",
+    "relative_path": "bin/publish_two_bit_generation",
+    "bytes": 15964832,
+    "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/actual1m-pid128-chain-a0002/artifacts.sha256",
+    "relative_path": "closed/historical/artifacts.sha256",
+    "bytes": 94455,
+    "sha256": "09b7ce99e5293c0e1254287416d536451b77c4386f70a677fb8e9f034563319d",
+    "etag": "\"9058167f0743697d4b178ce8186ea02c\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/actual1m-pid128-chain-a0002/evidence.tar.gz",
+    "relative_path": "closed/historical/evidence.tar.gz",
+    "bytes": 596854,
+    "sha256": "c02c364a97817ed3d5fc5c86dc2f02f145c5a3f94a3ddca1d713e49e5000862c",
+    "etag": "\"9a84a17d237ab263df3feac794d28564\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/artifacts.sha256",
+    "relative_path": "closed/local/artifacts.sha256",
+    "bytes": 100396,
+    "sha256": "5795dcd4de77ce712839be11fa41fd849cbdea53bcd553a55fe5e8c09adb88aa",
+    "etag": "\"4a0f5d8ce788583a323487c15c677ade\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/evidence.tar.gz",
+    "relative_path": "closed/local/evidence.tar.gz",
+    "bytes": 596125,
+    "sha256": "84e8538cd79bc4f14afdaed449c5d2de8f3ea571a1e1ae1c1b4b8f9023ed8062",
+    "etag": "\"223d69fb273a06299a04cdf56461db99\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32",
+    "relative_path": "prepared/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "etag": "\"1553426815b5dbf6d916ccd12f1c227a\""
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64",
+    "relative_path": "prepared/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "etag": "\"09946f4a1d247107e8efd679998954ec\""
+  }
+]
