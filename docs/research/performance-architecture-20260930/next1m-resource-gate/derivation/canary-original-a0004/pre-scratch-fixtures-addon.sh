@@ -1,0 +1,19 @@
+phase=scratch-fixtures
+get scratch-fixture-guest.sh 128
+printf '%s  scratch-fixture-guest.sh\n' 6f624ead997e6606a3dcb3dda0de0b1c35c6f2d0105a7b2dcd1ab111d81b306e | sha256sum --strict -c -
+get scratch-fixture-launcher.py 128
+printf '%s  scratch-fixture-launcher.py\n' 1a54b625af1a591c0e65c7138f328262213d7cc1d0011cbc8f7d06ea2a671929 | sha256sum --strict -c -
+get scratch-fixture-verifier.py 128
+printf '%s  scratch-fixture-verifier.py\n' 301c882bee892578fc351491506a01e48827eab56520bdc28fdafeaea9e6c3b5 | sha256sum --strict -c -
+get scratch-admission-mock.sh 128
+printf '%s  scratch-admission-mock.sh\n' 8ea3778bcd1868c85bd4d3419d1e5de93f828218a3ec496a2a804248d4196d70 | sha256sum --strict -c -
+get scratch-proof-negatives.py 128
+printf '%s  scratch-proof-negatives.py\n' 22f3c36298c0cb3916b0d9193883a211584237ca79be532c0c6095a26b152c65 | sha256sum --strict -c -
+set +e
+timeout -k 2 140 systemd-run --unit=borsuk-scratch-fixtures --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 -p TimeoutStopSec=10 -p KillMode=control-group -p PrivateNetwork=yes -p LimitCORE=0 bash -c 'set -Eeuo pipefail; cd /mnt/borsuk-scale1m; python3 -I scratch-proof-negatives.py scratch-fixture-launcher.py validate-scratch-binding.sh scratch-fixture-verifier.py; bash scratch-admission-mock.sh scratch-fixture-guest.sh /mnt/borsuk-scale1m/scratch-fixture-work' > evidence-root/scratch-fixtures.stdout 2> evidence-root/scratch-fixtures.stderr
+frc=$?; set -e
+printf '%s\n' "$frc" > evidence-root/scratch-fixtures.exit
+timeout -k 1 5 systemctl show borsuk-scratch-fixtures.service > evidence-root/scratch-fixtures.systemd
+(( frc == 0 )) || exit 94
+fstate=$(timeout -k 1 5 systemctl show borsuk-scratch-fixtures.service -p ActiveState --value)
+[[ $fstate == inactive || $fstate == failed ]] || exit 94
