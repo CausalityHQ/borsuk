@@ -1,0 +1,84 @@
+{
+  "schema": "borsuk-next1m-canary-source-asset-stage-receipt-v1",
+  "status": "STAGED_OPAQUE_SOURCE_BYTES_AUTHENTICATED",
+  "source_commit": "8fc761b6362420cbd637afda72c034e2b4c8500b",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "rows": [
+    {
+      "name": "wrapper-canary.sh",
+      "bytes": 16543,
+      "sha256": "3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2",
+      "key": "research/semantic-router/20261010/next1m-supervisor-canary-source/8fc761b6/assets/3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2",
+      "etag": "\"beba5185ab56bbf57e9f627028703567\"",
+      "receipts": {
+        "upload.json": {
+          "bytes": 169,
+          "sha256": "593267fbf7514f8a51bed6a68c9e9c82ad79027fef70dd988c70d0083ae1f7ce"
+        },
+        "head.json": {
+          "bytes": 261,
+          "sha256": "5fe2274d3f229dd8b6068cdff503c5352f89e21d92942af34fa02e2a84016add"
+        },
+        "readback.json": {
+          "bytes": 337,
+          "sha256": "c7e4eb8685aa58de9563058b930e07a99fed673c4c0fa38e5a3482b7b3438033"
+        }
+      }
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 62014,
+      "sha256": "b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452",
+      "key": "research/semantic-router/20261010/next1m-supervisor-canary-source/8fc761b6/assets/b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452",
+      "etag": "\"49dbf872c7908f417eb77831790e8677\"",
+      "receipts": {
+        "upload.json": {
+          "bytes": 169,
+          "sha256": "ae757ba6f13028558a96ab1d311e703a847a8a05971ed4eec8ba7964c464ced5"
+        },
+        "head.json": {
+          "bytes": 261,
+          "sha256": "3a39203b28844e163e6087c3168bed18ed7736e1ee4f4432400a09f3c95f984b"
+        },
+        "readback.json": {
+          "bytes": 337,
+          "sha256": "9af4fc6b8a348bcf0484cc3d084a8fe26618df48cb6a64d356005552d1ebf329"
+        }
+      }
+    },
+    {
+      "name": "verify-closed.py",
+      "bytes": 77200,
+      "sha256": "5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e",
+      "key": "research/semantic-router/20261010/next1m-supervisor-canary-source/8fc761b6/assets/5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e",
+      "etag": "\"9fcdb9766223bfad795ae57b795b5136\"",
+      "receipts": {
+        "upload.json": {
+          "bytes": 169,
+          "sha256": "98ba91bcdfe5760e1290033098283814afdc63a6e04afd86e143e74b62ff3d3a"
+        },
+        "head.json": {
+          "bytes": 261,
+          "sha256": "0497b677ef13c582e8dadbd2ef28e70624f50f5a01da180333c7fe3682f5b697"
+        },
+        "readback.json": {
+          "bytes": 337,
+          "sha256": "a08dcf2fe2f4362d11e5b0f8adb05f5532768d8ca6299ff036facb63032f7336"
+        }
+      }
+    }
+  ],
+  "original_unit": "run-p1466329-i710151709.service",
+  "original_invocation": "0ea7b046e7924c78acfc57a41c5c9fb0",
+  "original_exit": 0,
+  "elapsed_seconds": 16.023,
+  "memory_peak_mib": 134.8,
+  "swap_bytes": 0,
+  "local_native_executed": false,
+  "run_instances_executed": false,
+  "launch_authority": false,
+  "review_group": "7a428afddde44ea1",
+  "review_pending": true
+}
