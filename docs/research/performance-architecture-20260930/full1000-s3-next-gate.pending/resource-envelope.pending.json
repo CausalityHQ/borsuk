@@ -1,0 +1,25 @@
+{
+  "status": "PENDING_SOURCE_BOUND_GATE",
+  "purpose": "Native replay and S3 retained publication/panel32 parity admission; not cold performance measurement",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "EC2 Spot",
+  "instance_type": "c7i.2xlarge",
+  "host_safety": {"memory_bytes": 8589934592, "swap_bytes": 0, "scratch_gib": 40, "host_stop_seconds": 7200, "external_seconds": 7800, "cleanup_grace_seconds": 120},
+  "execution": "Sequential; no compiler, corpus preparation, derivation or generation rebuild",
+  "stage_limits": {
+    "transport": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "pids": 128, "seconds": 600},
+    "historical_reduction": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "pids": 128, "seconds": 120},
+    "local_reduction": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "pids": 128, "seconds": 120},
+    "retained_publication": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "library_memory_bytes": 536870912, "scratch_bytes": 536870912, "pids": 128, "seconds": 1200},
+    "s3_panel32": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 536870912, "pids": 128, "seconds": 900},
+    "s3_reduction": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "pids": 128, "seconds": 120},
+    "three_arm_parity": {"cpu_percent": 100, "allowed_cpus": "0", "memory_bytes": 1073741824, "pids": 128, "seconds": 120}
+  },
+  "retained_source": {"objects": 13, "bytes": 5472467000, "largest_body_bytes": 4104000000, "review_calculated_scratch_bytes": 336853220, "duplicate_payload_copy": false, "whole_body_remote_native_authentication_required": true},
+  "publication": {"fresh_disjoint_destination": "semantic/rebound-full1000-a0001", "new_objects": 11, "create_only": true, "head_last": true, "source_objects_immutable": true},
+  "stop_rule": "Stop at first failed prerequisite. Any unproven closure, source/provenance/schema/resource failure is INVALID; preserve original attempt and exact cleanup receipts.",
+  "spot_interruption": "Attempt INVALID; retain terminal evidence; no automatic retry or partial-result acceptance",
+  "claims": {"performance": false, "matched_vendor_win": false, "full1000_population_quality": false},
+  "remaining": ["Exact source-bound supervisor and runtime configs", "Transport body/identity roster", "Fresh Spot quote and total-dollar ceiling", "Actual native EC2 admission", "Separate disposable real-S3 canary before frozen full1000 cold measurement"]
+}
