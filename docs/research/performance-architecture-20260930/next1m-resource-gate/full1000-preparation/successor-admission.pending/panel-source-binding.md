@@ -1,0 +1,7 @@
+# Fresh-panel binding — committed Rust source inspection
+Source: c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38, crates/borsuk/src/bin/check_cohere_native_baseline.rs.
+Execution is required, tagged mode with snake_case and deny_unknown_fields. Use {"mode":"diagnostic_panel","ordinals":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],"trace":false}.
+Keep count=1000 and full authenticated requests/truth; do not truncate them to 32. The runner admits 1..128 sorted unique original ordinals below count. Diagnostic panels never establish population percentiles or full-cohort qualification.
+Config requires cohort_receipt and derivation_receipt as authenticated artifacts, producer_authority, corpus/source intervals, backend, generation prefix/root SHA, explicit profile, native_source, memory and serving. Bind new cohort/derivation receipts before creating any runnable panel config. Historical gate template contains only baseline.fetch_parallelism, not a complete native baseline config; copying it alone is insufficient.
+The qualified producer admits rows<=1000000/count<=1000 explicitly; future10M requires a substantive separately qualified library/resource change rather than overriding config.
+This is source inspection only; native runtime admission remains causality EC2-owned after original preparation terminal and cleanup. No pending pin is inferred from this note.
