@@ -1,0 +1,72 @@
+{
+  "acceptance": [
+    "All five regenerated preparation outputs match the first closed 1M admission seals before derivation.",
+    "All native phase identities/configurations and original native, timeout, time, tee, wrapper and manager exits are authenticated; construction phases exit zero.",
+    "Baseline original exit is zero with complete MEASURED summary, selected_count=executed_count=queries=32, k=10 and denominator320.",
+    "All query results are sealed before truth reduction and native output root/request/truth seals match the frozen configuration.",
+    "Resource limits, all OOM types and pids evidence, phase deadlines, namespace isolation, cleanup, artifact hashes and instance termination pass independent replay.",
+    "Root independently applies the quality_falsifier to the closed native summary."
+  ],
+  "backend": "LocalFileSystem",
+  "cache_state": "UNCONTROLLED_LOCAL_CORRECTNESS_ONLY",
+  "claims": {
+    "competitor_win": false,
+    "maintenance_generation_swap": false,
+    "physical_s3_cold": false,
+    "population_recall": false,
+    "population_tail_latency": false,
+    "production_ready": false
+  },
+  "corpus_intervals": [
+    {
+      "end": 100000,
+      "start": 0
+    },
+    {
+      "end": 1001000,
+      "start": 101000
+    }
+  ],
+  "dataset": "Cohere Wikipedia embed-multilingual-v3",
+  "dimensions": 1024,
+  "execution": {
+    "mode": "full"
+  },
+  "host_memory_ceiling_bytes": 8589934592,
+  "k": 10,
+  "library_memory_bytes": 536870912,
+  "metric": "cosine",
+  "next_after_screen_pass": "Fresh full1000-query truth/receipt and authenticated S3 publication; matched cold resource/performance gate with an explicitly controlled cache protocol. No repeat of the already completed same100k S3 Vectors benchmark.",
+  "outcomes": {
+    "execution_invalid": "Missing identity/resource/closure evidence, setup defect, interrupted or timed-out execution; preserve attempt and repair demonstrated setup.",
+    "quality_reject": "Complete authenticated MEASURED run below the preregistered screening threshold; preserve and diagnose routing/coverage/quantization before changing one cause.",
+    "resource_reject": "Authenticated native baseline exit3 with its typed resource reason; execution INVALID must not be recast as this outcome.",
+    "screen_pass": "Build/publication/local-Q32 correctness and recall screen only."
+  },
+  "proposed_retained_disk_upper_bytes": 27581982055,
+  "proposed_scratch_volume_bytes": 42949672960,
+  "quality_falsifier": {
+    "all_queries_sealed_before_truth": true,
+    "denominator": 320,
+    "maximum_underfilled_queries": 0,
+    "minimum_mean_recall10": 0.95,
+    "minimum_total_hits10": 304,
+    "rationale": "Prospective 95-percent small-panel screening threshold, consistent with historical k10 quality-screen methodology. It is not a confidence bound or a competitor parity threshold."
+  },
+  "query_count": 32,
+  "reserved_query_interval": {
+    "end": 101000,
+    "start": 100000
+  },
+  "rows": 1000000,
+  "schema": "borsuk-next1m-q32-build-gate-preregistration-v1",
+  "selected_query_interval": {
+    "end": 100032,
+    "start": 100000
+  },
+  "serving": {
+    "mode": "baseline"
+  },
+  "status": "FROZEN_PREREGISTERED_NATIVE_Q32_SCREEN",
+  "swap_bytes": 0
+}

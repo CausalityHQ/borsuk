@@ -1,0 +1,18 @@
+{
+  "status": "FROZEN_ROOT_METADATA_READY_ONE_ORIGINAL_NATIVE_ATTEMPT",
+  "controller_source": "603fd5f96b5880ebeaf6919ad4b77775742a0ee7",
+  "original_launch_unrun": true,
+  "static": {
+    "unit": "run-p2352244-i715238703.service",
+    "invocation_id": "117b0770b675459d9df9803303b4a8a1",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0,
+    "py_compile_exit": 0,
+    "cpu": 1,
+    "memory_mib": 256,
+    "swap": 0,
+    "runtime_seconds": 120
+  },
+  "local_native_or_validator_execution": false,
+  "performance_claim": false
+}
