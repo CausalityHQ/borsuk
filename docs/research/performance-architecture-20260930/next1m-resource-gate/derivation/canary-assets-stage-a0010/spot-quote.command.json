@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "10", "ec2", "describe-spot-price-history", "--instance-types", "c7i.2xlarge", "--product-descriptions", "Linux/UNIX", "--availability-zone", "eu-central-1c", "--start-time", "2026-10-10T01:37:38Z"]

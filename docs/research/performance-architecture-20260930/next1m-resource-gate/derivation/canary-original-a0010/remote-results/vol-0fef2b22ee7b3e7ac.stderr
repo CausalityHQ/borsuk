@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (InvalidVolume.NotFound) when calling the DescribeVolumes operation (reached max retries: 0): The volume 'vol-0fef2b22ee7b3e7ac' does not exist.

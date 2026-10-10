@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "10", "iam", "get-role-policy", "--role-name", "borsuk-bench-role", "--policy-name", "BorsukScaleInputsImmutable20261009"]

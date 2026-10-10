@@ -1,0 +1,47 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "C0: unadmitted special file /run/cloud-init/share/hook-hotplug-cmd",
+  "source_commit": "d2621ff573af7a69c55ca1fcb8052895a37165bb",
+  "instance_id": "i-07f9544bbb2f0b4c2",
+  "original_exit": 99,
+  "fixture_exit": 0,
+  "fixture_pass_lines": 255,
+  "fixture_scope": "synthetic source-bound fault checks; no numerical ANN claim",
+  "tail_steps": {
+    "T1": 0,
+    "T2": 0,
+    "T3": 0,
+    "T4": 0,
+    "T5": 0
+  },
+  "t3_cleanup_proved": true,
+  "original_handoff_W": "PASS",
+  "cloud_final_cases": "NOT_RUN",
+  "archive_authentication": {
+    "bytes": 23027,
+    "sha256": "dd6c415bfcd1524c909d1e90b0b838cc1e39afeb21f640bc20f9c9ad9cda629f"
+  },
+  "archive_members": 84,
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-07f9544bbb2f0b4c2",
+    "terminated": true,
+    "volumes": [
+      "vol-0fef2b22ee7b3e7ac",
+      "vol-0c1340a49a98b445b"
+    ],
+    "both_volumes_absent": true,
+    "reason": "terminal",
+    "user_data_sha256": "2fc3f0b4a84b0bec791bc2583abdce52019d773de7fbc3d9f5d33f1d85d3c1c5",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "scratch_formatting": "SUCCESS",
+  "platform": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "next_action": "same-worker narrow actual cloud-init FIFO path/type admission repair; original tests and source preserved"
+}

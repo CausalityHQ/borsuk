@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-canary-assets-staged-v1",
+  "prefix": "research/semantic-router/20261010/actual1m-scale-chain-canary-a0010",
+  "asset_count": 24,
+  "create_only": true,
+  "original_attempt_preserved": true,
+  "existing_policy_resources_preserved": true,
+  "launch_authorized": false,
+  "performance_claim": false,
+  "upload_timeout_reconciled": true
+}

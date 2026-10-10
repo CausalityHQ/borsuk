@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-canary-root-binding-check-v1",
+  "binding": "PASS",
+  "instance_id": "i-07f9544bbb2f0b4c2",
+  "final_instance_evidence": "describe-original-01.stdout",
+  "final_volume_evidence": "describe-scratch-volume-01.stdout",
+  "raw_api_binding_sha256": "128b4db51f9dcbb2628c752031e78621c13bf100e1417b817e13ce7da6629201",
+  "runtime_canary": "PENDING",
+  "performance_claim": false
+}
