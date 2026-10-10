@@ -1,0 +1,115 @@
+{
+  "schema": "borsuk-retained-generation-source-transport-v1",
+  "root_sha256": "8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885",
+  "namespace": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+  "objects": [
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/manifest.json",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/manifest.json",
+      "bytes": 45304,
+      "sha256": "8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885",
+      "etag": "\"59fa1cf0adf2eac156c81e5093d8c921\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/manifest.json",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/manifest.json",
+      "bytes": 653,
+      "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+      "etag": "\"50730f161b08caa5959f1c7d7089d9fd\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/page_manifest.json",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/page_manifest.json",
+      "bytes": 281,
+      "sha256": "84e57ba2ed436c8f526ae87b749ed5f9ae117137b4100766218cebd623e370e6",
+      "etag": "\"5563f792786f125525db9e1f37dac225\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/page_digests.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/page_digests.bin",
+      "bytes": 125024,
+      "sha256": "65a3e5322191ee77090da76cdec60337047d37613cd910ec04ac4a59831c2cd0",
+      "etag": "\"cdef24dd002fd77b24b6c050cf356454\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/mean.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/mean.bin",
+      "bytes": 4096,
+      "sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+      "etag": "\"fcae7f5267ad608be7cfa101e6f14417\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/records.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/records.bin",
+      "bytes": 264000000,
+      "sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+      "etag": "\"49b55c28076c8557a656929920230801\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/page_digests.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/plane/page_digests.bin",
+      "bytes": 1000000,
+      "sha256": "63c07feff1b370753008a4ed6e1bc05cd9844ef7a411b22ccc1e97a76ce9aa41",
+      "etag": "\"a8947e10e1a268f99b33e2e38ea3b434\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/root.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/root.bin",
+      "bytes": 3041472,
+      "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492",
+      "etag": "\"ad2ea49da2f44989f7ad6e1b935417b4\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/membership.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/membership.bin",
+      "bytes": 125000,
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+      "etag": "\"8835dbf3274467637fb86f24fe2aaabb\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/leaves.bin",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885/router/leaves.bin",
+      "bytes": 64125000,
+      "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+      "etag": "\"e0b9a5da796acd6db72b4627ea125390\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+      "bytes": 1036000000,
+      "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+      "etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+      "bytes": 4104000000,
+      "sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+      "etag": "\"6a9002d83bd42e6746381209619e6bb5\"",
+      "version_id": null
+    },
+    {
+      "logical_key": "semantic/index/head.json",
+      "s3_key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/index/head.json",
+      "bytes": 170,
+      "sha256": "4bced4aad7ddba512a1b4253ecbb86a8e81ca0a181103e24b002b92a4d988c1f",
+      "etag": "\"f268c5e319cc84d7a3637f0db2954d1b\"",
+      "version_id": null
+    }
+  ],
+  "head_last": true,
+  "remote_whole_body_sha_verified": false,
+  "native_retained_publication_required": true,
+  "performance_claim": false
+}

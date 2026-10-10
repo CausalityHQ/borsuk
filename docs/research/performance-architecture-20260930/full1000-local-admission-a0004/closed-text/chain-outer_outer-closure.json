@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-native-scale-build-outer-closure-v2",
+  "status": "CLOSED",
+  "recipe_sha256": "27ea601aa9f9812a0769696bc4a61abf80e37fe31715a2f81193de82c75f240c",
+  "config_sha256": "5858b34dfd38857c939d6afe4dddcd5b886319dfab7d6fa947f5a92968cf9342",
+  "terminal_sha256": "20865d71ef0912976d8b716e5b36ec0164bc1c4c7c8e92dc3e3941c183b85508",
+  "manifest_sha256": "a579e76b30043359ce30abee725f55834e638d6a0d8541ab36ce34cf856034de",
+  "wrapper_exit_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "unit": "borsuk-pid128-observer-97397306-bfe8-4a2e-b2f6-e9b6b1014c8f.service",
+  "invocation_id": "e4af976cde7749e5b4004a1e6ce102c6",
+  "control_group": "/system.slice/borsuk-pid128-observer-97397306-bfe8-4a2e-b2f6-e9b6b1014c8f.service",
+  "manager_show": {
+    "path": "/mnt/borsuk-scale1m/evidence-root/chain-outer/manager.show",
+    "bytes": 303,
+    "sha256": "097672161444ecd49963d304f11a18163cf2149b9cfa690d4193abb84041919a"
+  },
+  "outer_exit_file": {
+    "path": "/mnt/borsuk-scale1m/evidence-root/chain-actual.exit",
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "drain_proof": {
+    "path": "/mnt/borsuk-scale1m/evidence-root/chain-outer/drain.proof.json",
+    "bytes": 252,
+    "sha256": "3ada612090daf46e387f5c117d937ee3c6f5ac63e1c66f8c0cf70b556a22df37"
+  },
+  "actual_outer_exit": 0,
+  "drained": true,
+  "performance_claim": false
+}

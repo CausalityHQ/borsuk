@@ -1,0 +1,37 @@
+	Command being timed: "bash -c set -u -o noclobber
+inner=$1 dir=$2 errfd=$3 secs=$4
+shift 4
+timeout --signal=TERM --kill-after=10 "$secs" bash -c "$inner" _ "$dir" "$errfd" "$@"
+rc=$?
+printf '%s\n' "$rc" > "$dir/timeout.exit" || exit 98
+exit "$rc"
+ _ set -u -o noclobber
+dir=$1 errfd=$2
+shift 2
+bash -c 'printf "%s\n" "$$" > "$1" || exit 98; shift; exec "$@"' _ "$dir/native.pid" "$@" 2>&"$errfd"
+rc=$?
+printf '%s\n' "$rc" > "$dir/native.exit" || exit 98
+exit "$rc"
+ /mnt/borsuk-scale1m/evidence-chain/phases/baseline 10 300 /mnt/borsuk-scale1m/assets/bin/check_cohere_native_baseline /mnt/borsuk-scale1m/evidence-chain/configs/baseline.json ffa8ce8b844495a3ef09c4379c8205bc32b63b91634f1d28021d02c8e3584086 /mnt/borsuk-scale1m/prepared-parent/query/baseline-result.jsonl"
+	User time (seconds): 2.25
+	System time (seconds): 1.15
+	Percent of CPU this job got: 93%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:03.65
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 50712
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 30
+	Minor (reclaiming a frame) page faults: 329911
+	Voluntary context switches: 378495
+	Involuntary context switches: 347125
+	Swaps: 0
+	File system inputs: 312456
+	File system outputs: 10784
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

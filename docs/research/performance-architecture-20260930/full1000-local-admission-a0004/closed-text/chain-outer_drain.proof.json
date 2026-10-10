@@ -1,0 +1,7 @@
+{
+  "schema": "borsuk-native-pid128-drain-v1",
+  "state": "removed",
+  "path": "/sys/fs/cgroup/system.slice/borsuk-pid128-observer-97397306-bfe8-4a2e-b2f6-e9b6b1014c8f.service",
+  "invocation_id": "e4af976cde7749e5b4004a1e6ce102c6",
+  "events": null
+}

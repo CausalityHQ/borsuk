@@ -1,0 +1,17 @@
+{
+  "instance_id": "i-08bf63debc2f3e21e",
+  "terminated": true,
+  "reason": "terminal",
+  "user_data_sha256": "d0ca46700bd947df4a1503a9346633dd64f99da3551140c5320e266b2285ca83",
+  "archive_authenticated": true,
+  "manifest_verified": false,
+  "independent_replay_pending": true,
+  "late": false,
+  "cost_bound": "MODELED_7800_PLUS_120",
+  "supplied_started_epoch": 1791662180,
+  "effective_started_epoch": 1791662180,
+  "chain_unit_exit": 0,
+  "chain_disposition": "LOCAL_PANEL_CLOSED_EXTERNAL_REPLAY_REQUIRED",
+  "bootstrap_exit": 0,
+  "performance_claim": false
+}

@@ -1,0 +1,9 @@
+{
+  "config_sha256": "af46ec53d29f27acbfd5064feb0976ec1175daaed7bf6c4320e87e521ee4c771",
+  "control_epoch": 1,
+  "generation": 1,
+  "metadata_prefix": "semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885",
+  "prefix": "semantic/index",
+  "root_sha256": "8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885",
+  "schema": "borsuk-two-bit-local-publication-receipt-v1"
+}

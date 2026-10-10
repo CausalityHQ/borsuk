@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-full1000-panel-result-retention-v1",
+  "bytes": 1132147,
+  "sha256": "c427222dbcf5df7b228a09f6cabe6e43137a42f813b4a7247fee5bc4ee7882ea",
+  "source_closed": null,
+  "external_native_closure_required": true,
+  "external_native_replay_required": true,
+  "performance_claim": false
+}

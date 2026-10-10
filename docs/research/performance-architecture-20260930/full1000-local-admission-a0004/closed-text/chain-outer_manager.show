@@ -1,0 +1,10 @@
+MainPID=0
+Result=success
+ExecMainCode=1
+ExecMainStatus=0
+ControlGroup=
+Id=borsuk-pid128-observer-97397306-bfe8-4a2e-b2f6-e9b6b1014c8f.service
+Description=borsuk-pid128-observer-97397306-bfe8-4a2e-b2f6-e9b6b1014c8f.service
+ActiveState=active
+SubState=exited
+InvocationID=e4af976cde7749e5b4004a1e6ce102c6
