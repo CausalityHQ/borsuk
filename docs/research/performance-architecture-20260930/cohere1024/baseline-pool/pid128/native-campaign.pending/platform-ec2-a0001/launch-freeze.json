@@ -1,0 +1,62 @@
+{
+  "schema": "borsuk-pid128-platform-launch-draft-v1",
+  "status": "FROZEN_PLATFORM_FALSIFIER",
+  "candidate_commit": "2dfc520b3ff2c018bd3fa3570f2847406d0ddc43",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/semantic-router/20261010/pid128-platform/borsuk-platform-903b9b87431d454ebaa36a002459e66d",
+  "assets": "research/semantic-router/20261010/pid128-platform/borsuk-platform-903b9b87431d454ebaa36a002459e66d/inputs",
+  "client_token": "borsuk-platform-903b9b87431d454ebaa36a002459e66d",
+  "bootstrap_sha256": "895e5442a39d83822a9c208d9314279404fc9c3c9df321c0a39105a699e29c72",
+  "bootstrap_bytes": 10736,
+  "worker_sha256": "75e2feea6c5109edc1f4005d2eea6c7841bff748480f199852a885376654a6d8",
+  "watch_sha256": "9d305def40ab314e40a63439029d1ca4871459d92fb30f93ddbc341d1524fb5d",
+  "support_roster": [
+    [
+      "run-platform-pair.sh",
+      5152,
+      "c8d66709c10498ecd625dc37dbb86ee8f30c1508e2ba6f7cb21af038eac7d932"
+    ],
+    [
+      "run-platform-canary.sh",
+      3342,
+      "b8ed4707013e32a77f87435c4813cd2bee6e57087202f5a95b03f992807da8af"
+    ],
+    [
+      "collect-stage-outer.sh",
+      14630,
+      "ac51d8b718acff95158c83dafd14d1da5a3919f3ed80077c3e071596ffdf5023"
+    ],
+    [
+      "observer-command.sh",
+      643,
+      "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    ],
+    [
+      "timeout-descendant.sh",
+      992,
+      "1bda564e59d140aa5f28fa82b046d6678504ead9133b262c4513e6e8ce7b4436"
+    ],
+    [
+      "staging-library.sh",
+      42398,
+      "b2dc0740e5c643576fb6c18ef6630cefef9fc052c1a9e3e59310d78428f40c95"
+    ]
+  ],
+  "machine_cutoff_seconds": 1080,
+  "compute_allowance_usd": 0.03,
+  "ancillary_allowance_usd": 0.02,
+  "estimated_total_allowance_usd": 0.05,
+  "billing_guarantee": false,
+  "launch_executed": false,
+  "ann_executed": false,
+  "corpus_or_truth_used": false,
+  "performance_claim": false,
+  "original_review_id": "24e2ac019058461f",
+  "review_disposition_pending": false,
+  "bootstrap_source_inverse_equals_worker": true,
+  "termination_request_cutoff_seconds": 900,
+  "termination_confirmation_wait_seconds": 120,
+  "root_watch_runtime_seconds": 1560,
+  "request_sha256": "cdbc6c83983150b5fbf8ea1f27f45254a56b5043881d36c2ebc1516b1ecf6530"
+}
