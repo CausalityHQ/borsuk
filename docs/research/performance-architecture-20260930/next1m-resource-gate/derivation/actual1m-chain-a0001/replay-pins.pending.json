@@ -1,0 +1,295 @@
+{
+  "schema": "borsuk-native-scale-build-replay-pins-v1",
+  "run_prefix": "research/semantic-router/20261010/actual1m-scale-chain-a0001",
+  "instance_id": "i-0e842b3f25121d177",
+  "user_data_sha256": "179aba0f7883ac421822b005a680af0f5c29d0b59272cd8ce5b7fdd483724fc1",
+  "terminal_sha256": null,
+  "archive": {
+    "bytes": null,
+    "sha256": null
+  },
+  "artifacts_manifest_sha256": null,
+  "support": {
+    "manifest_sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0",
+    "files": {
+      "config-template.json": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba",
+      "derivation-config.json": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d",
+      "gate-config-template.json": "270e79c439915dda8183f89b539683a95a297b8c31d165ddea138615a9019082",
+      "run_actual_cohort_admission.sh": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008",
+      "run_native_scale_build_gate.sh": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422",
+      "service-stop.sh": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e",
+      "transport-pins.json": "93995d925d71b3242d135c38203806801ea0a1d3476c45da9d798ca286dfcc82",
+      "transport.py": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529",
+      "validate-scratch-binding.sh": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+    }
+  },
+  "prep": {
+    "elf_sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+    "config_template": {
+      "schema": "borsuk-cohere-native-cohort-config-v3",
+      "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+      "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+      "embedding_column": "emb",
+      "document_id_column": "_id",
+      "geometry": {
+        "corpus": 1000000,
+        "queries": 32,
+        "dimensions": 1024,
+        "k": 10
+      },
+      "corpus_intervals": [
+        {
+          "start": 0,
+          "end": 100000
+        },
+        {
+          "start": 101000,
+          "end": 1001000
+        }
+      ],
+      "reserved_query_interval": {
+        "start": 100000,
+        "end": 101000
+      },
+      "shards": [
+        {
+          "bytes": 216612385,
+          "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3",
+          "publisher_path": "en/0000.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0000.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216746705,
+          "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b",
+          "publisher_path": "en/0001.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0001.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216645218,
+          "sha256": "57ea548a95cc455997ee70ecdac98e19641e3c1db51cd45a4d52cc9017be87b8",
+          "publisher_path": "en/0002.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0002.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216311581,
+          "sha256": "fe5a8e01a3dba351c000fa019340ee8162880c0927dda2fab59ce802d830ea48",
+          "publisher_path": "en/0003.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0003.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 214758303,
+          "sha256": "5240dfc163f58b540fa0647f064a2cdda02d9c981e9268ef4a3319fd9b042e73",
+          "publisher_path": "en/0004.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0004.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216790181,
+          "sha256": "17f2357bbb91c068e5eaf15ade457ff6603c2cdbd757d21270912b48ad4d3062",
+          "publisher_path": "en/0005.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0005.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 217259568,
+          "sha256": "d2a27a94ecd315f0f82058979993bfabfd180ac0ffaaf6237b521df6fe621598",
+          "publisher_path": "en/0006.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0006.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 217022068,
+          "sha256": "4e0a32d44461c775fd42b01915a4ab8ad57c437854575f84e57cbccd796b9175",
+          "publisher_path": "en/0007.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0007.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 217443476,
+          "sha256": "0dafef2112c4b7c7427634dc44823c4afdccd7ca54544279f3d1d6cc0d002020",
+          "publisher_path": "en/0008.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0008.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216040478,
+          "sha256": "1d02c056f05c658bc074ef30db1b9da22b16e47620a92cab90867b5a98fd3699",
+          "publisher_path": "en/0009.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0009.parquet",
+          "rows": 100000
+        },
+        {
+          "bytes": 216623894,
+          "sha256": "e46f909cfc63ac7f7e62b6394f8026fd450ee5aff01a2fdbb9f8e187dbb8e39a",
+          "publisher_path": "en/0010.parquet",
+          "path": "/mnt/borsuk-scale1m/input/en/0010.parquet",
+          "rows": 100000
+        }
+      ],
+      "output_parent": {
+        "path": "/mnt/borsuk-scale1m/prepared-parent",
+        "device": null,
+        "inode": null
+      },
+      "resources": {
+        "batch_rows": 256,
+        "max_batch_bytes": 268435456,
+        "max_footer_bytes": 1048576,
+        "max_id_bytes": 1024,
+        "max_row_group_compressed_bytes": 268435456,
+        "max_row_group_rows": 10000,
+        "max_row_group_uncompressed_bytes": 1073741824,
+        "modeled_memory_bytes": 7516192768,
+        "cpu_limit": 4,
+        "actual_memory_bytes": 8589934592,
+        "swap_bytes": 0,
+        "scratch_bytes": 17179869184,
+        "timeout_seconds": 2400,
+        "truth_block_rows": 256,
+        "caller_memory_bytes": 67108864,
+        "caller_scratch_bytes": 1610612736,
+        "temporary_reserve_bytes": 67108864
+      }
+    },
+    "transport_pins": [
+      {
+        "relative_path": "input/en/0000.parquet",
+        "bytes": 216612385,
+        "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3"
+      },
+      {
+        "relative_path": "input/en/0001.parquet",
+        "bytes": 216746705,
+        "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b"
+      },
+      {
+        "relative_path": "input/en/0002.parquet",
+        "bytes": 216645218,
+        "sha256": "57ea548a95cc455997ee70ecdac98e19641e3c1db51cd45a4d52cc9017be87b8"
+      },
+      {
+        "relative_path": "input/en/0003.parquet",
+        "bytes": 216311581,
+        "sha256": "fe5a8e01a3dba351c000fa019340ee8162880c0927dda2fab59ce802d830ea48"
+      },
+      {
+        "relative_path": "input/en/0004.parquet",
+        "bytes": 214758303,
+        "sha256": "5240dfc163f58b540fa0647f064a2cdda02d9c981e9268ef4a3319fd9b042e73"
+      },
+      {
+        "relative_path": "input/en/0005.parquet",
+        "bytes": 216790181,
+        "sha256": "17f2357bbb91c068e5eaf15ade457ff6603c2cdbd757d21270912b48ad4d3062"
+      },
+      {
+        "relative_path": "input/en/0006.parquet",
+        "bytes": 217259568,
+        "sha256": "d2a27a94ecd315f0f82058979993bfabfd180ac0ffaaf6237b521df6fe621598"
+      },
+      {
+        "relative_path": "input/en/0007.parquet",
+        "bytes": 217022068,
+        "sha256": "4e0a32d44461c775fd42b01915a4ab8ad57c437854575f84e57cbccd796b9175"
+      },
+      {
+        "relative_path": "input/en/0008.parquet",
+        "bytes": 217443476,
+        "sha256": "0dafef2112c4b7c7427634dc44823c4afdccd7ca54544279f3d1d6cc0d002020"
+      },
+      {
+        "relative_path": "input/en/0009.parquet",
+        "bytes": 216040478,
+        "sha256": "1d02c056f05c658bc074ef30db1b9da22b16e47620a92cab90867b5a98fd3699"
+      },
+      {
+        "relative_path": "input/en/0010.parquet",
+        "bytes": 216623894,
+        "sha256": "e46f909cfc63ac7f7e62b6394f8026fd450ee5aff01a2fdbb9f8e187dbb8e39a"
+      },
+      {
+        "relative_path": "historical/requests",
+        "bytes": 4096000,
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      },
+      {
+        "relative_path": "bin/prepare_cohere_native_cohort",
+        "bytes": 10015160,
+        "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb"
+      },
+      {
+        "relative_path": "bin/check_cohere_native_baseline",
+        "bytes": 17303448,
+        "sha256": "4f25ed9db388e899f42459a4fd184f19dad594fc5f5a38c01a10d945f3b9beb1"
+      },
+      {
+        "relative_path": "bin/build_two_bit_generation",
+        "bytes": 4444504,
+        "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+      },
+      {
+        "relative_path": "bin/publish_two_bit_generation",
+        "bytes": 15964832,
+        "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+      },
+      {
+        "relative_path": "bin/build_sq8_source",
+        "bytes": 4273936,
+        "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+      }
+    ]
+  },
+  "frozen_seals": {
+    "corpus.f32": {
+      "bytes": 4096000000,
+      "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+    },
+    "queries.f32": {
+      "bytes": 131072,
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    "corpus.ids.jsonl": {
+      "bytes": 200873446,
+      "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+    },
+    "queries.ids.jsonl": {
+      "bytes": 6200,
+      "sha256": "e27fa2d4d0a22a4f9f4dbb9eb2aeeeb0681f48c7e2193e3aa57a2b49cb5ddeb4"
+    },
+    "truth.u64": {
+      "bytes": 2560,
+      "sha256": "36e83267ebfe5efb86db28c778d18897563a8c6c0784933e2b8d6d05cf31bb93"
+    }
+  },
+  "binding": {
+    "sha256": "d5e380e917fa14e944e73ac4bc9ab35a222a0abe23e06a70b31fec3617e3cdcd",
+    "volume_id": "vol-0820d1d944b7638d1"
+  },
+  "ec2": {
+    "max_spot_price": "0.59",
+    "launch_request": {
+      "path": "root-launch-request.json",
+      "sha256": "a0e961ee1a371bab77285c16a073c6f81654638a5c6ca7d79c38585abcd2bac4"
+    },
+    "launch_response": {
+      "path": "root-launch-response.json",
+      "sha256": "810600148a55e01d8fc094320a0f686bde3327d156d0cffa1d53d1976b0e0297"
+    },
+    "instance_running": {
+      "path": "root-instance-running.json",
+      "sha256": "1b9906d56ca7b243ee3e94bb2478fcd219c32af00773296ec796e3f6fce55688"
+    },
+    "volume": {
+      "path": "root-scratch-volume.json",
+      "sha256": "948dbaa78207dbf65311aafff2ca7ca85320123c00241ba3593b3800488f4060"
+    },
+    "instance_terminated": {
+      "path": "root-instance-terminated.json",
+      "sha256": null
+    }
+  }
+}
