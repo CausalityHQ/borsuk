@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-pid128-platform-launch-draft-v1",
+  "status": "FROZEN_PLATFORM_FALSIFIER",
+  "candidate_commit": "799dc4566597933a4a2b18c023543a218e768167",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/semantic-router/20261010/pid128-platform/borsuk-platform-80dc8dc1e99644fe9bd9cb264d082ed2",
+  "assets": "research/semantic-router/20261010/pid128-platform/borsuk-platform-80dc8dc1e99644fe9bd9cb264d082ed2/inputs",
+  "client_token": "borsuk-platform-80dc8dc1e99644fe9bd9cb264d082ed2",
+  "bootstrap_sha256": "fb11f3149372340aa2842ffa0b62b4fbf78316b73086acb0cc773fcd0fdb905b",
+  "bootstrap_bytes": 10736,
+  "worker_sha256": "e51a4dd830bc4590dd6f016fda9f2bf8c9c6927bec520cf4c6683ff8dd9aee98",
+  "watch_sha256": "9d305def40ab314e40a63439029d1ca4871459d92fb30f93ddbc341d1524fb5d",
+  "support_roster": [
+    [
+      "run-platform-pair.sh",
+      5152,
+      "c8d66709c10498ecd625dc37dbb86ee8f30c1508e2ba6f7cb21af038eac7d932"
+    ],
+    [
+      "run-platform-canary.sh",
+      3342,
+      "0ec6b4f5717ddb4e50ea03363288446f17f4b3da2dde0e2b79d2c416ce54644c"
+    ],
+    [
+      "collect-stage-outer.sh",
+      14630,
+      "ac51d8b718acff95158c83dafd14d1da5a3919f3ed80077c3e071596ffdf5023"
+    ],
+    [
+      "observer-command.sh",
+      643,
+      "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    ],
+    [
+      "timeout-descendant.sh",
+      992,
+      "1bda564e59d140aa5f28fa82b046d6678504ead9133b262c4513e6e8ce7b4436"
+    ],
+    [
+      "staging-library.sh",
+      44094,
+      "4f2943c8dd73df94fee7d1b7569e6af186424bbeefeec14c47bd9f502f36cc1c"
+    ]
+  ],
+  "machine_cutoff_seconds": 1080,
+  "compute_allowance_usd": 0.03,
+  "ancillary_allowance_usd": 0.02,
+  "estimated_total_allowance_usd": 0.05,
+  "billing_guarantee": false,
+  "launch_executed": false,
+  "ann_executed": false,
+  "corpus_or_truth_used": false,
+  "performance_claim": false,
+  "original_review_id": "24e2ac019058461f",
+  "review_disposition_pending": false,
+  "bootstrap_source_inverse_equals_worker": true,
+  "termination_request_cutoff_seconds": 900,
+  "termination_confirmation_wait_seconds": 120,
+  "root_watch_runtime_seconds": 1560,
+  "request_sha256": "aaf12a7c0fb8e8bca8338637b84daafc673e2769dc9404e52cc7a31bf0e4d6ec",
+  "original_failed_attempt": "a0001",
+  "change": "original-path drain read race only; same limits and platform protocol"
+}
