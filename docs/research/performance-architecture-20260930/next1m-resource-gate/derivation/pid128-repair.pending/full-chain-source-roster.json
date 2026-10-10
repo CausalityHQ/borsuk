@@ -1,0 +1,86 @@
+{
+  "status": "SOURCE_ROSTER_PREPARED_NOT_FROZEN_NOT_STAGED",
+  "source_commit": "1fef024fef2549e31be494cce0736dd4a63f0038",
+  "support_file_count": 12,
+  "support_sha256": "666994afb60447545ae83a99cd94a82b3fdf3ead3af6b63524c5a5737bc8257e",
+  "assets": [
+    {
+      "name": "collect-native-chain-outer.sh",
+      "bytes": 10099,
+      "sha256": "a15dafd8d0a67f84f3eb3e41f6958676b00b848b58e60c9df7cac9977f8549a3",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/collect-native-chain-outer.sh"
+    },
+    {
+      "name": "config-template.json",
+      "bytes": 3991,
+      "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/config-template.pending.json"
+    },
+    {
+      "name": "derivation-config.json",
+      "bytes": 1145,
+      "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/derivation-config.pending.json"
+    },
+    {
+      "name": "gate-config-template.json",
+      "bytes": 4333,
+      "sha256": "d2ac36fb5f444335fc35cad8d205e4221c125c439edb0f178245ebda666c0fbf",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/gate-config-template.pending.json"
+    },
+    {
+      "name": "observer-command.sh",
+      "bytes": 643,
+      "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/observer-command.sh"
+    },
+    {
+      "name": "run-native-chain-observer.sh",
+      "bytes": 3897,
+      "sha256": "7eab2c589e0f08713097c088388781e13f86f1acd04bfcb0366515148d73c315",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/run-native-chain-observer.sh"
+    },
+    {
+      "name": "run_actual_cohort_admission.sh",
+      "bytes": 22040,
+      "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/native-admission-a0001/run_actual_cohort_admission.sh"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 62014,
+      "sha256": "b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/run_native_scale_build_gate.sh"
+    },
+    {
+      "name": "service-stop.sh",
+      "bytes": 1958,
+      "sha256": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/service-stop.sh"
+    },
+    {
+      "name": "transport-pins.json",
+      "bytes": 6215,
+      "sha256": "572fda535badf6b3fb27db002e312c178e842148461cc807de3023e044228094",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/transport-pins.pending.json"
+    },
+    {
+      "name": "transport.py",
+      "bytes": 3654,
+      "sha256": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/transport.py"
+    },
+    {
+      "name": "validate-scratch-binding.sh",
+      "bytes": 2250,
+      "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297",
+      "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/validate-scratch-binding.sh"
+    }
+  ],
+  "unchanged_original_inputs_and_preparation": true,
+  "qualified_baseline_source": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "baseline_elf_sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3",
+  "collector_runtime_gate_pending": true,
+  "launch_authority": false,
+  "performance_claim": false
+}
