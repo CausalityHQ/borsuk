@@ -1,0 +1,7 @@
+{
+  "schema": "borsuk-canary-listing-v1",
+  "before": "26f126a3217925373baa574906ce8e2d1f3cd71be55263786032092bfda756a4",
+  "after": "26f126a3217925373baa574906ce8e2d1f3cd71be55263786032092bfda756a4",
+  "status": "identical",
+  "diff_head": []
+}

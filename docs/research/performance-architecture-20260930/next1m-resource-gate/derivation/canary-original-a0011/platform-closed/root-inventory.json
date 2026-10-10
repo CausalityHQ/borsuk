@@ -1,0 +1,82 @@
+[
+  {
+    "name": "original.json",
+    "bytes": 1568,
+    "sha256": "2a2d3aa9988dbedcd68e2f392af6137d45c7b0f115d71ec29f75d196f393d79b"
+  },
+  {
+    "name": "admission.json",
+    "bytes": 3723,
+    "sha256": "1676421672ebb72afa027d8e6a8af8007bac3129860332ac1d44011c365b4a43"
+  },
+  {
+    "name": "listing-summary.json",
+    "bytes": 246,
+    "sha256": "a34982a78abe2f1ff550ea1f7db3b36ae2db8127ba11f4688660c5c991ac32b6"
+  },
+  {
+    "name": "steps.jsonl",
+    "bytes": 674,
+    "sha256": "d526cd5a7764329f4d3a1adcce0ae7cfbc9accede3a454de9486169846cea722"
+  },
+  {
+    "name": "case-0.json",
+    "bytes": 766,
+    "sha256": "06aca2dd1c94e76be8469d0c5663a4dd815148abba5f6e43b46303cec0a8014b"
+  },
+  {
+    "name": "case-0.manager.json",
+    "bytes": 249,
+    "sha256": "4cf2673dd317449d1b1f6c8978a379e2d958437405161e47e6ffe8390188611b"
+  },
+  {
+    "name": "case-0.result.json",
+    "bytes": 53,
+    "sha256": "583b52a12040edf10a69bcd01cdb05b00d9f7bf1ea9afa305b6c86d7bac610ba"
+  },
+  {
+    "name": "case-0.status.json",
+    "bytes": 487,
+    "sha256": "e3de9fa87c010af91353e35f58f25f2a966ad326d8ac9a6866504d889418cde9"
+  },
+  {
+    "name": "case-2.json",
+    "bytes": 822,
+    "sha256": "fd24bd3583eb4bf94dc65b3eb5b77cc4b2cc6048dd91fe26e36b9dd709e3c360"
+  },
+  {
+    "name": "case-2.manager.json",
+    "bytes": 251,
+    "sha256": "2ba2186782fb96a0d28bf1cac19e623669e34d33bdcaef03558914039598af78"
+  },
+  {
+    "name": "case-2.result.json",
+    "bytes": 439,
+    "sha256": "105f45850a70793f74ef7f51b455e3f6487cb93945bb98e07eaae4ced7da6ff7"
+  },
+  {
+    "name": "case-2.status.json",
+    "bytes": 1991,
+    "sha256": "465c2ad44191f3e9ced0a3e1282e2f252340c62fbf5c79bf2fd8ae714d2621b6"
+  },
+  {
+    "name": "case-3.json",
+    "bytes": 822,
+    "sha256": "d2045c032f5aed9c89d69a2221828cfce24548a50a51117d02c10f28f082f387"
+  },
+  {
+    "name": "case-3.manager.json",
+    "bytes": 251,
+    "sha256": "b44c8172603ba74ee65b416d485fa762740f0cbd2d38963789a2d8f28834a2cd"
+  },
+  {
+    "name": "case-3.result.json",
+    "bytes": 439,
+    "sha256": "105f45850a70793f74ef7f51b455e3f6487cb93945bb98e07eaae4ced7da6ff7"
+  },
+  {
+    "name": "case-3.status.json",
+    "bytes": 1991,
+    "sha256": "3418e57e919fd9de4ce0f04de777c42a2808050241d0fa40ed0b14d931947d27"
+  }
+]

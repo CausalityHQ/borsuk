@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-canary-admission-v1",
+  "systemd": 255,
+  "fragment": "/usr/lib/systemd/system/cloud-final.service",
+  "fragment_sha256": "96b9a7b8a74af189954aa04dc589b0e4fbf9e0d725f3f0fa7ca5ab05e6204a24",
+  "copied_bytes": 365285,
+  "instance_id": "i-0af2f802b9b710f47",
+  "admitted_special": [
+    "/run/cloud-init/share/hook-hotplug-cmd"
+  ],
+  "symlinks": [
+    "/var/lib/cloud/instance\t/var/lib/cloud/instances/i-0af2f802b9b710f47",
+    "/run/cloud-init/result.json\t../../var/lib/cloud/data/result.json",
+    "/run/cloud-init/status.json\t../../var/lib/cloud/data/status.json",
+    "/run/cloud-init/network-config.json\t/var/lib/cloud/instance/network-config.json",
+    "/run/cloud-init/cloud-id\t/run/cloud-init/cloud-id-aws"
+  ],
+  "units": [
+    "== borsuk-canary-final-0.service",
+    "Type=oneshot",
+    "TimeoutStartUSec=10s",
+    "TimeoutStopUSec=5s",
+    "RemainAfterExit=yes",
+    "ExecStart={ path=/usr/bin/cloud-init ; argv[]=/usr/bin/cloud-init modules --mode=final ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "ExecStopPost={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-scale1m/service-stop.sh bootstrap ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "BindPaths=/mnt/borsuk-canary-cases/0/var-lib-cloud:/var/lib/cloud:rbind /mnt/borsuk-canary-cases/0/run-cloud-init:/run/cloud-init:rbind /mnt/borsuk-canary-cases/0/etc-cloud:/etc/cloud:rbind /mnt/borsuk-canary-cases/0/cloud-init.log:/var/log/cloud-init.log:rbind /mnt/borsuk-canary-cases/0/cloud-init-output.log:/var/log/cloud-init-output.log:rbind /mnt/borsuk-canary-cases/0/root:/mnt/borsuk-scale1m:rbind",
+    "KillMode=process",
+    "LoadState=loaded",
+    "== borsuk-canary-final-2.service",
+    "Type=oneshot",
+    "TimeoutStartUSec=10s",
+    "TimeoutStopUSec=5s",
+    "RemainAfterExit=yes",
+    "ExecStart={ path=/usr/bin/cloud-init ; argv[]=/usr/bin/cloud-init modules --mode=final ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "ExecStopPost={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-scale1m/service-stop.sh bootstrap ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "BindPaths=/mnt/borsuk-canary-cases/2/var-lib-cloud:/var/lib/cloud:rbind /mnt/borsuk-canary-cases/2/run-cloud-init:/run/cloud-init:rbind /mnt/borsuk-canary-cases/2/etc-cloud:/etc/cloud:rbind /mnt/borsuk-canary-cases/2/cloud-init.log:/var/log/cloud-init.log:rbind /mnt/borsuk-canary-cases/2/cloud-init-output.log:/var/log/cloud-init-output.log:rbind /mnt/borsuk-canary-cases/2/root:/mnt/borsuk-scale1m:rbind",
+    "KillMode=process",
+    "LoadState=loaded",
+    "== borsuk-canary-final-3.service",
+    "Type=oneshot",
+    "TimeoutStartUSec=10s",
+    "TimeoutStopUSec=5s",
+    "RemainAfterExit=yes",
+    "ExecStart={ path=/usr/bin/cloud-init ; argv[]=/usr/bin/cloud-init modules --mode=final ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "ExecStopPost={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-scale1m/service-stop.sh bootstrap ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }",
+    "BindPaths=/mnt/borsuk-canary-cases/3/var-lib-cloud:/var/lib/cloud:rbind /mnt/borsuk-canary-cases/3/run-cloud-init:/run/cloud-init:rbind /mnt/borsuk-canary-cases/3/etc-cloud:/etc/cloud:rbind /mnt/borsuk-canary-cases/3/cloud-init.log:/var/log/cloud-init.log:rbind /mnt/borsuk-canary-cases/3/cloud-init-output.log:/var/log/cloud-init-output.log:rbind /mnt/borsuk-canary-cases/3/root:/mnt/borsuk-scale1m:rbind",
+    "KillMode=process",
+    "LoadState=loaded",
+    ""
+  ]
+}

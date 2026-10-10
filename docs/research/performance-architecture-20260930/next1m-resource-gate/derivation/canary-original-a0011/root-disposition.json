@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "reasons": [
+    "case0: case 0 ExecStopPost did not run as the exact 1-argument hook with code=exited status=0",
+    "case2: case 2 cloud-init error count 4",
+    "case3: case 3 cloud-init error count 4"
+  ],
+  "source_commit": "c492190add30b4c7540728b793cf6ce191e2eeee",
+  "instance_id": "i-0af2f802b9b710f47",
+  "original_exit": 99,
+  "fixture_exit": 0,
+  "fixture_pass_lines": 291,
+  "fixture_scope": "synthetic source-bound fault checks; no numerical ANN claim",
+  "tail_steps": {
+    "T1": 0,
+    "T2": 0,
+    "T3": 0,
+    "T4": 0,
+    "T5": 0
+  },
+  "t3_cleanup_proved": true,
+  "original_handoff_W": "PASS",
+  "cloud_final_cases": "EXECUTED_VERIFIER_REJECTED",
+  "archive_authentication": {
+    "bytes": 24044,
+    "sha256": "2a90d662a5337b0c39a3945af2822b9a13ea684254f1205b2560374d12b4dd03"
+  },
+  "archive_members": 84,
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-0af2f802b9b710f47",
+    "terminated": true,
+    "volumes": [
+      "vol-0f213ad12735cdb9c",
+      "vol-0e87ae4a111f437e3"
+    ],
+    "both_volumes_absent": true,
+    "reason": "terminal",
+    "user_data_sha256": "25aef5399be807f239c68dcef728ab98f54c40a60d9cffeaece5bb25ca968a67",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "scratch_formatting": "SUCCESS",
+  "platform": "UNQUALIFIED",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "next_action": "same-worker diagnose hook evidence timing and cloud-init error aggregation; no gate waived"
+}

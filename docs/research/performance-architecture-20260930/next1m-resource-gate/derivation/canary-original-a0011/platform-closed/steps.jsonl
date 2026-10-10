@@ -1,0 +1,14 @@
+{"step":"W","t":1791597668,"msg":"begin budget=20"}
+{"step":"W","t":1791597668,"msg":"end"}
+{"step":"C0","t":1791597668,"msg":"begin budget=25"}
+{"step":"C0","t":1791597668,"msg":"end"}
+{"step":"C1","t":1791597668,"msg":"begin budget=15"}
+{"step":"C1","t":1791597669,"msg":"end"}
+{"step":"case0","t":1791597669,"msg":"begin budget=30"}
+{"step":"case0","t":1791597669,"msg":"end"}
+{"step":"case2","t":1791597669,"msg":"begin budget=30"}
+{"step":"case2","t":1791597670,"msg":"end"}
+{"step":"case3","t":1791597670,"msg":"begin budget=30"}
+{"step":"case3","t":1791597671,"msg":"end"}
+{"step":"C4","t":1791597671,"msg":"begin budget=20"}
+{"step":"C4","t":1791597671,"msg":"end"}

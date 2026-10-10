@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "10", "s3api", "list-objects-v2", "--bucket", "borsuk-bench-453182569524-euc1", "--prefix", "research/semantic-router/20261010/actual1m-scale-chain-canary-a0011/", "--max-keys", "100"]

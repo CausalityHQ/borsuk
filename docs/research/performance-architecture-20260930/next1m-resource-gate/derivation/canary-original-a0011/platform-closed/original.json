@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-canary-original-v1",
+  "show": [
+    "Result=exit-code",
+    "ExecMainCode=1",
+    "ExecMainStatus=1",
+    "ExecStopPost={ path=/bin/bash ; argv[]=/bin/bash /mnt/borsuk-scale1m/service-stop.sh bootstrap borsuk-bench-453182569524-euc1 research/semantic-router/20261010/actual1m-scale-chain-canary-a0011/bootstrap-manager.json ; ignore_errors=no ; start_time=[Sat 2026-10-10 02:01:07 UTC] ; stop_time=[Sat 2026-10-10 02:01:08 UTC] ; pid=4153 ; code=exited ; status=0 }",
+    "ActiveState=failed",
+    "SubState=failed"
+  ],
+  "manager": {
+    "schema": "borsuk-parity-bootstrap-exit-v1",
+    "instance_id": "i-0af2f802b9b710f47",
+    "terminal_sha256": "341f0945404f21079e73a20092d315e09f3b0cc2aca50e5601aed165c780b608",
+    "exit_code": "exited",
+    "exit_status": "1",
+    "service_result": "exit-code",
+    "final_exit": "99"
+  },
+  "final_exit": "99",
+  "tail_t1": {
+    "schema": "borsuk-canary-t1-v1",
+    "fragment_path": "/usr/lib/systemd/system/cloud-final.service",
+    "fragment_sha256": "96b9a7b8a74af189954aa04dc589b0e4fbf9e0d725f3f0fa7ca5ab05e6204a24",
+    "fragment_pin": "96b9a7b8a74af189954aa04dc589b0e4fbf9e0d725f3f0fa7ca5ab05e6204a24",
+    "fragment_ok": true,
+    "drop_in_paths": "/run/systemd/system/cloud-final.service.d/borsuk-exit.conf",
+    "drop_in_exact": true,
+    "cloud_init_dpkg": "26.1-0ubuntu1~24.04.1",
+    "cloud_init_cli": "/usr/bin/cloud-init 26.1-0ubuntu1~24.04.1",
+    "systemd": "systemd 255 (255.4-1ubuntu8.17)",
+    "version_matches_expected": true,
+    "expected_version": "26.1-0ubuntu1~24.04.1"
+  }
+}
