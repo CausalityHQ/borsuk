@@ -14,10 +14,36 @@ dc8d1f098e184ea4b7cf25133bf3a7b3, CPU1/CPU0 affinity/256MiB/zero swap/
 PID128/120 seconds. Runtime 111ms, peak 24.1M. This did not execute transport,
 jq admission, a fixture, or Rust. Runtime is UNVERIFIED.
 
+Source assembly update:
+
+- native-worker.sh and native-watch.sh derive from the accepted r7 platform
+  sources; assemble-worker.py reads text only and generates 19 pinned support
+  rows. It executes no experiment entrypoint.
+- Native worker setup and transport share launch+900. The full controller
+  allowance plus 300 seconds must remain before launch+18000. The independent
+  watcher requests termination at launch+17900, waits for confirmation and
+  root-volume absence before downloading the evidence archive. These are
+  request/observation deadlines, not an AWS billing guarantee.
+- Cleanup authenticates the parent and the four recorded observer identities,
+  then the eight possible phase names in each stage. Its manager calls share
+  a 90-second safety budget. Failed identity, stop or drain remains INVALID.
+- The prospective terminal schema is borsuk-native-pid128-ec2-v1 and records
+  controller_execution_attempted rather than claiming no native work occurred.
+- S3 transport now HEAD-pins ETag/length, GETs with If-Match and an inclusive
+  expected-length-plus-one bounded range, checks response ETag/ContentRange,
+  then checks exact body length/SHA. HTTPS remains HTTPS-only/max4 redirects.
+
+Latest static source assembly/check service run-p3658573-i703980799.service,
+invocation d2f54459c66f485ebf552167023e4700: assembly, bash -n and ShellCheck
+worker/watcher all exited 0; CPU1/CPU0 affinity/256MiB/zero swap/PID128/120s,
+497ms, peak34.8M. Transport bash -n/ShellCheck exited0 in
+run-p3566844-i703868667.service, invocation1c57d17b970d4087a4a648e21066fd46,
+140ms/20.7M. These checks did not run transport, jq admission or Rust.
+
 Remaining launch requirements:
 
-- Assemble the bootstrap and independent root watcher from the accepted platform
-  source. Preserve original parent/observer/payload identity and terminal status.
+- Independently review the assembled bootstrap/watcher/transport against the
+  accepted source and exact current config. Resolve demonstrated findings.
 - Keep the 18,000-second machine envelope. Before native start require at least
   16,800 seconds for the controller plus 300 seconds for teardown, evidence
   publication and termination request. Refuse before native execution otherwise.
@@ -28,10 +54,8 @@ Remaining launch requirements:
 - Review the assembled wrapper and transport once as an immutable source slice.
   HTTPS redirects are HTTPS-only/max4; unlike the older historical campaign,
   this prospective transport does not authenticate each redirect host.
-- Target HEAD is only a length precheck, not body authentication or a bound on
-  an object changed between HEAD and GET. The source objects are prerequisites
-  for an immutable campaign; exact body SHA remains mandatory. Resolve a strict
-  download byte cap before launch, including the S3 GET path.
+- Target HEAD is only a length/ETag precheck, never body authentication. Exact
+  body SHA remains mandatory. Range/If-Match response handling is target-UNRUN.
 - The receipt means transport authentication only; the actual runtime input
   admission, separate native staging, controlled-negative drain and PID128
   widths remain required. No performance or cold comparator claim is admitted.

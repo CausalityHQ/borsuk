@@ -44,8 +44,15 @@ for i in 0 1 2 3 4 5 6; do
         [[ $bucket == borsuk-bench-453182569524-euc1 && $key == research/* && $path == "$root/assets/bin/"* ]] || exit 125
         timeout -k 1 "$left" aws s3api head-object --bucket "$bucket" --key "$key" > "/var/lib/borsuk-validator/transport-$i.head.json"
         [[ $(jq -er .ContentLength "/var/lib/borsuk-validator/transport-$i.head.json") == "$bytes" ]] || exit 125
+        etag=$(jq -er '.ETag | select(type=="string" and length>0 and length<=256)' "/var/lib/borsuk-validator/transport-$i.head.json")
         left=$((deadline-$(date +%s)-2)); ((left>0)) || exit 124
-        timeout -k 1 "$left" aws s3api get-object --bucket "$bucket" --key "$key" "$partial" > "/var/lib/borsuk-validator/transport-$i.json"
+        # Inclusive range permits at most expected bytes + one sentinel byte.
+        # A replaced object fails If-Match; excess/truncation also fails length/SHA.
+        timeout -k 1 "$left" aws s3api get-object --bucket "$bucket" --key "$key" \
+          --if-match "$etag" --range "bytes=0-$bytes" "$partial" > "/var/lib/borsuk-validator/transport-$i.json"
+        jq -e --arg etag "$etag" --argjson bytes "$bytes" \
+          '.ETag==$etag and .ContentLength==$bytes and .ContentRange==("bytes 0-"+($bytes-1|tostring)+"/"+($bytes|tostring))' \
+          "/var/lib/borsuk-validator/transport-$i.json" >/dev/null
     fi
     [[ -f $partial && ! -L $partial && $(stat -c %s "$partial") == "$bytes" ]] || exit 125
     printf '%s  %s\n' "$hash" "$partial" | sha256sum -c -
