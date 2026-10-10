@@ -1,0 +1,9 @@
+# Platform bootstrap source checkpoint
+
+UNVERIFIED at runtime; no launch. platform-worker.sh transports only six SHA/length-pinned shell source files, installs SHA-pinned AWS CLI, then invokes a real systemd parent running the platform pair. The pair launches separate observers; bootstrap cleanup additionally checks each recorded diagnostic payload sibling. This is required because stopping the observer does not stop a sibling payload unit.
+
+Platform watcher derives from the accepted validator watcher with only the machine cutoff changed 780→1080 seconds and the collection label changed. It terminates and waits for the exact instance, checks root-volume absence, then authenticates small terminal and archive bodies. No performance claim is made. The backup guest shutdown is 18 minutes; setup/transport share 500 seconds, parent runtime330/stop10, polling345, and root termination remains independent. This is not a billing guarantee.
+
+Static commands: bash -n and ShellCheck on worker/watch, in CPU0/256Mi/noSwap/PID128/120s user services, explicit taskset0. Original ShellCheck failure from trap-use/quoting was corrected before the passing source check. No worker, pair, source helper, systemd canary, ANN ELF, corpus or truth executed locally.
+
+Independent critique bb4d7d570218480a is running against the earlier recipe/collector/staging/finite sources. Pair/bootstrap/watch were written subsequently and are outside that prompt. Preliminary engineering observation warns that a retained systemd manager record does not guarantee that an empty cgroup remains readable; collectors currently fail closed on that target condition. Do not launch until final finding reconciliation and worker integration review. Missing cgroups must never be represented as a fabricated populated-zero sample.
