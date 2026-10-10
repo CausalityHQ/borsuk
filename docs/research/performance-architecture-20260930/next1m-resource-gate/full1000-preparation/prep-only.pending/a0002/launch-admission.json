@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-full1000-preparation-launch-v1",
+  "started_epoch": 1791656513,
+  "external_deadline_epoch": 1791664313,
+  "client_token": "borsuk-full1000-preparation-a0002-1791656513",
+  "user_data_sha256": "312fca5676e20c57e08e513a213b9f0ab988ba692c8175f26391b58ecda0c288",
+  "watcher_sha256": "5f3258d7a660eff8ae2a691c3e14c1d265403901ab4b639b0a52eea59b926add",
+  "controller_commit": "3001821d6c87b69b9fbfb9dd49e99ac936b85f60",
+  "native_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "support_sha256": "c92c1784fe3b04082ba5a0243351be764e3a1728fa28b6a1892fc0d53b424725",
+  "spot_quote_usd_per_hour": "0.203800",
+  "source_static_checks": true,
+  "runtime_qualified": false,
+  "ann_run": false,
+  "performance_claim": false,
+  "original_invalid_attempt_preserved": "a0001",
+  "causal_repair": "support manifest self-reference removed"
+}

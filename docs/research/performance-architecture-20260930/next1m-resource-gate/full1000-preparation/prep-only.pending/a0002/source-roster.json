@@ -1,0 +1,75 @@
+{
+  "status": "PENDING_RUNTIME_QUALIFICATION",
+  "support_sha256": "c92c1784fe3b04082ba5a0243351be764e3a1728fa28b6a1892fc0d53b424725",
+  "assets": [
+    {
+      "name": "collect-native-chain-outer.sh",
+      "bytes": 10144,
+      "sha256": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477"
+    },
+    {
+      "name": "config-template.json",
+      "bytes": 3993,
+      "sha256": "ab84de428eea04a822b68b42ebf987cd87290d7f23e29385383ab93beb7fd1a4"
+    },
+    {
+      "name": "derivation-config.json",
+      "bytes": 1145,
+      "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+    },
+    {
+      "name": "gate-config-template.json",
+      "bytes": 4333,
+      "sha256": "d2ac36fb5f444335fc35cad8d205e4221c125c439edb0f178245ebda666c0fbf"
+    },
+    {
+      "name": "observer-command.sh",
+      "bytes": 643,
+      "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    },
+    {
+      "name": "run-native-chain-observer.sh",
+      "bytes": 3898,
+      "sha256": "8f5762b214553eaab2214fe13e4846a4c8cb17b41006535b9f56ea2cb9869d48"
+    },
+    {
+      "name": "run_actual_cohort_admission.sh",
+      "bytes": 22355,
+      "sha256": "4c98d763366e13de945ae3df32985a8e37451eea07347797f96a91f392ebb172"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 62015,
+      "sha256": "b80ad3640ea2b613f2be5979e532cfddf14e56979a1450f1b96aab467ac58992"
+    },
+    {
+      "name": "service-stop.sh",
+      "bytes": 1958,
+      "sha256": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e"
+    },
+    {
+      "name": "support.sha256",
+      "bytes": 1080,
+      "sha256": "c92c1784fe3b04082ba5a0243351be764e3a1728fa28b6a1892fc0d53b424725"
+    },
+    {
+      "name": "transport-pins.json",
+      "bytes": 6215,
+      "sha256": "572fda535badf6b3fb27db002e312c178e842148461cc807de3023e044228094"
+    },
+    {
+      "name": "transport.py",
+      "bytes": 3654,
+      "sha256": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529"
+    },
+    {
+      "name": "validate-scratch-binding.sh",
+      "bytes": 2250,
+      "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+    }
+  ],
+  "performance_claim": false,
+  "candidate_source": "3001821d6c87b69b9fbfb9dd49e99ac936b85f60",
+  "original_invalid_attempt": "a0001",
+  "causal_repair": "exclude manifest self-reference;12 support hashes verified"
+}

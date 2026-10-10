@@ -1,0 +1,40 @@
+{
+  "status": "FROZEN_SOURCE_ONLY_REAL_PREPARATION_GATE",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "market": "spot",
+  "instance_type": "c7i.2xlarge",
+  "native_seconds": 2400,
+  "transport_seconds": 900,
+  "machine_stop_seconds": 7200,
+  "external_stop_seconds": 7800,
+  "termination_grace_seconds": 120,
+  "construction": {
+    "cpu": 4,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 128
+  },
+  "scratch_volume_gib": 40,
+  "root_volume_gib": 80,
+  "max_spot_bid_usd_per_hour": 0.59,
+  "compute_ceiling_usd": 1.3,
+  "ancillary_ceiling_usd": 0.5,
+  "total_ceiling_usd": 1.8,
+  "retention": {
+    "create_only": true,
+    "per_body_cap_bytes": 5368709120,
+    "native_output_reservation_bytes": 11275344000,
+    "complete_marker_last": true,
+    "downstream_whole_sha_required": true,
+    "storage_cost_scope": "first30days projection; continuing retained storage metered separately"
+  },
+  "interruption": "INVALID_PRESERVE_NO_AUTO_RETRY",
+  "ann_run": false,
+  "performance_claim": false,
+  "maximum_ancillary_usd": 0.5,
+  "controller_commit": "3001821d6c87b69b9fbfb9dd49e99ac936b85f60",
+  "spot_quote_usd_per_hour": "0.203800",
+  "original_invalid_attempt_preserved": "a0001",
+  "causal_repair": "support manifest self-reference removed"
+}
