@@ -1,0 +1,20 @@
+{
+  "status": "CLOSED_EXECUTION_INVALID_CANARY_ASSERTION_REPAIRED_RUNTIME_UNVERIFIED",
+  "original_instance": "i-054f96b4f66db4e55",
+  "original_source": "5dce68cbfaa9e5cfe5484e792a3870bc07058f26",
+  "original_archive_sha256": "66d46e7dbaa95fa59d2c798b7fddeeddd5d56ba0d677fcf8de5bf7097f4f0855",
+  "original_archive_bytes": 268596,
+  "terminated": true,
+  "root_volume_absent": true,
+  "original_cleanup_exit": 0,
+  "component_checks": 48,
+  "cause": "canary asserted failure-handler cleanup.drain.json although original normal closure emitted drain.json",
+  "repair": "exact normal drain schema/path/InvocationID bound to original manager and child witness; require original stop and cleanup exit0",
+  "static_unit": "run-p3247716-i711952039.service",
+  "static_invocation": "693c47485292427782f370ed790927f3",
+  "bash_syntax_and_shellcheck_exit": 0,
+  "runtime_repair_verified": false,
+  "ann_executed": false,
+  "performance_claim": false,
+  "next_attempt": "a0003, causality EC2 Spot only"
+}

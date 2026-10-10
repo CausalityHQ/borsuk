@@ -10,7 +10,7 @@ freeze=$D/launch-freeze.json
 token=$(jq -er .client_token "$freeze"); prefix=$(jq -er .prefix "$freeze")
 bootstrap=$(jq -er .bootstrap_sha256 "$freeze"); launched=$(jq -er .launched_epoch "$freeze")
 watch=$(jq -er .watch_unit "$freeze")
-[[ $token =~ ^borsuk-next1m-canary-a0002-[0-9a-f]{16}$ && $watch == "$token.service" &&
+[[ $token =~ ^borsuk-next1m-canary-a0003-[0-9a-f]{16}$ && $watch == "$token.service" &&
    $prefix == "research/semantic-router/20261010/$token/run" && $bootstrap =~ ^[0-9a-f]{64}$ ]]
 instance='' watch_started=false request_attempted=false
 reconcile_original() {

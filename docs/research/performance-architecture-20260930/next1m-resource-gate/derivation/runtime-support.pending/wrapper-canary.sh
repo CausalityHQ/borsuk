@@ -251,8 +251,19 @@ printf -v escaped_command 'setsid /bin/bash %q %q </dev/null >/dev/null 2>&1 & e
 phase_case fixture-escaped fixture "$escaped_command" 98 no
 jq -e '.alive_after_timeout==true and .separate_process_group_and_session==true' \
  "$out/fixture-escaped-evidence/phases/fixture/child.witness.json" > "$out/fixture-escaped.assert"
-jq -e '.state=="empty" or .state=="removed"' \
- "$out/fixture-escaped-evidence/phases/fixture/cleanup.drain.json" > "$out/fixture-escaped-cleanup.assert"
+escaped_phase=$out/fixture-escaped-evidence/phases/fixture
+escaped_unit=$(< "$escaped_phase/unit")
+[[ $escaped_unit =~ ^borsuk-pid128-[0-9a-f-]{36}-fixture\.service$ ]]
+escaped_id=$(sed -n 's/^InvocationID=//p' "$escaped_phase/manager.initial.txt")
+[[ $escaped_id =~ ^[0-9a-f]{32}$ ]]
+jq -se --arg path "/sys/fs/cgroup/system.slice/$escaped_unit" --arg id "$escaped_id" \
+ 'length==2 and .[0].schema=="borsuk-native-pid128-payload-drain-v1" and
+ (.[0].state=="empty" or .[0].state=="removed") and .[0].path==$path and
+ .[0].invocation_id==$id and .[1].schema=="borsuk-native-pid128-timeout-witness-v1" and
+ .[1].control_group==($path|ltrimstr("/sys/fs/cgroup")) and .[1].invocation_id==$id and
+ .[1].alive_after_timeout==true and .[1].separate_process_group_and_session==true' \
+ "$escaped_phase/drain.json" "$escaped_phase/child.witness.json" > "$out/fixture-escaped-cleanup.assert"
+[[ $(< "$escaped_phase/manager.stop.exit") == 0 ]]
 [[ $(< "$out/fixture-escaped-evidence/cleanup.exit") == 0 ]]
 
 # Qualified real ELFs, usage only. No records, queries, truth or ANN calls.
