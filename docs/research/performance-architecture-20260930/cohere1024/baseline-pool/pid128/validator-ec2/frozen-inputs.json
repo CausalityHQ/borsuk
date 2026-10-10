@@ -1,0 +1,24 @@
+{
+  "commit": "f6d1871071136d9542ba09ed584454aeaae76b8e",
+  "artifacts": [
+    {
+      "name": "run-native-pid128.sh",
+      "bytes": 61729,
+      "sha256": "3e63380b93320f00dd5888497cd582bc448b5954edce7b8349a66f2dadd5734d",
+      "local_path": "/tmp/borsuk-pid128-validator-ec2/input-run-native-pid128.sh"
+    },
+    {
+      "name": "check-result-validator.sh",
+      "bytes": 6850,
+      "sha256": "ffcc7e26b5c37e519b6368ebdf76582c6f6e1df042b7e394f4018ec3b24011df",
+      "local_path": "/tmp/borsuk-pid128-validator-ec2/input-check-result-validator.sh"
+    },
+    {
+      "name": "validator-falsifier-contract.json",
+      "bytes": 2200,
+      "sha256": "78cb1fc947c0d8ca46d54fdedcbd1dd291cc056716b9f8f499ae6904d4344a1b",
+      "local_path": "/tmp/borsuk-pid128-validator-ec2/input-validator-falsifier-contract.json"
+    }
+  ],
+  "local_runtime_executed": false
+}

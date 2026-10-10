@@ -1,0 +1,77 @@
+{
+  "status": "SYNTHETIC_VALIDATOR_CHECKS_ACCEPTED_ONLY",
+  "instance_id": "i-016398cb8d11b9e67",
+  "source_commit": "8192af3910f3d731a51338d41ce502aa001290f2",
+  "evidence_sha256": "c5499f35889e8b397385c6422e5283edfa12812f6c7232e7403d8a7c65cd0a31",
+  "cases": [
+    {
+      "case": "positive",
+      "exit": 0,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "missing_newline",
+      "exit": 98,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "doubled_object",
+      "exit": 1,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "recall_mismatch",
+      "exit": 1,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "ordinal_mismatch",
+      "exit": 1,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "underfill",
+      "exit": 1,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "duplicate_id",
+      "exit": 1,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "interior_offset",
+      "exit": 98,
+      "intended_layer_verified": true
+    },
+    {
+      "case": "multi_document_stdout",
+      "exit": 98,
+      "intended_layer_verified": true
+    }
+  ],
+  "resource_limits": {
+    "cpu.max": "100000 100000",
+    "memory.max": "268435456",
+    "memory.swap.max": "0",
+    "pids.max": "128"
+  },
+  "cpu_affinity": "0",
+  "memory_events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "pids_events": {
+    "max": "0"
+  },
+  "terminated": true,
+  "root_volume_absent": true,
+  "native_qualified": false,
+  "performance_claim": false,
+  "r3_filesystem_guard_qualified": false
+}

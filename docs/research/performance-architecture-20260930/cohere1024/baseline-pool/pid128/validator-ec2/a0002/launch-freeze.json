@@ -1,0 +1,21 @@
+{
+  "attempt": "a0002",
+  "prefix": "research/semantic-router/20261010/pid128-validator/borsuk-val2-4e334f63745149c1948e36b1ac65da56",
+  "assets": "research/semantic-router/20261010/pid128-validator/borsuk-val-debb2150f4934389a51412bc7dc5f159/inputs",
+  "client_token": "borsuk-val2-4e334f63745149c1948e36b1ac65da56",
+  "instance_type": "c7a.large",
+  "bootstrap_sha256": "795c60e83dc55d193c564acd522c0cc74a5cb283ebce9e2c78dec4b5188e1d0d",
+  "bootstrap_bytes": 8425,
+  "worker_sha256": "8b8b62ecfec00c67aa024ee33b7618895800dba790a66aaaed78d231333a9686",
+  "watch_sha256": "6a4d86274023f9110f14cafafbe1ad99bb997adb3ef0b0f060f71628025ed33c",
+  "prior_attempt": "a0001",
+  "prior_error": "InsufficientInstanceCapacity",
+  "prior_instance_count": 0,
+  "frozen_cases_unchanged": true,
+  "resource_envelope_unchanged": true,
+  "launch_executed": false,
+  "spot_price": ".046200",
+  "spot_timestamp": "2026-10-10T03:00:00Z",
+  "compute_allowance_usd": 0.035,
+  "ancillary_allowance_usd": 0.015
+}

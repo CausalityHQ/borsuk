@@ -1,0 +1,12 @@
+{
+  "prefix": "research/semantic-router/20261010/pid128-validator/borsuk-val-debb2150f4934389a51412bc7dc5f159",
+  "assets": "research/semantic-router/20261010/pid128-validator/borsuk-val-debb2150f4934389a51412bc7dc5f159/inputs",
+  "client_token": "borsuk-val-debb2150f4934389a51412bc7dc5f159",
+  "bootstrap_sha256": "e1c30847ac2be11cf02da527ccd5edaee2d4d77a58250b9a61c081c461849773",
+  "bootstrap_bytes": 8424,
+  "worker_sha256": "8b8b62ecfec00c67aa024ee33b7618895800dba790a66aaaed78d231333a9686",
+  "watch_sha256": "6a4d86274023f9110f14cafafbe1ad99bb997adb3ef0b0f060f71628025ed33c",
+  "launch_executed": false,
+  "compute_allowance_usd": 0.035,
+  "ancillary_allowance_usd": 0.015
+}

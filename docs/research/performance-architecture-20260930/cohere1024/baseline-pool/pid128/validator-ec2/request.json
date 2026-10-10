@@ -1,0 +1,68 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.large",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "ClientToken": "borsuk-val-debb2150f4934389a51412bc7dc5f159",
+  "IamInstanceProfile": {
+    "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+  },
+  "NetworkInterfaces": [
+    {
+      "AssociatePublicIpAddress": true,
+      "DeviceIndex": 0,
+      "Groups": [
+        "sg-0b1fd3e4fbde4af0d"
+      ],
+      "SubnetId": "subnet-034528fbd6977848f"
+    }
+  ],
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "VolumeSize": 12,
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "DeleteOnTermination": true
+      }
+    }
+  ],
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.10"
+    }
+  },
+  "MetadataOptions": {
+    "HttpTokens": "required",
+    "HttpEndpoint": "enabled"
+  },
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-val-debb2150f4934389a51412bc7dc5f159"
+        },
+        {
+          "Key": "Owner",
+          "Value": "borsuk/prod-ready-v9"
+        }
+      ]
+    },
+    {
+      "ResourceType": "volume",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-val-debb2150f4934389a51412bc7dc5f159"
+        }
+      ]
+    }
+  ]
+}
