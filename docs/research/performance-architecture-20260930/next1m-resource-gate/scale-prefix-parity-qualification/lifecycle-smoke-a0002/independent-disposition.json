@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-collector-lifecycle-disposition-v1",
+  "status": "COLLECTOR_BRANCH_MECHANICS_VERIFIED",
+  "instance_id": "i-0898936cbabe0fb78",
+  "root_volume_id": "vol-01c4163d03d07556e",
+  "terminal_exit": 0,
+  "real_systemd_cases": 8,
+  "labelled_command_spy_cases": 4,
+  "collector_sha256": "1b090217e0927eb44c63df6fc0f465205531050cc27d3f80dd98dc4586986e60",
+  "archive_sha256": "3cd423297a55c98908d9a0b3fbd8f4f0d8f80b7f004263fc88d9cc14fd3388af",
+  "archive_bytes": 9965,
+  "members_verified": true,
+  "terminated": true,
+  "exact_root_volume_absent": true,
+  "prior_native_campaign_disposition": "a0003 remains INVALID96; compiler stages separately verified",
+  "limits": "tiny shell payloads; source-bound cleanup block only, no compiler or ANN execution; race events injected by labelled command spies",
+  "performance_claim": false,
+  "cold_claim": false
+}

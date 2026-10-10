@@ -1,0 +1,7 @@
+Running as unit: native-parity-gates.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 3min 52.949s
+CPU time consumed: 3min 22.786s
+Memory peak: 2.9M
+Memory swap peak: 0B

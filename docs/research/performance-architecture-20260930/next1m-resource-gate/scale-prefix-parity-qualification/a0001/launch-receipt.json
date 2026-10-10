@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-scale-parity-qualification-launch-v1",
+  "status": "RUNNING_UNVERIFIED",
+  "native_source_commit": "d97fa90c1fc176b9b381736a47ea976337a82427",
+  "freeze_commit": "968a76654768d56172d3d1c47bb7b20cf775ba18",
+  "aws_profile": "causality",
+  "instance_id": "i-0a6dc4576bdf44fa1",
+  "root_volume_id": "vol-0ee90596fe8cb0037",
+  "watcher_unit": "borsuk-scale-parity-qualification-a0001.service",
+  "watcher_invocation": "390e36f865094cd2afcab34b5df5588a",
+  "launch_exit": 0,
+  "scientific_performance_claim": false,
+  "next_gate": "collect same original terminal, authenticate archive and all four exits, then exact source integration only if qualified"
+}

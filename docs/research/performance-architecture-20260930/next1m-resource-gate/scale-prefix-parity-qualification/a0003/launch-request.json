@@ -1,0 +1,59 @@
+{
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 80,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "ClientToken": "borsuk-parity-qualification-a0003-1791651468",
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.50",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "InstanceType": "c7i.2xlarge",
+  "MaxCount": 1,
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "MinCount": 1,
+  "Placement": {
+    "AvailabilityZone": "eu-central-1c"
+  },
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-parity-qualification-a0003-1791649248"
+        },
+        {
+          "Key": "Purpose",
+          "Value": "exact-source-native-parity-qualification"
+        }
+      ]
+    }
+  ],
+  "UserData": "#!/bin/bash\nset -Eeuo pipefail\numask 077\nexport AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 DEBIAN_FRONTEND=noninteractive\nroot=/mnt/borsuk-reducer\nbucket=borsuk-bench-453182569524-euc1\nprefix=research/native-library-check/20261010/scale-prefix-parity-a0003\nmkdir -p \"$root/evidence\"\ncd \"$root\"\nphase=bootstrap\nstarted=$(date +%s)\nsystemd-run --unit=borsuk-parity-host-stop --on-active=9000s /usr/sbin/shutdown -h now\nfinish() {\n original=$?\n trap - EXIT TERM\n set +e\n code=$original\n phase_at_exit=$phase\n timeout -k 2 30 systemctl show native-parity-gates -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup >evidence/manager.show || code=96\n owned_cgroup=$(timeout -k 2 15 systemctl show native-parity-gates -p ControlGroup --value) || code=96\n timeout -k 2 30 systemctl stop native-parity-gates || code=96\n if [[ $owned_cgroup == /system.slice/native-parity-gates.service && -e /sys/fs/cgroup$owned_cgroup/cgroup.events ]]; then\n  cat \"/sys/fs/cgroup$owned_cgroup/cgroup.events\" >evidence/drain.events || code=96\n  grep -Fxq 'populated 0' evidence/drain.events || code=96\n elif [[ -z $owned_cgroup || ! -e /sys/fs/cgroup$owned_cgroup ]]; then\n  printf '%s\\n' owned-cgroup-absent >evidence/drain.events\n else code=96; fi\n cp bootstrap.log evidence/bootstrap.log || code=96\n printf '%s\\n' \"$original\" >evidence/bootstrap-original-exit\n printf '%s\\n' \"$code\" >evidence/collection-exit\n (cd evidence && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS) || code=96\n tar -czf evidence.tar.gz evidence || code=96\n timeout -k 2 90 aws s3api put-object --bucket \"$bucket\" --key \"$prefix/output/evidence.tar.gz\" --body evidence.tar.gz --if-none-match '*' >archive-put.json || code=96\n archive_sha=$(sha256sum evidence.tar.gz | cut -d ' ' -f1) || code=96\n archive_bytes=$(stat -c %s evidence.tar.gz) || code=96\n token=$(curl -fsS --connect-timeout 2 --max-time 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token) || code=96\n instance=$(curl -fsS --connect-timeout 2 --max-time 5 -H \"X-aws-ec2-metadata-token: $token\" http://169.254.169.254/latest/meta-data/instance-id) || code=96\n write_terminal() {\n  jq -cn --arg source 'afb70da60727ba80147a97e71fce738ab15e6456' --arg phase \"$phase_at_exit\" --arg instance \"$instance\" --arg sha \"$archive_sha\" --argjson bytes \"${archive_bytes:-0}\" --argjson original \"$original\" --argjson exit \"$code\" '{schema:\"borsuk-scale-parity-native-qualification-v1\",source_commit:$source,instance_id:$instance,phase:$phase,original_exit:$original,exit:$exit,archive:{bytes:$bytes,sha256:$sha},performance_claim:false}' >terminal.json\n }\n ready=0\n if write_terminal && sync -f terminal.json && sync -f \"$root\"; then ready=1; else code=96; fi\n if [[ $ready == 0 ]]; then\n  if write_terminal && sync -f terminal.json && sync -f \"$root\"; then ready=1; fi\n fi\n if [[ $ready == 1 ]]; then\n  timeout -k 2 60 aws s3api put-object --bucket \"$bucket\" --key \"$prefix/output/terminal.json\" --body terminal.json --if-none-match '*' >terminal-put.json || code=96\n fi\n shutdown -h now\n exit \"$code\"\n}\ntrap finish EXIT\ntrap 'exit 97' TERM\nexec >bootstrap.log 2>&1\nphase=install\ntimeout -k 10 180 apt-get -qq -o DPkg::Lock::Timeout=120 update\ntimeout -k 10 300 apt-get -qq -y -o DPkg::Lock::Timeout=120 install curl unzip jq time tar gzip util-linux binutils build-essential pkg-config libssl-dev cmake python3.12 python3-dev\ncurl -fsSL --connect-timeout 10 --max-time 180 -o aws.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip\nprintf '%s  aws.zip\\n' 50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6 | sha256sum -c -\ntest \"$(stat -c %s aws.zip)\" = 73022935\ntimeout -k 5 120 unzip -q aws.zip\ntimeout -k 5 120 ./aws/install\nphase=download\nfor name in source.tar.gz source-files.sha256 source-manifest.json gates.sh; do\n timeout -k 2 60 aws s3api get-object --bucket \"$bucket\" --key \"$prefix/input/$name\" \"$name\" >\"$name.get.json\"\ndone\nprintf '%s  source.tar.gz\\n' 8c16e336a801da9be04fddc3044d0d680aa8e31ca64f771c5c46cfe9992c6525 | sha256sum -c -\nprintf '%s  source-manifest.json\\n' 5f26cb5ba194695d6aa5c9c08b0e8206324ba923bcb6478636c0b385c06f869e | sha256sum -c -\nprintf '%s  source-files.sha256\\n' a249fbfabfd0eeabc7037493e8dd01f883a4d3cec6a3f478bf543a74b8013d58 | sha256sum -c -\nprintf '%s  gates.sh\\n' e8f69df7d7bacb6b7ddd08c1bf4e0a6d93773ff7e110b699eb223be2a45ea436 | sha256sum -c -\nmkdir source\ntar -xzf source.tar.gz -C source\nphase=toolchain\nexport RUSTUP_HOME=\"$root/.rustup\" CARGO_HOME=\"$root/.cargo\"\nexport PATH=\"$CARGO_HOME/bin:$PATH\"\ncurl -fsSL --connect-timeout 10 --max-time 180 -o rustup-init.sh https://sh.rustup.rs\ntimeout -k 10 600 sh rustup-init.sh -y --profile minimal --default-toolchain 1.98.0\ntimeout -k 10 180 rustup component add clippy --toolchain 1.98.0\nphase=native\n(( $(date +%s) - started + 7200 + 300 <= 9000 )) || exit 95\nset +e\nsystemd-run --unit=native-parity-gates --wait --pipe -p MemoryMax=8G -p MemorySwapMax=0 -p CPUQuota=200% -p TasksMax=512 -p RuntimeMaxSec=7200 -p TimeoutStopSec=30 -p KillMode=control-group -p LimitCORE=0 -p WorkingDirectory=\"$root/source\" --setenv=RUSTUP_HOME=\"$RUSTUP_HOME\" --setenv=CARGO_HOME=\"$CARGO_HOME\" --setenv=PATH=\"$PATH\" /bin/bash \"$root/gates.sh\" >evidence/launcher.stdout 2>evidence/launcher.stderr\nnative_exit=$?\nset -e\nprintf '%s\\n' \"$native_exit\" >evidence/launcher.exit\n(( native_exit == 0 )) || exit \"$native_exit\"\nphase=complete\n"
+}

@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-parity-independent-disposition-v1",
+  "source_commit": "afb70da60727ba80147a97e71fce738ab15e6456",
+  "instance_id": "i-04f67845d277d0d88",
+  "archive_sha256": "9ae7c7283b829a323ad8954c851e91a6792d817c2bee10ded6d31cae6e55532e",
+  "native_stages_exit": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "tests_passed": 86,
+  "source_files_verified_before_after": 436,
+  "original_native_exit": 0,
+  "original_closure_exit": 96,
+  "closure_status": "INVALID_UNIT_UNLOADED_STOP_FAILURE",
+  "native_compilation_status": "VERIFIED",
+  "campaign_status": "NOT_QUALIFIED",
+  "terminated": true,
+  "root_volume_absent": true,
+  "swap_peak": 0,
+  "oom_kill": 0,
+  "memory_peak_bytes": 8589934592,
+  "performance_claim": false
+}

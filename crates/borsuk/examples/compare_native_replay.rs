@@ -30,7 +30,7 @@ use std::{
     collections::BTreeSet,
     error::Error,
     fs::File,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Seek, Write},
     os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
 };
@@ -1451,10 +1451,26 @@ fn read_run_observed(
     path: &Path,
     sha: &str,
     expected: Option<&CompletedConfig>,
+    query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
+) -> Result<Run> {
+    read_run_observed_with_identity(path, sha, expected, None, query)
+}
+
+fn read_run_observed_with_identity(
+    path: &Path,
+    sha: &str,
+    expected: Option<&CompletedConfig>,
+    admitted_inode: Option<(u64, u64)>,
     mut query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
 ) -> Result<Run> {
     require(valid_sha(sha), "result lowercase SHA256")?;
     let mut rows = Rows::open(path)?;
+    if let Some(inode) = admitted_inode {
+        require(
+            (rows.original.dev, rows.original.ino) == inode,
+            "parity run changed before first content read",
+        )?;
+    }
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
@@ -1914,6 +1930,407 @@ fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
     report["config_sha256"] = json!(config_sha);
     report["config_bytes"] = json!(config_bytes);
     Ok(report)
+}
+
+const SCALE_PARITY_CONFIG_SCHEMA: &str = "borsuk-scale-prefix-parity-config-v1";
+const SCALE_PARITY_REPORT_SCHEMA: &str = "borsuk-scale-prefix-parity-v1";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScalePrefixParityConfig {
+    schema: String,
+    // Historical local Q32, full-input local panel, full-input S3 panel.
+    runs: [CompletedConfig; 3],
+    requests: [CompletedInput; 2],
+    truth: [CompletedInput; 2],
+}
+
+fn parity_invariant_rows(c: &CompletedConfig) -> Result<(Value, Value)> {
+    let mut identity = c.expected_identity.clone();
+    let identity = identity.as_object_mut().ok_or("parity identity object")?;
+    for key in ["config_sha256", "execution"] {
+        require(
+            identity.remove(key).is_some(),
+            "missing parity identity field",
+        )?;
+    }
+    let identity = Value::Object(identity.clone());
+    let mut inputs = c.expected_bound_inputs.clone();
+    let inputs = inputs.as_object_mut().ok_or("parity input object")?;
+    // Each exception is independently validated and pinned in the scale reader.
+    // Every other field, including unknown additions, must remain exactly equal.
+    for key in [
+        "count",
+        "requests_bytes",
+        "requests_sha256",
+        "truth_bytes",
+        "truth_sha256",
+        "backend",
+        "credential_source",
+        "generation_prefix",
+        "generation_root_sha256",
+        "cohort_receipt_sha256",
+        "derivation_receipt_sha256",
+        "execution",
+    ] {
+        require(inputs.remove(key).is_some(), "missing parity input field")?;
+    }
+    Ok((identity, Value::Object(inputs.clone())))
+}
+
+fn parity_samples(a: &[Sample], b: &[Sample]) -> Result<()> {
+    require(
+        a.len() == 32 && b.len() == 32,
+        "parity requires exactly32 queries",
+    )?;
+    for (ordinal, (a, b)) in a.iter().zip(b).enumerate() {
+        require(
+            a.returned.len() == K
+                && b.returned.len() == K
+                && a.returned == b.returned
+                && a.hits10 == b.hits10
+                && a.charges == b.charges
+                && a.charges.sum()?.failed_gets == 0
+                && b.charges.sum()?.failed_gets == 0,
+            &format!("scale parity query{ordinal}: ordered IDs/score bits/recall/charges mismatch"),
+        )?;
+    }
+    Ok(())
+}
+
+fn authenticated_parity_file(pin: &CompletedInput) -> Result<(File, FileIdentity)> {
+    require(
+        valid_sha(&pin.sha256) && pin.bytes > 0 && pin.bytes <= 4_096_000,
+        "bounded parity file pin",
+    )?;
+    let mut file = open_input(&pin.path)?;
+    let original = file_identity(&file)?;
+    require(original.len == pin.bytes, "parity exact file length")?;
+    let mut digest = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        total = plus(total, n as u64)?;
+        require(total <= pin.bytes, "parity file growth")?;
+        digest.update(&buffer[..n]);
+    }
+    require(
+        total == pin.bytes
+            && format!("{:x}", digest.finalize()) == pin.sha256
+            && file_identity(&file)? == original,
+        "parity full-body authentication/mutation",
+    )?;
+    file.rewind()?;
+    Ok((file, original))
+}
+
+fn authenticated_prefix_pair(pins: &[CompletedInput; 2]) -> Result<()> {
+    require(
+        pins[0].bytes < pins[1].bytes,
+        "strict parity prefix geometry",
+    )?;
+    let (mut prefix, prefix_identity) = authenticated_parity_file(&pins[0])?;
+    let (mut full, full_identity) = authenticated_parity_file(&pins[1])?;
+    require(
+        (prefix_identity.dev, prefix_identity.ino) != (full_identity.dev, full_identity.ino),
+        "distinct prefix/full descriptors",
+    )?;
+    let mut remaining = pins[0].bytes;
+    let mut a = [0_u8; 8192];
+    let mut b = [0_u8; 8192];
+    while remaining > 0 {
+        let n = usize::try_from(remaining.min(a.len() as u64))?;
+        prefix.read_exact(&mut a[..n])?;
+        full.read_exact(&mut b[..n])?;
+        require(
+            a[..n] == b[..n],
+            "authenticated request/truth prefix mismatch",
+        )?;
+        remaining -= n as u64;
+    }
+    require(
+        file_identity(&prefix)? == prefix_identity && file_identity(&full)? == full_identity,
+        "prefix comparison descriptor mutation",
+    )?;
+    recheck_parity_path(&pins[0], &prefix_identity)?;
+    recheck_parity_path(&pins[1], &full_identity)
+}
+
+fn recheck_parity_path(pin: &CompletedInput, original: &FileIdentity) -> Result<()> {
+    require(
+        file_identity(&open_input(&pin.path)?)? == *original,
+        "authenticated parity pathname replacement",
+    )
+}
+
+fn parity_role_identities(c: &ScalePrefixParityConfig) -> Result<[(u64, u64); 3]> {
+    let pins = [
+        &c.runs[0].input,
+        &c.runs[1].input,
+        &c.runs[2].input,
+        &c.requests[0],
+        &c.requests[1],
+        &c.truth[0],
+        &c.truth[1],
+    ];
+    let mut identities = Vec::with_capacity(pins.len());
+    for pin in pins {
+        // Metadata only: never open request/truth content before run seals.
+        let dir = parent(&pin.path)?;
+        let entry = rustix::fs::statat(
+            &dir,
+            pin.path.file_name().ok_or("parity filename")?,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )?;
+        let identity = (entry.st_dev, entry.st_ino);
+        require(!identities.contains(&identity), "parity file role alias")?;
+        identities.push(identity);
+    }
+    Ok([identities[0], identities[1], identities[2]])
+}
+
+fn reduce_scale_prefix_parity(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (ScalePrefixParityConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == SCALE_PARITY_CONFIG_SCHEMA,
+        "scale prefix parity config schema",
+    )?;
+    let panel =
+        json!({"mode":"diagnostic_panel", "ordinals":(0..32).collect::<Vec<_>>(), "trace":false});
+    for (index, arm) in c.runs.iter().enumerate() {
+        let inputs = &arm.expected_bound_inputs;
+        require(
+            arm.schema == SCALE_CONFIG_SCHEMA
+                && inputs["rows"] == 1_000_000
+                && inputs["profile"] == "scale1m"
+                && inputs["count"] == if index == 0 { 32 } else { 1000 }
+                && inputs["selected_count"] == 32
+                && inputs["execution"]
+                    == if index == 0 {
+                        json!({"mode":"full"})
+                    } else {
+                        panel.clone()
+                    }
+                && inputs["backend"]["kind"] == if index == 2 { "s3" } else { "local" },
+            "parity historical/local/S3 geometry and execution",
+        )?;
+        require(
+            parity_invariant_rows(arm)? == parity_invariant_rows(&c.runs[0])?,
+            "parity source/corpus/query policy invariant mismatch",
+        )?;
+        let pin_index = usize::from(index != 0);
+        for (pins, bytes_key, sha_key) in [
+            (&c.requests, "requests_bytes", "requests_sha256"),
+            (&c.truth, "truth_bytes", "truth_sha256"),
+        ] {
+            require(
+                inputs[bytes_key] == pins[pin_index].bytes
+                    && inputs[sha_key] == pins[pin_index].sha256,
+                "parity file pins must bind exact run inputs",
+            )?;
+        }
+    }
+    require(
+        c.requests[0].bytes == 131_072
+            && c.requests[1].bytes == 4_096_000
+            && c.truth[0].bytes == 2560
+            && c.truth[1].bytes == 80_000,
+        "parity fixed request/truth byte geometry",
+    )?;
+    for key in ["cohort_receipt_sha256", "derivation_receipt_sha256"] {
+        require(
+            c.runs[1].expected_bound_inputs[key] == c.runs[2].expected_bound_inputs[key],
+            "local/S3 panel must use same full input provenance",
+        )?;
+    }
+    // Complete every seal/terminal validation before any request or truth file opens.
+    let admitted = parity_role_identities(&c)?;
+    let runs = c
+        .runs
+        .iter()
+        .zip(admitted)
+        .map(|(arm, inode)| {
+            read_run_observed_with_identity(
+                &arm.input.path,
+                &arm.input.sha256,
+                Some(arm),
+                Some(inode),
+                |_, _, _| Ok(()),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for i in 0..runs.len() {
+        for j in 0..i {
+            require(
+                c.runs[i].input.sha256 != c.runs[j].input.sha256
+                    && c.runs[i].expected_identity["config_sha256"]
+                        != c.runs[j].expected_identity["config_sha256"]
+                    && (runs[i].file_identity.dev, runs[i].file_identity.ino)
+                        != (runs[j].file_identity.dev, runs[j].file_identity.ino),
+                "distinct parity run artifacts",
+            )?;
+        }
+    }
+    parity_samples(&runs[0].samples, &runs[1].samples)?;
+    parity_samples(&runs[1].samples, &runs[2].samples)?;
+    authenticated_prefix_pair(&c.requests)?;
+    authenticated_prefix_pair(&c.truth)?;
+    for (arm, run) in c.runs.iter().zip(&runs) {
+        recheck_parity_path(&arm.input, &run.file_identity)?;
+    }
+    Ok(
+        json!({"schema":SCALE_PARITY_REPORT_SCHEMA,"status":"EXACT_PREFIX_PARITY",
+        "config_sha256":config_sha,"config_bytes":config_bytes,"complete":true,"matched_queries":32,
+        "ordered_ids_and_score_bits_equal":true,"per_query_logical_charges_equal":true,
+        "request_and_truth_prefix_authenticated":true,
+        "run_sha256":c.runs.iter().map(|r| &r.input.sha256).collect::<Vec<_>>(),
+        "external_generation_provenance_gate_required":true,
+        "cold_s3_claim":false,"performance_pass_claim":false,"vendor_or_scientific_win_claim":false}),
+    )
+}
+
+#[cfg(test)]
+mod scale_prefix_parity_tests {
+    use super::*;
+
+    fn pin(path: PathBuf, body: &[u8]) -> CompletedInput {
+        std::fs::write(&path, body).unwrap();
+        CompletedInput {
+            path,
+            bytes: body.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(body)),
+        }
+    }
+
+    #[test]
+    fn scale_prefix_authenticates_both_bodies_and_refuses_suffix_and_prefix_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pins = [
+            pin(dir.path().join("prefix"), b"abc"),
+            pin(dir.path().join("full"), b"abcdef"),
+        ];
+        authenticated_prefix_pair(&pins).unwrap();
+        std::fs::write(&pins[1].path, b"abcdeg").unwrap();
+        assert!(authenticated_prefix_pair(&pins).is_err());
+        let changed = [
+            pin(dir.path().join("other"), b"abd"),
+            pin(dir.path().join("full"), b"abcdef"),
+        ];
+        assert!(authenticated_prefix_pair(&changed).is_err());
+        std::fs::write(&changed[1].path, b"abcde").unwrap();
+        assert!(authenticated_prefix_pair(&changed).is_err());
+        std::fs::write(&changed[1].path, b"abcdefg").unwrap();
+        assert!(authenticated_prefix_pair(&changed).is_err());
+    }
+
+    #[test]
+    fn scale_parity_refuses_path_replacement_even_with_identical_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = pin(dir.path().join("original"), b"authenticated");
+        let (_file, stamp) = authenticated_parity_file(&original).unwrap();
+        recheck_parity_path(&original, &stamp).unwrap();
+        let replacement = pin(dir.path().join("replacement"), b"authenticated");
+        std::fs::rename(&replacement.path, &original.path).unwrap();
+        assert!(recheck_parity_path(&original, &stamp).is_err());
+    }
+
+    fn samples() -> Vec<Sample> {
+        (0..32)
+            .map(|ordinal| Sample {
+                returned: (0..K)
+                    .map(|id| Hit {
+                        id: (ordinal * K + id) as u64,
+                        score_bits: (id as f32).to_bits(),
+                    })
+                    .collect(),
+                charges: Charges::default(),
+                hits10: K as u64,
+                wall_ns: 1,
+                trace_sha256: [0; 32],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scale_parity_refuses_order_score_recall_underfill_and_per_query_charge_changes() {
+        let a = samples();
+        parity_samples(&a, &samples()).unwrap();
+        for change in 0..7 {
+            let mut b = samples();
+            match change {
+                0 => b[31].returned.swap(0, 1),
+                1 => b[31].returned[0].score_bits ^= 1,
+                2 => b[31].hits10 -= 1,
+                3 => {
+                    b[31].returned.pop();
+                }
+                4 => b[31].charges.source.submitted_gets += 1,
+                5 => b[31].charges.sq8.verified_bytes += 1,
+                _ => b[31].charges.router.failed_gets += 1,
+            }
+            assert!(parity_samples(&a, &b).is_err());
+        }
+        assert!(parity_samples(&a[..31], &a).is_err());
+    }
+
+    #[test]
+    fn scale_parity_keeps_source_policy_and_unknown_fields_invariant() {
+        let mut identity = json!({"binary_sha256":"a", "config_sha256":"b", "execution":{}});
+        let mut inputs = json!({"native_sq8_sha256":"x", "fetch_parallelism":16});
+        for key in [
+            "count",
+            "requests_bytes",
+            "requests_sha256",
+            "truth_bytes",
+            "truth_sha256",
+            "backend",
+            "credential_source",
+            "generation_prefix",
+            "generation_root_sha256",
+            "cohort_receipt_sha256",
+            "derivation_receipt_sha256",
+            "execution",
+        ] {
+            inputs[key] = json!("bound");
+        }
+        let make = |identity, inputs| CompletedConfig {
+            schema: SCALE_CONFIG_SCHEMA.into(),
+            input: CompletedInput {
+                path: PathBuf::from("unused"),
+                bytes: 1,
+                sha256: "a".repeat(64),
+            },
+            expected_identity: identity,
+            expected_bound_inputs: inputs,
+        };
+        let first = make(identity.clone(), inputs.clone());
+        identity["config_sha256"] = json!("different-bound-config");
+        inputs["backend"] = json!("different-bound-backend");
+        let changed = make(identity.clone(), inputs.clone());
+        assert_eq!(
+            parity_invariant_rows(&first).unwrap(),
+            parity_invariant_rows(&changed).unwrap()
+        );
+        for (key, value) in [
+            ("native_sq8_sha256", json!("changed")),
+            ("fetch_parallelism", json!(32)),
+            ("unexpected_policy", json!(true)),
+        ] {
+            let mut changed_inputs = inputs.clone();
+            changed_inputs[key] = value;
+            let changed = make(identity.clone(), changed_inputs);
+            assert_ne!(
+                parity_invariant_rows(&first).unwrap(),
+                parity_invariant_rows(&changed).unwrap()
+            );
+        }
+        inputs.as_object_mut().unwrap().remove("backend");
+        assert!(parity_invariant_rows(&make(identity, inputs)).is_err());
+    }
 }
 
 fn reduce_scale(config_path: &Path, config_sha: &str) -> Result<Value> {
@@ -3023,7 +3440,11 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
-    Ok(report["status"] == "MEASURED")
+    Ok(report["status"] == "MEASURED"
+        || (schema == SCALE_PARITY_REPORT_SCHEMA
+            && report["schema"] == SCALE_PARITY_REPORT_SCHEMA
+            && report["status"] == "EXACT_PREFIX_PARITY"
+            && report["complete"] == true))
 }
 
 fn main() {
@@ -3060,6 +3481,21 @@ fn main() {
             )?;
             return execute_report(Path::new(&args[4]), PAIRED_SCHEMA, || {
                 reduce_paired(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--scale-prefix-parity")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --scale-prefix-parity CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), SCALE_PARITY_REPORT_SCHEMA, || {
+                reduce_scale_prefix_parity(
                     Path::new(&args[2]),
                     args[3].to_str().ok_or("config SHA256 encoding")?,
                 )
@@ -4443,6 +4879,315 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Synthetic sealed native-schema evidence. This exercises the full reducer;
+    // it is not an index-quality or S3-runtime measurement.
+    fn scale_parity_dispatch_fixture(dir: &Path) -> Value {
+        let requests = vec![0_u8; 4_096_000];
+        let truth = vec![0_u8; 80_000];
+        let file_pin = |name: &str, body: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            json!({"path":path,"bytes":body.len(),"sha256":sha(body)})
+        };
+        let request_pins = [
+            file_pin("request32", &requests[..131_072]),
+            file_pin("request1000", &requests),
+        ];
+        let truth_pins = [
+            file_pin("truth32", &truth[..2560]),
+            file_pin("truth1000", &truth),
+        ];
+        let mut arms = Vec::new();
+        for arm in 0..3 {
+            let mut rows = v2_fixture();
+            rows.retain(|row| {
+                !matches!(row["phase"].as_str(), Some("query" | "recall"))
+                    || row["ordinal"].as_u64().unwrap() < 32
+            });
+            let execution = if arm == 0 {
+                json!({"mode":"full"})
+            } else {
+                json!({"mode":"diagnostic_panel","ordinals":(0..32).collect::<Vec<_>>(),"trace":false})
+            };
+            rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v7");
+            rows[0]["config_sha256"] = json!((arm + 6).to_string().repeat(64));
+            rows[0]["execution"] = execution.clone();
+            rows[0]["serving"] = json!({"mode":"baseline"});
+            rows[0]["fetch_parallelism"] = json!(16);
+            for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
+                rows[0][key] = json!("9".repeat(64));
+            }
+            let selected = usize::from(arm != 0);
+            let root = ["a", "b", "c"][arm].repeat(64);
+            let inputs = &mut rows[1];
+            inputs["dataset"] = json!("CohereLabs/wikipedia-2023-11-embed-multilingual-v3");
+            inputs["revision"] = json!("ade45fb52bd549f5e8c065636fe4160a43c2af36");
+            inputs["rows"] = json!(1_000_000);
+            inputs["dimensions"] = json!(1024);
+            inputs["profile"] = json!("scale1m");
+            inputs["query_source_first"] = json!(100_000);
+            inputs["count"] = json!(if arm == 0 { 32 } else { 1000 });
+            inputs["selected_count"] = json!(32);
+            inputs["execution"] = execution.clone();
+            inputs["generation_root_sha256"] = json!(root);
+            for (pins, size, hash) in [
+                (&request_pins, "requests_bytes", "requests_sha256"),
+                (&truth_pins, "truth_bytes", "truth_sha256"),
+            ] {
+                inputs[size] = pins[selected]["bytes"].clone();
+                inputs[hash] = pins[selected]["sha256"].clone();
+            }
+            inputs["reserved_queries_sha256"] = request_pins[1]["sha256"].clone();
+            inputs["corpus_intervals"] =
+                json!([{"start":0,"end":100_000},{"start":101_000,"end":1_001_000}]);
+            inputs["reserved_query_interval"] = json!({"start":100_000,"end":101_000});
+            inputs["serving"] = json!({"mode":"baseline"});
+            inputs["source_cache"] = json!("off");
+            inputs["fetch_parallelism"] = json!(16);
+            inputs["max_memory_bytes"] = json!(536_870_912);
+            inputs["cohort_receipt_sha256"] = json!(if arm == 0 { "1" } else { "2" }.repeat(64));
+            inputs["derivation_receipt_sha256"] =
+                json!(if arm == 0 { "3" } else { "4" }.repeat(64));
+            inputs["producer_authority"] = json!({"source_commit":"4".repeat(40),"executable_sha256":"5".repeat(64),
+                "producer_source_sha256":"6".repeat(64),"sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)});
+            if arm < 2 {
+                inputs["backend"] = json!({"kind":"local","store_root":"/synthetic/store"});
+                inputs["credential_source"] = Value::Null;
+            }
+            for row in &mut rows {
+                match row["phase"].as_str().unwrap() {
+                    "source_binding" if arm < 2 => row["charges"] = charge(0),
+                    "startup" => row["serving"] = json!({"mode":"baseline"}),
+                    "query" => {
+                        if arm != 0 {
+                            row["selected_slot"] = row["ordinal"].clone();
+                        }
+                        row["serving"] = json!({"mode":"baseline"});
+                        row["source_nomination_skipped"] = json!(false);
+                        row["planning_scope"] = json!("source_nomination_and_cover");
+                        row["plan"] = json!({"selected_pages":[0],"ranges":[[0,100]],"planned_bytes":100,
+                            "target_pages":1,"target_shortfall":0,"primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
+                    }
+                    "all_queries_sealed" => {
+                        row["count"] = json!(32);
+                        row["selected_count"] = json!(32);
+                        row["population_count"] = json!(if arm == 0 { 32 } else { 1000 });
+                        row["reserved_query_count"] = json!(1000);
+                        row["requests_sha256"] = request_pins[selected]["sha256"].clone();
+                        row["generation_root_sha256"] = json!(root);
+                    }
+                    _ => (),
+                }
+                if arm < 2 && row.get("transport").is_some() {
+                    row["transport"]["before"] = Value::Null;
+                    row["transport"]["after"] = Value::Null;
+                }
+            }
+            let last_query = rows.iter().rfind(|row| row["phase"] == "query").unwrap();
+            let mut boundary = last_query["transport"].clone();
+            if arm == 2 {
+                for key in ["before", "after"] {
+                    boundary[key]["status_counts"] = Value::Null;
+                    boundary[key]["status_counts_entries"] = json!(1);
+                }
+            }
+            boundary["scope"] = json!("cumulative_process_native_transport");
+            boundary["status_counts_omitted_from_terminal"] = json!(true);
+            for key in [
+                "wire_bytes",
+                "unread_bytes",
+                "billed_bytes",
+                "billed_requests",
+            ] {
+                boundary[key] = Value::Null;
+            }
+            let summary = &mut rows.last_mut().unwrap()["summary"];
+            if arm < 2 {
+                summary["binding_charge"] = charge(0);
+            }
+            summary["queries"] = json!(32);
+            summary["total_hits10"] = json!(288);
+            summary["recall_numerator"] = json!(288);
+            summary["recall_denominator"] = json!(320);
+            summary["mean_recall10"] = json!(0.9);
+            summary["charges"] = charges(32);
+            summary["sum"] = charge(96);
+            summary["query_wall_ns"] = json!(528_000_000_u64);
+            summary["process_wall_ns"] = json!(528_000_100_u64);
+            summary["query_process_cpu_ns"] = json!(32);
+            summary["process_cpu_ns"] = json!(132);
+            summary["requests_sha256"] = request_pins[selected]["sha256"].clone();
+            summary["truth_sha256"] = truth_pins[selected]["sha256"].clone();
+            summary["generation_root_sha256"] = json!(root);
+            summary["transport_last_boundary"] = boundary;
+            summary["serving"] = json!({"mode":"baseline"});
+            summary["direct_memory"] = Value::Null;
+            summary["execution"] = execution;
+            summary["selected_count"] = json!(32);
+            summary["executed_count"] = json!(32);
+            summary["population_count"] = json!(if arm == 0 { 32 } else { 1000 });
+            summary["reserved_query_count"] = json!(1000);
+            summary["diagnostic_panel"] = json!(arm != 0);
+            summary["diagnostic_prefix"] = json!(arm == 0);
+            summary["population_percentiles_valid"] = json!(false);
+            summary["full_cohort_qualification"] = json!(false);
+            if arm != 0 {
+                // A panel has an admission row before binding/open, unlike the full-run fixture.
+                rows.insert(2, json!({"phase":"diagnostic_admission", "execution":rows[0]["execution"],
+                    "selected_count":32,"population_count":1000,"trace":false,
+                    "diagnostic_bytes_per_active_query":0,"diagnostic_cap_bytes":536_870_912,
+                    "max_active_queries":1,"charged_in_caller_pinned_bytes":true,"caller_pinned_bytes":0,
+                    "panel_line_cap_bytes":32768,"host_read_cap_bytes":32768,"trace_ranges":0,
+                    "population_percentiles_valid":false,"full_cohort_qualification":false,
+                    "semantics":"synthetic untraced panel schema fixture","truth_opened":false,
+                    "trace_retained_bytes":0,"trace_peak_bytes":0,"diagnostic_pinned_bytes":0,
+                    "trace_peak_charged_by_library_at_traced_admission":0,
+                    "range_state_pinned_by_runner_bytes":0,"range_state_both_paths_bytes":0}));
+            }
+            authenticate(&mut rows);
+            let body = encode(&rows);
+            let path = dir.join(format!("parity-run{arm}.jsonl"));
+            std::fs::write(&path, &body).unwrap();
+            arms.push(json!({"schema":SCALE_CONFIG_SCHEMA,"input":{"path":path,"bytes":body.len(),"sha256":sha(&body)},
+                "expected_identity":rows[0],"expected_bound_inputs":rows[1]}));
+        }
+        json!({"schema":SCALE_PARITY_CONFIG_SCHEMA,"runs":arms,"requests":request_pins,"truth":truth_pins})
+    }
+
+    #[test]
+    fn scale_prefix_parity_full_dispatch_seals_and_input_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = scale_parity_dispatch_fixture(dir.path());
+        let path = dir.path().join("parity-config.json");
+        let body = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        let report = reduce_scale_prefix_parity(&path, &sha(&body)).unwrap();
+        assert_eq!(report["status"], "EXACT_PREFIX_PARITY");
+        assert_eq!(report["matched_queries"], 32);
+        assert_eq!(report["cold_s3_claim"], false);
+        assert_eq!(report["external_generation_provenance_gate_required"], true);
+        let output = dir.path().join("parity-report.json");
+        assert!(
+            execute_report(&output, SCALE_PARITY_REPORT_SCHEMA, || {
+                reduce_scale_prefix_parity(&path, &sha(&body))
+            })
+            .unwrap()
+        );
+        let persisted: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(persisted["status"], "EXACT_PREFIX_PARITY");
+        assert_eq!(persisted["complete"], true);
+        assert!(
+            execute_report(&output, SCALE_PARITY_REPORT_SCHEMA, || {
+                reduce_scale_prefix_parity(&path, &sha(&body))
+            })
+            .is_err()
+        );
+        for key in [
+            "count",
+            "fetch_parallelism",
+            "native_sq8_sha256",
+            "cohort_receipt_sha256",
+        ] {
+            let mut bad = config.clone();
+            bad["runs"][2]["expected_bound_inputs"][key] = json!("changed");
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(
+                reduce_scale_prefix_parity(&path, &sha(&bytes)).is_err(),
+                "{key}"
+            );
+        }
+        let mut bad = config.clone();
+        bad["runs"][2] = bad["runs"][1].clone();
+        let bytes = serde_json::to_vec(&bad).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(reduce_scale_prefix_parity(&path, &sha(&bytes)).is_err());
+        std::fs::write(&path, &body).unwrap();
+        std::fs::write(config["truth"][1]["path"].as_str().unwrap(), b"short").unwrap();
+        assert!(reduce_scale_prefix_parity(&path, &sha(&body)).is_err());
+
+        // A broken seal must fail before attempting to open a nofollow truth path.
+        let mut bad = config.clone();
+        let run_path = PathBuf::from(bad["runs"][2]["input"]["path"].as_str().unwrap());
+        let mut rows: Vec<Value> = std::fs::read_to_string(&run_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        rows.iter_mut()
+            .find(|row| row["phase"] == "all_queries_sealed")
+            .unwrap()["prefix_sha256"] = json!("0".repeat(64));
+        let bytes = encode(&rows);
+        std::fs::write(&run_path, &bytes).unwrap();
+        bad["runs"][2]["input"]["bytes"] = json!(bytes.len());
+        bad["runs"][2]["input"]["sha256"] = json!(sha(&bytes));
+        std::fs::remove_file(config["truth"][1]["path"].as_str().unwrap()).unwrap();
+        std::os::unix::fs::symlink(
+            "/must-not-open-truth",
+            config["truth"][1]["path"].as_str().unwrap(),
+        )
+        .unwrap();
+        let body = serde_json::to_vec(&bad).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        let invalid = dir.path().join("invalid-parity-report.json");
+        assert!(
+            !execute_report(&invalid, SCALE_PARITY_REPORT_SCHEMA, || {
+                reduce_scale_prefix_parity(&path, &sha(&body))
+            })
+            .unwrap()
+        );
+        let invalid: Value = serde_json::from_slice(&std::fs::read(&invalid).unwrap()).unwrap();
+        assert_eq!(invalid["status"], "INVALID");
+        assert_eq!(invalid["error"], "authenticated query seal");
+    }
+
+    #[test]
+    fn scale_parity_role_aliases_and_native_config_reuse_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = scale_parity_dispatch_fixture(dir.path());
+        let mut bad = config.clone();
+        bad["runs"][2]["input"]["path"] = bad["truth"][1]["path"].clone();
+        let typed: ScalePrefixParityConfig = serde_json::from_value(bad).unwrap();
+        assert_eq!(
+            parity_role_identities(&typed).unwrap_err().to_string(),
+            "parity file role alias"
+        );
+        let alias = dir.path().join("truth-hard-link");
+        std::fs::hard_link(config["truth"][1]["path"].as_str().unwrap(), &alias).unwrap();
+        let mut bad = config.clone();
+        bad["runs"][2]["input"]["path"] = json!(alias);
+        let typed: ScalePrefixParityConfig = serde_json::from_value(bad).unwrap();
+        assert_eq!(
+            parity_role_identities(&typed).unwrap_err().to_string(),
+            "parity file role alias"
+        );
+
+        let mut bad = config.clone();
+        let run_path = PathBuf::from(bad["runs"][2]["input"]["path"].as_str().unwrap());
+        let mut rows: Vec<Value> = std::fs::read_to_string(&run_path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let duplicate = bad["runs"][1]["expected_identity"]["config_sha256"].clone();
+        rows[0]["config_sha256"] = duplicate.clone();
+        bad["runs"][2]["expected_identity"]["config_sha256"] = duplicate;
+        authenticate(&mut rows);
+        let bytes = encode(&rows);
+        std::fs::write(&run_path, &bytes).unwrap();
+        bad["runs"][2]["input"]["bytes"] = json!(bytes.len());
+        bad["runs"][2]["input"]["sha256"] = json!(sha(&bytes));
+        let body = serde_json::to_vec(&bad).unwrap();
+        let path = dir.path().join("duplicate-config.json");
+        std::fs::write(&path, &body).unwrap();
+        assert_eq!(
+            reduce_scale_prefix_parity(&path, &sha(&body))
+                .unwrap_err()
+                .to_string(),
+            "distinct parity run artifacts"
+        );
     }
 
     fn v2_fixture() -> Vec<Value> {

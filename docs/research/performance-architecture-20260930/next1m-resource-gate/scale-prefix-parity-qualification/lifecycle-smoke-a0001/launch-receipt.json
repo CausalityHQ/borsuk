@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-lifecycle-launch-v1",
+  "instance_id": "i-0528d4a775df01b9d",
+  "root_volume_id": "vol-04aac3d6cc9392f91",
+  "watcher": "borsuk-parity-lifecycle-smoke-a0001.service",
+  "invocation_id": "2473505a989e4ea2baf6c58358f14c7b",
+  "launch_exit": 0,
+  "performance_claim": false
+}

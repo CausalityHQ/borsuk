@@ -1,0 +1,59 @@
+{
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 20,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "ClientToken": "borsuk-lifecycle-smoke-a0002-1791654515",
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.50",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "InstanceType": "c7i.2xlarge",
+  "MaxCount": 1,
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "MinCount": 1,
+  "Placement": {
+    "AvailabilityZone": "eu-central-1c"
+  },
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-parity-qualification-a0003-1791649248"
+        },
+        {
+          "Key": "Purpose",
+          "Value": "exact-source-native-parity-qualification"
+        }
+      ]
+    }
+  ],
+  "UserData": "#!/bin/bash\nset -Eeuo pipefail\numask 077\nexport AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 DEBIAN_FRONTEND=noninteractive\nroot=/mnt/borsuk-lifecycle-smoke\nbucket=borsuk-bench-453182569524-euc1\nprefix=research/native-library-check/20261010/parity-lifecycle-smoke-a0002\nmkdir -p \"$root\"\ncd \"$root\"\nsystemd-run --unit=borsuk-lifecycle-host-stop --on-active=1200s /usr/sbin/shutdown -h now\nfinish() {\n original=$?; trap - EXIT; set +e\n tar -czf evidence.tar.gz bootstrap.log collector.sh smoke.sh output stage.exit stage.stdout stage.stderr\n archive_rc=$?\n sha=$(sha256sum evidence.tar.gz | cut -d ' ' -f1); bytes=$(stat -c %s evidence.tar.gz)\n code=$original; (( archive_rc == 0 )) || code=96\n if command -v aws >/dev/null; then\n  timeout -k 2 90 aws s3api put-object --bucket \"$bucket\" --key \"$prefix/output/evidence.tar.gz\" --body evidence.tar.gz --if-none-match '*' >archive-put.json || code=96\n  printf '{\"schema\":\"borsuk-parity-lifecycle-smoke-v1\",\"original_exit\":%s,\"exit\":%s,\"archive\":{\"bytes\":%s,\"sha256\":\"%s\"},\"performance_claim\":false}\\n' \"$original\" \"$code\" \"${bytes:-0}\" \"$sha\" >terminal.json\n  sync -f terminal.json && sync -f \"$root\" && timeout -k 2 60 aws s3api put-object --bucket \"$bucket\" --key \"$prefix/output/terminal.json\" --body terminal.json --if-none-match '*' >terminal-put.json\n fi\n /usr/sbin/shutdown -h now\n exit \"$code\"\n}\ntrap finish EXIT\nexec >bootstrap.log 2>&1\ntimeout -k 2 120 apt-get -qq -o DPkg::Lock::Timeout=60 update\ntimeout -k 2 180 apt-get -qq -y -o DPkg::Lock::Timeout=60 install curl unzip\ncurl -fsSL --connect-timeout 10 --max-time 120 -o aws.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip\nprintf '%s  aws.zip\\n' 50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6 | sha256sum -c -\n[[ $(stat -c %s aws.zip) == 73022935 ]]\ntimeout -k 2 90 unzip -q aws.zip\ntimeout -k 2 90 ./aws/install\nfor name in collector.sh smoke.sh; do timeout -k 2 45 aws s3api get-object --bucket \"$bucket\" --key \"$prefix/input/$name\" \"$name\" >\"$name.get.json\"; done\nprintf '%s  collector.sh\\n' 1b090217e0927eb44c63df6fc0f465205531050cc27d3f80dd98dc4586986e60 | sha256sum -c -\nprintf '%s  smoke.sh\\n' f65e23ee74b2dcbbad4a13f3b3ee346689fd81cd2a136341699193ed95b113e3 | sha256sum -c -\nset +e\nsystemd-run --unit=borsuk-lifecycle-smoke --wait --pipe -p CPUQuota=100% -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=180 -p TimeoutStopSec=15 -p KillMode=control-group -p LimitCORE=0 /bin/bash \"$root/smoke.sh\" \"$root/collector.sh\" \"$root/output\" >stage.stdout 2>stage.stderr\nrc=$?\nset -e\nprintf '%s\\n' \"$rc\" >stage.exit\nexit \"$rc\"\n"
+}

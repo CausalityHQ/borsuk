@@ -1,0 +1,131 @@
+{
+  "schema": "borsuk-scale-parity-compiler-bundle-v1",
+  "status": "FROZEN_NATIVE_QUALIFICATION_NOT_LAUNCHED",
+  "source_commit": "afb70da60727ba80147a97e71fce738ab15e6456",
+  "source_file_count": 436,
+  "source_inventory_sha256": "5f26cb5ba194695d6aa5c9c08b0e8206324ba923bcb6478636c0b385c06f869e",
+  "archive_paths": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates",
+    "scripts/check_rust_test_build.sh",
+    "docs/research/mutation-visibility-20260928/ranking-memory-harness.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/control-build-a0001/prospective/control-rotated_two_bit.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/control-build-a0001/prospective/control-two_bit_generation.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0001/prospective/control-rotated_two_bit.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0001/prospective/control-two_bit_generation.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0002/prospective/control-rotated_two_bit.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0002/prospective/control-two_bit_generation.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0003/prospective/control-rotated_two_bit.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0003/prospective/control-two_bit_generation.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0004/prospective/control-rotated_two_bit.rs",
+    "docs/research/performance-architecture-20260930/cohere1024/cold-two-bit-four-row/qualification-a0004/prospective/control-two_bit_generation.rs",
+    "docs/research/query-ranking-admission-20260928/ranking-memory-harness.rs",
+    "scripts/v114_score_rust/Cargo.lock",
+    "scripts/v114_score_rust/Cargo.toml",
+    "scripts/v114_score_rust/src/bin/v144_page_parity.rs",
+    "scripts/v114_score_rust/src/bin/v145_page_parity.rs",
+    "scripts/v114_score_rust/src/bin/v146_centroid_score.rs",
+    "scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs",
+    "scripts/v114_score_rust/src/main.rs"
+  ],
+  "pins": {
+    "source.tar.gz": {
+      "bytes": 5448630,
+      "sha256": "8c16e336a801da9be04fddc3044d0d680aa8e31ca64f771c5c46cfe9992c6525"
+    },
+    "source-manifest.json": {
+      "bytes": 62852,
+      "sha256": "5f26cb5ba194695d6aa5c9c08b0e8206324ba923bcb6478636c0b385c06f869e"
+    },
+    "source-files.sha256": {
+      "bytes": 47709,
+      "sha256": "a249fbfabfd0eeabc7037493e8dd01f883a4d3cec6a3f478bf543a74b8013d58"
+    },
+    "gates.sh": {
+      "bytes": 4514,
+      "sha256": "e8f69df7d7bacb6b7ddd08c1bf4e0a6d93773ff7e110b699eb223be2a45ea436"
+    }
+  },
+  "mandatory_tests": [
+    "scale_prefix_parity_tests::scale_prefix_authenticates_both_bodies_and_refuses_suffix_and_prefix_changes",
+    "scale_prefix_parity_tests::scale_parity_refuses_order_score_recall_underfill_and_per_query_charge_changes",
+    "scale_prefix_parity_tests::scale_parity_keeps_source_policy_and_unknown_fields_invariant",
+    "scale_prefix_parity_tests::scale_parity_refuses_path_replacement_even_with_identical_bytes",
+    "tests::scale_prefix_parity_full_dispatch_seals_and_input_binding",
+    "tests::scale_parity_role_aliases_and_native_config_reuse_are_refused"
+  ],
+  "expected_example_tests": 86,
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "Spot": true,
+  "native_seconds": 7200,
+  "machine_seconds": 9000,
+  "cleanup_grace_seconds": 120,
+  "cpu_quota_percent": 200,
+  "memory_bytes": 8589934592,
+  "swap_bytes": 0,
+  "pids": 512,
+  "jobs": 1,
+  "max_bid_usd_hour": 0.5,
+  "compute_ceiling_usd": 1.25,
+  "ancillary_ceiling_usd": 0.2,
+  "scientific_performance_claim": false,
+  "whole_workspace_test_execution": false,
+  "full_native_file_count": 426,
+  "prior_native_changed_paths": [
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "failing_layer_first": [
+    "failed-dispatch",
+    "failed-role-binding"
+  ],
+  "prior_failed_attempt": "a0001 and a0002 preserved; a0002 cargo101/tee0, selected-slot fixture mismatch",
+  "prefix": "research/native-library-check/20261010/scale-prefix-parity-a0003",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "client_token": "borsuk-parity-qualification-a0003-1791651468",
+  "host_root_volume_gib": 80,
+  "native_toolchain": "1.98.0",
+  "root_volume_cleanup": "exact captured VolumeId absent after same-instance terminate/wait",
+  "no_prior_launch_claim": true,
+  "compiler_inputs_only": true,
+  "frozen_files": {
+    "source.tar.gz": {
+      "bytes": 5448630,
+      "sha256": "8c16e336a801da9be04fddc3044d0d680aa8e31ca64f771c5c46cfe9992c6525"
+    },
+    "source-manifest.json": {
+      "bytes": 62852,
+      "sha256": "5f26cb5ba194695d6aa5c9c08b0e8206324ba923bcb6478636c0b385c06f869e"
+    },
+    "source-files.sha256": {
+      "bytes": 47709,
+      "sha256": "a249fbfabfd0eeabc7037493e8dd01f883a4d3cec6a3f478bf543a74b8013d58"
+    },
+    "gates.sh": {
+      "bytes": 4514,
+      "sha256": "e8f69df7d7bacb6b7ddd08c1bf4e0a6d93773ff7e110b699eb223be2a45ea436"
+    },
+    "bundle-proposal.json": {
+      "bytes": 4390,
+      "sha256": "ef85d9b53a533a2bbd604648c355b2a1460eac54d5e669cec4ffbc131d5d76a0"
+    },
+    "user-data.sh": {
+      "bytes": 5470,
+      "sha256": "1e1c25f4dd4f5abbba9cda9c47fe0ed9541100403d7eaf17147907f8f680b9be"
+    },
+    "launch-request.json": {
+      "bytes": 6983,
+      "sha256": "78051f9e6b31d409960fa438e2a79369d2ab593b63c0d90777d546243552ebe7"
+    },
+    "run-original.sh": {
+      "bytes": 3783,
+      "sha256": "738bd72151364913ac90e27a86546f344dbc8d52219c27e3ab47bcc81b744277"
+    }
+  },
+  "spot_quote": {
+    "bytes": 332,
+    "sha256": "fc8c2deb836b80c7d172b0f06caa52b1afebe8f4e862a06d104c8b67225104e1"
+  }
+}

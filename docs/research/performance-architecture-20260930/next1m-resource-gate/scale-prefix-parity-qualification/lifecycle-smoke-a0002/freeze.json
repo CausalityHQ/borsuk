@@ -1,0 +1,55 @@
+{
+  "schema": "borsuk-lifecycle-smoke-freeze-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/native-library-check/20261010/parity-lifecycle-smoke-a0002",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "client_token": "borsuk-lifecycle-smoke-a0002-1791654515",
+  "runtime_seconds": 180,
+  "host_stop_seconds": 1200,
+  "root_deadline_seconds": 1500,
+  "compute_ceiling_usd": 0.25,
+  "ancillary_ceiling_usd": 0.1,
+  "instance_type": "c7i.2xlarge",
+  "spot": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.50",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "claims": {
+    "compiler": false,
+    "performance": false,
+    "cold": false
+  },
+  "scope": "8 real-systemd cases plus 4 labelled command-spy disappearance/error cases; source-bound collector unchanged; original failures preserved",
+  "pins": {
+    "collector.sh": {
+      "bytes": 1808,
+      "sha256": "1b090217e0927eb44c63df6fc0f465205531050cc27d3f80dd98dc4586986e60"
+    },
+    "smoke.sh": {
+      "bytes": 6511,
+      "sha256": "f65e23ee74b2dcbbad4a13f3b3ee346689fd81cd2a136341699193ed95b113e3"
+    },
+    "user-data.sh": {
+      "bytes": 2602,
+      "sha256": "3ff8b59c63d7010dbf015abc543649add7f32f69f342fadd451d66f43c28c72e"
+    },
+    "launch-request.json": {
+      "bytes": 4051,
+      "sha256": "15f3e55daef0fbe64e86e849c48ee6227945bd7c100e6d8c909411036aec49ec"
+    },
+    "run-original.sh": {
+      "bytes": 3772,
+      "sha256": "26992abb963db640b840c430b4855e4bc308dd6d875f8250c792020bb4cd6d85"
+    }
+  },
+  "spot_quote": {
+    "bytes": 417,
+    "sha256": "fa8e0765f22989476e9eb2512a9694597c41faa565c35a0dcfbda508b8b7adb2"
+  }
+}

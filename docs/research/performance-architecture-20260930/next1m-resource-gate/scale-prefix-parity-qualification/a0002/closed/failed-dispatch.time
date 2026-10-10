@@ -1,0 +1,24 @@
+Command exited with non-zero status 101
+	Command being timed: "cargo test --locked -p borsuk --example compare_native_replay tests::scale_prefix_parity_full_dispatch_seals_and_input_binding -- --exact --test-threads=1"
+	User time (seconds): 185.33
+	System time (seconds): 17.33
+	Percent of CPU this job got: 87%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:52.85
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3979556
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 693
+	Minor (reclaiming a frame) page faults: 9887566
+	Voluntary context switches: 42055
+	Involuntary context switches: 1907
+	Swaps: 0
+	File system inputs: 464
+	File system outputs: 5318624
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 101

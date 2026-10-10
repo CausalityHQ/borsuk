@@ -1,0 +1,25 @@
+{
+  "status": "PROSPECTIVE_NOT_LAUNCHED",
+  "basis": "closed 1M metadata; exact source retained scratch formula; not candidate validator execution",
+  "source_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "parts": {
+    "root_and_head_reserve": 135168,
+    "plane_manifest_two_copies": 1306,
+    "page_manifest_two_copies": 562,
+    "sq8_page_digests_two_copies": 250048,
+    "mean_two_copies": 8192,
+    "records_one_copy": 264000000,
+    "plane_page_digests_two_copies": 2000000,
+    "router_root_two_copies": 6082944,
+    "membership_two_copies": 250000,
+    "leaves_one_copy": 64125000
+  },
+  "source_required_scratch_bytes": 336853220,
+  "old_100k_scratch_bytes": 67108864,
+  "proposed_publication_scratch_bytes": 536870912,
+  "publication_memory_bytes": 536870912,
+  "query_memory_bytes": 536870912,
+  "host_memory_ceiling_bytes": 8589934592,
+  "algorithm_change": false,
+  "performance_claim": false
+}

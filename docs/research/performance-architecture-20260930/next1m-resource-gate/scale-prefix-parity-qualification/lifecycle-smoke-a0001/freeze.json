@@ -1,0 +1,55 @@
+{
+  "schema": "borsuk-lifecycle-smoke-freeze-v1",
+  "status": "FROZEN_NOT_LAUNCHED",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/native-library-check/20261010/parity-lifecycle-smoke-a0001",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "client_token": "borsuk-lifecycle-smoke-a0001-1791654239",
+  "runtime_seconds": 180,
+  "host_stop_seconds": 1200,
+  "root_deadline_seconds": 1500,
+  "compute_ceiling_usd": 0.25,
+  "ancillary_ceiling_usd": 0.1,
+  "instance_type": "c7i.2xlarge",
+  "spot": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.50",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "claims": {
+    "compiler": false,
+    "performance": false,
+    "cold": false
+  },
+  "scope": "8 real-systemd cleanup cases; race injections NOT_RUN; original a0003 remains INVALID96",
+  "pins": {
+    "collector.sh": {
+      "bytes": 1808,
+      "sha256": "1b090217e0927eb44c63df6fc0f465205531050cc27d3f80dd98dc4586986e60"
+    },
+    "smoke.sh": {
+      "bytes": 4317,
+      "sha256": "f246204f5d0c8f2a1b641c624deab2fa89f912f0ff8428841546e019c0cc236c"
+    },
+    "user-data.sh": {
+      "bytes": 2602,
+      "sha256": "6f0896550f5785eb0a939ac4e84a02e57c8bbbdb7451022b984a41e07450af60"
+    },
+    "launch-request.json": {
+      "bytes": 4051,
+      "sha256": "fd0055c965eeeaf7812e881b150b20cd59140b71c122187205300c0d2b452172"
+    },
+    "run-original.sh": {
+      "bytes": 3772,
+      "sha256": "adcafff053fca9941c383422a53683e404ac6961bdb45f5b177e97a8d16802db"
+    }
+  },
+  "spot_quote": {
+    "bytes": 417,
+    "sha256": "fa8e0765f22989476e9eb2512a9694597c41faa565c35a0dcfbda508b8b7adb2"
+  }
+}

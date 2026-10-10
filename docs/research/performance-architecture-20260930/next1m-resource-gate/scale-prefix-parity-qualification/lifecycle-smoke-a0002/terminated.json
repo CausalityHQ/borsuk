@@ -1,0 +1,99 @@
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-02eb0dd206d76e693",
+            "OwnerId": "453182569524",
+            "Groups": [],
+            "Instances": [
+                {
+                    "Architecture": "x86_64",
+                    "BlockDeviceMappings": [],
+                    "ClientToken": "borsuk-lifecycle-smoke-a0002-1791654515",
+                    "EbsOptimized": false,
+                    "EnaSupport": true,
+                    "Hypervisor": "xen",
+                    "InstanceLifecycle": "spot",
+                    "NetworkInterfaces": [],
+                    "RootDeviceName": "/dev/sda1",
+                    "RootDeviceType": "ebs",
+                    "SecurityGroups": [],
+                    "SpotInstanceRequestId": "sir-hn4fqc6k",
+                    "StateReason": {
+                        "Code": "Client.InstanceInitiatedShutdown",
+                        "Message": "Client.InstanceInitiatedShutdown: Instance initiated shutdown"
+                    },
+                    "Tags": [
+                        {
+                            "Key": "Purpose",
+                            "Value": "exact-source-native-parity-qualification"
+                        },
+                        {
+                            "Key": "Name",
+                            "Value": "borsuk-parity-qualification-a0003-1791649248"
+                        }
+                    ],
+                    "VirtualizationType": "hvm",
+                    "CpuOptions": {
+                        "CoreCount": 4,
+                        "ThreadsPerCore": 2
+                    },
+                    "CapacityReservationSpecification": {
+                        "CapacityReservationPreference": "open"
+                    },
+                    "HibernationOptions": {
+                        "Configured": false
+                    },
+                    "MetadataOptions": {
+                        "State": "pending",
+                        "HttpTokens": "required",
+                        "HttpPutResponseHopLimit": 2,
+                        "HttpEndpoint": "enabled",
+                        "HttpProtocolIpv6": "disabled",
+                        "InstanceMetadataTags": "disabled"
+                    },
+                    "EnclaveOptions": {
+                        "Enabled": false
+                    },
+                    "BootMode": "uefi-preferred",
+                    "PlatformDetails": "Linux/UNIX",
+                    "UsageOperation": "RunInstances",
+                    "UsageOperationUpdateTime": "2026-10-10T17:49:35+00:00",
+                    "MaintenanceOptions": {
+                        "AutoRecovery": "default",
+                        "RebootMigration": "default"
+                    },
+                    "CurrentInstanceBootMode": "uefi",
+                    "NetworkPerformanceOptions": {
+                        "BandwidthWeighting": "default"
+                    },
+                    "Operator": {
+                        "Managed": false,
+                        "HiddenByDefault": false
+                    },
+                    "InstanceId": "i-0898936cbabe0fb78",
+                    "ImageId": "ami-0b8a830d6339a9758",
+                    "State": {
+                        "Code": 48,
+                        "Name": "terminated"
+                    },
+                    "PrivateDnsName": "",
+                    "PublicDnsName": "",
+                    "StateTransitionReason": "User initiated",
+                    "AmiLaunchIndex": 0,
+                    "ProductCodes": [],
+                    "InstanceType": "c7i.2xlarge",
+                    "LaunchTime": "2026-10-10T17:49:35+00:00",
+                    "Placement": {
+                        "AvailabilityZoneId": "euc1-az1",
+                        "GroupName": "",
+                        "Tenancy": "default",
+                        "AvailabilityZone": "eu-central-1c"
+                    },
+                    "Monitoring": {
+                        "State": "disabled"
+                    }
+                }
+            ]
+        }
+    ]
+}

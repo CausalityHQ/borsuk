@@ -1,0 +1,45 @@
+{
+  "id": "f2d0e09175384181",
+  "status": "running",
+  "started_at": 1791646545,
+  "prompt_sha256": "78e7535dd30cb65b828a1c65d5961663b5140d14da8cdb0193c9f28d497d8be1",
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "9992822968f04131",
+      "provider": "claude",
+      "model": "claude-opus-5-5",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ]
+    },
+    {
+      "role": "engineering_critic",
+      "id": "d743ff62e268460b",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ]
+    }
+  ],
+  "force_reason": "New release-design decision after authenticated 1M/Q32 terminal PASS at96c6e904: full1000 truth and actual S3 publication/measurement protocol. Previous pairfe86c325 reviewed only collector smoke, now closed and accepted; this is not a repeated review of that source or question."
+}
