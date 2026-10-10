@@ -1,0 +1,58 @@
+{
+  "schema": "borsuk-pid128-platform-launch-draft-v1",
+  "status": "PENDING_REVIEW_NOT_LAUNCHED",
+  "candidate_commit": "e85fed7c29d40b124ef766dc489fd90d1d5276f6",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "prefix": "research/semantic-router/20261010/pid128-platform/borsuk-platform-903b9b87431d454ebaa36a002459e66d",
+  "assets": "research/semantic-router/20261010/pid128-platform/borsuk-platform-903b9b87431d454ebaa36a002459e66d/inputs",
+  "client_token": "borsuk-platform-903b9b87431d454ebaa36a002459e66d",
+  "bootstrap_sha256": "6b91218c61cd1c066f1cb4398db0346f359338f0f4686c60c27e07f9c4b7863f",
+  "bootstrap_bytes": 10697,
+  "worker_sha256": "508c679dd9b6475a6295dd0c52dd742686d4d2da2911fb4b8935b259e92505b9",
+  "watch_sha256": "a2e1488fdcf9789f7f28d61bb7191045caab5c19b03550028a296fb4282a23df",
+  "support_roster": [
+    [
+      "run-platform-pair.sh",
+      5152,
+      "c8d66709c10498ecd625dc37dbb86ee8f30c1508e2ba6f7cb21af038eac7d932"
+    ],
+    [
+      "run-platform-canary.sh",
+      3342,
+      "85ea5863b30a1b8fa1cad9e06941b2c0701973f56ed5a15baf499790dd911587"
+    ],
+    [
+      "collect-stage-outer.sh",
+      14583,
+      "04c2d73626405546afd00459a8682727cfe061df09f3415695be28aaf6836416"
+    ],
+    [
+      "observer-command.sh",
+      643,
+      "dc49a2ab12620f9f2470e88492a59e2ca28785fb007d26e4b5420346c0ad588c"
+    ],
+    [
+      "timeout-descendant.sh",
+      941,
+      "51aba1150983ee26497d0163c3a2b2037f106c63016d71c826b2338facbc9bbb"
+    ],
+    [
+      "staging-library.sh",
+      42398,
+      "b2dc0740e5c643576fb6c18ef6630cefef9fc052c1a9e3e59310d78428f40c95"
+    ]
+  ],
+  "machine_cutoff_seconds": 1080,
+  "compute_allowance_usd": 0.03,
+  "ancillary_allowance_usd": 0.02,
+  "estimated_total_allowance_usd": 0.05,
+  "billing_guarantee": false,
+  "launch_executed": false,
+  "ann_executed": false,
+  "corpus_or_truth_used": false,
+  "performance_claim": false,
+  "original_review_id": "24e2ac019058461f",
+  "review_disposition_pending": true,
+  "bootstrap_source_inverse_equals_worker": true
+}
