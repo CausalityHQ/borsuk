@@ -1,0 +1,24 @@
+{
+  "source_base": "08becf8e1ebd4f815bc58b029fe3c800b04d710a",
+  "candidate": "c8f416f31469cd234f03d27aeac6cfafd553bf5b",
+  "source_parent": "546afff6f2b629d7dfdf9aae059402195cbbb7ce",
+  "owned_paths": [
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/launch-one-canary.py"
+  ],
+  "sha256": "48d4c79861285f9a8a60d03a635427c096b060415f5c8fc45c364d3fabf19238",
+  "ast_unchanged_functions": [
+    "aws",
+    "checked",
+    "epoch",
+    "scratch_proof",
+    "settle"
+  ],
+  "new_function": "settle_instance",
+  "source_checks": "PASS",
+  "runtime": "UNRUN",
+  "fixture_sha256": "2170e37be98080587dece20cc3327c04cacfb78152b1b5e5f0313df674fdd19f",
+  "production_native_changed": false,
+  "one_shot_launch_and_cleanup_preserved": true,
+  "launch_authorized": false,
+  "performance_claim": false
+}

@@ -61,6 +61,27 @@ def settle(observe,volume,instance,clock,sleep,window=30,spacing=2,limit=12):
         assert att[0]['State']=='attaching'
         sleep(min(spacing,max(0,window-(clock()-start)-3)))
     raise AssertionError('scratch attachment did not settle')
+def settle_instance(observe,instance,token,clock,sleep,window=30,spacing=2,limit=12):
+    # Finite observation of ONLY this instance (same id and client token) until BOTH expected mappings exist. A pending instance may still be missing one of them (transient);
+    # a foreign or duplicate device, wrong identity, token or state, a malformed shape or an AWS error is refused at once. Timing rules exactly as in settle().
+    start=clock()
+    for n in range(1,limit+1):
+        left=window-(clock()-start);assert left>=3
+        rc,body=observe(n,min(25,left));assert clock()-start<=window   # a call that finished after the window can never succeed
+        assert rc==0 and type(body) is bytes and 0<len(body)<=65536
+        doc=json.loads(body);res=doc['Reservations'];assert type(res) is list and len(res)==1
+        found=res[0]['Instances'];assert type(found) is list and len(found)==1;info=found[0]
+        assert info['InstanceId']==instance and info['ClientToken']==token and info['State']['Name'] in ('pending','running')
+        maps=info['BlockDeviceMappings'];assert type(maps) is list
+        names=[m['DeviceName'] for m in maps]
+        assert all(type(x) is str for x in names) and len(set(names))==len(names) and set(names)<={'/dev/sda1','/dev/sdf'}
+        assert all(type(m['Ebs']) is dict and type(m['Ebs']['VolumeId']) is str and re.fullmatch(r'vol-[0-9a-f]{8,17}',m['Ebs']['VolumeId']) for m in maps)
+        if set(names)=={'/dev/sda1','/dev/sdf'}:
+            assert clock()-start<=window   # and re-checked immediately before success
+            return n,body,doc
+        assert info['State']['Name']=='pending'
+        sleep(min(spacing,max(0,window-(clock()-start)-3)))
+    raise AssertionError('instance block device mappings did not settle')
 assert time.time()-a['started_epoch']<180
 assert hashlib.sha256((root/'user-data.sh').read_bytes()).hexdigest()==a['user_data_sha256']
 assert hashlib.sha256((root/'watch-original.sh').read_bytes()).hexdigest()==a['watcher_sha256']
@@ -73,8 +94,9 @@ try:
     assert len(original['Instances'])==1
     instance=original['Instances'][0]['InstanceId'];assert re.fullmatch(r'i-[0-9a-f]+',instance)
     (root/'instance-id').write_text(instance+'\n')
-    info=checked('describe-original',['ec2','describe-instances','--instance-ids',instance])['Reservations'][0]['Instances'][0]
-    assert info['InstanceId']==instance and info['ClientToken']==a['client_token']
+    seen_instance,raw_instances,seen_doc=settle_instance(lambda i,left:(lambda x:(x.returncode,x.stdout))(aws('describe-original-%02d'%i,['ec2','describe-instances','--instance-ids',instance],left,True)),instance,a['client_token'],time.monotonic,time.sleep)
+    instance_evidence='describe-original-%02d.stdout'%seen_instance;assert (root/instance_evidence).read_bytes()==raw_instances
+    info=seen_doc['Reservations'][0]['Instances'][0]
     mappings=info['BlockDeviceMappings'];assert len(mappings)==2
     volumes=[x['Ebs']['VolumeId'] for x in mappings];assert len(set(volumes))==2
     assert all(x['Ebs']['DeleteOnTermination'] is True for x in mappings)
@@ -84,7 +106,6 @@ try:
     zone=r['Placement']['AvailabilityZone']
     seen,raw_volumes,described=settle(lambda i,left:(lambda x:(x.returncode,x.stdout))(aws('describe-scratch-volume-%02d'%i,['ec2','describe-volumes','--volume-ids',scratch],left,True)),scratch,instance,time.monotonic,time.sleep)
     final_evidence='describe-scratch-volume-%02d.stdout'%seen;assert (root/final_evidence).read_bytes()==raw_volumes
-    raw_instances=(root/'describe-original.stdout').read_bytes();assert len(raw_instances)<=65536
     proof=scratch_proof(a['started_epoch'],zone,instance,info,described,int(time.time()));assert proof['scratch']==scratch
     binding={'schema':'borsuk-scratch-launch-binding-v2','instance_id':instance,'volume_id':scratch,'root_volume_id':proof['root'],'device':'/dev/sdf','size_bytes':42949672960,'availability_zone':zone,
              'volume_type':'gp3','encrypted':True,'multi_attach':False,'snapshot_empty':True,'state':'in-use','attached_device':'/dev/sdf','delete_on_termination':True,
@@ -98,7 +119,7 @@ try:
     cmd=['systemd-run','--user','--unit='+WATCH_UNIT,'-p','CPUQuota=100%','-p','AllowedCPUs=0','-p','MemoryMax=256M','-p','MemorySwapMax=0','-p','TasksMax=128','-p','RuntimeMaxSec=3900s','-p','Environment=AWS_MAX_ATTEMPTS=1','-p','Environment=AWS_PAGER=','bash',str(root/'watch-original.sh'),instance,str(a['started_epoch']),a['user_data_sha256']]
     subprocess.run(cmd,check=True,timeout=10)
     watch_started=True
-    (root/'launch-root-result.json').write_text(json.dumps({'instance_id':instance,'volumes':volumes,'watcher_unit':WATCH_UNIT+'.service','watcher_started':True,'scratch_volume_final_evidence':final_evidence,'performance_claim':False},indent=2)+'\n')
+    (root/'launch-root-result.json').write_text(json.dumps({'instance_id':instance,'volumes':volumes,'watcher_unit':WATCH_UNIT+'.service','watcher_started':True,'instance_final_evidence':instance_evidence,'scratch_volume_final_evidence':final_evidence,'performance_claim':False},indent=2)+'\n')
     print(instance)
 except BaseException:
     if instance is None:
