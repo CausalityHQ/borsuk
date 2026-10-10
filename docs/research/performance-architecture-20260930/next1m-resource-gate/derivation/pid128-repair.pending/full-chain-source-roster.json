@@ -1,13 +1,13 @@
 {
   "status": "SOURCE_ROSTER_PREPARED_NOT_FROZEN_NOT_STAGED",
-  "source_commit": "1fef024fef2549e31be494cce0736dd4a63f0038",
+  "source_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
   "support_file_count": 12,
-  "support_sha256": "666994afb60447545ae83a99cd94a82b3fdf3ead3af6b63524c5a5737bc8257e",
+  "support_sha256": "9eab944877bb53eac7b41faf57a128c321f4c07afb56d83c38a40947b55ab703",
   "assets": [
     {
       "name": "collect-native-chain-outer.sh",
-      "bytes": 10099,
-      "sha256": "a15dafd8d0a67f84f3eb3e41f6958676b00b848b58e60c9df7cac9977f8549a3",
+      "bytes": 10144,
+      "sha256": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477",
       "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/collect-native-chain-outer.sh"
     },
     {
@@ -80,7 +80,17 @@
   "unchanged_original_inputs_and_preparation": true,
   "qualified_baseline_source": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
   "baseline_elf_sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3",
-  "collector_runtime_gate_pending": true,
+  "collector_runtime_gate_pending": false,
   "launch_authority": false,
-  "performance_claim": false
+  "performance_claim": false,
+  "collector_disposable_gate": {
+    "attempt": "a0008",
+    "source_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+    "archive_sha256": "e42f8d5cd1c7810aef6812a4896365a0e6df64388f2491391f6b3f3f8223d952",
+    "terminated": true,
+    "volume_absent": true
+  },
+  "changed_since_prior_roster": [
+    "collect-native-chain-outer.sh"
+  ]
 }

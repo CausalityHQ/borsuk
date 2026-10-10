@@ -1,0 +1,36 @@
+{
+  "status": "DISPOSABLE_COLLECTOR_SMOKE_METADATA_AUTHENTICATED",
+  "source_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+  "instance_id": "i-0a070b07a5d215e62",
+  "archive_bytes": 26138,
+  "archive_sha256": "e42f8d5cd1c7810aef6812a4896365a0e6df64388f2491391f6b3f3f8223d952",
+  "sealed_regular_files": 291,
+  "completed_cases": [
+    "positive0",
+    "positive2",
+    "positive3",
+    "exit-disagreement",
+    "wrong-config",
+    "truncated-seal",
+    "replaced",
+    "populated",
+    "deadline"
+  ],
+  "original_exits": [
+    0,
+    0,
+    0
+  ],
+  "collector_live_cleanup_proved": true,
+  "terminated": true,
+  "volume_absent": true,
+  "all_phase_metadata_synthetic": true,
+  "ann_executed": false,
+  "performance_claim": false,
+  "full_native_chain_qualified": false,
+  "local_action": "closed metadata and opaque hash audit only; no fixture/native/runtime-validator execution",
+  "remaining": [
+    "exact-source real1M native gate and Q32 recall screen",
+    "fresh physical cold S3 measurements"
+  ]
+}

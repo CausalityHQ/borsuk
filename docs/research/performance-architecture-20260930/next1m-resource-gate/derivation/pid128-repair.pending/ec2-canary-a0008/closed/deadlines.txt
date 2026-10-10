@@ -1,0 +1,1 @@
+termination_request_by_launch_plus_2500; all_termination_attempts_and_waits_share_launch_plus_2620; not_a_guarantee_of_AWS_completion

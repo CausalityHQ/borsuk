@@ -1,0 +1,9 @@
+# Disposable collector smoke a0008 accepted
+
+Exact source73886fff6b1e7ddea0e5a548d997cfab939eab35. Original causality/eu-central-1 Spot instance i-0a070b07a5d215e62, watcher d0befd6cca2a4b69b0203efd0bc21481 terminal1/0. Bootstrap, original test, cleanup all0. Instance terminated and volume absent before acceptance. Complete collected archive26138 bytes SHA256 e42f8d5cd1c7810aef6812a4896365a0e6df64388f2491391f6b3f3f8223d952.
+
+All nine actual systemd/kernel cases passed and291 regular smoke files authenticated against the complete seal. Original0/2/3 closures are distinct from collector exit0. Six refusals: exit disagreement, wrong config, truncated manifest, replacement identity, live original descendant, deadline. Original live refusal cleanup is independently observed before harness cleanup; replacement stays active until its own authenticated harness cleanup. Empty metadata-refusal retained units are explicitly harness-cleaned, not claimed as collector failure-cleanup qualification. Native phase fields are entirely synthetic. CPU1/256MiB/PID128/noSwap, external300s command, parent310s; root bounded external termination receipt preserved.
+
+Root closed metadata audit run-p1872119-i714770093.service exit0,97ms,8.2MiB, CPU1/256MiB/noSwap/120s. It reads only completed receipts and opaque hashes, never runs fixtures, native programs, runtime admission validators, corpus or GT locally. The actual systemd smoke ran only on causality EC2.
+
+Original failuresa0005/6/7 remain immutable INVALID. No further collector smoke is required when its relevant exact source and environment are unchanged. This is disposable staging mechanics acceptance ONLY; full native chain, real1M Q32 and physical cold performance remain unqualified. Proceed to root-owned exact-source real1M native gate using preserved algorithms, qualified bounded-pool baseline ELF, exact existing corpus/query/truth and scientific limits. The product goal remains incomplete.
