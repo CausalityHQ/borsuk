@@ -1,0 +1,8 @@
+{
+  "changed_helpers": [
+    "cleanup_owned",
+    "run_phase"
+  ],
+  "validator_and_filesystem_runtime_evidence_reused_only_for_unchanged_source": true,
+  "native_runtime_executed": false
+}
