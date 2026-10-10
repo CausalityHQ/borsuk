@@ -11,7 +11,7 @@ assert {x['name'] for x in roster}=={'wrapper-canary.sh','run_native_scale_build
 # Explicit root review disposition and fresh source-bound quote, never intent alone.
 auth=json.loads((d/'root-source-admission.json').read_text())
 assert auth['status']=='READY_DISPOSABLE_SUPERVISOR_CANARY'
-for name in ['next1m-canary-worker.sh','next1m-canary-watch.sh','next1m-canary-launch-once.sh','next1m-canary-request.pending.json','next1m-canary-freeze.py','support-roster.json']:
+for name in ['next1m-canary-worker.sh','next1m-canary-watch.sh','next1m-canary-launch-once.sh','next1m-canary-request.pending.json','next1m-canary-freeze.py','support-roster.json','canary-execution-envelope.pending.json']:
  assert hashlib.sha256((d/name).read_bytes()).hexdigest()==auth['files'][name]
 assert auth['ann_measurement'] is False and auth['aws_profile']=='causality'
 assert auth['total_cost_cap_usd']==0.60
