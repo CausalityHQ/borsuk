@@ -1,0 +1,10 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "reviewed_candidate_preserved": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "review_group": "aadd94cc1afc4f22",
+  "initial_partial_finding": "engineering critic4560bbe2 flagged inherited logger descriptors",
+  "independently_confirmed_source": "accepted HEAD review-repair-r7/timeout-descendant.sh redirects0/1/2 and closes FD3..63 before sleep60",
+  "repair": "new working draft applies same redirection and descriptor close, finite child fallback60s",
+  "runtime_executed": false,
+  "review_result_pending": true
+}

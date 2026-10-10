@@ -1,0 +1,98 @@
+{
+  "schema": "borsuk-next1m-observer-mechanics-canary-envelope-v1",
+  "status": "PENDING_SOURCE_REVIEW_AND_ROOT_FREEZE",
+  "candidate_source_commit": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "spot",
+  "instance_type": "c7i.2xlarge",
+  "instance_id": null,
+  "single_launch": true,
+  "root_volume": {
+    "gib": 48,
+    "encrypted": true,
+    "delete_on_termination": true
+  },
+  "runtime_toolchain": false,
+  "cargo_rustc_allowed": false,
+  "ann_measurement": false,
+  "real_operations": [
+    "source and ELF exact-byte SHA admission",
+    "systemd observer and sibling payload services",
+    "kernel CPU affinity, quota, memory, PID and swap limits",
+    "Bash fixture plain exits, timeout, overflow and escaped-session drain",
+    "qualified Rust ELF CLI usage only"
+  ],
+  "outer_canary": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128
+  },
+  "observer_per_case": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "build_payload": {
+    "cpu_quota_percent": 400,
+    "allowed_cpus": "0-3",
+    "memory_max_bytes": 8589934592,
+    "swap_max_bytes": 0,
+    "tasks_max": 128
+  },
+  "query_payload": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 536870912,
+    "swap_max_bytes": 0,
+    "tasks_max": 128
+  },
+  "deadlines": {
+    "canary_command_seconds": 1500,
+    "kill_grace_seconds": 10,
+    "machine_shutdown_from_launch_seconds": 1700,
+    "root_external_termination_from_launch_seconds": 1800,
+    "root_cleanup_margin_seconds": 120
+  },
+  "cost": {
+    "fresh_spot_quote_usd_per_hour": "0.215100",
+    "compute_cap_usd": "0.32",
+    "ancillary_cap_usd": 0.15,
+    "total_cap_usd": 0.5,
+    "quote_required_before_launch": true,
+    "maximum_spot_bid_usd_per_hour": "0.60",
+    "modeled_at_quote_usd": "0.114720",
+    "total_at_bid_cap_usd": "0.47",
+    "quote_observed_at": "2026-10-10T12:28:05Z",
+    "quote_artifact": {
+      "path": "/tmp/borsuk-next1m-pid128-repair-draft/canary-quote-20261010/spot-price.json",
+      "bytes": 417,
+      "sha256": "b1cf67ac8259190d3f040adaf4977c8523ec4a39072ff52548f0b8b849b9f853"
+    },
+    "quote_original_unit": "run-p13994-i708723775.service",
+    "quote_original_exit": 0
+  },
+  "success_requires": [
+    "original canary command exit0 and source-bound result receipt",
+    "all expected plain native fixture exits separately retained",
+    "both build and query strict kernel envelopes",
+    "escaped descendant alive-after-timeout witness and exact owned drain",
+    "all canary-owned services and descendants drained",
+    "original instance terminated and root volume deleted before final collection acceptance",
+    "complete authenticated terminal evidence replay"
+  ],
+  "interruption": "INVALID interrupted cell; preserve original receipts; no automatic retry",
+  "no_performance_claim": true,
+  "remaining_before_launch": [
+    "dual source critique aadd94cc1afc4f22 reconciliation",
+    "direct full-chain collector refusal coverage source",
+    "source-bound asset roster and exact root execution/collection seam",
+    "fresh Spot quote and finite budget arithmetic",
+    "final source/config freeze and review corrections"
+  ]
+}

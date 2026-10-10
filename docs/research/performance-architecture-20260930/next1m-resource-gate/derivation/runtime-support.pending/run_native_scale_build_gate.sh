@@ -97,7 +97,7 @@ finish() {
           baseline_invoked:($baseline_invoked == 1),actual_query_completion_requires_external_replay:true,
           instance_termination_verified:false,performance_claim:false}' \
         -- ${completed[@]+"${completed[@]}"} > "$evidence/terminal.json" || { wf=1; rc=98; }
-    # Seal pre-status evidence; wrapper.exit and terminal.json record the later intent.
+    # Seal terminal and phase evidence; the later wrapper.exit is bound independently.
     (cd -- "$evidence" && find . -type f ! -path ./closure.sha256 ! -path ./wrapper.exit -print0 | sort -z | xargs -0 sha256sum --) \
         > "$evidence/closure.sha256" || { wf=1; rc=98; }
     sync -f "$evidence" || { wf=1; rc=98; }
@@ -665,6 +665,7 @@ run_phase() {
     stage=$name
     phase_dir=$evidence/phases/$name
     mkdir -- "$phase_dir"
+    printf '%s\n' "$secs" > "$phase_dir/timeout.seconds"
     sample_disk "phase-$name-before"
     (( SECONDS + secs + 80 < whole_deadline )) || die 'phase cannot fit whole-stage deadline'
     manager_deadline=$((SECONDS+secs+80))

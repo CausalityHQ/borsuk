@@ -348,6 +348,7 @@ def check_resources(ev, P, labels, unit, memory=GIB8, cores=4, cpus='0-3'):
         else:
             req(eff_body == base, 'effective limit drift ' + lab)
         recs = ev.jl(P + 'resources.%s.jsonl' % lab)
+        required_event_counters(recs)
         req(len(recs) > 1 and recs[0]['path'].endswith('/' + unit), 'ancestor chain / owned unit leaf')
         leaf = recs[0]
         req(int(leaf['memory_current']) <= memory and int(leaf['memory_peak']) <= memory and int(leaf['memory_swap_current']) == 0, 'leaf memory evidence')
@@ -614,6 +615,15 @@ def verify_gate(ev, pins, sup, term, receipt):
     return final, gate_sha
 
 
+def required_event_counters(rows):
+    for row in rows:
+        if row['path'] != '/sys/fs/cgroup':
+            req(row['pids_events'] != 'absent' and 'max' in counters(row['pids_events']), 'missing non-root PID event counter')
+            req(row['memory_events'] != 'absent' and
+                {'max', 'oom', 'oom_kill', 'oom_group_kill'} <= set(counters(row['memory_events'])),
+                'missing non-root memory event counter')
+
+
 def snapshot_pair(ev, before, after, path, memory, cores, cpus):
     b, a = ev.jl(before), ev.jl(after)
     expected_paths = [path, '/sys/fs/cgroup/system.slice', '/sys/fs/cgroup']
@@ -624,6 +634,7 @@ def snapshot_pair(ev, before, after, path, memory, cores, cpus):
         req(vals, 'missing finite ' + key)
         return min(vals)
     for rows in (b, a):
+        required_event_counters(rows)
         req(effective(rows, 'memory_max') == memory and effective(rows, 'memory_swap_max') == 0 and effective(rows, 'pids_max') == 128, 'snapshot effective memory/swap/PID limits')
         quotas = []
         for r in rows:
@@ -663,6 +674,9 @@ def verify_outer_observer(ev, rc, config_sha, recipe_sha):
     req(ev.b('chain-observer.unit') == (unit + '\n').encode() and ev.b('chain-launch.exit') == b'0\n' and
         ev.b('chain-actual.exit') == ('%d\n' % rc).encode(), 'launch distinct from original exit')
     manager = kv_lines(ev.t('chain-outer/manager.show'))
+    launch = kv_lines(ev.t('chain-launch.identity'))
+    req(launch.get('Id') == launch.get('Description') == unit and launch.get('InvocationID') == ident and
+        launch.get('ControlGroup') == '/system.slice/' + unit, 'original launch identity binds final observer')
     result = 'success' if rc == 0 else 'exit-code'
     req(manager.get('Id') == manager.get('Description') == unit and manager.get('InvocationID') == ident and
         manager.get('MainPID') == '0' and manager.get('ExecMainCode') == '1' and manager.get('ExecMainStatus') == str(rc) and

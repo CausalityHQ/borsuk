@@ -1,0 +1,13 @@
+{
+  "candidate": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "group_id": "aadd94cc1afc4f22",
+  "research_critic_id": "409425f54dd34dbe",
+  "engineering_critic_id": "4560bbe2d9bc46a3",
+  "started_at": 1791635126,
+  "status_at_start": "running",
+  "initial_cooldown_request_dispatched": false,
+  "override_reason": "Distinct new scale1M composition; preceding group259d91aacc8c4b8f reviewed100k source7cffa155 and both critics completed. No duplicate review of this1M source.",
+  "runtime_permitted": false,
+  "source_edit_permitted": false,
+  "repeat_consultation_permitted": false
+}

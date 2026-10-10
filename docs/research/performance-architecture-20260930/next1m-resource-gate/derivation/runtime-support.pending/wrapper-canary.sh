@@ -7,7 +7,7 @@ umask 077
 [[ $# == 3 ]] || exit 125
 wrapper=$(realpath -e -- "$1"); bins=$(realpath -e -- "$2"); out=$3
 [[ $out == /* && ! -e $out && ! -L $out && -d ${out%/*} ]] || exit 125
-[[ $(sha256sum "$wrapper" | cut -d' ' -f1) == f692d430d48cee28bc1e53cbc1c4fa865dacf23bf33db9f8238b426b4c660a6f ]] || exit 125
+[[ $(sha256sum "$wrapper" | cut -d' ' -f1) == b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452 ]] || exit 125
 (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) || exit 125
 (( EUID == 0 )) || exit 125
 mkdir -- "$out"
@@ -22,7 +22,7 @@ awk '/^cfg\(\)/{print}' "$wrapper" > "$out/cfg.sh"
 awk '/^IFS= read -r -d .*JQ_F32 /{p=1;next} p && /^EOF$/{exit} p{print}' "$wrapper" > "$out/f32.jq"
 awk '/^observer_relative=/{p=1} /^resources before$/{exit} p{print}' "$wrapper" > "$out/observer-init.sh"
 for part in prefix.sh sample.sh phases.sh cfg.sh f32.jq observer-init.sh; do [[ -s $out/$part ]]; done
-sha256sum "$wrapper" "$out"/{prefix.sh,sample.sh,phases.sh,cfg.sh,f32.jq} > "$out/source.sha256"
+sha256sum "$wrapper" "$out"/{prefix.sh,sample.sh,phases.sh,cfg.sh,f32.jq,observer-init.sh} > "$out/source.sha256"
 run() {
  local name=$1 expected=$2 rc
  shift 2
@@ -50,11 +50,12 @@ jq -e '.status=="INVALID" and .signal=="HUP" and .original_exit==129 and .intend
 run carried2 2 bash -c 'source "$1/prefix.sh" "$1/invalid.json" "$2" "$1/carried-evidence"; verified=1; baseline_exit=2; exit 2' _ "$out" "$config_sha"
 jq -e '.status=="BASELINE_NONZERO_EXIT" and .intended_exit==2 and .baseline_native_exit==2' "$out/carried-evidence/terminal.json" > "$out/carried.assert"
 # Independent literal values; signed-zero JSON roundtrip remains a native generation check.
-cat >> "$out/f32.jq" <<'EOF'
+cp "$out/f32.jq" "$out/f32-assertions.jq"
+cat >> "$out/f32-assertions.jq" <<'EOF'
 [[1065353216,1],[3221225472,-2],[1,1.401298464324817e-45],[2139095039,3.4028234663852886e38]] |
 all(.[]; . as $pair | ($pair[0]|f32dec)==$pair[1] and ($pair[0]|f32ok))
 EOF
-jq -ne -f "$out/f32.jq" > "$out/f32.assert"
+jq -ne -f "$out/f32-assertions.jq" > "$out/f32.assert"
 # Real kernel supervision of disclosed Bash fixtures; never ANN measurements.
 observer_unit='' observer_id=''
 stop_observer() {
@@ -158,9 +159,11 @@ trap '' TERM
 printf 'pid=%s\n' "$$" > "$1"
 cat "/proc/$$/cgroup" >> "$1"
 cat "/proc/$$/stat" > "$1.procstat"
-exec sleep 1000
+# Exact logger-descriptor cleanup from the accepted r7 timeout descendant.
+for ((fd=3;fd<64;fd++)); do eval "exec $fd>&-"; done
+exec /bin/sleep 60
 ESCAPED
-printf -v escaped_command 'setsid /bin/bash %q %q & exec sleep 30' "$out/escaped-child.sh" "$out/staging-escaped/native/descendant.identity"
+printf -v escaped_command 'setsid /bin/bash %q %q </dev/null >/dev/null 2>&1 & exec sleep 30' "$out/escaped-child.sh" "$out/staging-escaped/native/descendant.identity"
 phase_case fixture-escaped fixture "$escaped_command" 98 no
 jq -e '.alive_after_timeout==true and .separate_process_group_and_session==true' \
  "$out/fixture-escaped-evidence/phases/fixture/child.witness.json" > "$out/fixture-escaped.assert"

@@ -1,0 +1,52 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "review_group": "aadd94cc1afc4f22",
+  "reviewed_candidate": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "engineering_result_complete": true,
+  "research_result_pending": true,
+  "engineering_report_sha256": "24a2b47e9f3c871f0ad940bb1f690e19a65a4e72ad5259f0e74c5dabb322d9f5",
+  "reconciled_source_findings": [
+    {
+      "finding": 1,
+      "repair": "phase writes exact timeout.seconds before launch"
+    },
+    {
+      "finding": 2,
+      "repair": "escaped child redirects standard streams, closes FD3..63 and uses accepted60s fallback"
+    },
+    {
+      "finding": 3,
+      "repair": "non-root mandatory PID/memory event keys required in both snapshot and observer resource replay"
+    },
+    {
+      "finding": 4,
+      "repair": "launch Id/Description/InvocationID/ControlGroup checked against final observer"
+    },
+    {
+      "finding": "source sealing",
+      "repair": "f32 source excerpt remains immutable; assertions separate; observer-init included in source manifest"
+    }
+  ],
+  "static": {
+    "unit": "run-p347309-i709037604.service",
+    "invocation_id": "8536b94a66a04d14a7b495ea5178710e",
+    "exit": 0,
+    "commands": [
+      "bash -n run_native_scale_build_gate.sh",
+      "bash -n wrapper-canary.sh",
+      "shellcheck -x wrapper-canary.sh",
+      "py_compile verify-closed.py"
+    ],
+    "peak_memory": "36.1M",
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "runtime_executed": false,
+  "review_findings_runtime_falsifiers_remaining": true,
+  "paid_launch_performed": false,
+  "performance_claim": false
+}
