@@ -1,0 +1,34 @@
+{
+  "schema": "borsuk-native-scale-derivation-config-v1",
+  "original_corpus": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/corpus.f32",
+    "bytes": 4096000000,
+    "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+  },
+  "rows": 1000000,
+  "dimensions": 1024,
+  "corpus_intervals": [
+    {
+      "end": 100000,
+      "start": 0
+    },
+    {
+      "end": 1001000,
+      "start": 101000
+    }
+  ],
+  "producer_authority": {
+    "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+    "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+    "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+    "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+  },
+  "resources": {
+    "max_payload_bytes": 2147483648,
+    "max_aggregate_scratch_bytes": 17601119807,
+    "caller_payload_bytes": 67108864,
+    "caller_scratch_bytes": 4193879871,
+    "temporary_reserve_bytes": 67108864
+  }
+}

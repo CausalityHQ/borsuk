@@ -1,0 +1,72 @@
+[
+  {
+    "name": "closure-failure-support.sh",
+    "bytes": 3901,
+    "sha256": "c98fd336646a0f0e31649a35432af925cc99a445ab06bbcded20d15b663d8db0"
+  },
+  {
+    "name": "collect-native-chain-outer.sh",
+    "bytes": 10144,
+    "sha256": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477"
+  },
+  {
+    "name": "derivation-config.json",
+    "bytes": 1145,
+    "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+  },
+  {
+    "name": "gate-config.json",
+    "bytes": 4400,
+    "sha256": "db04c8bd5e27ea74d1cc49c8bdcf842f4ee2858e7e690924bbc974f1eb00086e"
+  },
+  {
+    "name": "observer-command.sh",
+    "bytes": 643,
+    "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+  },
+  {
+    "name": "retain-generation-source.sh",
+    "bytes": 6283,
+    "sha256": "aa48e825ba7678dfd263c2ff500c800e483e077a4359c80c0572d5138c082c95"
+  },
+  {
+    "name": "retain-panel-result.sh",
+    "bytes": 1863,
+    "sha256": "7c9c76b84b2de7b7a16cd50e098e6c341ce25f12366c38ad1fcd4feee7807f11"
+  },
+  {
+    "name": "run-native-chain-observer.sh",
+    "bytes": 3896,
+    "sha256": "34ed00d2516e3854550e3a3200c999c5b6112ddc9bcd4ea0c216cccdfebb47d3"
+  },
+  {
+    "name": "run_native_scale_build_gate.sh",
+    "bytes": 62782,
+    "sha256": "27ea601aa9f9812a0769696bc4a61abf80e37fe31715a2f81193de82c75f240c"
+  },
+  {
+    "name": "service-stop.sh",
+    "bytes": 2739,
+    "sha256": "99541cb05066612a4caae4f44244af12c965a07b9c8156b3f53715864249c30e"
+  },
+  {
+    "name": "support.sha256",
+    "bytes": 1163,
+    "sha256": "c4c93f4cfb7376555ba0ac142105aa52fbc7957fbdeed0064c4154c8e3b027bc"
+  },
+  {
+    "name": "transport-pins.json",
+    "bytes": 3888,
+    "sha256": "f63229c572dbbeaca472dda23f1d2c091d43f903e33b188260a406ad05e5ec2f"
+  },
+  {
+    "name": "transport.py",
+    "bytes": 3655,
+    "sha256": "b97e7bae8f809d9b4dfa03c8f7df0bb0c9f3484dde7daeaf9357caa784c60894"
+  },
+  {
+    "name": "validate-scratch-binding.sh",
+    "bytes": 2250,
+    "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+  }
+]
