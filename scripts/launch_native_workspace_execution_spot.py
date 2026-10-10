@@ -18,6 +18,7 @@ controller_code_sha256={every CODE path:SHA256}, native_source_manifest=
 --budget-object-selector-implementation qualifies only the four native evaluator gates.
 --budget-object-fitter-implementation executes both modules and the same three build gates.
 --cohere-sq8-builder builds the existing source-builder example only.
+--baseline-pool-implementation qualifies the baseline blocking-pool repair in both owning targets.
 --cohere-cohort-implementation qualifies exactly two new preflight bins.
 --cohere1024-implementation qualifies the root-supplied D1024 native candidate.
 --hierarchical-cells-implementation uses a separate minimal-archive v2 root.
@@ -81,6 +82,7 @@ COHERE_COHORT = False
 COHERE_SQ8_BUILDER = False
 EXACT_SQ8_RUNTIME = False
 RETAINED_GENERATION_REBIND = False
+BASELINE_POOL = False
 MINIMAL_ARCHIVE = False
 HIERARCHICAL_CELLS_DELTA = ('crates/borsuk/src/bin/hierarchical_semantic_cells.rs',
                           'crates/borsuk/src/hierarchical_semantic_cells.rs')
@@ -570,6 +572,63 @@ RETAINED_REBIND_RELEASE = ('binaries/check_cohere_native_baseline', 'binaries/pu
 RETAINED_REBIND_SUBNET = 'subnet-00243d923761c047c'
 
 
+BASELINE_POOL_DELTA = ('crates/borsuk/src/bin/check_cohere_native_baseline.rs',)
+BASELINE_POOL_STAGE_SCHEMA = 'borsuk-baseline-pool-implementation-gates-stage-v1'
+BASELINE_POOL_BIN_TESTS = tuple('tests::' + name for name in (
+    'query_runtime_bounds_blocking_threads_and_drains',
+    'cold_fetch_parallelism_selector_is_explicit_and_bounded',
+    'actual_native_queries_seal_and_reduce_against_literal_oracles'))
+BASELINE_POOL_REQUIRED_TESTS = {
+    'baseline-pool-bin-tests': BASELINE_POOL_BIN_TESTS,
+    'baseline-pool-replay-tests': (*('scale_native_runner::' + name for name in BASELINE_POOL_BIN_TESTS),
+        'tests::actual_native_scale_runner_reducer_seal_count_mismatches'),
+}
+# Full targets include Tokio tests and the embedded producer/source-cover test modules.
+BASELINE_POOL_TEST_COUNTS = {'baseline-pool-bin-tests': 42, 'baseline-pool-replay-tests': 80}
+BASELINE_POOL_STAGES = tuple((name, command.split()) for name, command in (
+    ('baseline-pool-bin-tests', 'cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1'),
+    ('baseline-pool-replay-tests', 'cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1'),
+    ('release', 'cargo build --release --locked -p borsuk --bin check_cohere_native_baseline'),
+    ('clippy', 'cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious'),
+    ('test-build', 'env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh')))
+BASELINE_POOL_RELEASE = ('binaries/check_cohere_native_baseline',)
+
+
+def validate_baseline_pool_sources(base):
+    """Bind the three baseline tests to both targets and the reducer to its example."""
+    baseline = (Path(base)/BASELINE_POOL_DELTA[0]).read_text()
+    replay = (Path(base)/'crates/borsuk/examples/compare_native_replay.rs').read_text()
+    assert '#[path = "../src/bin/check_cohere_native_baseline.rs"]\nmod scale_native_runner;' in replay, 'replay baseline module binding'
+    # shortcut: these fixed Rust declarations are checked textually; native stage logs remain the test authority.
+    for body, names in ((baseline, BASELINE_POOL_BIN_TESTS),
+                        (replay, BASELINE_POOL_REQUIRED_TESTS['baseline-pool-replay-tests'][-1:])):
+        assert re.search(r'^mod tests \{', body, re.MULTILINE), 'owning tests module'
+        for name in names:
+            assert len(re.findall(r'^    #\[test\]\n    fn ' + re.escape(name.removeprefix('tests::')) + r'\(', body, re.MULTILINE)) == 1, 'unique owning test declaration: ' + name
+
+
+def _baseline_pool_self_check():
+    """Source/command parsing only; never run a gate or manufacture native evidence."""
+    import ast
+    import shlex
+    base = Path(__file__).resolve().parents[1]
+    validate_baseline_pool_sources(base)
+    script = base/'scripts/check_baseline_pool_implementation.sh'
+    body = script.read_text()
+    stages = [shlex.split(line)[1:] for line in body.splitlines() if line.startswith('run_stage ')]
+    assert stages == [[name, *command] for name, command in BASELINE_POOL_STAGES], 'exact five serial shell gates'
+    assert len(stages) == 5 and all('--test-threads=1' in stage for stage in stages[:2])
+    assert stages[2][1:] == ['cargo', 'build', '--release', '--locked', '-p', 'borsuk', '--bin', 'check_cohere_native_baseline']
+    names = [name for tests in BASELINE_POOL_REQUIRED_TESTS.values() for name in tests]
+    assert len(names) == len(set(names)) == 7, 'distinct owning test names'
+    assert BASELINE_POOL_DELTA == ('crates/borsuk/src/bin/check_cohere_native_baseline.rs',)
+    assert BASELINE_POOL_RELEASE == ('binaries/check_cohere_native_baseline',)
+    for name in ('launch_native_workspace_execution_spot', 'check_native_workspace_execution'):
+        ast.parse((base/'scripts'/(name+'.py')).read_text())
+    subprocess.run(['bash', '-n', str(script)], check=True)
+    print('PASS baseline pool source/command parsing only; native, lifecycle and resource qualification UNVERIFIED')
+
+
 def retained_rebind_required_tests(required):
     """Fail-closed on any drift (and while empty): both rosters, the two existing publisher names plus exactly two new ones, nothing shared."""
     assert required == RETAINED_REBIND_REQUIRED_TESTS and set(required) == set(RETAINED_REBIND_TEST_SOURCES) and all(required.values()), 'retained rebind mandatory test names pending'
@@ -643,6 +702,10 @@ def completed_native_qualification(base, authority, *, retained=False):
 
 def cohere_cohort_required_tests():
     required = COHERE_COHORT_REQUIRED_TESTS
+    if BASELINE_POOL:
+        assert required == BASELINE_POOL_REQUIRED_TESTS, 'baseline pool mandatory test roster'
+        assert set(required) == set(BASELINE_POOL_TEST_COUNTS), 'baseline pool owning stages'
+        return required
     if RETAINED_GENERATION_REBIND:
         return retained_rebind_required_tests(required)
     if EXACT_SQ8_RUNTIME:
@@ -865,26 +928,28 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
-def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False):
+def configure(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False, baseline_pool=False):
     """Select the protocol explicitly in every controller/worker process."""
     global SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, MINIMAL_ARCHIVE, NATIVE_DELTA, ROOT, CONFIG, PREFIX, TOKEN_PREFIX, TAG
     global SCHEMA, CONFIG_SCHEMA, RECEIPT_SCHEMA, CODE, FIXED, ARTIFACTS, RELEASE_ARTIFACTS, TERMINAL_IDENTITIES, SUBNET
-    global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME, RETAINED_GENERATION_REBIND
+    global BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME, RETAINED_GENERATION_REBIND, BASELINE_POOL
     global COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS, _COHORT_REBOUND
-    assert type(budget_object_selector) is type(budget_object_fitter) is type(cohere1024) is type(cohere_cohort) is type(cohere_sq8_builder) is type(exact_sq8_runtime) is type(retained_generation_rebind) is bool
+    assert type(budget_object_selector) is type(budget_object_fitter) is type(cohere1024) is type(cohere_cohort) is type(cohere_sq8_builder) is type(exact_sq8_runtime) is type(retained_generation_rebind) is type(baseline_pool) is bool
     assert type(semantic_1m) is type(test_build) is type(implementation) is type(startup_wave8) is type(root_reuse) is type(bounded_publication) is type(fixed48) is type(hierarchical_cells) is type(constrained_split) is type(cell_overlap) is type(fine_sq8) is type(pq_residual) is type(co_selection) is bool
-    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder or exact_sq8_runtime or retained_generation_rebind
-    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter, cohere1024, cohere_cohort, cohere_sq8_builder, exact_sq8_runtime, retained_generation_rebind)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
+    scoped = startup_wave8 or root_reuse or bounded_publication or fixed48 or hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder or exact_sq8_runtime or retained_generation_rebind or baseline_pool
+    assert sum((startup_wave8, root_reuse, bounded_publication, fixed48, hierarchical_cells, constrained_split, cell_overlap, fine_sq8, pq_residual, co_selection, budget_object_selector, budget_object_fitter, cohere1024, cohere_cohort, cohere_sq8_builder, exact_sq8_runtime, retained_generation_rebind, baseline_pool)) <= 1 and not (scoped and test_build), 'mutually exclusive execution modes'
     if scoped:
         semantic_1m = implementation = True
     assert not (test_build and implementation), 'mutually exclusive execution modes'
-    # The exact SQ8 and retained rebind modes reuse the cohort-family lifecycle with their own protocol data.
+    # These modes reuse the cohort-family lifecycle with their own protocol data.
     EXACT_SQ8_RUNTIME = exact_sq8_runtime
     RETAINED_GENERATION_REBIND = retained_generation_rebind
+    BASELINE_POOL = baseline_pool
     SUBNET = RETAINED_REBIND_SUBNET if retained_generation_rebind else FULL_FIXED['subnet_id']
-    if exact_sq8_runtime or retained_generation_rebind:
+    if exact_sq8_runtime or retained_generation_rebind or baseline_pool:
         cohere_cohort = True
         COHERE_COHORT_STAGES, COHERE_COHORT_STAGE_SCHEMA, COHERE_COHORT_REQUIRED_TESTS = (
+            (BASELINE_POOL_STAGES, BASELINE_POOL_STAGE_SCHEMA, BASELINE_POOL_REQUIRED_TESTS) if baseline_pool else
             (RETAINED_REBIND_STAGES, RETAINED_REBIND_STAGE_SCHEMA, RETAINED_REBIND_REQUIRED_TESTS) if retained_generation_rebind else
             (EXACT_SQ8_RUNTIME_STAGES, EXACT_SQ8_RUNTIME_STAGE_SCHEMA, EXACT_SQ8_RUNTIME_REQUIRED_TESTS))
         _COHORT_REBOUND = True
@@ -911,8 +976,8 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
     COHERE_COHORT = cohere_cohort
     COHERE_SQ8_BUILDER = cohere_sq8_builder
     MINIMAL_ARCHIVE = hierarchical_cells or constrained_split or cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort or cohere_sq8_builder
-    NATIVE_DELTA = RETAINED_REBIND_DELTA if retained_generation_rebind else EXACT_SQ8_RUNTIME_DELTA if exact_sq8_runtime else () if cohere_sq8_builder else COHERE_COHORT_DELTA if cohere_cohort else COHERE1024_DELTA if cohere1024 else BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
-    RELEASE_ARTIFACTS = RETAINED_REBIND_RELEASE if retained_generation_rebind else EXACT_SQ8_RUNTIME_RELEASE if exact_sq8_runtime else ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
+    NATIVE_DELTA = BASELINE_POOL_DELTA if baseline_pool else RETAINED_REBIND_DELTA if retained_generation_rebind else EXACT_SQ8_RUNTIME_DELTA if exact_sq8_runtime else () if cohere_sq8_builder else COHERE_COHORT_DELTA if cohere_cohort else COHERE1024_DELTA if cohere1024 else BUDGET_OBJECT_FITTER_DELTA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_DELTA if budget_object_selector else CO_SELECTION_DELTA if co_selection else PQ_RESIDUAL_DELTA if pq_residual else FINE_SQ8_DELTA if fine_sq8 else CELL_OVERLAP_DELTA if cell_overlap else CONSTRAINED_SPLIT_DELTA if constrained_split else HIERARCHICAL_CELLS_DELTA if hierarchical_cells else FIXED48_DELTA if fixed48 else BOUNDED_PUBLICATION_DELTA if bounded_publication else ROOT_REUSE_DELTA if root_reuse else STARTUP_WAVE8_DELTA
+    RELEASE_ARTIFACTS = BASELINE_POOL_RELEASE if baseline_pool else RETAINED_REBIND_RELEASE if retained_generation_rebind else EXACT_SQ8_RUNTIME_RELEASE if exact_sq8_runtime else ('binaries/build_sq8_source',) if cohere_sq8_builder else ('binaries/check_cohere_native_baseline', 'binaries/prepare_cohere_native_cohort', 'binaries/publish_two_bit_generation') if cohere_cohort else FULL_RELEASE_ARTIFACTS if cohere1024 else ('binaries/hierarchical_semantic_cells',) if cell_overlap or fine_sq8 or pq_residual or co_selection or budget_object_selector or budget_object_fitter else ('binaries/check_hierarchical_split_balance', 'binaries/hierarchical_semantic_cells', 'binaries/two_bit_http') if constrained_split else ('binaries/hierarchical_semantic_cells', 'binaries/two_bit_http', 'binaries/build_two_bit_generation', 'binaries/check_semantic_router_scorer') if hierarchical_cells else ('binaries/two_bit_http', 'binaries/check_semantic_router_scorer', 'binaries/two_bit_plan_demo') if fixed48 else ('binaries/two_bit_http',) if scoped else FULL_RELEASE_ARTIFACTS
     TERMINAL_IDENTITIES = (*FULL_TERMINAL_IDENTITIES, 'controller_source_commit', 'candidate_delta_paths') if scoped else FULL_TERMINAL_IDENTITIES
     if MINIMAL_ARCHIVE:
         TERMINAL_IDENTITIES += ARCHIVE_IDENTITIES
@@ -1186,6 +1251,19 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
         FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_retained_generation_rebind_implementation.sh'], subnet_id=SUBNET)
 
 
+    if baseline_pool:
+        ROOT = Path('docs/research/performance-architecture-20260930/cohere1024/baseline-pool/implementation-gates')
+        CONFIG = ROOT/'config.json'
+        TOKEN_PREFIX = 'baseline-pool-implementation-gates-'
+        PREFIX = 'research/semantic-router/20261010/' + TOKEN_PREFIX
+        TAG = 'borsuk-baseline-pool-implementation-gates'
+        SCHEMA = 'borsuk-baseline-pool-implementation-gates-spot-v1'
+        CONFIG_SCHEMA = 'borsuk-baseline-pool-implementation-gates-v1'
+        RECEIPT_SCHEMA = 'borsuk-baseline-pool-implementation-gates-receipt-v1'
+        CODE = (*FULL_CODE, 'scripts/check_rust_test_build.sh', 'scripts/check_baseline_pool_implementation.sh')
+        FIXED.update(schema=CONFIG_SCHEMA, command=['bash', 'scripts/check_baseline_pool_implementation.sh'])
+
+
     if cohere_sq8_builder:
         ROOT = Path('docs/research/performance-architecture-20260930/cohere1024/sq8-builder-qualification')
         CONFIG = ROOT/'config.json'
@@ -1206,17 +1284,19 @@ def configure(semantic_1m=False, *, test_build=False, implementation=False, star
 
 
 @contextlib.contextmanager
-def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False):
+def execution_mode(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False, baseline_pool=False):
     """Restore the caller's protocol after a worker or synthetic check."""
-    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME, RETAINED_GENERATION_REBIND
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind)
+    previous = SEMANTIC_1M, TEST_BUILD, IMPLEMENTATION, STARTUP_WAVE8, ROOT_REUSE, BOUNDED_PUBLICATION, FIXED48, HIERARCHICAL_CELLS, CONSTRAINED_SPLIT, CELL_OVERLAP, FINE_SQ8, PQ_RESIDUAL, CO_SELECTION, BUDGET_OBJECT_SELECTOR, BUDGET_OBJECT_FITTER, COHERE1024, COHERE_COHORT, COHERE_SQ8_BUILDER, EXACT_SQ8_RUNTIME, RETAINED_GENERATION_REBIND, BASELINE_POOL
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind, baseline_pool=baseline_pool)
     try:
         yield
     finally:
-        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13], budget_object_fitter=previous[14], cohere1024=previous[15], cohere_cohort=previous[16] and not previous[18] and not previous[19], cohere_sq8_builder=previous[17], exact_sq8_runtime=previous[18], retained_generation_rebind=previous[19])
+        configure(previous[0], test_build=previous[1], implementation=previous[2], startup_wave8=previous[3], root_reuse=previous[4], bounded_publication=previous[5], fixed48=previous[6], hierarchical_cells=previous[7], constrained_split=previous[8], cell_overlap=previous[9], fine_sq8=previous[10], pq_residual=previous[11], co_selection=previous[12], budget_object_selector=previous[13], budget_object_fitter=previous[14], cohere1024=previous[15], cohere_cohort=previous[16] and not previous[18] and not previous[19] and not previous[20], cohere_sq8_builder=previous[17], exact_sq8_runtime=previous[18], retained_generation_rebind=previous[19], baseline_pool=previous[20])
 
 
 def mode_flag():
+    if BASELINE_POOL:
+        return ' --baseline-pool-implementation'
     if RETAINED_GENERATION_REBIND:
         return ' --retained-generation-rebind-implementation'
     if EXACT_SQ8_RUNTIME:
@@ -1235,6 +1315,8 @@ def mode_flag():
 
 
 def archive_binding_prefix():
+    if BASELINE_POOL:
+        return 'BORSUK_BASELINE_POOL_'
     if RETAINED_GENERATION_REBIND:
         return 'BORSUK_RETAINED_GENERATION_REBIND_'
     if EXACT_SQ8_RUNTIME:
@@ -1435,7 +1517,7 @@ def qualify(base=Path('.')):
     manifest = json.loads((base/path).read_bytes())
     if STARTUP_WAVE8 or ROOT_REUSE or BOUNDED_PUBLICATION or FIXED48 or MINIMAL_ARCHIVE:
         assert re.fullmatch('[0-9a-f]{40}', config['controller_source_commit']), 'frozen controller commit'
-        assert manifest['schema'] == ('borsuk-retained-generation-rebind-implementation-gates-native-source-manifest-v1' if RETAINED_GENERATION_REBIND else 'borsuk-exact-sq8-runtime-gates-native-source-manifest-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-native-source-manifest-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-native-source-manifest-v1' if COHERE1024 else 'borsuk-budget-object-fitter-native-source-manifest-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
+        assert manifest['schema'] == ('borsuk-baseline-pool-implementation-gates-native-source-manifest-v1' if BASELINE_POOL else 'borsuk-retained-generation-rebind-implementation-gates-native-source-manifest-v1' if RETAINED_GENERATION_REBIND else 'borsuk-exact-sq8-runtime-gates-native-source-manifest-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-native-source-manifest-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-native-source-manifest-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-native-source-manifest-v1' if COHERE1024 else 'borsuk-budget-object-fitter-native-source-manifest-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-native-source-manifest-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-native-source-manifest-v1' if CO_SELECTION else 'borsuk-pq-residual-native-source-manifest-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-native-source-manifest-v1' if FINE_SQ8 else 'borsuk-cell-overlap-native-source-manifest-v1' if CELL_OVERLAP else 'borsuk-constrained-split-native-source-manifest-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-native-source-manifest-v1' if HIERARCHICAL_CELLS else 'borsuk-fixed48-native-source-manifest-v1' if FIXED48 else 'borsuk-bounded-publication-native-source-manifest-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-native-source-manifest-v1' if ROOT_REUSE else 'borsuk-startup-wave8-native-source-manifest-v1')
         assert manifest['candidate_qualification_pending'] is True, 'source authority is not completed assurance'
         validate_candidate_delta(manifest['candidate_delta_paths'])
         if STARTUP_WAVE8:
@@ -1452,6 +1534,8 @@ def qualify(base=Path('.')):
         assert 'crates/borsuk/examples/build_sq8_source.rs' in inventory, 'existing SQ8 builder source required'
     if FINE_SQ8 or PQ_RESIDUAL or CO_SELECTION or BUDGET_OBJECT_SELECTOR or BUDGET_OBJECT_FITTER or COHERE1024 or COHERE_COHORT or COHERE_SQ8_BUILDER:
         assert set(NATIVE_DELTA) <= set(inventory), 'complete corrected four-bit native source roster'
+    if BASELINE_POOL:
+        validate_baseline_pool_sources(base)
     if RETAINED_GENERATION_REBIND:
         validate_retained_rebind_sources(base, config['mandatory_tests'])
     assert type(manifest['source_file_count']) is int and manifest['source_file_count'] == len(inventory) > 0
@@ -1460,7 +1544,7 @@ def qualify(base=Path('.')):
     assert identity == manifest['source_identity_sha256']
     assert SEMANTIC_1M or identity == SOURCE_IDENTITY, 'historical native source identity'
     assert re.fullmatch('[0-9a-f]{40}', manifest['native_source_commit'])
-    proof = dict(schema='borsuk-retained-generation-rebind-implementation-gates-qualification-v1' if RETAINED_GENERATION_REBIND else 'borsuk-exact-sq8-runtime-gates-qualification-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-qualification-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-qualification-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-qualification-v1' if COHERE1024 else 'borsuk-budget-object-fitter-implementation-gates-qualification-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
+    proof = dict(schema='borsuk-baseline-pool-implementation-gates-qualification-v1' if BASELINE_POOL else 'borsuk-retained-generation-rebind-implementation-gates-qualification-v1' if RETAINED_GENERATION_REBIND else 'borsuk-exact-sq8-runtime-gates-qualification-v1' if EXACT_SQ8_RUNTIME else 'borsuk-cohere-sq8-builder-qualification-v1' if COHERE_SQ8_BUILDER else 'borsuk-cohere-cohort-implementation-gates-qualification-v1' if COHERE_COHORT else 'borsuk-cohere1024-implementation-gates-qualification-v1' if COHERE1024 else 'borsuk-budget-object-fitter-implementation-gates-qualification-v1' if BUDGET_OBJECT_FITTER else 'borsuk-budget-object-selector-implementation-gates-qualification-v1' if BUDGET_OBJECT_SELECTOR else 'borsuk-co-selection-implementation-gates-qualification-v1' if CO_SELECTION else 'borsuk-pq-residual-implementation-gates-qualification-v1' if PQ_RESIDUAL else 'borsuk-corrected-four-bit-implementation-gates-qualification-v1' if FINE_SQ8 else 'borsuk-cell-overlap-implementation-gates-qualification-v1' if CELL_OVERLAP else 'borsuk-constrained-split-implementation-gates-qualification-v1' if CONSTRAINED_SPLIT else 'borsuk-hierarchical-cells-implementation-gates-qualification-v2' if HIERARCHICAL_CELLS else 'borsuk-fixed48-implementation-gates-qualification-v1' if FIXED48 else 'borsuk-bounded-publication-implementation-gates-qualification-v1' if BOUNDED_PUBLICATION else 'borsuk-root-reuse-implementation-gates-qualification-v1' if ROOT_REUSE else 'borsuk-startup-wave8-implementation-gates-qualification-v1' if STARTUP_WAVE8 else 'borsuk-semantic-1m-implementation-gates-qualification-v1' if IMPLEMENTATION else 'borsuk-native-workspace-test-build-qualification-v1' if TEST_BUILD else 'borsuk-native-workspace-execution-qualification-v1',
         config_path=str(CONFIG), config_sha256=worker.sha(body), campaign_schema=SCHEMA,
         source_sha256=inventory, source_identity_sha256=identity, source_file_count=len(inventory),
         native_source_commit=manifest['native_source_commit'], native_source_manifest=pointer,
@@ -1522,10 +1606,13 @@ def preflight(base=Path('.')):
                 assert set(native) == set(proof['source_sha256']), 'complete committed native roster'
                 native_trees.append(native)
             assert native_trees[0] == native_trees[1], 'native source changed from qualified commit'
+        if BASELINE_POOL:
+            assert subprocess.check_output(['git','diff','--no-renames','--diff-filter=M','--name-only',
+                config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'one MODIFIED baseline native path'
         if RETAINED_GENERATION_REBIND:
             assert subprocess.check_output(['git','diff','--no-renames','--diff-filter=M','--name-only',
                 config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'three MODIFIED native paths, no new Rust path'
-        if COHERE_COHORT and not (EXACT_SQ8_RUNTIME or RETAINED_GENERATION_REBIND):
+        if COHERE_COHORT and not (EXACT_SQ8_RUNTIME or RETAINED_GENERATION_REBIND or BASELINE_POOL):
             assert subprocess.check_output(['git','diff','--no-renames','--diff-filter=A','--name-only',
                 config_commit,'HEAD'], cwd=base, text=True).splitlines() == list(NATIVE_DELTA), 'one NEW publisher native bin'
         for name in proof['candidate_delta_paths']:
@@ -1613,6 +1700,7 @@ def record_constrained_split_stage(argv, *, cell_overlap=False, fine_sq8=False, 
     evidence_invalid |= (pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort) and bool(finished) and (wrong_stage or
         stage.startswith(('cohere-native-', 'exact-sq8-scorer', 'retained-rebind-', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-')) and (seen != set(passes) or tests != len(passes)))
     evidence_invalid |= cohere1024 and bool(finished) and stage == 'generation-release-test' and (seen != set(passes) or tests != len(passes))
+    evidence_invalid |= BASELINE_POOL and bool(finished) and stage in BASELINE_POOL_TEST_COUNTS and tests != BASELINE_POOL_TEST_COUNTS[stage]
     gate = (int(status) or int(log_status) or
         (96 if tests == 0 or failed or ignored or duplicate or evidence_invalid or any(count != 1 for count in passes.values()) else 0)) if finished else None
     print(json.dumps(dict(schema=COHERE_SQ8_BUILDER_STAGE_SCHEMA if cohere_sq8_builder else COHERE_COHORT_STAGE_SCHEMA if cohere_cohort else COHERE1024_STAGE_SCHEMA if cohere1024 else BUDGET_OBJECT_FITTER_STAGE_SCHEMA if budget_object_fitter else BUDGET_OBJECT_SELECTOR_STAGE_SCHEMA if budget_object_selector else CO_SELECTION_STAGE_SCHEMA if co_selection else PQ_RESIDUAL_STAGE_SCHEMA if pq_residual else FINE_SQ8_STAGE_SCHEMA if fine_sq8 else CELL_OVERLAP_STAGE_SCHEMA if cell_overlap else CONSTRAINED_SPLIT_STAGE_SCHEMA, stage=stage,
@@ -1707,6 +1795,7 @@ def validate_bounded_publication_stages(log, *, fixed48=False, hierarchical_cell
         if cohere1024 or EXACT_SQ8_RUNTIME else all(count == 1 for count in passes.values())), 'named tests must pass exactly once in each required stage'
     assert not cohere1024 or seen[1] == set(required['generation-release-test']) and test_counts[1] == 1, 'exact release oracle count'
     assert not strict_counts or all(summaries[index] == 1 and passed_lines[index] == test_counts[index] for index in test_stage_indices), 'actual nonzero test counts'
+    assert not BASELINE_POOL or all(test_counts[index] == BASELINE_POOL_TEST_COUNTS[stages[index][0]] for index in test_stage_indices), 'exact baseline pool owning target counts'
     assert not (pq_residual or co_selection or budget_object_selector or budget_object_fitter or cohere1024 or cohere_cohort) or all(seen[index] == set(required[name]) and test_counts[index] == len(required[name])
         for index, (name, _) in enumerate(stages) if name.startswith(('cohere-native-', 'exact-sq8-scorer', 'retained-rebind-', 'pq-residual-', 'co-selection-', 'budget-object-selector-', 'budget-object-fitter-'))), 'exact selector stage tests' if budget_object_selector else 'exact PQ residual stage tests'
     assert cohere_sq8_builder or not (hierarchical_cells or constrained_split or strict_counts) or test_builds == 1, 'actual unshimmed test-build completion'
@@ -2166,7 +2255,7 @@ def _worker_self_check(proof, config_body, manifest_body, completed_native_body=
                     assert not calls and not (out/'target').exists(), 'invalid qualification reached Cargo/target'
                     continue
                 result = worker.main('cargo' if TEST_BUILD or IMPLEMENTATION else 'fake-cargo', repo, out,
-                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER, cohere1024=COHERE1024, cohere_cohort=COHERE_COHORT and not (EXACT_SQ8_RUNTIME or RETAINED_GENERATION_REBIND), cohere_sq8_builder=COHERE_SQ8_BUILDER, exact_sq8_runtime=EXACT_SQ8_RUNTIME, retained_generation_rebind=RETAINED_GENERATION_REBIND)
+                                     semantic_1m=SEMANTIC_1M, test_build=TEST_BUILD, implementation=IMPLEMENTATION, startup_wave8=STARTUP_WAVE8, root_reuse=ROOT_REUSE, bounded_publication=BOUNDED_PUBLICATION, fixed48=FIXED48, hierarchical_cells=HIERARCHICAL_CELLS, constrained_split=CONSTRAINED_SPLIT, cell_overlap=CELL_OVERLAP, fine_sq8=FINE_SQ8, pq_residual=PQ_RESIDUAL, co_selection=CO_SELECTION, budget_object_selector=BUDGET_OBJECT_SELECTOR, budget_object_fitter=BUDGET_OBJECT_FITTER, cohere1024=COHERE1024, cohere_cohort=COHERE_COHORT and not (EXACT_SQ8_RUNTIME or RETAINED_GENERATION_REBIND or BASELINE_POOL), cohere_sq8_builder=COHERE_SQ8_BUILDER, exact_sq8_runtime=EXACT_SQ8_RUNTIME, retained_generation_rebind=RETAINED_GENERATION_REBIND, baseline_pool=BASELINE_POOL)
                 assert previous == (authority.SEMANTIC_1M, authority.TEST_BUILD, authority.IMPLEMENTATION, authority.STARTUP_WAVE8, authority.ROOT_REUSE, authority.BOUNDED_PUBLICATION, authority.FIXED48, authority.HIERARCHICAL_CELLS, authority.CONSTRAINED_SPLIT, authority.CELL_OVERLAP, authority.FINE_SQ8, authority.PQ_RESIDUAL, authority.CO_SELECTION, authority.CONFIG, authority.CODE, authority.FIXED)
             assert len(calls) == 1, 'full test repeated'
             assert type(result['exit_status']) is int
@@ -4251,8 +4340,10 @@ def _startup_wave8_preflight_self_check(*, root_reuse=False, bounded_publication
                     rejected(lambda:preflight())
 
 
-def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False):
-    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind):
+def self_check(semantic_1m=False, *, test_build=False, implementation=False, startup_wave8=False, root_reuse=False, bounded_publication=False, fixed48=False, hierarchical_cells=False, constrained_split=False, cell_overlap=False, fine_sq8=False, pq_residual=False, co_selection=False, budget_object_selector=False, budget_object_fitter=False, cohere1024=False, cohere_cohort=False, cohere_sq8_builder=False, exact_sq8_runtime=False, retained_generation_rebind=False, baseline_pool=False):
+    with execution_mode(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind, baseline_pool=baseline_pool):
+        if baseline_pool:
+            return _baseline_pool_self_check()
         if cohere_sq8_builder:
             return _cohere_sq8_builder_self_check()
         if retained_generation_rebind:
@@ -4485,6 +4576,7 @@ if __name__ == '__main__':
     cohere_sq8_builder = args[:1] == ['--cohere-sq8-builder']
     exact_sq8_runtime = args[:1] == ['--exact-sq8-runtime']
     retained_generation_rebind = args[:1] == ['--retained-generation-rebind-implementation']
+    baseline_pool = args[:1] == ['--baseline-pool-implementation']
     cohere_cohort = args[:1] == ['--cohere-cohort-implementation']
     cohere1024 = args[:1] == ['--cohere1024-implementation']
     budget_object_fitter = args[:1] == ['--budget-object-fitter-implementation']
@@ -4499,15 +4591,17 @@ if __name__ == '__main__':
     bounded_publication = args[:1] == ['--bounded-publication-implementation']
     root_reuse = args[:1] == ['--root-reuse-implementation']
     startup_wave8 = args[:1] == ['--startup-wave8-implementation']
-    implementation = cohere_sq8_builder or exact_sq8_runtime or retained_generation_rebind or cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
+    implementation = baseline_pool or cohere_sq8_builder or exact_sq8_runtime or retained_generation_rebind or cohere_cohort or cohere1024 or budget_object_fitter or budget_object_selector or co_selection or pq_residual or fine_sq8 or cell_overlap or constrained_split or hierarchical_cells or fixed48 or bounded_publication or root_reuse or startup_wave8 or args[:1] == ['--semantic-1m-implementation']
     test_build = args[:1] == ['--semantic-1m-test-build']
     semantic_1m = implementation or test_build or args[:1] == ['--semantic-1m']
     if semantic_1m:
         args = args[1:]
-    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind)
+    configure(semantic_1m, test_build=test_build, implementation=implementation, startup_wave8=startup_wave8, root_reuse=root_reuse, bounded_publication=bounded_publication, fixed48=fixed48, hierarchical_cells=hierarchical_cells, constrained_split=constrained_split, cell_overlap=cell_overlap, fine_sq8=fine_sq8, pq_residual=pq_residual, co_selection=co_selection, budget_object_selector=budget_object_selector, budget_object_fitter=budget_object_fitter, cohere1024=cohere1024, cohere_cohort=cohere_cohort, cohere_sq8_builder=cohere_sq8_builder, exact_sq8_runtime=exact_sq8_runtime, retained_generation_rebind=retained_generation_rebind, baseline_pool=baseline_pool)
     if args[:1] and args[0].startswith('--'):
         resource.setrlimit(resource.RLIMIT_AS, (200*1024**2,200*1024**2))
-    if args == ['--self-check'] and cohere_sq8_builder:
+    if args == ['--self-check'] and baseline_pool:
+        _baseline_pool_self_check()
+    elif args == ['--self-check'] and cohere_sq8_builder:
         _cohere_sq8_builder_self_check()
     elif args == ['--self-check'] and retained_generation_rebind:
         _budget_object_selector_self_check(cohere_cohort=True, retained_generation_rebind=True)
@@ -4562,7 +4656,7 @@ if __name__ == '__main__':
         assert len(args) == 2
         print(json.dumps(replay(args[1]),sort_keys=True))
     else:
-        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--cohere-sq8-builder | --retained-generation-rebind-implementation | --semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation | --budget-object-fitter-implementation | --cohere1024-implementation | --cohere-cohort-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
+        assert len(args) == 1, 'usage: launch_native_workspace_execution_spot.py [--baseline-pool-implementation | --cohere-sq8-builder | --retained-generation-rebind-implementation | --semantic-1m | --semantic-1m-test-build | --semantic-1m-implementation | --startup-wave8-implementation | --root-reuse-implementation | --bounded-publication-implementation | --fixed48-implementation | --hierarchical-cells-implementation | --constrained-split-implementation | --cell-overlap-implementation | --fine-sq8-implementation | --pq-residual-implementation | --co-selection-implementation | --budget-object-selector-implementation | --budget-object-fitter-implementation | --cohere1024-implementation | --cohere-cohort-implementation] aNNNN | --self-check | --stage REPO OUT | --check-receipt OUT | --replay OUT'
         with open('/tmp/borsuk-native-workspace-execution-launch.lock','a+') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             main(args[0])
