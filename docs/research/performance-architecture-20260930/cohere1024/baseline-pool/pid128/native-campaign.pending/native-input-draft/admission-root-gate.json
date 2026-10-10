@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-native-pid128-root-gate-v2",
+  "status": "PASS",
+  "stage": "admission",
+  "recipe_sha256": "f0273d2353b198030dd9df4718a142a88c009b6e78861f8cf9d5b9f1dd9639d3",
+  "staging_receipt_sha256": null,
+  "admission_sha256": null,
+  "admission_terminal_sha256": null,
+  "admission_closure_sha256": null,
+  "admission_outer_sha256": null
+}

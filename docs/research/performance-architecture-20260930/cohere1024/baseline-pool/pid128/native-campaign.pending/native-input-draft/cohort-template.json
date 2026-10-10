@@ -1,0 +1,63 @@
+{
+  "schema": "borsuk-cohere-native-cohort-config-v3",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "embedding_column": "emb",
+  "document_id_column": "_id",
+  "geometry": {
+    "corpus": 100000,
+    "queries": 32,
+    "dimensions": 1024,
+    "k": 10
+  },
+  "corpus_intervals": [
+    {
+      "start": 0,
+      "end": 100000
+    }
+  ],
+  "reserved_query_interval": {
+    "start": 100000,
+    "end": 101000
+  },
+  "shards": [
+    {
+      "bytes": 216612385,
+      "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3",
+      "publisher_path": "en/0000.parquet",
+      "path": "/mnt/borsuk-pool-pid/input/en/0000.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216746705,
+      "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b",
+      "publisher_path": "en/0001.parquet",
+      "path": "/mnt/borsuk-pool-pid/input/en/0001.parquet",
+      "rows": 100000
+    }
+  ],
+  "output_parent": {
+    "path": "/mnt/borsuk-pool-pid/prepared-parent",
+    "device": null,
+    "inode": null
+  },
+  "resources": {
+    "batch_rows": 256,
+    "max_batch_bytes": 268435456,
+    "max_footer_bytes": 1048576,
+    "max_id_bytes": 1024,
+    "max_row_group_compressed_bytes": 268435456,
+    "max_row_group_rows": 10000,
+    "max_row_group_uncompressed_bytes": 1073741824,
+    "modeled_memory_bytes": 7516192768,
+    "cpu_limit": 4,
+    "actual_memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "scratch_bytes": 17179869184,
+    "timeout_seconds": 2400,
+    "truth_block_rows": 256,
+    "caller_memory_bytes": 67108864,
+    "caller_scratch_bytes": 1610612736,
+    "temporary_reserve_bytes": 67108864
+  }
+}

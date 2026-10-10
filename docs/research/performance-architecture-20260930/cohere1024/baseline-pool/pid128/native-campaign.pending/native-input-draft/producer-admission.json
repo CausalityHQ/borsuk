@@ -1,0 +1,50 @@
+{
+  "status": "EXISTING_QUALIFIED_PRODUCER_ELFS_BODY_AUTHENTICATED",
+  "native_base": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "candidate": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "only_changed_path": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "source_qualification_sha256": "5d0bcea490ed5c435c4d89ab0c68d91bfeb55c622bae5a99ab45701701391d9f",
+  "assets": [
+    {
+      "name": "prepare_cohere_native_cohort",
+      "bytes": 10015160,
+      "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+      "terminated_before_collection": true,
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/prepare_cohere_native_cohort",
+      "etag": "\"9d3eba0e43cdd72aec7cd341fa1d7a62-2\"",
+      "local_path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/prepare_cohere_native_cohort"
+    },
+    {
+      "name": "build_two_bit_generation",
+      "bytes": 4444504,
+      "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe",
+      "terminated_before_collection": true,
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_two_bit_generation",
+      "etag": "\"107f2acf759373861d4e76405506b6cc\"",
+      "local_path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/build_two_bit_generation"
+    },
+    {
+      "name": "publish_two_bit_generation",
+      "bytes": 15964832,
+      "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982",
+      "terminated_before_collection": true,
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/publish_two_bit_generation",
+      "etag": "\"52190475b221cc1726998401c3933b15-2\"",
+      "local_path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/publish_two_bit_generation"
+    },
+    {
+      "name": "build_sq8_source",
+      "bytes": 4273936,
+      "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+      "terminated_before_collection": true,
+      "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_sq8_source",
+      "etag": "\"d7a1c95a131c8097eb0cf27b4cd84b9f\"",
+      "local_path": "/data/target/borsuk-pool-pid-falsifier-proposal/assets-existing/build_sq8_source"
+    }
+  ],
+  "new_build": false,
+  "native_executed": false,
+  "baseline_elf_pending_live_gate": true
+}
