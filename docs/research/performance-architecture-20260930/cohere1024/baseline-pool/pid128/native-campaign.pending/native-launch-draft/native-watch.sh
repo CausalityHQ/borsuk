@@ -53,7 +53,15 @@ for attempt in 1 2 3 4 5 6; do
 done
 [[ $volume =~ ^vol-[0-9a-f]{17}$ ]] || exit 125
 terminal=false
+next_health=0
 while ((SECONDS<deadline)); do
+    if ((SECONDS>=next_health)); then
+        timeout -k 1 8 aws ec2 describe-instances --instance-ids "$instance" > "$out/health.json"
+        jq -e --arg i "$instance" '[.Reservations[].Instances[]]|length==1 and .[0].InstanceId==$i' "$out/health.json" >/dev/null
+        observed=$(jq -er '.Reservations[0].Instances[0].State.Name' "$out/health.json")
+        [[ $observed != terminated && $observed != shutting-down ]] || break
+        next_health=$((SECONDS+30))
+    fi
     rc=0
     left=$((deadline-SECONDS-2)); ((left>0)) || break
     cap=10; ((cap<=left)) || cap=$left
@@ -81,7 +89,7 @@ printf '%s\n' "$absent" > "$out/volume.absent"
 [[ $terminal == true ]] || exit 94
 jq -e '.ContentLength>0 and .ContentLength<=65536 and (.ETag|type)=="string"' "$out/terminal.head.json" >/dev/null
 etag=$(jq -r .ETag "$out/terminal.head.json")
-timeout -k 2 30 aws s3api get-object --bucket "$bucket" --key "$prefix/terminal.json" --if-match "$etag" "$out/terminal.json" > "$out/terminal.download.json"
+timeout -k 2 30 aws s3api get-object --bucket "$bucket" --key "$prefix/terminal.json" --if-match "$etag" --range "bytes=0-$(jq -r .ContentLength "$out/terminal.head.json")" "$out/terminal.json" > "$out/terminal.download.json"
 [[ $(stat -c %s "$out/terminal.json") == "$(jq -r .ContentLength "$out/terminal.head.json")" ]] || exit 94
 jq -se --arg i "$instance" --arg p "$prefix" --arg b "$bootstrap" 'length==1 and (.[0]|type)=="object" and .[0].instance_id==$i and .[0].prefix==$p and .[0].bootstrap_sha256==$b' "$out/terminal.json" > "$out/terminal.identity.validated"
 jq -e 'type=="object" and .schema=="borsuk-native-pid128-ec2-v1" and (.controller_execution_attempted|type)=="boolean" and .performance_claim==false and (.evidence_sha256|test("^[0-9a-f]{64}$")) and (.evidence_bytes|type)=="number" and .evidence_bytes>0 and .evidence_bytes<=16777216' "$out/terminal.json" >/dev/null
@@ -89,7 +97,7 @@ sha=$(jq -r .evidence_sha256 "$out/terminal.json")
 timeout -k 1 10 aws s3api head-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" > "$out/evidence.head.json"
 [[ $(jq -r .ContentLength "$out/evidence.head.json") == "$(jq -r .evidence_bytes "$out/terminal.json")" ]] || exit 94
 etag=$(jq -er .ETag "$out/evidence.head.json")
-timeout -k 2 30 aws s3api get-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" --if-match "$etag" "$out/evidence.tar.gz" > "$out/evidence.download.json"
+timeout -k 2 30 aws s3api get-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" --if-match "$etag" --range "bytes=0-$(jq -r .evidence_bytes "$out/terminal.json")" "$out/evidence.tar.gz" > "$out/evidence.download.json"
 printf '%s  %s\n' "$sha" "$out/evidence.tar.gz" | sha256sum -c - > "$out/evidence.authenticated"
 [[ $(stat -c %s "$out/evidence.tar.gz") == "$(jq -r .evidence_bytes "$out/terminal.json")" ]] || exit 94
 printf '%s\n' 'COLLECTED_NATIVE_GATE_EVIDENCE_ROOT_REPLAY_REQUIRED' > "$out/root.status"

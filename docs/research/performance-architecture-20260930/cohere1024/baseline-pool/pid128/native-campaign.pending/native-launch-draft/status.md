@@ -19,8 +19,8 @@ Source assembly update:
 - native-worker.sh and native-watch.sh derive from the accepted r7 platform
   sources; assemble-worker.py reads text only and generates 19 pinned support
   rows. It executes no experiment entrypoint.
-- Native worker setup and transport share launch+900. The full controller
-  allowance plus 300 seconds must remain before launch+18000. The independent
+- Native worker setup and transport share launch+700. The full controller
+  allowance plus 400 seconds must remain before launch+17900. The independent
   watcher requests termination at launch+17900, waits for confirmation and
   root-volume absence before downloading the evidence archive. These are
   request/observation deadlines, not an AWS billing guarantee.
@@ -45,11 +45,11 @@ Remaining launch requirements:
 - Independently review the assembled bootstrap/watcher/transport against the
   accepted source and exact current config. Resolve demonstrated findings.
 - Keep the 18,000-second machine envelope. Before native start require at least
-  16,800 seconds for the controller plus 300 seconds for teardown, evidence
+  16,800 seconds for the controller plus 400 seconds for teardown, evidence
   publication and termination request. Refuse before native execution otherwise.
   The independent watcher must request termination before the machine cutoff;
   confirmed termination remains separately recorded, not guaranteed billing time.
-- Install/setup and transport share the remaining 900-second budget. Every
+- Install/setup and transport share the remaining 700-second budget. Every
   blocking call is clamped to its remaining deadline. No retries or extension.
 - Review the assembled wrapper and transport once as an immutable source slice.
   HTTPS redirects are HTTPS-only/max4; unlike the older historical campaign,
@@ -71,8 +71,12 @@ allowance ($1.25 compute plus $0.25 ancillary), not a billing cap. A read-only
 causality EC2 quote in spot-quote.json returns $0.193400/hour, quoted at
 2026-10-10T08:00:00+00:00. No RunInstances call was made.
 
-One new immutable-wrapper dual review group259d91aacc8c4b8f is running against
+One new immutable-wrapper dual review group259d91aacc8c4b8f completed against
 7cffa1552a62fab65f6c983524d027dd3e57132a. Both critics were confirmed running;
 the research critic continued through the configured usage-limit fallback.
 No duplicate group was launched. All runtime and release acceptance remains
 pending the actual reviewed findings and exact EC2 execution.
+
+Superseding reconciliation: see review-reconciliation.md. The original reviewed
+wrapper remains immutable in7cffa155; current generated source incorporates the
+verified findings. Runtime remains UNVERIFIED.
