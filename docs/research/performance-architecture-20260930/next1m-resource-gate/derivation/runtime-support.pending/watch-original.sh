@@ -119,8 +119,8 @@ jq -e --arg instance "$instance" '.schema=="borsuk-native-scale-build-bootstrap-
 (ulimit -f 262144; aws_big s3api get-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" remote-results/evidence.tar.gz > remote-results/evidence.get.json) || exit 12
 [[ $(stat -c %s remote-results/evidence.tar.gz) == "$(jq -er .evidence.bytes remote-results/terminal.json)" ]] || exit 12
 [[ $(sha256sum remote-results/evidence.tar.gz | cut -d' ' -f1) == "$(jq -er .evidence.sha256 remote-results/terminal.json)" ]] || exit 12
-(ulimit -f 64; aws_call s3api get-object --bucket "$bucket" --key "$prefix/artifacts.sha256" remote-results/artifacts.sha256 > remote-results/manifest.get.json) || exit 12
-[[ $(stat -c %s remote-results/artifacts.sha256) -le 65536 ]] || exit 12
+(ulimit -f 2048; aws_call s3api get-object --bucket "$bucket" --key "$prefix/artifacts.sha256" remote-results/artifacts.sha256 > remote-results/manifest.get.json) || exit 12
+[[ $(stat -c %s remote-results/artifacts.sha256) -le 2097152 ]] || exit 12
 # Closure only: a retained baseline disposition (exit 2/3) is recorded verbatim, never interpreted as scientific success.
 jq -e '.phase=="complete" and ((.exit==0 and .chain.unit_exit==0 and .chain.disposition=="NATIVE_CHAIN_CLOSED") or ((.exit==2 or .exit==3) and .chain.unit_exit==.exit and .chain.disposition=="BASELINE_NONZERO_EXIT"))' remote-results/terminal.json > /dev/null \
   || { printf 'Original terminal is not a closed bootstrap/chain disposition: INVALID\n' >&2; exit 10; }

@@ -1,0 +1,7 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "candidate_sha256": "a0f6c0df7263a001bd29efa0722482a5074738b006d97e7efa330efd2120e7ae",
+  "candidate_bytes": 12225,
+  "change": "manifest transport cap only: 64KiB to 2MiB, matching bootstrap and replay; lifecycle and deadline unchanged",
+  "runtime_executed": false
+}

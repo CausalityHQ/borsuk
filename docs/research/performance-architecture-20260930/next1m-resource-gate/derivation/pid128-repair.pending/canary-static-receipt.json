@@ -1,0 +1,40 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "canary_static": {
+    "unit": "run-p3957113-i708463852.service",
+    "invocation_id": "2191f2fc7fe54a298aed65c7f0344b58",
+    "commands": [
+      "bash -n wrapper-canary.sh",
+      "shellcheck -x wrapper-canary.sh"
+    ],
+    "exit": 0,
+    "peak_memory": "29.3M"
+  },
+  "watcher_static": {
+    "unit": "run-p3834087-i708351276.service",
+    "invocation_id": "1f2ed413bad544c5967f00f5eda3c623",
+    "commands": [
+      "bash -n watch-original.sh",
+      "shellcheck -x watch-original.sh"
+    ],
+    "exit": 0,
+    "peak_memory": "19.5M"
+  },
+  "envelope": {
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "runtime_executed": false,
+  "remaining": [
+    "independent source review",
+    "full-chain collector falsifiers",
+    "disposable causality EC2 mechanical canary",
+    "real1M source/input admission",
+    "fresh1M native run/closure"
+  ],
+  "performance_claim": false
+}

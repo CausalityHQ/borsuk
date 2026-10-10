@@ -1,0 +1,19 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "candidate_sha256": "336fb4ed37ad1d34a35d8cc1d769f5eb14fefdb2c3d3d2ee2432384041b4fda0",
+  "candidate_bytes": 11082,
+  "wrapper_sha256": "f692d430d48cee28bc1e53cbc1c4fa865dacf23bf33db9f8238b426b4c660a6f",
+  "runtime_executed": false,
+  "declared_real_operations": [
+    "systemd observer and payload cgroups",
+    "kernel CPU/memory/PID/swap limits",
+    "Bash fixtures exits0/2/3/17 timeout and log cap",
+    "qualified ELF usage only"
+  ],
+  "ann_executed": false,
+  "remaining": [
+    "source review",
+    "disposable causality EC2 canary execution",
+    "full-chain root collector falsifiers"
+  ]
+}
