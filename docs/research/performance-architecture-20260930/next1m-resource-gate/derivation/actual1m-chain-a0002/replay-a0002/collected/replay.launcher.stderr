@@ -1,0 +1,7 @@
+Running as unit: borsuk-closed-replay.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 112ms
+CPU time consumed: 109ms
+Memory peak: 10.2M
+Memory swap peak: 0B
