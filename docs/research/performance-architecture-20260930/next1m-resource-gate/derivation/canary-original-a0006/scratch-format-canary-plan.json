@@ -1,0 +1,46 @@
+{
+  "schema": "borsuk-scratch-fixture-canary-plan-v1",
+  "source_commit": "b2f5c5d7d2f5f30270b5cf7cde7f57575ac627be",
+  "purpose": "Run exact source-bound synthetic refusal fixtures before real scratch formatting, then unchanged environment canary; no ANN",
+  "assets": 19,
+  "fixture_unit": {
+    "cpu_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "runtime_seconds": 120,
+    "private_network": true,
+    "kill_mode": "control-group"
+  },
+  "before_format": true,
+  "nonzero_stops_canary": true,
+  "mock_operations": "Formatting/system command functions and synthetic API bodies only; no real device mutation in fixtures",
+  "real_operations": "Subsequent launch-bound volume proof, scratch formatting and existing platform canary only after fixture exit0",
+  "addon_sha256": "1749c8becf7d232566d997d70e7b30006b3490d8a7e78f880481b27e565295a8",
+  "cleanup_addition": "Add borsuk-scratch-fixtures to exact owned-unit finish stop/check list",
+  "assembly_addition": "Insert addon exactly once before phase=scratch; preserve original assembled bytes by inverse removal and exact cleanup-list inverse",
+  "compute_max_usd": 0.65,
+  "ancillary_max_usd": 0.15,
+  "machine_local_stop_seconds": 3000,
+  "external_stop_seconds": 3600,
+  "external_cleanup_seconds": 120,
+  "historical_attempts_unchanged": true,
+  "runtime_status": "UNRUN",
+  "launch_authorized": false,
+  "attachment_observation": {
+    "window_seconds": 30,
+    "max_observations": 12,
+    "spacing_seconds": 2,
+    "aws_errors_retried": false,
+    "final_state": "attached",
+    "final_evidence_basename_key": "scratch_volume_final_evidence"
+  },
+  "prior_attempt": "a0005 closed: fixture namespace defect; no real formatting or ANN",
+  "fixture_order": [
+    "formatting",
+    "attachment_settle",
+    "ownership_proof"
+  ],
+  "production_source_changed": false
+}
