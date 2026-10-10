@@ -8,6 +8,8 @@ umask 077
 wrapper=$(realpath -e -- "$1"); bins=$(realpath -e -- "$2"); out=$3
 [[ $out == /* && ! -e $out && ! -L $out && -d ${out%/*} ]] || exit 125
 [[ $(sha256sum "$wrapper" | cut -d' ' -f1) == b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452 ]] || exit 125
+replay=${wrapper%/*}/verify-closed.py
+[[ -f $replay && ! -L $replay && $(sha256sum "$replay" | cut -d' ' -f1) == 5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e ]] || exit 125
 (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) || exit 125
 (( EUID == 0 )) || exit 125
 mkdir -- "$out"
@@ -22,7 +24,7 @@ awk '/^cfg\(\)/{print}' "$wrapper" > "$out/cfg.sh"
 awk '/^IFS= read -r -d .*JQ_F32 /{p=1;next} p && /^EOF$/{exit} p{print}' "$wrapper" > "$out/f32.jq"
 awk '/^observer_relative=/{p=1} /^resources before$/{exit} p{print}' "$wrapper" > "$out/observer-init.sh"
 for part in prefix.sh sample.sh phases.sh cfg.sh f32.jq observer-init.sh; do [[ -s $out/$part ]]; done
-sha256sum "$wrapper" "$out"/{prefix.sh,sample.sh,phases.sh,cfg.sh,f32.jq,observer-init.sh} > "$out/source.sha256"
+sha256sum "$wrapper" "$replay" "$out"/{prefix.sh,sample.sh,phases.sh,cfg.sh,f32.jq,observer-init.sh} > "$out/source.sha256"
 run() {
  local name=$1 expected=$2 rc
  shift 2
@@ -109,6 +111,7 @@ phase_case() {
   > "$out/$name-launch.stdout" 2> "$out/$name-launch.stderr"
  observer_id=$(timeout -k 1 5 systemctl show "$observer_unit" -p InvocationID --value)
  [[ $observer_id =~ ^[0-9a-f]{32}$ ]]
+ timeout -k 1 5 systemctl show "$observer_unit" -p Id -p Description -p InvocationID -p ControlGroup > "$out/$name-launch.identity"
  end=$((SECONDS+100))
  while :; do
   timeout -k 1 5 systemctl show "$observer_unit" -p InvocationID -p Description -p MainPID -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup \
@@ -141,6 +144,63 @@ for code in 0 2 3; do
  jq -e --argjson code "$code" '.intended_exit==$code and .baseline_native_exit==$code and .performance_claim==false' \
    "$out/fixture-query$code-evidence/terminal.json" > "$out/fixture-query$code.assert"
 done
+# Actual verifier component checks on retained fixture metadata. This does not
+# exercise full-chain receipt replay and never reads vectors/truth/hits.
+python3 - "$replay" "$out" <<'REPLAY'
+import copy,hashlib,importlib.util,json,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('borsuk_closed_replay',sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+out=Path(sys.argv[2]);checks=[]
+def ev_for(bodies):
+    return m.Ev(bodies,{k:(len(v),hashlib.sha256(v).hexdigest()) for k,v in bodies.items()})
+def expect_refusal(label,bodies,name,code,mutate):
+    altered=dict(bodies);mutate(altered)
+    try:m.verify_phase_observer(ev_for(altered),'phase/',name,code,11)
+    except m.Invalid:checks.append({'case':label,'refused':True});return
+    raise SystemExit('INVALID: verifier accepted '+label)
+def rewrite(bodies,key,fn):
+    obj=m.decode(bodies[key]);fn(obj);bodies[key]=(json.dumps(obj)+'\n').encode()
+for tag,name,code in [('fixture-build0','fixture',0),('fixture-query0','baseline',0),('fixture-query2','baseline',2),('fixture-query3','baseline',3)]:
+    root=out/(tag+'-evidence')/'phases'/name
+    bodies={}
+    for p in root.rglob('*'):
+        if p.is_file():
+            if p.is_symlink() or p.stat().st_size>16777216:raise SystemExit('fixture metadata type/size')
+            bodies['phase/'+p.relative_to(root).as_posix()]=p.read_bytes()
+    m.verify_phase_observer(ev_for(bodies),'phase/',name,code,11)
+    checks.append({'case':tag,'positive':True})
+    expect_refusal(tag+'-timeout-missing',bodies,name,code,lambda b:b.pop('phase/timeout.seconds'))
+    expect_refusal(tag+'-timeout-changed',bodies,name,code,lambda b:b.update({'phase/timeout.seconds':b'12\n'}))
+    for field,value in [('pids_events','absent'),('pids_events',''),('memory_events','absent')]:
+        def mutate(b,field=field,value=value):
+            for key in ('phase/resources.initial','phase/resources.final'):
+                records=[m.decode(line) for line in b[key].splitlines()]
+                records[0][field]=value
+                b[key]=b''.join((json.dumps(r)+'\n').encode() for r in records)
+        expect_refusal(tag+'-'+field+'-'+('absent' if value else 'empty'),bodies,name,code,mutate)
+    expect_refusal(tag+'-drain-path',bodies,name,code,lambda b:rewrite(b,'phase/drain.json',lambda o:o.update(path='/sys/fs/cgroup/system.slice/foreign.service')))
+    release=int(bodies['phase/release.uptime_cs'])
+    expect_refusal(tag+'-elapsed-too-long',bodies,name,code,lambda b:b.update({'phase/drain.uptime_cs':('%d\n'%(release+9301)).encode()}))
+    def changed_runtime(b):
+        text=b['phase/manager.final.txt'].decode()
+        lines=text.splitlines()
+        if sum(line.startswith('RuntimeMaxUSec=') for line in lines)!=1:raise SystemExit('fixture runtime property missing')
+        b['phase/manager.final.txt']=('\n'.join('RuntimeMaxUSec=1h' if line.startswith('RuntimeMaxUSec=') else line for line in lines)+'\n').encode()
+    expect_refusal(tag+'-manager-runtime',bodies,name,code,changed_runtime)
+    expect_refusal(tag+'-payload-exit',bodies,name,code,lambda b:b.update({'phase/payload.exit':b'17\n'}))
+    launch=m.kv_lines((out/(tag+'-launch.identity')).read_text())
+    unit=launch['Id'];ident=launch['InvocationID'];m.verify_launch_identity(launch,unit,ident)
+    changed=dict(launch,InvocationID='f'*32 if ident!='f'*32 else 'e'*32)
+    try:m.verify_launch_identity(changed,unit,ident)
+    except m.Invalid:checks.append({'case':tag+'-launch-identity','refused':True})
+    else:raise SystemExit('INVALID: launch identity mismatch accepted')
+result={'schema':'borsuk-next1m-canary-replay-components-v1','status':'COMPONENT_CHECKS_VERIFIED',
+ 'full_chain_replay_exercised':False,'fixtures_are_bash_not_ann':True,'runtime_host':'disposable EC2',
+ 'checks':checks,'performance_claim':False}
+(out/'replay-component-checks.json').write_text(json.dumps(result,indent=2)+'\n')
+REPLAY
+
 phase_case fixture-exit17 fixture 'exit 17' 98 no
 for layer in native time timeout payload; do
  [[ $(< "$out/fixture-exit17-evidence/phases/fixture/$layer.exit") == 17 ]]
@@ -187,6 +247,7 @@ for name in "${!pins[@]}"; do
   *) run "usage-$name" 2 "$bins/$name";;
  esac
 done
+sha256sum --check --strict "$out/source.sha256" > "$out/source-closure.assert"
 jq -n '{schema:"borsuk-next1m-wrapper-canary-v2",status:"WRAPPER_CHECKS_VERIFIED",runtime_scope:"disposable remote only",phase_commands_are_bash_fixtures:true,native_cli_usage_only:true,ann_run:false,performance_claim:false,unexercised:["bootstrap transport and scratch-volume binding","full data authentication and native chain","inventory-write failure","full-chain root collector and instance cleanup","signed-zero native f32 serialization"]}' > "$out/result.json"
 (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > "$out/SHA256SUMS"
 sync -f "$out"

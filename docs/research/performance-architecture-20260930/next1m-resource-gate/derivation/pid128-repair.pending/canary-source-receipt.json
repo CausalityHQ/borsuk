@@ -1,8 +1,9 @@
 {
   "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
-  "candidate_sha256": "c0bfcd42a336c4c043392df64a457cde76c420d2d21d6cf0b1884ae2c303dae1",
-  "candidate_bytes": 11321,
+  "candidate_sha256": "fba9bb3e1e4798ca0ba54698c23334ca8c499560873cc4624784cd91e8379ec1",
+  "candidate_bytes": 15676,
   "wrapper_sha256": "b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452",
+  "replay_sha256": "5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e",
   "runtime_executed": false,
   "declared_real_operations": [
     "systemd observer and payload cgroups",

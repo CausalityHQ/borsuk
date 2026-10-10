@@ -662,6 +662,11 @@ def snapshot_pair(ev, before, after, path, memory, cores, cpus):
         req(ev.b(name) == b'true\n', 'snapshot marker ' + name)
 
 
+def verify_launch_identity(launch, unit, ident):
+    req(launch.get('Id') == launch.get('Description') == unit and launch.get('InvocationID') == ident and
+        launch.get('ControlGroup') == '/system.slice/' + unit, 'original launch identity binds final observer')
+
+
 def verify_outer_observer(ev, rc, config_sha, recipe_sha):
     outer = ev.j('chain-outer/outer-closure.json')
     unit, ident = outer['unit'], outer['invocation_id']
@@ -675,8 +680,7 @@ def verify_outer_observer(ev, rc, config_sha, recipe_sha):
         ev.b('chain-actual.exit') == ('%d\n' % rc).encode(), 'launch distinct from original exit')
     manager = kv_lines(ev.t('chain-outer/manager.show'))
     launch = kv_lines(ev.t('chain-launch.identity'))
-    req(launch.get('Id') == launch.get('Description') == unit and launch.get('InvocationID') == ident and
-        launch.get('ControlGroup') == '/system.slice/' + unit, 'original launch identity binds final observer')
+    verify_launch_identity(launch, unit, ident)
     result = 'success' if rc == 0 else 'exit-code'
     req(manager.get('Id') == manager.get('Description') == unit and manager.get('InvocationID') == ident and
         manager.get('MainPID') == '0' and manager.get('ExecMainCode') == '1' and manager.get('ExecMainStatus') == str(rc) and
@@ -709,12 +713,30 @@ def verify_outer_observer(ev, rc, config_sha, recipe_sha):
     return unit
 
 
-def verify_phase_observer(ev, prefix, name, want):
+def manager_runtime_us(value):
+    req(type(value) is str and 0 < len(value) <= 128, 'manager runtime string')
+    pos, total = 0, decimal.Decimal(0)
+    scales = {'us':1, 'ms':1000, 's':1000000, 'min':60000000, 'h':3600000000}
+    while pos < len(value):
+        token = re.match(r'\s*(\d+(?:\.\d+)?)(us|ms|min|s|h)\s*', value[pos:])
+        req(token is not None, 'unsupported manager runtime format')
+        total += decimal.Decimal(token.group(1)) * scales[token.group(2)]
+        pos += token.end()
+    req(0 < total <= 1000000000000 and total == total.to_integral_value(), 'manager runtime finite microseconds')
+    return int(total)
+
+
+def verify_phase_observer(ev, prefix, name, want, timeout_seconds):
+    req(isint(timeout_seconds) and timeout_seconds > 0 and
+        ev.t(prefix + 'timeout.seconds') == '%d\n' % timeout_seconds, 'exact admitted phase timeout')
     unit = ev.t(prefix + 'unit').strip()
     req(re.fullmatch(r'borsuk-pid128-[0-9a-f-]+-' + name + r'\.service', unit) is not None, 'payload unit')
     initial, final = (kv_lines(ev.t(prefix + f)) for f in ('manager.initial.txt', 'manager.final.txt'))
     ident = initial.get('InvocationID')
     req(hexs(ident, 32) and final.get('InvocationID') == ident and initial.get('Description') == final.get('Description') == unit, 'payload original invocation')
+    for manager in (initial, final):
+        req(manager_runtime_us(manager.get('RuntimeMaxUSec')) == (timeout_seconds + 80) * 1000000,
+            'payload manager runtime ceiling equals frozen supervision allowance')
     cg = '/sys/fs/cgroup/system.slice/' + unit
     req(initial.get('ControlGroup') == '/system.slice/' + unit and final.get('ControlGroup') in ('', '/system.slice/' + unit), 'payload cgroup identity')
     req(final.get('MainPID') == '0' and final.get('ExecMainCode') == '1' and final.get('ExecMainStatus') == str(want) and
@@ -730,6 +752,9 @@ def verify_phase_observer(ev, prefix, name, want):
         req(counters(ev.t(prefix + 'drain.events')).get('populated') == 0, 'payload descendants drained')
     released, drained = ev.t(prefix + 'release.uptime_cs').strip(), ev.t(prefix + 'drain.uptime_cs').strip()
     req(released.isdigit() and drained.isdigit() and int(drained) >= int(released), 'monotonic payload interval')
+    # SECONDS has one-second granularity; the phase manager reserves80 seconds
+    # around the native timeout. This checks mechanics, never query latency.
+    req(int(drained) - int(released) <= (timeout_seconds + 80 + 1) * 100, 'phase interval exceeds admitted supervision bound')
     summary = kv_lines(ev.t(prefix + 'observer.txt').replace(' ', '\n'))
     req(summary.get('cadence_ms') == '50' and summary.get('timestamps') == 'proc_uptime_centiseconds' and
         summary.get('samples', '').isdigit() and 0 <= int(summary['samples']) <= 80000 and
@@ -828,7 +853,7 @@ def verify_chain(ev, pins, term, final, gate_sha, prep_receipt):
         req(len(ev.b(P + 'native.stdout')) <= cap['stdout_cap_bytes'], 'phase stdout cap ' + p)
         peak, swaps, status = time_fields(ev.t(P + 'native.time.txt'))
         req(0 < peak <= (536870912 if p == 'baseline' else GIB8) and swaps == 0 and status == want, 'phase GNU time ceilings ' + p)
-        verify_phase_observer(ev, P, p, want)
+        verify_phase_observer(ev, P, p, want, cap['timeout_seconds'])
     req(len(ev.b(C + 'phases/stage/native.stdout')) == 0 and len(ev.b(C + 'phases/publish/native.stdout')) == 0, 'stage/publish silent success')
     # generation: config (exact f32 calibration), root, plane, page manifest
     gc = decode(cfgs['generation'])

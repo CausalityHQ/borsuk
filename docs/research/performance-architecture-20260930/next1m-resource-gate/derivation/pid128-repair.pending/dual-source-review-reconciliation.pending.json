@@ -1,0 +1,64 @@
+{
+  "status": "SOURCE_FINDINGS_REPAIRED_RUNTIME_UNVERIFIED",
+  "group": "aadd94cc1afc4f22",
+  "reviewed_candidate": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "critics": {
+    "research": "409425f54dd34dbe",
+    "engineering": "4560bbe2d9bc46a3"
+  },
+  "both_original_jobs_completed": true,
+  "report_hashes": {
+    "review-research-409425f54dd34dbe.md": "d64a88e3b5f5a403eca15d58ff39dbd2414b86d6231d6fd70f897534360c9e3f",
+    "review-engineering-4560bbe2d9bc46a3.md": "24a2b47e9f3c871f0ad940bb1f690e19a65a4e72ad5259f0e74c5dabb322d9f5"
+  },
+  "source_repairs": [
+    "exact timeout.seconds written before each phase launch",
+    "escaped child standard streams redirected and numbered logger descriptors closed before finite60s fallback",
+    "non-root mandatory PID and memory event keys required during independent replay",
+    "launch Id/Description/InvocationID/ControlGroup crosschecked",
+    "recorded RuntimeMaxUSec equals timeout+80 in initial and final managers; release/drain interval bounded with1s granularity allowance",
+    "f32 excerpt immutable, assertions separate, observer-init and replay source included in manifest; source manifest checked after tests"
+  ],
+  "remote_component_falsifiers_added": [
+    "positive actual build/query fixture metadata for0/2/3",
+    "missing/changed timeout receipt",
+    "absent/empty PID events",
+    "absent memory events",
+    "foreign drain path",
+    "late drain interval",
+    "wrong manager runtime ceiling",
+    "payload exit mismatch",
+    "original launch identity contradiction"
+  ],
+  "component_checks_are_not_full_chain_replay": true,
+  "static": {
+    "unit": "run-p611301-i709298764.service",
+    "invocation_id": "722a564cf6914695b0ded03b68377b1c",
+    "exit": 0,
+    "checks": [
+      "py_compile verify-closed.py",
+      "embedded metadata-check Python syntax compile only",
+      "bash -n wrapper-canary.sh",
+      "shellcheck -x wrapper-canary.sh"
+    ],
+    "peak_memory": "35.1M",
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "runtime_executed": false,
+  "paid_launch_performed": false,
+  "remaining": [
+    "root canary execution/collection source seam and envelope admission",
+    "full-chain collector negative runtime coverage",
+    "disposable causality EC2 canary",
+    "real1M source/input admission",
+    "fresh recorded1M native build/Q32 run and exact closure/quality replay"
+  ],
+  "accepted_source_mechanics_do_not_transfer_to_scale": true,
+  "cold_latency_claim": false,
+  "performance_claim": false
+}
