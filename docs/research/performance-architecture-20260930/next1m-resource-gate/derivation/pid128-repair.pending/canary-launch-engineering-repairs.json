@@ -1,0 +1,52 @@
+{
+  "schema": "borsuk-next1m-canary-launch-review-repairs-v1",
+  "status": "SOURCE_REPAIRED_RUNTIME_UNVERIFIED_RESEARCH_REVIEW_PENDING",
+  "parent": "26b2b19469ec7e3430a2d73686759435040880f9",
+  "review_group": "7a428afddde44ea1",
+  "engineering_result": "d8404f6fb4d84bd4",
+  "engineering_review_source": "8fc761b6362420cbd637afda72c034e2b4c8500b",
+  "findings": {
+    "P1_request": "Request template and support roster pinned to root admission; exact final JSON request checks count1, sole root volume, role, image, network, Spot bid and all settings before launch.",
+    "P1_receipt_failure": "Request-attempt marker precedes API; unsuccessful exits reconcile original token; known ownership termination independent of receipt-file writes.",
+    "P1_watcher": "Occupied collection refused before request; durable cleanup-armed acknowledgment bound to original watcher InvocationID/instance/prefix required before handoff.",
+    "P2_time_cost": "Guest cleanup, archive/hash/sync/uploads share180s finish window; root termination attempts and waits share absolute launch+2620 bound. AWS completion remains explicitly unguaranteed.",
+    "P2_optimized_python": "Explicit early sys.flags/PYTHONOPTIMIZE refusal cannot be optimized away."
+  },
+  "static_check": {
+    "unit": "run-p1779902-i710481937.service",
+    "invocation": "578248cfa8a745a7aba644e1f7b00852",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0,
+    "py_compile_exit": 0
+  },
+  "files": {
+    "next1m-canary-worker.sh": {
+      "bytes": 13092,
+      "sha256": "edc217ada10fcb6164c4a0ad3675213b4d3969299cbc18c12fdd1905bf48b7ba"
+    },
+    "next1m-canary-watch.sh": {
+      "bytes": 7338,
+      "sha256": "9ad7dc972d82143c376385a428244955404115c169ed30f5287af04cb7496185"
+    },
+    "next1m-canary-launch-once.sh": {
+      "bytes": 4838,
+      "sha256": "7bffec53568788a78a959dc10eec2098b13fef8d9ef385989712df8efbb272c9"
+    },
+    "next1m-canary-freeze.py": {
+      "bytes": 4413,
+      "sha256": "8f3c9fc789515b46088a3977ba4a099c0dadaefa8094362906bab2ce28fe7672"
+    },
+    "review-launch-engineering-d8404f6fb4d84bd4.md": {
+      "bytes": 5722,
+      "sha256": "5f3435c3f06faf9a0e63515d77f746b8946252ef2bd8bf2346209d271717879b"
+    }
+  },
+  "runtime_executed": false,
+  "launch_executed": false,
+  "performance_claim": false,
+  "remaining": [
+    "original research result full read and reconciliation",
+    "exact-source canary smoke and all runtime falsifiers on causality EC2",
+    "root final freeze/admission after all concrete findings repaired"
+  ]
+}

@@ -12,11 +12,36 @@ bootstrap=$(jq -er .bootstrap_sha256 "$freeze"); launched=$(jq -er .launched_epo
 watch=$(jq -er .watch_unit "$freeze")
 [[ $token =~ ^borsuk-next1m-canary-a0001-[0-9a-f]{16}$ && $watch == "$token.service" &&
    $prefix == "research/semantic-router/20261010/$token/run" && $bootstrap =~ ^[0-9a-f]{64}$ ]]
-instance='' watch_started=false
+instance='' watch_started=false request_attempted=false
+reconcile_original() {
+    local n body count
+    for n in 1 2 3; do
+        body=$(timeout -k 1 8 aws ec2 describe-instances --filters "Name=client-token,Values=$token") || return 1
+        printf '%s\n' "$body" > "$D/reconciled.$n.json" || :
+        count=$(jq -er '[.Reservations[].Instances[]]|length' <<< "$body") || return 1
+        ((count<=1)) || return 1
+        if ((count==1)); then
+            instance=$(jq -er --arg t "$token" '[.Reservations[].Instances[]]|.[0]|select(.ClientToken==$t)|.InstanceId' <<< "$body") || return 1
+            [[ $instance =~ ^i-[0-9a-f]{17}$ ]] || return 1
+            return 0
+        fi
+        sleep 2
+    done
+    return 1
+}
 cleanup_unwatched() {
-    local rc=$?; trap - EXIT
-    if [[ -n $instance && $watch_started == false ]]; then
-        timeout -k 1 15 aws ec2 terminate-instances --instance-ids "$instance" > "$D/emergency-terminate.json" || rc=94
+    local rc=$? output_fd
+    trap - EXIT; set +e
+    if [[ $request_attempted == true && ! $instance =~ ^i-[0-9a-f]{17}$ ]]; then
+        reconcile_original || {
+            devbox-tell "Original causality request outcome remains unresolved: $token. No retry was sent. Preserve $D and reconcile the original token."
+            rc=94
+        }
+    fi
+    if [[ $instance =~ ^i-[0-9a-f]{17}$ && $watch_started == false ]]; then
+        exec {output_fd}> "$D/emergency-terminate.json" || { rc=94; exec {output_fd}>/dev/null; }
+        timeout -k 1 15 aws ec2 terminate-instances --instance-ids "$instance" >&"$output_fd" || rc=94
+        exec {output_fd}>&-
     fi
     exit "$rc"
 }
@@ -30,26 +55,17 @@ timeout -k 1 5 aws sts get-caller-identity > "$D/account.json"
 timeout -k 1 8 aws ec2 describe-instances --filters "Name=client-token,Values=$token" > "$D/preexisting.json"
 jq -e '[.Reservations[].Instances[]]|length==0' "$D/preexisting.json" >/dev/null
 age=$(($(date +%s)-launched)); ((age>=0 && age<=30)) || exit 125
+[[ ! -e $D/collection && ! -L $D/collection ]] || exit 125
 date +%s > "$D/run-request.epoch"
 rc=0
+request_attempted=true
 timeout -k 1 15 aws ec2 run-instances --cli-input-json "file://$D/request.json" --user-data "file://$D/bootstrap.sh" \
   > "$D/run-instances.json" 2> "$D/run-instances.stderr" || rc=$?
 printf '%s\n' "$rc" > "$D/run-instances.exit"
 if ((rc==0)); then
     instance=$(jq -er '.Instances|if length==1 then .[0].InstanceId else error("launch identity") end' "$D/run-instances.json")
 else
-    # Read-only eventual-state reconciliation, never a second request.
-    for n in 1 2 3; do
-        timeout -k 1 8 aws ec2 describe-instances --filters "Name=client-token,Values=$token" > "$D/reconciled.$n.json"
-        count=$(jq -er '[.Reservations[].Instances[]]|length' "$D/reconciled.$n.json")
-        ((count<=1)) || exit 94
-        if ((count==1)); then instance=$(jq -er '.Reservations[0].Instances[0].InstanceId' "$D/reconciled.$n.json"); break; fi
-        sleep 2
-    done
-    if [[ -z $instance ]]; then
-        devbox-tell "Original causality EC2 request outcome is unresolved: $token. No second request was sent. Preserve $D and reconcile this token."
-        exit 94
-    fi
+    reconcile_original || exit 94
 fi
 [[ $instance =~ ^i-[0-9a-f]{17}$ ]]
 printf '%s\n' "$instance" > "$D/instance.id"
@@ -57,7 +73,17 @@ systemd-run --user --expand-environment=no --unit="$watch" --description="$insta
   -p RemainAfterExit=yes -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 \
   -p TasksMax=128 -p RuntimeMaxSec=2800 -p TimeoutStopSec=20 \
   /usr/bin/taskset -c 0 /bin/bash "$D/next1m-canary-watch.sh" "$instance" "$prefix" "$D/collection" "$launched" "$bootstrap"
-watch_started=true
 systemctl --user show "$watch" -p InvocationID -p ActiveState -p MainPID -p ExecMainCode -p ExecMainStatus > "$D/watch.initial.show"
+watch_id=$(sed -n 's/^InvocationID=//p' "$D/watch.initial.show")
+[[ $watch_id =~ ^[0-9a-f]{32}$ ]]
+armed_deadline=$((SECONDS+10))
+until [[ -f $D/collection/supervision-armed.json && ! -L $D/collection/supervision-armed.json ]]; do
+    ((SECONDS<armed_deadline)) || exit 94
+    sleep 0.1
+done
+jq -se --arg i "$instance" --arg id "$watch_id" --arg p "$prefix" \
+ 'length==1 and .[0].schema=="borsuk-canary-root-supervision-armed-v1" and .[0].instance_id==$i and .[0].invocation_id==$id and .[0].prefix==$p and .[0].cleanup_trap_installed==true' \
+ "$D/collection/supervision-armed.json" >/dev/null
+watch_started=true
 sync -f "$D"
 printf 'ORIGINAL_INSTANCE=%s WATCH=%s\n' "$instance" "$watch"

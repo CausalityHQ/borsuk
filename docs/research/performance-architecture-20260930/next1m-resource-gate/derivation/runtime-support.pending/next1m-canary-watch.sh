@@ -7,6 +7,14 @@ instance=${1:?}; prefix=${2:?}; out=${3:?}; launched=${4:?}; bootstrap=${5:?}
 [[ $# == 5 && $instance =~ ^i-[0-9a-f]{17}$ && $prefix == research/* && $out == /* && ! -e $out && ! -L $out && $launched =~ ^[0-9]{10}$ && $bootstrap =~ ^[0-9a-f]{64}$ ]] || exit 125
 bucket=borsuk-bench-453182569524-euc1
 terminated=false evidence_failed=0
+termination_deadline=$((launched+2620))
+termination_call() {
+    local cap=$1 left; shift
+    left=$((termination_deadline-$(date +%s)-2))
+    ((left>0)) || return 94
+    ((cap<=left)) || cap=$left
+    timeout -k 1 "$cap" "$@"
+}
 terminate_owned() {
     if [[ $terminated == false ]]; then
         local attempt rc=1 stdout_fd stderr_fd
@@ -15,17 +23,18 @@ terminate_owned() {
             # Failed receipt storage must never prevent the exact-instance API call.
             exec {stdout_fd}> "$out/terminate.$attempt.json" || { evidence_failed=1; exec {stdout_fd}>/dev/null; }
             exec {stderr_fd}> "$out/terminate.$attempt.stderr" || { evidence_failed=1; exec {stderr_fd}>/dev/null; }
-            timeout -k 1 10 aws ec2 terminate-instances --instance-ids "$instance" 1>&"$stdout_fd" 2>&"$stderr_fd" || rc=$?
+            termination_call 10 aws ec2 terminate-instances --instance-ids "$instance" 1>&"$stdout_fd" 2>&"$stderr_fd" || rc=$?
             exec {stdout_fd}>&-; exec {stderr_fd}>&-
             ((rc==0)) && break
             [[ $rc == 254 ]] && grep -F 'InvalidInstanceID.NotFound' "$out/terminate.$attempt.stderr" >/dev/null || return 1
+            (( $(date +%s)+2 < termination_deadline )) || return 94
             sleep 2
         done
         ((rc==0)) || return 1
         exec {stdout_fd}> "$out/terminated.wait.stdout" || { evidence_failed=1; exec {stdout_fd}>/dev/null; }
         exec {stderr_fd}> "$out/terminated.wait.stderr" || { evidence_failed=1; exec {stderr_fd}>/dev/null; }
         rc=0
-        timeout -k 1 120 aws ec2 wait instance-terminated --instance-ids "$instance" 1>&"$stdout_fd" 2>&"$stderr_fd" || rc=$?
+        termination_call 120 aws ec2 wait instance-terminated --instance-ids "$instance" 1>&"$stdout_fd" 2>&"$stderr_fd" || rc=$?
         exec {stdout_fd}>&-; exec {stderr_fd}>&-
         ((rc==0)) || return 1
         terminated=true
@@ -34,10 +43,15 @@ terminate_owned() {
 trap 'rc=$?; trap - EXIT; terminate_owned || { devbox-tell "Validator cleanup is unproven for exact instance $instance; receipts $out"; rc=94; }; ((evidence_failed==0)) || rc=94; exit "$rc"' EXIT
 # Cleanup is installed before any fallible receipt or age initialization.
 mkdir "$out"
+[[ ${INVOCATION_ID:-} =~ ^[0-9a-f]{32}$ ]] || exit 125
+jq -n --arg i "$instance" --arg id "$INVOCATION_ID" --arg p "$prefix" \
+ '{schema:"borsuk-canary-root-supervision-armed-v1",instance_id:$i,invocation_id:$id,prefix:$p,cleanup_trap_installed:true}' > "$out/supervision-armed.json"
+sync -f "$out/supervision-armed.json"
+sync -f "$out"
 age=$(($(date +%s)-launched)); ((age>=0 && age<=90)) || exit 125
 # Request termination by launch+2500; allow bounded confirmation afterward.
 deadline=$((SECONDS+2500-age))
-printf '%s\n' 'termination_request_by_launch_plus_2500; confirmation_wait_120s; not_a_guarantee_of_AWS_completion' > "$out/deadlines.txt"
+printf '%s\n' 'termination_request_by_launch_plus_2500; all_termination_attempts_and_waits_share_launch_plus_2620; not_a_guarantee_of_AWS_completion' > "$out/deadlines.txt"
 volume=''
 for attempt in 1 2 3 4 5 6; do
     rc=0

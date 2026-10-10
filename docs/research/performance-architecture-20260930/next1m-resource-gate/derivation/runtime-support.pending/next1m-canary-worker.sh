@@ -2,6 +2,7 @@
 # SOURCE ONLY. Causality EC2 bootstrap; real platform programs, no ANN/corpus/GT.
 # Transport schema retained solely for the existing root watcher.
 # shellcheck disable=SC2329 # finish is invoked by EXIT.
+# shellcheck disable=SC2016 # jq programs are intentional single-quoted literals passed through finish_run.
 set -Eeuo pipefail
 umask 077
 export LC_ALL=C AWS_DEFAULT_REGION=eu-central-1 AWS_PAGER='' AWS_MAX_ATTEMPTS=1
@@ -29,7 +30,18 @@ setup() {
 finish() {
     local original=$? cleanup=0 unit cg registration identity tag p
     trap - EXIT; set +e
+    finish_deadline=$((SECONDS+180))
+    wall_finish_left=$((machine_deadline-$(date +%s)-10))
+    ((wall_finish_left>0)) || exit 94
+    ((wall_finish_left>=180)) || finish_deadline=$((SECONDS+wall_finish_left))
     cleanup_deadline=$((SECONDS+120))
+    ((cleanup_deadline<finish_deadline)) || cleanup_deadline=$((finish_deadline-1))
+    finish_run() {
+        local cap=$1 left; shift
+        left=$((finish_deadline-SECONDS-2)); ((left>0)) || return 94
+        ((cap<=left)) || cap=$left
+        timeout -k 1 "$cap" "$@"
+    }
     # Exact durable identities only; payloads are siblings, not observer children.
     drain() {
         local unit=$1 identity=$2 tag=$3 expected current cg rc=0 left
@@ -78,18 +90,18 @@ finish() {
     done
     ((cleanup==0)) || { state=INVALID; original=94; }
     printf '%s\n' "$original" > "$root/bootstrap.exit" || exit 94
-    jq -n --arg state "$state" --arg phase "$phase" --arg instance "$instance_id" --arg prefix "$prefix" --arg bootstrap "$bootstrap_sha" --argjson original "$original" --argjson test "$test_exit" --argjson cleanup "$cleanup" \
+    finish_run 10 jq -n --arg state "$state" --arg phase "$phase" --arg instance "$instance_id" --arg prefix "$prefix" --arg bootstrap "$bootstrap_sha" --argjson original "$original" --argjson test "$test_exit" --argjson cleanup "$cleanup" \
       '{schema:"borsuk-validator-ec2-v1",status:$state,phase:$phase,instance_id:$instance,prefix:$prefix,bootstrap_sha256:$bootstrap,
         bootstrap_exit:$original,test_exit:$test,cleanup_exit:$cleanup,native_execution_status:"CLI_USAGE_ONLY_PENDING_ROOT_REPLAY",ann_executed:false,
         real_platform_programs:true,native_cli_usage_only:true,performance_claim:false,production_qualification:false}' > "$root/terminal.json" || exit 94
-    sync -f "$root" || exit 94
-    tar -czf /var/lib/borsuk-validator-evidence.tar.gz -C /var/lib borsuk-validator -C /mnt borsuk-pid-evidence || exit 94
-    sha=$(sha256sum /var/lib/borsuk-validator-evidence.tar.gz); sha=${sha%% *}
-    bytes=$(stat -c %s /var/lib/borsuk-validator-evidence.tar.gz) || exit 94
+    finish_run 10 sync -f "$root" || exit 94
+    finish_run 30 tar -czf /var/lib/borsuk-validator-evidence.tar.gz -C /var/lib borsuk-validator -C /mnt borsuk-pid-evidence || exit 94
+    sha=$(finish_run 10 sha256sum /var/lib/borsuk-validator-evidence.tar.gz) || exit 94; sha=${sha%% *}
+    bytes=$(finish_run 5 stat -c %s /var/lib/borsuk-validator-evidence.tar.gz) || exit 94
     [[ $sha =~ ^[0-9a-f]{64}$ && $bytes -gt 0 && $bytes -le 268435456 ]] || exit 94
-    timeout -k 1 30 aws s3api put-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" --body /var/lib/borsuk-validator-evidence.tar.gz --if-none-match '*' > "$root/upload.json" || exit 94
-    jq --arg sha "$sha" --argjson bytes "$bytes" '.+{evidence_sha256:$sha,evidence_bytes:$bytes}' "$root/terminal.json" > /var/lib/borsuk-validator-terminal.json || exit 94
-    timeout -k 1 30 aws s3api put-object --bucket "$bucket" --key "$prefix/terminal.json" --body /var/lib/borsuk-validator-terminal.json --if-none-match '*' || exit 94
+    finish_run 30 aws s3api put-object --bucket "$bucket" --key "$prefix/evidence.tar.gz" --body /var/lib/borsuk-validator-evidence.tar.gz --if-none-match '*' > "$root/upload.json" || exit 94
+    finish_run 10 jq --arg sha "$sha" --argjson bytes "$bytes" '.+{evidence_sha256:$sha,evidence_bytes:$bytes}' "$root/terminal.json" > /var/lib/borsuk-validator-terminal.json || exit 94
+    finish_run 30 aws s3api put-object --bucket "$bucket" --key "$prefix/terminal.json" --body /var/lib/borsuk-validator-terminal.json --if-none-match '*' || exit 94
     shutdown -h now
     exit "$original"
 }
