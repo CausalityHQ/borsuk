@@ -1,0 +1,14 @@
+{
+  "method": "head -c | sha256sum after whole body authentication",
+  "corpus": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/corpus.f32",
+    "prefix_bytes": 409600000,
+    "prefix_sha256": "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c"
+  },
+  "requests": {
+    "path": "/mnt/borsuk-scale1m/assets/historical/requests",
+    "prefix_bytes": 131072,
+    "prefix_sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+  },
+  "truth_scope": "fresh exhaustive 1M truth sealed by native receipt; exact historical Q32 truth prefix required"
+}

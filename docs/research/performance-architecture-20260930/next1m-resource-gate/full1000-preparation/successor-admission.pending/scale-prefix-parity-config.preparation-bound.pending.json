@@ -1,0 +1,59 @@
+{
+  "schema": "borsuk-scale-prefix-parity-config-v1",
+  "runs": [
+    {
+      "schema": "borsuk-completed-native-reduction-v1",
+      "input": {
+        "path": "/mnt/borsuk-scale1m/historical/q32-baseline-result.jsonl",
+        "bytes": null,
+        "sha256": null
+      },
+      "expected_identity": null,
+      "expected_bound_inputs": null
+    },
+    {
+      "schema": "borsuk-completed-native-reduction-v1",
+      "input": {
+        "path": "/mnt/borsuk-scale1m/admission/local-panel32.jsonl",
+        "bytes": null,
+        "sha256": null
+      },
+      "expected_identity": null,
+      "expected_bound_inputs": null
+    },
+    {
+      "schema": "borsuk-completed-native-reduction-v1",
+      "input": {
+        "path": "/mnt/borsuk-scale1m/admission/s3-panel32.jsonl",
+        "bytes": null,
+        "sha256": null
+      },
+      "expected_identity": null,
+      "expected_bound_inputs": null
+    }
+  ],
+  "requests": [
+    {
+      "path": "/mnt/borsuk-scale1m/historical/requests-q32.f32",
+      "bytes": 131072,
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    {
+      "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    }
+  ],
+  "truth": [
+    {
+      "path": "/mnt/borsuk-scale1m/historical/truth-q32.u64",
+      "bytes": 2560,
+      "sha256": "36e83267ebfe5efb86db28c778d18897563a8c6c0784933e2b8d6d05cf31bb93"
+    },
+    {
+      "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/truth.u64",
+      "bytes": 80000,
+      "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+    }
+  ]
+}

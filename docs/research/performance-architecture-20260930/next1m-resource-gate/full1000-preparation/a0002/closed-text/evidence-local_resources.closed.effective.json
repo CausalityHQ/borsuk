@@ -1,0 +1,8 @@
+{
+  "path": "/sys/fs/cgroup/system.slice/borsuk-cohort-parity.service",
+  "cpuset": "0-3",
+  "memory_max_bytes": 8589934592,
+  "swap_max_bytes": 0,
+  "pids_max": 128,
+  "cpu_quota_cores": 4
+}

@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-native-scale-build-bootstrap-closed-v1",
+  "instance_id": "i-0321c9a08d4178896",
+  "phase": "complete",
+  "original_exit": 0,
+  "exit": 0,
+  "evidence": {
+    "bytes": 50602,
+    "sha256": "16be7f8c7dee30ed0d73347be2b8b8a49a6f94d321e31b2d31682d42408ac373"
+  },
+  "chain": {
+    "unit_exit": null,
+    "disposition": null
+  },
+  "acceptance": "PROVISIONAL_REQUIRES_EXTERNAL_BOOTSTRAP_EXIT",
+  "publication_verified": false,
+  "scientific_success_asserted": false,
+  "performance_claim": false
+}

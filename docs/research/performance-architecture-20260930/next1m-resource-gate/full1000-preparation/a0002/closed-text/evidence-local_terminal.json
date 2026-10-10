@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-actual-cohort-admission-local-v1",
+  "status": "ADMISSION_VERIFIED",
+  "stage": "local-admission-verified",
+  "intended_exit": 0,
+  "config_sha256": "d6820ffdb0306d3a842d953f483005b7a2d35cefbf6651afec6330c8f9877375",
+  "elf_sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb",
+  "output": "/mnt/borsuk-scale1m/prepared-parent/cohort",
+  "wrapper_exit_scope": "intended_exit",
+  "actual_manager_and_outer_exit_required": true,
+  "scope": "local exact1M/Q1000 source, fresh truth, historical prefixes and resource closure only",
+  "publication_verified": false,
+  "instance_termination_verified": false,
+  "ann_run": false,
+  "performance_claim": false
+}

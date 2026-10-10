@@ -1,0 +1,17 @@
+{
+  "instance_id": "i-0321c9a08d4178896",
+  "terminated": true,
+  "reason": "terminal",
+  "user_data_sha256": "312fca5676e20c57e08e513a213b9f0ab988ba692c8175f26391b58ecda0c288",
+  "archive_authenticated": true,
+  "manifest_verified": false,
+  "independent_replay_pending": true,
+  "late": false,
+  "cost_bound": "MODELED_7800_PLUS_120",
+  "supplied_started_epoch": 1791656513,
+  "effective_started_epoch": 1791656513,
+  "chain_unit_exit": null,
+  "chain_disposition": null,
+  "bootstrap_exit": 0,
+  "performance_claim": false
+}

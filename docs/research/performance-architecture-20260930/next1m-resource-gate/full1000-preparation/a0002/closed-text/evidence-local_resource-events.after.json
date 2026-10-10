@@ -1,0 +1,25 @@
+{
+  "from": "before",
+  "to": "after",
+  "memory_max_events": [
+    {
+      "path": "/sys/fs/cgroup/system.slice/borsuk-cohort-parity.service",
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    {
+      "path": "/sys/fs/cgroup/system.slice",
+      "before": 95396,
+      "after": 95396,
+      "delta": 0
+    },
+    {
+      "path": "/sys/fs/cgroup",
+      "before": null,
+      "after": null,
+      "delta": 0
+    }
+  ],
+  "valid": true
+}
