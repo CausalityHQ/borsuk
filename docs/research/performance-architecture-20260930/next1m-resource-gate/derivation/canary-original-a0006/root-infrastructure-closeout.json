@@ -1,0 +1,14 @@
+{
+  "instance_id": "i-03da6cc4fdcadb76c",
+  "terminated": true,
+  "known_scratch_volume": "vol-0f221bce1e3b88a31",
+  "known_scratch_absent": true,
+  "attachment_search_empty": true,
+  "root_volume_identity_not_observed": true,
+  "status": "EXECUTION_INVALID",
+  "binding_published": false,
+  "runtime_fixtures_executed": false,
+  "ann_run": false,
+  "performance_claim": false,
+  "failure": "initial pending DescribeInstances omitted root mapping"
+}

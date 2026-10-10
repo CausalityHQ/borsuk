@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "pending initial DescribeInstances omitted root disk mapping",
+  "original_launch": {
+    "session": 68365,
+    "unit": "run-p4078952-i675054310.service",
+    "invocation": "5cb5296a2eb3421c988694b83a62c764",
+    "exit": 1,
+    "runtime_seconds": 11.778
+  },
+  "cleanup_original": {
+    "session": 88786,
+    "unit": "run-p4113356-i675080055.service",
+    "exit": 0
+  },
+  "cleanup": {
+    "instance_id": "i-03da6cc4fdcadb76c",
+    "terminated": true,
+    "known_scratch_volume": "vol-0f221bce1e3b88a31",
+    "known_scratch_absent": true,
+    "attachment_search_empty": true,
+    "root_volume_identity_not_observed": true,
+    "status": "EXECUTION_INVALID",
+    "binding_published": false,
+    "runtime_fixtures_executed": false,
+    "ann_run": false,
+    "performance_claim": false,
+    "failure": "initial pending DescribeInstances omitted root mapping"
+  },
+  "binding_published": false,
+  "actual_formatting": "NOT_RUN",
+  "runtime_fixtures": "NOT_RUN",
+  "platform_canary": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "next_action": "bounded same-instance mapping observation before unchanged ownership proof; no duplicate launch"
+}
