@@ -271,6 +271,10 @@ for n in 0 2 3; do
  printf '== %s\n%s\n' "$u" "$sh" >> "$res/unit.show.txt"
  grep -qx 'LoadState=loaded' <<< "$sh" && grep -qx 'Type=oneshot' <<< "$sh" && grep -qx 'TimeoutStartUSec=10s' <<< "$sh" && grep -qx 'TimeoutStopUSec=5s' <<< "$sh" || { sev 2 "unit $u did not load with the expected overrides"; exit 0; }
 done
+# the ACTIVE coordinator keeps the three case units loaded: systemd.unit(5) UNIT GARBAGE COLLECTION - another loaded unit's After= references them, so a stopped successful
+# case unit is not unloaded and its actual ExecStopPost record survives to the show below (After= alone never starts them). Bounded readback of the loaded manager state:
+ca=$(run 3 systemctl show borsuk-canary-coordinator.service -p After --value) && (( ${#ca} <= 2048 )) || { sev 2 "coordinator After unreadable or oversized"; exit 0; }
+for w in cloud-final.service borsuk-canary-final-0.service borsuk-canary-final-2.service borsuk-canary-final-3.service; do [[ " $ca " == *" $w "* ]] || { sev 2 "coordinator After lacks $w"; exit 0; }; done
 # case trees are copied AFTER the reload (the generator rewrites /run/cloud-init); edits touch the copies only
 declare -A want=()
 for pair in /var/lib/cloud:var-lib-cloud /run/cloud-init:run-cloud-init /etc/cloud:etc-cloud; do
@@ -301,8 +305,8 @@ for n in 0 2 3; do
  jq -n --arg i "$instance" '{schema:"borsuk-canary-terminal-v1",instance_id:$i,canary:true}' | mkfile 0600 "$c/root/terminal.json" || { sev 2 "case $n terminal.json refused"; exit 0; }
 done
 mkdir -m 0700 -- "$cases/original"
-jq -n --argjson v "$ver" --arg f "$frag" --arg fs "$frag_sha" --argjson total "$total" --arg i "$instance" --rawfile u "$res/unit.show.txt" --rawfile l "$res/symlinks.tsv" \
- '{schema:"borsuk-canary-admission-v1",systemd:$v,fragment:$f,fragment_sha256:$fs,copied_bytes:$total,instance_id:$i,admitted_special:["/run/cloud-init/share/hook-hotplug-cmd"],symlinks:($l|split("\n")|map(select(length>0))),units:($u|split("\n"))}' > "$res/admission.json"
+jq -n --argjson v "$ver" --arg f "$frag" --arg fs "$frag_sha" --argjson total "$total" --arg i "$instance" --rawfile u "$res/unit.show.txt" --rawfile l "$res/symlinks.tsv" --arg ca "$ca" \
+ '{schema:"borsuk-canary-admission-v1",systemd:$v,fragment:$f,fragment_sha256:$fs,copied_bytes:$total,instance_id:$i,admitted_special:["/run/cloud-init/share/hook-hotplug-cmd"],symlinks:($l|split("\n")|map(select(length>0))),coordinator_after:($ca|split(" ")|map(select(length>0))|sort),units:($u|split("\n"))}' > "$res/admission.json"
 step_end
 
 # ---- C1: preserve the original evidence outside the bound targets and take the live baseline -----------------------------
@@ -385,7 +389,13 @@ run_case() {
  for f in result.json status.json; do reg "$c/var-lib-cloud/data/$f" && cp -p "$c/var-lib-cloud/data/$f" "$res/case-$n.$f" || { ok=0; sev 1 "case $n cloud-init $f missing"; }; done
  if [[ -f $res/case-$n.result.json ]]; then
   errs=$(jq -er '.v1.errors | length' "$res/case-$n.result.json") || errs=bad
-  [[ $errs == "$ers" ]] || { ok=0; sev 1 "case $n cloud-init error count $errs"; }
+ fi
+ # cloud-init 26.1 with the copy's status.json deleted: ONE stage runs (modules-final) and the four stage records alias ONE errors list (nullstatus.copy()), so the raw result repeats the
+ # owner errors four times. The raw files are kept; the exact frozen shape is required, never uniqued: owner errors [] (case 0) or the single scripts-user failure (cases 2/3), ALL four
+ # stage lists equal to the owner, only modules-final carries times, and result.errors is exactly the ordered stage concatenation. Both files must hold exactly ONE JSON document
+ # (-s on the result, --slurpfile length on the status), so no earlier false document can be masked and no extra document ignored.
+ if [[ -f $res/case-$n.result.json && -f $res/case-$n.status.json ]]; then
+  jq -e -s --argjson want "$ers" --arg err "('scripts-user', RuntimeError('Runparts: 1 failures (part-001) in 1 attempted commands'))" --slurpfile s "$res/case-$n.status.json" '["init","init-local","modules-config","modules-final"] as $st | (length == 1 and ($s | length) == 1) and (.[0] as $r | $s[0].v1 as $v | (($r.v1 | keys) == ["datasource","errors"]) and (($v | keys) == ["datasource","init","init-local","modules-config","modules-final","stage"]) and ($v.stage == null) and ($st | all(.[]; . as $k | ($v[$k] | type) == "object" and ($v[$k] | keys) == ["errors","finished","recoverable_errors","start"] and ($v[$k].errors | type) == "array" and ($v[$k].recoverable_errors | type) == "object")) and ([$st[] | select($v[.].start != null or $v[.].finished != null)] == ["modules-final"]) and ($v["modules-final"].start | type == "number" and . > 0) and ($v["modules-final"].finished | type == "number" and . >= $v["modules-final"].start) and ($v["modules-final"].errors == (if $want == 0 then [] else [$err] end)) and ($st | all(.[]; . as $k | $v[$k].errors == $v["modules-final"].errors)) and ($r.v1.datasource == $v.datasource) and ($r.v1.errors == [$st[] as $k | $v[$k].errors[]]))' "$res/case-$n.result.json" > /dev/null || { ok=0; sev 1 "case $n cloud-init status/result is not the exact frozen shape (owner errors expected $ers, raw result errors $errs)"; }
  fi
  if reg "$out/bootstrap-manager.json"; then cp -p -- "$out/bootstrap-manager.json" "$res/case-$n.manager.json" || { ok=0; sev 1 "case $n manager record not copied"; }; fi
  modsran=$(tail -c +"$((s0 + 1))" "$c/cloud-init.log" | head -c 4194304 | grep -oE 'Running module [A-Za-z0-9_-]+' | sort -u | tr '\n' ',') || modsran=''

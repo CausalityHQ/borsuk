@@ -16,7 +16,7 @@ export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 root=$1 bucket=$2 prefix=$3 instance=$4 boot=$5 stop=$6 frag_sha=$7
 [[ $root == /mnt/borsuk-scale1m && $bucket == borsuk-bench-453182569524-euc1 && $prefix =~ ^research/semantic-router/[0-9]{8}/[a-z0-9-]+$ && $instance =~ ^i-[0-9a-f]+$ && $boot =~ ^[0-9]+$ && $stop =~ ^[0-9]+$ && $frag_sha =~ ^[0-9a-f]{64}$ ]] || exit 90
 wc_sha=bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f
-coord_sha=983a3f16e5f3567e587729502d82d3a0c33cf90df3f7054e08559b66583f0acc
+coord_sha=b2ec593fe50776462dcb403237f1a971361bfa2249e8c303f9d4815ed968700b
 probe_sha=6111cbc9f504be3dc43c96dc450f2d30d319ab20ccdcf0acf94d65a518072fc9
 want_ci=26.1-0ubuntu1~24.04.1
 dropin=/run/systemd/system/cloud-final.service.d/borsuk-exit.conf
@@ -211,7 +211,7 @@ t5() {
  ( umask 022; cat > /run/systemd/system/borsuk-canary-coordinator.service <<'EOF'
 [Unit]
 Description=Borsuk canary coordinator
-After=cloud-final.service
+After=cloud-final.service borsuk-canary-final-0.service borsuk-canary-final-2.service borsuk-canary-final-3.service
 
 [Service]
 Type=simple
