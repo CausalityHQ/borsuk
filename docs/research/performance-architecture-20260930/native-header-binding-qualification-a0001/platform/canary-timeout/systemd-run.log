@@ -1,0 +1,7 @@
+Running as unit: borsuk-header-canary-timeout.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=124
+Service runtime: 1.057s
+CPU time consumed: 57ms
+Memory peak: 1.2M
+Memory swap peak: 0B

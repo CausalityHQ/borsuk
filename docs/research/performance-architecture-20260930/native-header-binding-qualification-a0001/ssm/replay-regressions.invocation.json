@@ -1,0 +1,22 @@
+{
+    "CommandId": "7fbf1118-fe02-43fe-b6cd-36b1c181fd33",
+    "InstanceId": "i-045105d04ff5d0bb8",
+    "Comment": "native-header-qualification-a0001-replay-regressions",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-10T22:21:57.059Z",
+    "ExecutionElapsedTime": "PT5M5.612S",
+    "ExecutionEndDateTime": "2026-10-10T22:27:02.059Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-native-header-binding-stage-v1\",\n  \"stage\": \"replay-regressions\",\n  \"source_commit\": \"d077a54f456af30242753ed1e2e397a9416191f7\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/ssm/7fbf1118-fe02-43fe-b6cd-36b1c181fd33/i-045105d04ff5d0bb8/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/ssm/7fbf1118-fe02-43fe-b6cd-36b1c181fd33/i-045105d04ff5d0bb8/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "CommandId": "f33a8529-8e7f-416c-b5e1-64ad86782c49",
+    "InstanceId": "i-045105d04ff5d0bb8",
+    "Comment": "native-header-qualification-a0001-workspace-clippy",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-10T22:43:11.172Z",
+    "ExecutionElapsedTime": "PT4M11.97S",
+    "ExecutionEndDateTime": "2026-10-10T22:47:22.172Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-native-header-binding-stage-v1\",\n  \"stage\": \"workspace-clippy\",\n  \"source_commit\": \"d077a54f456af30242753ed1e2e397a9416191f7\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/ssm/f33a8529-8e7f-416c-b5e1-64ad86782c49/i-045105d04ff5d0bb8/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261010/native-header-binding-qualification-a0001/ssm/f33a8529-8e7f-416c-b5e1-64ad86782c49/i-045105d04ff5d0bb8/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

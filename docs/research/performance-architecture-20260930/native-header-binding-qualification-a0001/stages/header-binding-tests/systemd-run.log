@@ -1,0 +1,7 @@
+Running as unit: borsuk-header-header-binding-tests.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 3min 53.914s
+CPU time consumed: 3min 22.680s
+Memory peak: 1.7M
+Memory swap peak: 0B

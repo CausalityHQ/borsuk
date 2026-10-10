@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-native-header-binding-root-stage-verification-v1",
+  "stage": "header-binding-tests",
+  "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "instance_id": "i-045105d04ff5d0bb8",
+  "ssm_command_id": "41c81c44-0a33-401f-9b4b-f2dab7bcab28",
+  "ssm_status": "Success",
+  "ssm_response_code": 0,
+  "terminal": {
+    "schema": "borsuk-native-header-binding-stage-v1",
+    "stage": "header-binding-tests",
+    "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+    "manager_exit": 0,
+    "native_exit": 0,
+    "owned_cgroup_drained": true,
+    "performance_claim": false
+  },
+  "manifest_sha256": "431da027e68253ec16ca605a949f531e1fd6e09d64a03a8926f380e7d56ecd4e",
+  "all_manifest_bodies_authenticated": true,
+  "source_file_count": 462,
+  "source_before_after_equal": true,
+  "exact_required_tests": 7,
+  "ignored": 0,
+  "failed": 0,
+  "oom": 0,
+  "swap_peak": 0,
+  "native_qualified": false,
+  "performance_claim": false
+}

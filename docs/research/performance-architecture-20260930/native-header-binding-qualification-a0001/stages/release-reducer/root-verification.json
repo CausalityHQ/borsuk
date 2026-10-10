@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-native-header-binding-root-stage-verification-v1",
+  "stage": "release-reducer",
+  "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "instance_id": "i-045105d04ff5d0bb8",
+  "ssm_command_id": "0708ed74-f2c9-4f1d-a26a-ab20c5a915c3",
+  "ssm_status": "Success",
+  "ssm_response_code": 0,
+  "terminal": {
+    "schema": "borsuk-native-header-binding-stage-v1",
+    "stage": "release-reducer",
+    "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+    "manager_exit": 0,
+    "native_exit": 0,
+    "owned_cgroup_drained": true,
+    "performance_claim": false
+  },
+  "manifest_sha256": "d4a4b18584ccee8d81a1a7de1b47fe601d98c8468f4939ccf34add02f044f2da",
+  "all_manifest_bodies_authenticated": true,
+  "source_file_count": 462,
+  "source_before_after_equal": true,
+  "release": {
+    "path": "compare_native_replay",
+    "bytes": 1997056,
+    "sha256": "0837efd7c339e4d0968cfebc21a1390dfec18f9a0229b334cfaeddefa20236fd",
+    "actual_elf_collected": true
+  },
+  "oom": 0,
+  "swap_peak": 0,
+  "native_qualified": false,
+  "performance_claim": false
+}

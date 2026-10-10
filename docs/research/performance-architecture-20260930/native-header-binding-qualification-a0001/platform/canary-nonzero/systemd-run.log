@@ -1,0 +1,7 @@
+Running as unit: borsuk-header-canary-nonzero.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 59ms
+CPU time consumed: 58ms
+Memory peak: 2.9M
+Memory swap peak: 0B

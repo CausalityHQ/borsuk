@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-native-header-binding-platform-canary-v1",
+  "stage": "canary-nonzero",
+  "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "manager_exit": 1,
+  "native_exit": 1,
+  "owned_cgroup_drained": true,
+  "native_ann_executed": false,
+  "performance_claim": false
+}

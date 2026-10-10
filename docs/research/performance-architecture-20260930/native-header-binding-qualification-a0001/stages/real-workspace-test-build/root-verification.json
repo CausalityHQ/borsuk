@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-native-header-binding-root-stage-verification-v1",
+  "stage": "real-workspace-test-build",
+  "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "instance_id": "i-045105d04ff5d0bb8",
+  "ssm_command_id": "fd1d1a85-eab4-4cda-9be7-c63e2b807a9a",
+  "ssm_status": "Success",
+  "ssm_response_code": 0,
+  "terminal": {
+    "schema": "borsuk-native-header-binding-stage-v1",
+    "stage": "real-workspace-test-build",
+    "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+    "manager_exit": 0,
+    "native_exit": 0,
+    "owned_cgroup_drained": true,
+    "performance_claim": false
+  },
+  "manifest_sha256": "d908d390eb80806d71919dbed759605286b4817a42ec09553068efb09bc8beae",
+  "all_manifest_bodies_authenticated": true,
+  "source_file_count": 462,
+  "source_before_after_equal": true,
+  "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+  "oom": 0,
+  "swap_peak": 0,
+  "memory_max_events": 2332,
+  "native_qualified": false,
+  "performance_claim": false
+}

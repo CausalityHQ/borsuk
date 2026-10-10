@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-native-header-binding-root-stage-verification-v1",
+  "stage": "workspace-clippy",
+  "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "instance_id": "i-045105d04ff5d0bb8",
+  "ssm_command_id": "f33a8529-8e7f-416c-b5e1-64ad86782c49",
+  "ssm_status": "Success",
+  "ssm_response_code": 0,
+  "terminal": {
+    "schema": "borsuk-native-header-binding-stage-v1",
+    "stage": "workspace-clippy",
+    "source_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+    "manager_exit": 0,
+    "native_exit": 0,
+    "owned_cgroup_drained": true,
+    "performance_claim": false
+  },
+  "manifest_sha256": "c0e811705a367ec936006eee3905ea8781ad8b53c80c1b415846091a5e2f420e",
+  "all_manifest_bodies_authenticated": true,
+  "source_file_count": 462,
+  "source_before_after_equal": true,
+  "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+  "oom": 0,
+  "swap_peak": 0,
+  "native_qualified": false,
+  "performance_claim": false
+}
