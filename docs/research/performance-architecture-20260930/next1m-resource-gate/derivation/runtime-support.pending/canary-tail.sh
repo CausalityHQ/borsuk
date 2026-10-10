@@ -16,7 +16,7 @@ export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 root=$1 bucket=$2 prefix=$3 instance=$4 boot=$5 stop=$6 frag_sha=$7
 [[ $root == /mnt/borsuk-scale1m && $bucket == borsuk-bench-453182569524-euc1 && $prefix =~ ^research/semantic-router/[0-9]{8}/[a-z0-9-]+$ && $instance =~ ^i-[0-9a-f]+$ && $boot =~ ^[0-9]+$ && $stop =~ ^[0-9]+$ && $frag_sha =~ ^[0-9a-f]{64}$ ]] || exit 90
 wc_sha=bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f
-coord_sha=7c2db63dea0d935614066e44b5f67e652d2a8137a7a5d883262106a348d70392
+coord_sha=983a3f16e5f3567e587729502d82d3a0c33cf90df3f7054e08559b66583f0acc
 probe_sha=6111cbc9f504be3dc43c96dc450f2d30d319ab20ccdcf0acf94d65a518072fc9
 want_ci=26.1-0ubuntu1~24.04.1
 dropin=/run/systemd/system/cloud-final.service.d/borsuk-exit.conf

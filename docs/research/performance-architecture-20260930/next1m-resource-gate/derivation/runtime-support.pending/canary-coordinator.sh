@@ -17,7 +17,7 @@ tev=$root/evidence-root/canary-tail
 bucket=borsuk-bench-453182569524-euc1
 stop_sha=6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e
 wc_pin=bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f
-fifo=/run/cloud-init/hook-hotplug-cmd
+fifo=/run/cloud-init/share/hook-hotplug-cmd
 dropin=/run/systemd/system/cloud-final.service.d/borsuk-exit.conf
 t0=$EPOCHSECONDS
 instance='' prefix='' frag_sha='' frag='' local_stop=0 iid_dir=''
@@ -84,7 +84,7 @@ bnd() { local c=$cases/$1; printf '%s' "$c/var-lib-cloud:/var/lib/cloud $c/run-c
 lst() {
  set -Eeuo pipefail
  local -a ex=()
- [[ -z ${2:-} ]] || ex=(! -path ./hook-hotplug-cmd)
+ [[ -z ${2:-} ]] || ex=(! \( -path ./share/hook-hotplug-cmd -type p \))
  cd -- "$1" || return 1
  { find . -xdev -type d -printf 'd %p\n' || exit 1
    find . -xdev ! -type f ! -type d "${ex[@]}" -printf '%y %p -> %l\n' || exit 1
@@ -281,7 +281,7 @@ for n in 0 2 3; do
  c=$cases/$n
  mkdir -m 0700 -- "$c" "$c/root" "$c/var-lib-cloud" "$c/run-cloud-init" "$c/etc-cloud"
  for pair in /var/lib/cloud:var-lib-cloud /run/cloud-init:run-cloud-init /etc/cloud:etc-cloud; do
-  run 8 bash -c 'set -o pipefail; tar -C "$1" --exclude=./hook-hotplug-cmd -cf - . | tar -C "$2" -xpf - --numeric-owner' _ "${pair%:*}" "$c/${pair#*:}"
+  run 8 bash -c 'set -o pipefail; tar -C "$1" --exclude=./share/hook-hotplug-cmd -cf - . | tar -C "$2" -xpf - --numeric-owner' _ "${pair%:*}" "$c/${pair#*:}"
   [[ $(dig "$c/${pair#*:}") == "${want[${pair#*:}]}" ]] || { sev 2 "case $n copy of ${pair%:*} differs from the live tree"; exit 0; }
  done
  mkfile 0640 "$c/cloud-init.log" < /var/log/cloud-init.log && mkfile 0640 "$c/cloud-init-output.log" < /var/log/cloud-init-output.log || { sev 2 "case $n log copies not created"; exit 0; }
@@ -302,7 +302,7 @@ for n in 0 2 3; do
 done
 mkdir -m 0700 -- "$cases/original"
 jq -n --argjson v "$ver" --arg f "$frag" --arg fs "$frag_sha" --argjson total "$total" --arg i "$instance" --rawfile u "$res/unit.show.txt" --rawfile l "$res/symlinks.tsv" \
- '{schema:"borsuk-canary-admission-v1",systemd:$v,fragment:$f,fragment_sha256:$fs,copied_bytes:$total,instance_id:$i,admitted_special:["/run/cloud-init/hook-hotplug-cmd"],symlinks:($l|split("\n")|map(select(length>0))),units:($u|split("\n"))}' > "$res/admission.json"
+ '{schema:"borsuk-canary-admission-v1",systemd:$v,fragment:$f,fragment_sha256:$fs,copied_bytes:$total,instance_id:$i,admitted_special:["/run/cloud-init/share/hook-hotplug-cmd"],symlinks:($l|split("\n")|map(select(length>0))),units:($u|split("\n"))}' > "$res/admission.json"
 step_end
 
 # ---- C1: preserve the original evidence outside the bound targets and take the live baseline -----------------------------

@@ -1,0 +1,23 @@
+{
+  "candidate": "d4a544dcf12f766aa0566c2c37dafec97b4e176a",
+  "parent": "d2621ff573af7a69c55ca1fcb8052895a37165bb",
+  "source_hashes": {
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-tail.sh": "b069a2e76805683d207988e3e9764cbefb9a92b17195b8be06e4e889b2376659",
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-coordinator.sh": "983a3f16e5f3567e587729502d82d3a0c33cf90df3f7054e08559b66583f0acc"
+  },
+  "exact_four_line_inverse": "PASS",
+  "tail_pin_only": "PASS",
+  "bash_syntax": "PASS",
+  "fixture_compile": "PASS",
+  "fixture_sha256": "78e23213f40b362baed4c0227cb0eaac8e08e26b474928460292e44aa2b7f6ee",
+  "fixture_runtime": "UNRUN",
+  "actual_platform": "UNVERIFIED",
+  "native_changed": false,
+  "performance_claim": false,
+  "root_integration_base": "627db03c785adecbecddf694757910bf7eb597f9",
+  "platform_fixture_sha256": "fc970608fd25094941a62ea3404a98ae73b0661c8ac78aa128f978053356e306",
+  "existing_check_call_count": 37,
+  "changed_check_calls": 1,
+  "normalization": "four exact literal reversals; runtime tests preserved",
+  "production_native_changed": false
+}
