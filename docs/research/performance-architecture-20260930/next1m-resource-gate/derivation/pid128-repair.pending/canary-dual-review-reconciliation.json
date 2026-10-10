@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-next1m-canary-dual-review-reconciliation-v1",
+  "status": "CONCRETE_SOURCE_FINDINGS_REPAIRED_RUNTIME_UNVERIFIED",
+  "reviewed_source": "8fc761b6362420cbd637afda72c034e2b4c8500b",
+  "source_parent": "d2b0dbbd4f8c1c3a4e2c974d1f28682736a84158",
+  "review_group": "7a428afddde44ea1",
+  "engineering_id": "d8404f6fb4d84bd4",
+  "research_id": "060045d6fcea4bc9",
+  "both_original_reviews_completed": true,
+  "engineering_repairs_at": "d2b0dbbd4f8c1c3a4e2c974d1f28682736a84158",
+  "additional_research_repairs": {
+    "async_start": "Original bounded blocking Type=exec launch exit retained; separate bounded identity capture outside setup budget.",
+    "queued_absence": "Every prelaunch registration must carry original identity; absent cgroup requires authenticated original terminal manager and successful stop proof, otherwise cleanup is unproven. No invented ownership or unidentified kill.",
+    "shutdown_rounding": "Canary remaining-time admission and finish budget use recorded effective minute-rounded shutdown epoch, with conservative margin.",
+    "remaining_deadlines": "All root termination attempts, including EXIT, share launch+2620; guest packaging/publication share finite finish budget. AWS completion uncertainty remains explicit."
+  },
+  "bootstrap_size_example_bytes": 14988,
+  "bootstrap_limit_bytes": 16384,
+  "static_check": {
+    "unit": "run-p2097180-i710790136.service",
+    "invocation": "33962697f913417b8d539a54cf5d27f7",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0,
+    "py_compile_exit": 0
+  },
+  "runtime_executed": false,
+  "run_instances_executed": false,
+  "performance_claim": false,
+  "remaining": [
+    "new final source admission including envelope/template/freezer/support roster hashes",
+    "fresh quote, final content-addressed asset stage/readback and root freeze",
+    "one causality Spot canary; original exit and exact instance/volume closure then separate canary metadata replay",
+    "full-chain input admission and unchanged1M run are separate subsequent gates"
+  ]
+}

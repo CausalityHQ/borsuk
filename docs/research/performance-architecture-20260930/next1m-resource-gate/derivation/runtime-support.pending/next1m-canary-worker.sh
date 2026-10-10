@@ -28,10 +28,10 @@ setup() {
     timeout -k 1 "$cap" "$@"
 }
 finish() {
-    local original=$? cleanup=0 unit cg registration identity tag p
+    local original=$? cleanup=0 unit cg registration identity tag p terminal stop_exit
     trap - EXIT; set +e
     finish_deadline=$((SECONDS+180))
-    wall_finish_left=$((machine_deadline-$(date +%s)-10))
+    wall_finish_left=$((effective_shutdown_epoch-$(date +%s)-10))
     ((wall_finish_left>0)) || exit 94
     ((wall_finish_left>=180)) || finish_deadline=$((SECONDS+wall_finish_left))
     cleanup_deadline=$((SECONDS+120))
@@ -49,7 +49,18 @@ finish() {
         expected=$(sed -n 's/^InvocationID=//p' "$identity")
         [[ $expected =~ ^[0-9a-f]{32}$ ]] || return 1
         cg=/sys/fs/cgroup/system.slice/$unit
-        [[ ! -e $cg ]] && return 0
+        if [[ ! -e $cg && ! -L $cg ]]; then
+            # Absence alone cannot exclude a queued start. Require original terminal+stop proof.
+            local terminal=${4:-} stop_exit=${5:-}
+            [[ -f $terminal && ! -L $terminal && -f $stop_exit && ! -L $stop_exit ]] || return 1
+            [[ $(stat -c %s "$stop_exit") == 2 && $(< "$stop_exit") == 0 ]] || return 1
+            grep -Fx "InvocationID=$expected" "$terminal" >/dev/null || return 1
+            grep -Fx "Description=$unit" "$terminal" >/dev/null || return 1
+            grep -Fx MainPID=0 "$terminal" >/dev/null || return 1
+            grep -Fx ExecMainCode=1 "$terminal" >/dev/null || return 1
+            printf '%s\n' 'REMOVED_AFTER_AUTHENTICATED_ORIGINAL_TERMINAL_AND_STOP' > "$root/$tag.cleanup.removed" || return 1
+            return 0
+        fi
         [[ ! -L $cg && $(realpath -e "$cg") == "$cg" ]] || return 1
         left=$((cleanup_deadline-SECONDS)); ((left>6)) || return 1
         timeout -k 1 5 systemctl show "$unit" -p InvocationID -p Description -p ControlGroup > "$root/$tag.cleanup.show" || return 1
@@ -74,19 +85,19 @@ finish() {
         [[ $unit =~ ^borsuk-pid128-observer-[a-z0-9-]+\.service$ ]] || { cleanup=1; continue; }
         tag=${registration##*/}; tag=${tag%-launch.unit}
         identity=${registration%-launch.unit}-launch.identity
-        if [[ -d /sys/fs/cgroup/system.slice/$unit ]]; then
-            # A recorded name is not an ownership proof; never infer its InvocationID.
-            drain "$unit" "$identity" "$tag-observer" || cleanup=1
-        fi
+        # Registration without identity remains unproven even if the cgroup is absent.
+        drain "$unit" "$identity" "$tag-observer" \
+          "/mnt/borsuk-pid-evidence/canary/$tag-manager.txt" \
+          "/mnt/borsuk-pid-evidence/canary/$tag-observer.stop.exit" || cleanup=1
     done
     for p in /mnt/borsuk-pid-evidence/canary/*-evidence/phases/*; do
         [[ -f $p/unit && ! -L $p/unit ]] || { cleanup=1; continue; }
         unit=$(< "$p/unit")
         tag=${p%/phases/*}; tag=${tag##*/}; tag=$tag-${p##*/}
         # No invented identity when launch failed before its original receipt.
-        if [[ -d /sys/fs/cgroup/system.slice/$unit ]]; then
-            drain "$unit" "$p/manager.initial.txt" "$tag-payload" || cleanup=1
-        fi
+        terminal=$p/manager.final.txt; stop_exit=$p/manager.stop.exit
+        if [[ ! -f $terminal ]]; then terminal=$p/manager.cleanup.txt; stop_exit=$p/cleanup.stop.exit; fi
+        drain "$unit" "$p/manager.initial.txt" "$tag-payload" "$terminal" "$stop_exit" || cleanup=1
     done
     ((cleanup==0)) || { state=INVALID; original=94; }
     printf '%s\n' "$original" > "$root/bootstrap.exit" || exit 94
@@ -108,6 +119,7 @@ finish() {
 trap finish EXIT
 remaining_minutes=$(((machine_deadline-$(date +%s))/60))
 ((remaining_minutes>0 && remaining_minutes<=40)) || exit 125
+effective_shutdown_epoch=$(($(date +%s)+remaining_minutes*60))
 shutdown -h +"$remaining_minutes"
 setup 180 apt-get update
 setup 240 env DEBIAN_FRONTEND=noninteractive apt-get install -y jq curl unzip
@@ -133,7 +145,7 @@ phase=transport
 support=/mnt/borsuk-platform-support
 mkdir "$support" /mnt/borsuk-pool-pid /mnt/borsuk-pid-evidence
 for spec in \
-  'wrapper-canary.sh:16543:3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2' \
+  'wrapper-canary.sh:16648:aab33fc75ec9738bdc1c5f7abf048a497615287f729985c77883ec03e8372a85' \
   'run_native_scale_build_gate.sh:62014:b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452' \
   'verify-closed.py:77200:5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e'; do
     name=${spec%%:*}; rest=${spec#*:}; bytes=${rest%%:*}; expected=${rest#*:}
@@ -161,16 +173,27 @@ setup 30 aws s3api get-object --bucket "$bucket" --key 'research/semantic-router
 printf '%s  %s\n' 4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66 "$support/bin/build_sq8_source" | sha256sum -c -
 chmod 0500 "$support/bin/build_sq8_source"
 phase=canary
-(( $(date +%s)+1690 <= machine_deadline-100 )) || exit 125
+(( $(date +%s)+1690 <= effective_shutdown_epoch-100 )) || exit 125
+[[ $(timeout -k 1 5 systemctl show borsuk-next1m-canary.service -p LoadState --value) == not-found ]] || exit 125
+printf '%s\n' borsuk-next1m-canary.service > "$root/parent.unit"
+sync -f "$root/parent.unit"; sync -f "$root"
 attempted=true
-systemd-run --expand-environment=no --quiet --no-block --unit=borsuk-next1m-canary --description=borsuk-next1m-canary.service --service-type=exec \
+set +e
+timeout -k 1 10 systemd-run --expand-environment=no --quiet --unit=borsuk-next1m-canary --description=borsuk-next1m-canary.service --service-type=exec \
   -p RemainAfterExit=yes -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 \
   -p TasksMax=128 -p RuntimeMaxSec=1510 -p TimeoutStopSec=10 -p KillMode=control-group -p LimitCORE=0 \
   -p "StandardOutput=append:$root/platform.log" -p "StandardError=append:$root/platform.log" \
   /usr/bin/taskset -c 0 /usr/bin/timeout -k 10 1500 /bin/bash "$support/wrapper-canary.sh" "$support/run_native_scale_build_gate.sh" "$support/bin" /mnt/borsuk-pid-evidence/canary
-setup 5 systemctl show borsuk-next1m-canary.service -p Id -p Description -p InvocationID -p ControlGroup > "$root/parent.identity"
+parent_launch_rc=$?
+set -e
+printf '%s\n' "$parent_launch_rc" > "$root/parent.launch.exit"
+timeout -k 1 5 systemctl show borsuk-next1m-canary.service -p Id -p Description -p InvocationID -p ControlGroup > "$root/parent.identity"
 parent_id=$(sed -n 's/^InvocationID=//p' "$root/parent.identity")
 [[ $parent_id =~ ^[0-9a-f]{32}$ ]]
+grep -Fx Description=borsuk-next1m-canary.service "$root/parent.identity" >/dev/null
+grep -Fx ControlGroup=/system.slice/borsuk-next1m-canary.service "$root/parent.identity" >/dev/null
+sync -f "$root/parent.identity"; sync -f "$root"
+[[ $parent_launch_rc == 0 ]] || exit 94
 deadline=$((SECONDS+1520))
 while :; do
     timeout -k 1 5 systemctl show borsuk-next1m-canary.service -p InvocationID -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus > "$root/parent.poll"

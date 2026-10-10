@@ -152,6 +152,9 @@ phase_case() {
   printf 'removed\n' > "$out/$name-drain.events"
  fi
  stop_observer
+ printf '0\n' > "$out/$name-observer.stop.exit"
+ sync -f "$out/$name-observer.stop.exit"
+ sync -f "$out"
 }
 phase_case fixture-build0 fixture 'exit 0' 0 0
 phase_case fixture-query0 baseline 'exit 0' 0 0

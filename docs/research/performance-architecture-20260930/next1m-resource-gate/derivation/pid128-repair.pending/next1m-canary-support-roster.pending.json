@@ -1,8 +1,8 @@
 [
   {
     "name": "wrapper-canary.sh",
-    "bytes": 16543,
-    "sha256": "3177914f0b221d379dae10cf3587a383efadf9283bf896b8594dde59dfa3e9f2"
+    "bytes": 16648,
+    "sha256": "aab33fc75ec9738bdc1c5f7abf048a497615287f729985c77883ec03e8372a85"
   },
   {
     "name": "run_native_scale_build_gate.sh",
