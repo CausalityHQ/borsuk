@@ -194,6 +194,7 @@ for f in native timeout time tee time-log supervisor-stderr-log native-stderr-lo
 for f in after closed; do [[ $(< "$E/resource-closure.$f.txt") == true ]]; done
 jq -e '.status=="ADMISSION_VERIFIED" and .intended_exit==0 and .performance_claim==false' $E/terminal.json
 phase=retain-preparation
+jq -e '[.outputs[]|select(.name=="corpus.f32")|{bytes,sha256}]==[{bytes:4096000000,sha256:"1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"}]' prepared-parent/cohort/complete.json
 # Whole native output seals were checked by the admission wrapper. Retain them create-only.
 admit 3000 retain-preparation
 retain_deadline=$(( $(date +%s) + 2400 ))
