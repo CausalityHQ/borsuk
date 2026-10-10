@@ -43,7 +43,7 @@ config_actual=$(sha256sum "$root/gate-config.json"); config_actual=${config_actu
 [[ $config_actual == "$config_sha" ]]
 deadline=$(( $(date +%s) + 10080 ))
 launch=0
-timeout -k 1 10 systemd-run --unit="$unit" --description="$unit" --no-block \
+timeout -k 1 10 systemd-run --unit="$unit" --description="$unit" \
   -p Type=exec -p RemainAfterExit=yes -p CPUQuota=100% -p AllowedCPUs=0 \
   -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 \
   -p RuntimeMaxSec=10080 -p TimeoutStopSec=30 -p KillMode=control-group -p LimitCORE=0 \

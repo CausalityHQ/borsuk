@@ -1,0 +1,22 @@
+{
+  "status": "SOURCE_LAUNCHER_ALIGNED_FULL_CHAIN_RUNTIME_UNVERIFIED",
+  "canary_evidence_commit": "39970912eb78b670092420e276470c2d5092d5fd",
+  "canary_instance": "i-0612ad24ad4bc9912",
+  "scope": "remove only --no-block; Type=exec, original bounded launch status, identity capture and cleanup retained",
+  "candidate_sha256": "7eab2c589e0f08713097c088388781e13f86f1acd04bfcb0366515148d73c315",
+  "native_chain_invocation_tail_unchanged": true,
+  "native_chain_tail_sha256": "99f275d8f90940ed75d960adbcea2ef91a06bc4f5f5d6a83ab653243f3112aa8",
+  "static_unit": "run-p3876595-i712593425.service",
+  "static_invocation": "9ca21db5112843a69eee53c88fc1c6b6",
+  "bash_n_exit": 0,
+  "shellcheck_exit": 0,
+  "runtime_verified": false,
+  "performance_claim": false,
+  "remaining": [
+    "direct full-chain collector refusal coverage on causality EC2",
+    "final twelve-support-file hash roster and exact root launch/source/input admission",
+    "one distinct original 1M native Q32 screen after admission and staging; no repeated failed algorithm",
+    "full closed-chain replay before recall interpretation",
+    "fresh physical cold S3 campaign after native Q32 screen"
+  ]
+}
