@@ -1,0 +1,23 @@
+{
+  "status": "PLATFORM_PAIR_ACCEPTED_ONLY",
+  "instance_id": "i-0ef52a7bc835908cd",
+  "source_commit": "799dc4566597933a4a2b18c023543a218e768167",
+  "archive_sha256": "bce909292d7b63d6a99213451f08691e82a40713730647065c911de0da735560",
+  "archive_bytes": 61359,
+  "positive_manifest_files": 133,
+  "negative_manifest_files": 132,
+  "negative_timeout_exit": 124,
+  "negative_elapsed_centiseconds": 1538,
+  "root_watch_exit": 0,
+  "instance_terminated": true,
+  "root_volume_absent": true,
+  "ann_executed": false,
+  "real_data_admission_qualified": false,
+  "performance_claim": false,
+  "remaining": [
+    "actual native input admission",
+    "native staging and negative",
+    "widths real-data PID128 gate",
+    "matched cold performance"
+  ]
+}
