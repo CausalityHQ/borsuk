@@ -76,6 +76,7 @@ sha2 = { version = "0.10", features = ["asm"] }
 libc = "0.2.186"
 
 [dev-dependencies]
+flate2 = { version = "=1.1.9", default-features = false, features = ["zlib-rs"] }
 axum = "0.8"
 criterion = "0.7"
 memory-stats = "1.2"
@@ -92,6 +93,9 @@ name = "native_process_cpu"
 
 [[example]]
 name = "compare_native_replay"
+
+[[example]]
+name = "extract_closed_native_replay"
 
 [[example]]
 name = "build_sq8_source"

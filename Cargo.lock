@@ -712,6 +712,7 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion",
+ "flate2",
  "futures-util",
  "half",
  "http-body-util",
