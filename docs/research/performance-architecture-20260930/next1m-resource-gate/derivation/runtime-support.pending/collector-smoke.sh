@@ -40,9 +40,24 @@ cleanup_unit() {
  owned='' owned_id=''
 }
 finish() {
- local rc=$?
+ local rc=$? saved=${case_dir:-$out}
  trap - EXIT
- cleanup_unit || rc=94
+ if ((rc!=0)); then
+  set +e
+  cleanup_unit > "$saved/failed-harness-cleanup.stdout" 2> "$saved/failed-harness-cleanup.stderr"
+  cleanup_rc=$?
+  printf '%s\n' "$cleanup_rc" > "$saved/failed-harness-cleanup.exit" || rc=94
+  ((cleanup_rc==0)) || rc=94
+  for name in evidence-chain evidence-root; do
+   if [[ -d $root/$name && ! -L $root/$name && ! -e $saved/failed-$name ]]; then
+    mv "$root/$name" "$saved/failed-$name" || rc=94
+   fi
+  done
+  printf '%s\n' "$rc" > "$saved/failed-smoke.exit" || rc=94
+  sync -f "$out" || rc=94
+ else
+  cleanup_unit || rc=94
+ fi
  exit "$rc"
 }
 trap finish EXIT
@@ -91,10 +106,18 @@ start_unit() {
  [[ $owned_id =~ ^[0-9a-f]{32}$ ]]
  ((launch_rc==0)) || return 1
  wait_end=$((SECONDS+8))
- until [[ -f $root/evidence-root/chain-actual.exit || $mode == deadline ]]; do
-  ((SECONDS<wait_end)) || return 1
-  sleep 0.05
- done
+ if [[ $mode != deadline ]]; then
+  while :; do
+   manager systemctl show "$owned" -p InvocationID -p MainPID -p ExecMainCode -p ExecMainStatus -p ActiveState -p SubState > "$case_dir/terminal.before"
+   grep -Fx "InvocationID=$owned_id" "$case_dir/terminal.before" >/dev/null
+   if grep -Fx MainPID=0 "$case_dir/terminal.before" >/dev/null; then break; fi
+   ((SECONDS<wait_end)) || return 1
+   sleep 0.05
+  done
+  grep -Fx ExecMainCode=1 "$case_dir/terminal.before" >/dev/null
+  grep -Fx "ExecMainStatus=$code" "$case_dir/terminal.before" >/dev/null
+  [[ $(stat -c %s "$root/evidence-root/chain-actual.exit") == 2 && $(< "$root/evidence-root/chain-actual.exit") == "$code" ]]
+ fi
 }
 for case_name in positive0 positive2 positive3 exit-disagreement wrong-config truncated-seal replaced populated deadline; do
  ((SECONDS<batch_end-20)) || exit 94
@@ -115,13 +138,17 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
   replaced)
    old_unit=$owned; old_id=$owned_id
    cleanup_unit
+   owned=$old_unit
+   replacement_rc=0
    manager systemd-run --unit="$old_unit" --description="$old_unit" -p Type=exec -p RemainAfterExit=yes \
     -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 \
     -p RuntimeMaxSec=30 -p TimeoutStopSec=3 -p KillMode=control-group -p LimitCORE=0 \
-    -p BindsTo=borsuk-next1m-canary.service /bin/sleep 20 > "$case_dir/replacement.launch" 2>&1
-   owned=$old_unit
-   owned_id=$(manager systemctl show "$owned" -p InvocationID --value)
+    -p BindsTo=borsuk-next1m-canary.service /bin/sleep 20 > "$case_dir/replacement.launch" 2>&1 || replacement_rc=$?
+   printf '%s\n' "$replacement_rc" > "$case_dir/replacement.launch.exit"
+   manager systemctl show "$owned" -p Id -p InvocationID -p ControlGroup > "$case_dir/replacement.identity"
+   owned_id=$(sed -n 's/^InvocationID=//p' "$case_dir/replacement.identity")
    [[ $owned_id =~ ^[0-9a-f]{32}$ && $owned_id != "$old_id" ]]
+   ((replacement_rc==0)) || exit 94
    supplied_id=$old_id;;
  esac
  if [[ $case_name == populated || $case_name == deadline ]]; then
@@ -144,16 +171,45 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
   fi
  fi
  deadline=$(( $(date +%s)+12 )); [[ $case_name != deadline ]] || deadline=$(( $(date +%s)+4 ))
+ printf '%s\n' "$deadline" > "$case_dir/supplied-deadline.epoch"
+ collector_started=$SECONDS
  rc=0
  timeout -k 2 28 bash "$collector" "$owned" "$supplied_id" "$root/evidence-chain" \
   "$root/evidence-root/chain-outer" "$root/evidence-root/chain-actual.exit" \
   "$recipe_sha" "$config_sha" "$deadline" > "$case_dir/collector.stdout" 2> "$case_dir/collector.stderr" || rc=$?
  printf '%s\n' "$rc" > "$case_dir/collector.exit"
+ elapsed=$((SECONDS-collector_started))
+ printf '%s\n' "$elapsed" > "$case_dir/collector.elapsed.seconds"
  case $case_name in
   positive*)
    [[ $rc == 0 ]]
    jq -e --argjson code "$code" --arg id "$supplied_id" '.status=="CLOSED" and .actual_outer_exit==$code and .invocation_id==$id and .drained==true' "$root/evidence-root/chain-outer/outer-closure.json" > "$case_dir/assert";;
   *) [[ $rc != 0 && $rc != 124 && $rc != 137 && ! -e $root/evidence-root/chain-outer/outer-closure.json ]];;
+ esac
+ case $case_name in
+  exit-disagreement|wrong-config|truncated-seal)
+   grep -Fx "InvocationID=$owned_id" "$root/evidence-root/chain-outer/manager.show" >/dev/null
+   grep -Fx MainPID=0 "$root/evidence-root/chain-outer/manager.show" >/dev/null
+   [[ $(< "$root/evidence-root/chain-outer/failure-cleanup.exit") == 0 ||
+      $(< "$root/evidence-root/chain-outer/failure-cleanup.exit") == 1 ]]
+   [[ ! -e /sys/fs/cgroup/system.slice/$owned/cgroup.events ]] ||
+    grep -Fx 'populated 0' "/sys/fs/cgroup/system.slice/$owned/cgroup.events" >/dev/null
+   case $case_name in
+    exit-disagreement) [[ $(< "$root/evidence-root/chain-actual.exit") == 2 ]];;
+    wrong-config) jq -e '.config_sha256==("f"*64)' "$root/evidence-chain/terminal.json" >/dev/null;;
+    truncated-seal)
+     [[ -f $root/evidence-root/chain-outer/closure.sorted && -f $root/evidence-root/chain-outer/closure.actual ]]
+     grep -Fx './synthetic.txt' "$root/evidence-root/chain-outer/closure.actual" >/dev/null
+     ! grep -Fx './synthetic.txt' "$root/evidence-root/chain-outer/closure.sorted" >/dev/null;;
+   esac;;
+  replaced)
+   [[ $(< "$root/evidence-root/chain-outer/failure-cleanup.exit") == 1 ]]
+   grep -Fx "InvocationID=$owned_id" "$root/evidence-root/chain-outer/poll.tmp" >/dev/null;;
+  populated) grep -Fx 'populated 1' "$root/evidence-root/chain-outer/drain.events" >/dev/null;;
+  deadline)
+   ((elapsed<=18))
+   grep -Fx "InvocationID=$owned_id" "$root/evidence-root/chain-outer/poll.tmp" >/dev/null
+   pid=$(sed -n 's/^MainPID=//p' "$root/evidence-root/chain-outer/poll.tmp"); [[ $pid =~ ^[1-9][0-9]*$ ]];;
  esac
  if [[ $case_name == populated || $case_name == deadline ]]; then
   # This must be checked BEFORE the smoke's independent safety cleanup.
@@ -173,7 +229,8 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
   grep -Fx ActiveState=active "$case_dir/replacement.after" >/dev/null
   pid=$(sed -n 's/^MainPID=//p' "$case_dir/replacement.after"); [[ $pid =~ ^[1-9][0-9]*$ ]]
  fi
- cleanup_unit
+ cleanup_unit > "$case_dir/harness-cleanup.stdout" 2> "$case_dir/harness-cleanup.stderr"
+ printf '0\n' > "$case_dir/harness-cleanup.exit"
  [[ ! -e $root/evidence-chain ]] || mv "$root/evidence-chain" "$case_dir/evidence-chain"
  mv "$root/evidence-root" "$case_dir/evidence-root"
  mkdir "$root/evidence-root"
@@ -181,6 +238,6 @@ for case_name in positive0 positive2 positive3 exit-disagreement wrong-config tr
 done
 [[ $(wc -l < "$out/completed-cases.txt") == 9 ]]
 sha256sum --check --strict "$out/source.sha256" > "$out/source-closure.assert"
-jq -n '{schema:"borsuk-native-collector-smoke-v1",status:"COLLECTOR_MECHANICS_VERIFIED",real_systemd:true,synthetic_chain_metadata:true,positive_cases:3,refusal_cases:6,ann_executed:false,performance_claim:false,full_native_chain_qualified:false}' > "$out/result.json"
+jq -n '{schema:"borsuk-native-collector-smoke-v1",status:"COLLECTOR_MECHANICS_VERIFIED",real_systemd:true,synthetic_chain_metadata:true,positive_cases:3,refusal_cases:6,collector_cleanup_verified_for_live_cases:true,retained_empty_metadata_refusal_units_cleaned_by_harness:true,ann_executed:false,performance_claim:false,full_native_chain_qualified:false}' > "$out/result.json"
 (cd "$out"; find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > "$out/SHA256SUMS"
 sync -f "$out"

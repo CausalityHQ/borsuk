@@ -3,7 +3,7 @@
   "plan_consultation": "72663aa8c1f34869",
   "plan_provider": "codex",
   "plan_model": "gpt-6.1-sol",
-  "source_sha256": "db0db88fdbea2b4a6bfeee8b5b279270c474b34835f82e6eb5df45cb1d151c30",
+  "source_sha256": "de33ff52adee978a9e2b4aa7bb00289460e307f53d5842f4a0b6f92db2f88cf1",
   "positive_cases": [
     "positive0",
     "positive2",
@@ -32,15 +32,15 @@
     "collector_per_case_timeout_seconds": 28
   },
   "static": {
-    "unit": "run-p190909-i713089798.service",
-    "invocation_id": "a22ec8e475de42f68f99c219e12666bb",
+    "unit": "run-p847276-i713738577.service",
+    "invocation_id": "f6f5b843a49a4e2098de3b5d76f854d3",
     "bash_n_exit": 0,
     "shellcheck_exit": 0
   },
   "remaining": [
-    "independent source critique",
-    "source-bound staging/cleanup adapter using existing EC2 canary machinery",
-    "one remote original smoke and closure audit",
+    "one remote original collector smoke and closure audit",
     "exact-source real 1M native gate"
-  ]
+  ],
+  "review_group": "fe86c3258f2a4710",
+  "cleanup_scope": "collector cleanup proved for live cases; harness cleans retained empty metadata refusal units"
 }
