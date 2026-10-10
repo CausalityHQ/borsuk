@@ -1,0 +1,72 @@
+[
+  {
+    "path": "verify-closed.py",
+    "bytes": 77732,
+    "sha256": "437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a"
+  },
+  {
+    "path": "replay-pins.json",
+    "bytes": 11353,
+    "sha256": "cff58f0c8f6fc23dec3153d5bfa0e7d6148146510f9e03697c7bbf3aee8e611f"
+  },
+  {
+    "path": "remote-results/terminal.json",
+    "bytes": 531,
+    "sha256": "a9cc15569920012030d3753c788b7647b6d9441d2fe91a5f130f4467932fa215"
+  },
+  {
+    "path": "remote-results/bootstrap-manager.json",
+    "bytes": 249,
+    "sha256": "1919b2c6088afdfc190797afa7109c0971d82d5b71c3048d6189d5000d9b1056"
+  },
+  {
+    "path": "remote-results/collection.json",
+    "bytes": 543,
+    "sha256": "74bbf81b07a8fba8a46da49e9adf508aaf90c4b3330d77b6e34c6987dda15f20"
+  },
+  {
+    "path": "remote-results/artifacts.sha256",
+    "bytes": 94455,
+    "sha256": "09b7ce99e5293c0e1254287416d536451b77c4386f70a677fb8e9f034563319d"
+  },
+  {
+    "path": "remote-results/evidence.tar.gz",
+    "bytes": 596854,
+    "sha256": "c02c364a97817ed3d5fc5c86dc2f02f145c5a3f94a3ddca1d713e49e5000862c"
+  },
+  {
+    "path": "remote-results/state.txt",
+    "bytes": 61,
+    "sha256": "24081d5001ad7cd134fff32759d19657485af5f11b1c13907bb42106291331fc"
+  },
+  {
+    "path": "remote-results/launch-time.txt",
+    "bytes": 158,
+    "sha256": "cc1f37ea8a7356787a161b274976da60a299c08a578e7373bf0cbfd1c9e0cf40"
+  },
+  {
+    "path": "remote-results/root-launch-request.json",
+    "bytes": 18337,
+    "sha256": "94484c9fc31a01511642fa29ef597f46957c5ebdf4321878e341765e62288a31"
+  },
+  {
+    "path": "remote-results/root-launch-response.json",
+    "bytes": 5262,
+    "sha256": "1a9cbde7386e6e0439023866929d01c86937c9f3d554287ee49c89d8686affda"
+  },
+  {
+    "path": "remote-results/root-instance-running.json",
+    "bytes": 8499,
+    "sha256": "3b93fabc4d40101cab745138cfa15746406da35e585daa70e1795c14c8fa27f5"
+  },
+  {
+    "path": "remote-results/root-scratch-volume.json",
+    "bytes": 1148,
+    "sha256": "6dd718b43f756d87adc3c19bcf8a9881315b1c3246ed66081bf78d66b52ca85b"
+  },
+  {
+    "path": "remote-results/root-instance-terminated.json",
+    "bytes": 4063,
+    "sha256": "9fcf2be96db41e656f848952c618fbcef759f3464b1a1b31bd59ac06306182c0"
+  }
+]

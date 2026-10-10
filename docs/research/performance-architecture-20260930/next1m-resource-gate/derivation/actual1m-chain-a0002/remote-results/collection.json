@@ -1,0 +1,17 @@
+{
+  "instance_id": "i-0df6baa2bf2b499ff",
+  "terminated": true,
+  "reason": "terminal",
+  "user_data_sha256": "319f381c6bcbc278d5c40caba26584ce4f4aeceb552edc442a64c443291db50d",
+  "archive_authenticated": true,
+  "manifest_verified": false,
+  "independent_replay_pending": true,
+  "late": false,
+  "cost_bound": "MODELED_15000_PLUS_120",
+  "supplied_started_epoch": 1791643019,
+  "effective_started_epoch": 1791643019,
+  "chain_unit_exit": 0,
+  "chain_disposition": "NATIVE_CHAIN_CLOSED",
+  "bootstrap_exit": 0,
+  "performance_claim": false
+}
