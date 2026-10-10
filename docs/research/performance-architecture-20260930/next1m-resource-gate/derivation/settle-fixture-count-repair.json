@@ -1,0 +1,11 @@
+{
+  "source_base": "6b582018d6d5385e0b715201366743ea409555a6",
+  "old_sha256": "83cea1432e1ae0a20682ea3a6770aad9273af89a346b3fbe1ae03646cb058b9b",
+  "new_sha256": "4a7b1bd0fd91c5b56187875e7b743981d5e442ed4cd03cc8844fe5bbc9062095",
+  "demonstrated_failure": "a0007 authenticated archive: only two global text-count assertions failed after adding the second finite observer",
+  "fix": "Require exactly two keep=True observation callsites with both known evidence names; exactly two sleep calls and callback arguments",
+  "behavioral_cases_changed": false,
+  "production_source_changed": false,
+  "runtime_rerun": "UNRUN",
+  "local_runtime_executed": false
+}
