@@ -1,0 +1,92 @@
+{
+  "schema": "borsuk-next1m-collector-smoke-envelope-v1",
+  "status": "PENDING_EXECUTION_WIRING_AND_ROOT_FREEZE",
+  "candidate_source_commit": "70448857f8016cb3ed68029387c60eec9c45c3c2",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "spot",
+  "instance_type": "c7i.2xlarge",
+  "instance_id": null,
+  "single_launch": true,
+  "root_volume": {
+    "gib": 48,
+    "encrypted": true,
+    "delete_on_termination": true
+  },
+  "runtime_toolchain": false,
+  "cargo_rustc_allowed": false,
+  "ann_measurement": false,
+  "real_operations": [
+    "source exact-byte SHA admission",
+    "real systemd collector original exit0/2/3",
+    "six evidence and ownership refusals",
+    "live original cgroup drain before independent harness cleanup"
+  ],
+  "outer_canary": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128
+  },
+  "observer_per_case": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 45
+  },
+  "deadlines": {
+    "bootstrap_setup_seconds": 500,
+    "canary_command_seconds": 300,
+    "kill_grace_seconds": 10,
+    "collection_cleanup_budget_seconds": 180,
+    "machine_shutdown_from_launch_seconds": 2400,
+    "root_external_termination_from_launch_seconds": 2500,
+    "root_cleanup_margin_seconds": 120
+  },
+  "cost": {
+    "fresh_spot_quote_usd_per_hour": "0.215100",
+    "compute_cap_usd": "0.436667",
+    "ancillary_cap_usd": 0.15,
+    "total_cap_usd": 0.6,
+    "quote_required_before_launch": true,
+    "maximum_spot_bid_usd_per_hour": "0.60",
+    "modeled_at_quote_usd": "0.156545",
+    "total_at_bid_cap_usd": "0.586667",
+    "quote_observed_at": "2026-10-10T12:28:05Z",
+    "quote_artifact": {
+      "path": "/tmp/borsuk-next1m-pid128-repair-draft/canary-quote-20261010/spot-price.json",
+      "bytes": 417,
+      "sha256": "b1cf67ac8259190d3f040adaf4977c8523ec4a39072ff52548f0b8b849b9f853"
+    },
+    "quote_original_unit": "run-p13994-i708723775.service",
+    "quote_original_exit": 0
+  },
+  "success_requires": [
+    "original collector smoke process exit0",
+    "nine case assertions and complete authenticated seal",
+    "collector cleanup independently proved for live cases",
+    "replacement not stopped under stale identity",
+    "original instance terminated and volume deleted"
+  ],
+  "interruption": "INVALID interrupted cell; preserve original receipts; no automatic retry",
+  "no_performance_claim": true,
+  "remaining_before_launch": [
+    "exact support staging",
+    "fresh Spot quote",
+    "root source and configuration freeze"
+  ],
+  "reviewed_source_parent": "94df50a9e833d0b51431bf49b2008ef2b62ca9d4",
+  "budget_arithmetic": {
+    "success_path_seconds": 990,
+    "machine_margin_seconds": 1410,
+    "external_compute_accounting_seconds": 2620,
+    "setup_plus_canary_plus_grace_plus_collection": "500 + 300 + 10 + 180 = 990 < 2400",
+    "measurement_protocol_unchanged": true,
+    "local_runtime_allowed": false,
+    "setup_is_budget_not_hard_cap": true,
+    "launch_requires_worker_remaining_time_guard": true
+  }
+}

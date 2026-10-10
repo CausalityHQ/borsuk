@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "70448857f8016cb3ed68029387c60eec9c45c3c2",
+  "client_token": "borsuk-next1m-canary-a0007-fa1b043c5a280fdb",
+  "watch_unit": "borsuk-next1m-canary-a0007-fa1b043c5a280fdb.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0007-fa1b043c5a280fdb/run",
+  "assets": "research/semantic-router/20261010/next1m-collector-smoke-source/70448857/assets",
+  "launch_authority": true,
+  "prior_attempt": "a0006",
+  "prior_attempt_closed": true,
+  "purpose": "collector-only real systemd smoke; all native phase metadata synthetic; no ANN or data",
+  "launched_epoch": 1791642178,
+  "bootstrap_sha256": "ece8a48dcca9930ecf62e69eba988f8479570e40bd8dc605bae7e18b570fdddb",
+  "watch_sha256": "1b936ba5ec33aa18d818c9d11ab8f77e7b5cfb993d6608c3366684bb2401540e",
+  "request_sha256": "8fa6f6363a6a03705e0736848fa196dda9778bf14af1fc154bb701eebb6d44df",
+  "support_roster": [
+    {
+      "name": "collector-smoke.sh",
+      "bytes": 14093,
+      "sha256": "de33ff52adee978a9e2b4aa7bb00289460e307f53d5842f4a0b6f92db2f88cf1"
+    },
+    {
+      "name": "collect-native-chain-outer.sh",
+      "bytes": 10144,
+      "sha256": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477"
+    },
+    {
+      "name": "observer-command.sh",
+      "bytes": 643,
+      "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    }
+  ]
+}
