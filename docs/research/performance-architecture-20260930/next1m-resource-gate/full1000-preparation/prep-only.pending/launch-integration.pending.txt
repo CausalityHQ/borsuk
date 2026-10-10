@@ -1,0 +1,1 @@
+Pending source only: no assets uploaded, no instance launched. S3 retention requires downstream whole-body SHA/EOF authentication; HEAD is not SHA proof. Any output above PutObject5GiB cap is INVALID, not silently multipart. Input transport roster remains original17 pinned bodies. Machine7200s, native2400s, retention3000s.
