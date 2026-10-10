@@ -88,12 +88,13 @@ timeout -k 10 120 ./aws/install
 token=$(curl -fsS --connect-timeout 5 --max-time 10 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
 instance=$(curl -fsS --connect-timeout 5 --max-time 10 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 [[ $instance =~ ^i-[0-9a-f]+$ ]]
+ser() { tr -d ' \n' < "/sys/block/${1##*/}/device/serial"; }
 phase=support
 get() { (ulimit -f "$2"; timeout -k 5 30 aws s3api get-object --bucket "$bucket" --key "$prefix/inputs/$1" "$1"); [[ -f $1 && ! -L $1 && $(stat -c %s "$1") -le $((${2} * 1024)) ]]; }
 printf '%s  support.sha256\n' "$support_sha" > expected-support.sha256
 get support.sha256 64
 sha256sum -c expected-support.sha256
-names='config-template.json derivation-config.json gate-config-template.json run_actual_cohort_admission.sh run_native_scale_build_gate.sh service-stop.sh transport-pins.json transport.py'
+names='config-template.json derivation-config.json gate-config-template.json run_actual_cohort_admission.sh run_native_scale_build_gate.sh service-stop.sh transport-pins.json transport.py validate-scratch-binding.sh'
 for n in $names; do get "$n" 64; done
 sha256sum --strict -c support.sha256
 awk '{print $2}' support.sha256 | LC_ALL=C sort > support.names
@@ -116,11 +117,12 @@ done
 (( $(date +%s) <= setup_stop )) || exit 90
 [[ -f $bd && ! -L $bd && -f $bd.sha256 && ! -L $bd.sha256 && $(stat -c %s "$bd") -le 4096 && $(stat -c %s "$bd.sha256") -le 256 ]] || exit 90
 h=$(sha256sum < "$bd"); printf '%s  scratch-launch-binding.json\n' "${h%% *}" | cmp -s - "$bd.sha256" || exit 90
-vol=$(jq -ers --arg i "$instance" 'select(length == 1) | .[0] | select((keys == ["device","instance_id","schema","size_bytes","volume_id"]) and .schema == "borsuk-scratch-launch-binding-v1" and .instance_id == $i and .device == "/dev/sdf" and .size_bytes == 42949672960 and (.volume_id | test("^vol-[0-9a-f]{8,17}$"))) | .volume_id' "$bd") || exit 90
-mapfile -t cand < <(for s in /sys/block/nvme*n1/device/serial; do [[ -r $s && $(tr -d ' \n' < "$s") == "${vol/-/}" ]] && basename "$(dirname "$(dirname "$s")")"; done)
+ids=$(timeout -k 1 15 bash "$root/validate-scratch-binding.sh" "$instance" "$bd") || exit 90
+[[ $ids =~ ^(vol-[0-9a-f]{8,17})\ (vol-[0-9a-f]{8,17})$ ]] || exit 90; vol=${BASH_REMATCH[1]}; rvol=${BASH_REMATCH[2]}
+mapfile -t cand < <(for s in /sys/block/nvme*n1; do [[ $(ser "$s") == "${vol/-/}" ]] && basename "$s"; done)
 (( ${#cand[@]} == 1 )) || exit 90
 dev=/dev/${cand[0]}
-ident() { { echo "== $1 $dev $vol"; lsblk -b -J -o NAME,SERIAL,SIZE,TYPE,FSTYPE,UUID,MOUNTPOINTS,PKNAME; tr -d '\n' < "/sys/block/${dev##*/}/device/serial"; echo; blkid -p "$dev" 2>&1 || echo "blkid_rc=$?"; findmnt -J; df -B1 "$root"; } > "evidence-root/scratch-$1.txt" 2>&1; }
+ident() { { echo "== $1 $dev $vol"; lsblk -b -J -o NAME,SERIAL,SIZE,TYPE,FSTYPE,UUID,MOUNTPOINTS,PKNAME; ser "$dev"; echo; blkid -p "$dev" 2>&1 || echo "blkid_rc=$?"; findmnt -J; df -B1 "$root"; } > "evidence-root/scratch-$1.txt" 2>&1; }
 [[ -b $dev && $(blockdev --getsize64 "$dev") == 42949672960 ]] || exit 90
 ident before
 nl=$(lsblk -rno NAME "$dev" | wc -l) || exit 90
@@ -132,7 +134,9 @@ sw=$(swapon --noheadings --show=NAME) || exit 90
 [[ $nl == 1 && -z $mp$ft$ws && $mt != *"$dev"* && $sw != *"$dev"* ]] || exit 90
 bk=0; blkid -p "$dev" > /dev/null 2>&1 || bk=$?
 [[ $bk == 2 ]] || exit 90
-cmp -s -n 4194304 "$dev" /dev/zero || exit 90
+out=$(timeout -k 1 20 cmp -n 4194304 "$dev" /dev/zero 2>&1) && rc=0 || rc=$?; printf '%s\nrc=%s\n' "$out" "$rc" > evidence-root/scratch-cmp.txt || exit 90; (( rc <= 1 )) || exit 90
+rd=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)") || exit 90
+[[ /dev/$rd != "$dev" && $(ser "$rd") == "${rvol/-/}" && $(ser "$dev") == "${vol/-/}" && $(blockdev --getsize64 "$dev") == 42949672960 ]] || exit 90
 mkdir prepared-parent
 timeout -k 5 300 mkfs.ext4 -q -m 0 -L borsuk-scratch -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 "$dev" < /dev/null
 mount -o noatime,nodev,nosuid "$dev" prepared-parent

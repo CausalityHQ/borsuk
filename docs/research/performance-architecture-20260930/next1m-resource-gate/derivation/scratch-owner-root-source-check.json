@@ -1,0 +1,34 @@
+{
+  "source_commit": "45cb982eaf1a283abd0df8f1899f0d158c209c39",
+  "base": "0e03cf161bd56d781d712ef52ce741618c7df389",
+  "owned_files": {
+    "runtime-support.pending/user-data.sh": {
+      "bytes": 16321,
+      "sha256": "6f624ead997e6606a3dcb3dda0de0b1c35c6f2d0105a7b2dcd1ab111d81b306e"
+    },
+    "runtime-support.pending/validate-scratch-binding.sh": {
+      "bytes": 2250,
+      "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+    },
+    "runtime-support.pending/launch-one-canary.py": {
+      "bytes": 7693,
+      "sha256": "1a54b625af1a591c0e65c7138f328262213d7cc1d0011cbc8f7d06ea2a671929"
+    },
+    "runtime-support.pending/assemble-canary.py": {
+      "bytes": 7060,
+      "sha256": "dd9315501a11b8eae05ecdc022649fc65b94f1944330bc28491b447d55634f42"
+    },
+    "runtime-support.pending/verify-closed.py": {
+      "bytes": 66330,
+      "sha256": "301c882bee892578fc351491506a01e48827eab56520bdc28fdafeaea9e6c3b5"
+    },
+    "canary-prefix-segments.pending.json": {
+      "bytes": 3029,
+      "sha256": "d5ee2dc1a442ad71d96190c89bec13281d7cb5aee2c70bac486f6e6dde8d1443"
+    }
+  },
+  "static_source_check": "PASS",
+  "runtime_mock_executed": false,
+  "native_executed": false,
+  "launch_authorized": false
+}

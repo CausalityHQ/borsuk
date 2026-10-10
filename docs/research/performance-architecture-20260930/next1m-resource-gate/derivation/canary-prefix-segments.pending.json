@@ -1,6 +1,6 @@
 {
   "coordinator_sha256": null,
-  "cut_before_line": 160,
+  "cut_before_line": 164,
   "hooks": [
     {
       "line": 15,
@@ -13,24 +13,24 @@
       "replacement_pending": "remaining_minutes=$(( (local_stop_epoch - $(date +%s)) / 60 )); (( remaining_minutes >= 1 )) || bad; shutdown -h +\"$remaining_minutes\""
     },
     {
-      "line": 110,
+      "line": 111,
       "original_sha256": "f28b4c60382d2b494f63dab05ee28a610187c40e2fe00b06fe7726d7a3f5a8d6",
       "replacement_pending": "setup_stop=$((boot_epoch + 800))"
     },
     {
-      "line": 137,
+      "line": 141,
       "original_sha256": "75288c56002fd7f828c793912bb91bf10373477f0c8ed195fbb3b526a687b74c",
       "replacement_pending": "timeout -k 5 60 mkfs.ext4 -q -m 0 -L borsuk-scratch -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 \"$dev\" < /dev/null"
     },
     {
       "anchor_sha256": "fbdf7858b18440dc9dbb1540d9396a4a1b38c99598fa6022840fa4171ac2ccc4",
-      "insert_before_line": 149,
+      "insert_before_line": 153,
       "replacement_pending": "(( $(date +%s) + 1800 <= local_stop_epoch )) || exit 95"
     }
   ],
   "performance_claim": false,
-  "prefix_bytes": 11612,
-  "prefix_sha256": "09b06a0d7e576c2fe6ed0198ec3005e577be6e82c5a934d2c12f272754db9cb8",
+  "prefix_bytes": 11807,
+  "prefix_sha256": "909f515d9281983d8e00df89b6b20b430339e9689934c9e1ab58a0dd7a0aa4d9",
   "root_started_epoch": null,
   "runtime_verified": false,
   "schema": "borsuk-next1m-canary-prefix-pins-pending-v1",
@@ -48,33 +48,33 @@
       "sha256": "63dff397996e8fd5f330571f95945e4ec27b0204aeb9ecb7220a5c79212974e2"
     },
     {
-      "bytes": 2550,
+      "bytes": 2639,
       "first_line": 77,
-      "last_line": 109,
-      "sha256": "97f5c661343f759a5ca0de420b9fe2ab1a877096e0f97dafed489c8fd1bf36c9"
+      "last_line": 110,
+      "sha256": "000833ffb2949052da2212e359fb27cf56dc0399bc025939420b5e7405324409"
     },
     {
-      "bytes": 2180,
-      "first_line": 111,
-      "last_line": 136,
-      "sha256": "8ae7225105b5e7aed72b8aa1b4247c635aee1c55205606cac6e0bb31e63bcef4"
+      "bytes": 2286,
+      "first_line": 112,
+      "last_line": 140,
+      "sha256": "a0432b28d1ee3331ef52c5037d7dd6ea33e44d734008fe68c890ea35404a437a"
     },
     {
       "bytes": 795,
-      "first_line": 138,
-      "last_line": 148,
+      "first_line": 142,
+      "last_line": 152,
       "sha256": "f959c60afaaeded49a267c2e0860181d5c8ef75b7c69cc080bd5837e5c4322ca"
     },
     {
       "bytes": 991,
-      "first_line": 149,
-      "last_line": 159,
+      "first_line": 153,
+      "last_line": 163,
       "sha256": "5a481ed6a701f85a033cb31cce923159db0648ce6cf751bb0419ea5baaa0a9b9"
     }
   ],
   "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/user-data.sh",
-  "source_revision": "d761ee7afedd74f769a85441ef4585e3755dee99",
-  "source_sha256": "916682b97beb350a5e505d18b42742729042f3bc6301fcd1a8e3f09bb5a15811",
+  "source_revision": "62d118f53a3a7f013dc4e0111b145b80a1d79841",
+  "source_sha256": "6f624ead997e6606a3dcb3dda0de0b1c35c6f2d0105a7b2dcd1ab111d81b306e",
   "status": "PENDING_ASSEMBLY_NO_LAUNCH",
   "tail_sha256": null
 }

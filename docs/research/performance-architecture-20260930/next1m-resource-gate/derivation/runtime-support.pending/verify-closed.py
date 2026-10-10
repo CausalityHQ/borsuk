@@ -10,7 +10,7 @@ a closed nonzero disposition, never as a scientific PASS. Exit 0 means the evide
 receipt v2, two_bit_generation.rs Manifest/Discovery (borsuk-two-bit-generation-v8), two_bit_build.rs page manifest,
 two_bit_source.rs SourcePlaneReceipt, publish_two_bit_generation.rs receipt v1, check_cohere_native_baseline.rs config v7.
 """
-import base64, calendar, datetime, decimal, hashlib, json, re, struct, sys, tarfile
+import calendar, datetime, decimal, hashlib, json, re, struct, sys, tarfile
 from pathlib import Path
 
 ROOT = '/mnt/borsuk-scale1m'
@@ -26,7 +26,7 @@ REVISION = 'ade45fb52bd549f5e8c065636fe4160a43c2af36'
 INTERVALS = [{'start': 0, 'end': 100000}, {'start': 101000, 'end': 1001000}]
 RESERVED_INTERVAL = {'start': 100000, 'end': 101000}
 SUPPORT_NAMES = ('config-template.json', 'derivation-config.json', 'gate-config-template.json', 'run_actual_cohort_admission.sh',
-                 'run_native_scale_build_gate.sh', 'service-stop.sh', 'transport-pins.json', 'transport.py')
+                 'run_native_scale_build_gate.sh', 'service-stop.sh', 'transport-pins.json', 'transport.py', 'validate-scratch-binding.sh')
 PHASES = ('derive', 'stage', 'generation', 'publish', 'baseline')
 PHASE_MAX = {'derive': 3600, 'stage': 300, 'generation': 2700, 'publish': 1800, 'baseline': 900}
 EXIT_FILES = ('native', 'timeout', 'time', 'tee', 'time-log', 'supervisor-stderr-log', 'native-stderr-log')
@@ -38,7 +38,7 @@ transport-exit.json service-exit.json chain-exit.json systemd-after-cohort-parit
 prepared-parent_cohort_complete.json prepared-parent_cohort_truth.u64 prepared-parent_derived_derivation.json
 prepared-parent_generation_manifest.json prepared-parent_generation_page_manifest.json prepared-parent_generation_plane_manifest.json
 prepared-parent_publication-receipt.json finalized-config.json gate-config-template.json gate-config.json chain-argv.json
-scratch-launch-binding.json scratch-launch-binding.json.sha256'''.split())
+scratch-launch-binding.json scratch-launch-binding.json.sha256 scratch-cmp.txt'''.split())
 OPTIONAL_TOP = frozenset(['prepared-parent_query_baseline-result.jsonl'])
 BASELINE_RESULT = 'prepared-parent_query_baseline-result.jsonl'
 
@@ -267,11 +267,21 @@ def parse_time(text):
     return calendar.timegm(dt.timetuple()) - off, m.group(3) or ''
 
 
+def raw_user_data_ok(q, expected_sha):
+    # the launch request carries the RAW shell script string (the AWS CLI encodes it once on the wire); a base64-looking string is a different request and does not match
+    return type(q['UserData']) is str and sha(q['UserData'].encode('utf-8')) == expected_sha
+
+
+def launch_times_agree(binding_epoch, run_epoch, described_epoch):
+    # the producer derived the binding from DescribeInstances; RunInstances must report the same launch within a finite 2 s skew
+    return binding_epoch == described_epoch and abs(run_epoch - described_epoch) <= 2
+
+
 def verify_ec2(R, pins, instance, binding, launch_text):
     spec = pins['ec2']
     q, r = pinned_json(R, spec['launch_request']), pinned_json(R, spec['launch_response'])
     run, vol, dead = pinned_json(R, spec['instance_running']), pinned_json(R, spec['volume']), pinned_json(R, spec['instance_terminated'])
-    req(sha(base64.b64decode(q['UserData'], validate=True)) == pins['user_data_sha256'], 'launch request user data')
+    req(raw_user_data_ok(q, pins['user_data_sha256']), 'launch request raw user data')
     req(q['InstanceType'] == 'c7i.2xlarge' and ie(q['MinCount'], 1) and ie(q['MaxCount'], 1) and q['InstanceInitiatedShutdownBehavior'] == 'terminate', 'launch request shape')
     req(q['Placement']['AvailabilityZone'] == 'eu-central-1c' and q['MetadataOptions']['HttpTokens'] == 'required', 'launch request placement/IMDSv2')
     mo = q['InstanceMarketOptions']
@@ -285,12 +295,26 @@ def verify_ec2(R, pins, instance, binding, launch_text):
     req(inst['InstanceId'] == instance and inst['InstanceType'] == 'c7i.2xlarge' and inst['Placement']['AvailabilityZone'] == 'eu-central-1c', 'launch response instance')
     running = run['Reservations'][0]['Instances'][0]
     req(running['InstanceId'] == instance, 'running description instance')
-    mapped = [m for m in running['BlockDeviceMappings'] if m['DeviceName'] == '/dev/sdf']
-    req(len(mapped) == 1 and mapped[0]['Ebs']['VolumeId'] == binding['volume_id'] and mapped[0]['Ebs']['DeleteOnTermination'] is True, 'launch mapping /dev/sdf volume equals binding')
+    lt = re.fullmatch(r'launch_time_raw=(\S+) launch_epoch=(\d+) supplied_started=(\d+) effective_started=(\d+) supplied_minus_launch_seconds=(-?\d+)', launch_text.strip())
+    req(lt is not None, 'watcher launch-time receipt syntax')
+    run_launch, described_launch, started = parse_time(inst['LaunchTime'])[0], parse_time(running['LaunchTime'])[0], int(lt.group(3))
+    req(launch_times_agree(binding['launch_time_epoch'], run_launch, described_launch), 'binding launch epoch equals DescribeInstances and agrees with RunInstances')
+    launch_epoch = described_launch
+    run_maps = {m['DeviceName']: m['Ebs'] for m in running['BlockDeviceMappings']}
+    req(set(run_maps) == {'/dev/sda1', '/dev/sdf'} and len(running['BlockDeviceMappings']) == 2, 'running mapping roster')
+    # DeleteOnTermination is a DescribeInstances mapping field (not a DescribeVolumes one)
+    req(run_maps['/dev/sdf']['VolumeId'] == binding['volume_id'] and run_maps['/dev/sdf']['DeleteOnTermination'] is True
+        and run_maps['/dev/sda1']['VolumeId'] == binding['root_volume_id'] and run_maps['/dev/sda1']['DeleteOnTermination'] is True and binding['volume_id'] != binding['root_volume_id'], 'launch mappings equal the binding volume and root volume')
     v = vol['Volumes']
-    req(len(v) == 1 and v[0]['VolumeId'] == binding['volume_id'] and ie(v[0]['Size'], 40) and v[0]['VolumeType'] == 'gp3' and v[0]['Encrypted'] is True and v[0].get('SnapshotId', '') == '', 'scratch volume description (fresh blank 40GiB)')
+    req(len(v) == 1 and v[0]['VolumeId'] == binding['volume_id'] and ie(v[0]['Size'], 40) and v[0]['VolumeType'] == 'gp3' and v[0]['Encrypted'] is True and v[0].get('SnapshotId') == ''
+        and v[0].get('MultiAttachEnabled') is False and v[0]['State'] == 'in-use' and v[0]['AvailabilityZone'] == q['Placement']['AvailabilityZone'], 'scratch volume description (fresh blank 40GiB, no snapshot, no multi-attach)')
     att = v[0]['Attachments']
-    req(len(att) == 1 and att[0]['InstanceId'] == instance and att[0]['Device'] == '/dev/sdf' and att[0]['DeleteOnTermination'] is True, 'scratch volume attachment')
+    req(len(att) == 1 and att[0]['InstanceId'] == instance and att[0]['Device'] == '/dev/sdf' and att[0]['State'] == 'attached' and att[0]['VolumeId'] == binding['volume_id'], 'scratch volume attachment')
+    create, attach = parse_time(v[0]['CreateTime'])[0], parse_time(att[0]['AttachTime'])[0]
+    req(started - 60 <= launch_epoch <= started + 240 and launch_epoch - 60 <= create <= launch_epoch + 60 and create - 5 <= attach <= launch_epoch + 120 and create > 0, 'launch/create/attach window (same finite skew as the launcher and the guest)')
+    req(binding['create_time_epoch'] == create and binding['attach_time_epoch'] == attach
+        and binding['availability_zone'] == q['Placement']['AvailabilityZone'], 'binding times and zone equal the pinned API responses')
+    req(binding['describe_instances_sha256'] == spec['instance_running']['sha256'] and binding['describe_volumes_sha256'] == spec['volume']['sha256'], 'binding hashes equal the pinned raw API responses')
     gone = dead['Reservations'][0]['Instances'][0]
     req(gone['InstanceId'] == instance and gone['State']['Name'] == 'terminated', 'root EC2 evidence: original instance terminated')
     m = re.fullmatch(r'launch_time_raw=(\S+) launch_epoch=(\d+) supplied_started=(\d+) effective_started=(\d+) supplied_minus_launch_seconds=(-?\d+)', launch_text.strip())
@@ -474,6 +498,33 @@ def lsblk_identity(text, label, vol):
         req(d.get('fstype') == 'ext4' and SCRATCH in mounts and 'TYPE="ext4"' in text, 'scratch device ext4 mounted after format')
 
 
+def lsblk_json(text):
+    data, _ = json.JSONDecoder(object_pairs_hook=uniq, parse_constant=no_const).raw_decode(text, text.index('{', text.index('\n')))
+    return data
+
+
+def root_unchanged(before, after, root_vol):
+    # the root backing disk is found by the binding's root volume id; its partitions, filesystems, UUIDs and mounts must be identical across the scratch format
+    states = []
+    for text in (before, after):
+        disks = [d for d in lsblk_json(text)['blockdevices'] if str(d.get('serial')).strip() == root_vol.replace('-', '') and d['type'] == 'disk']
+        req(len(disks) == 1, 'root disk unique by the binding root volume id')
+        kids = disks[0].get('children') or []
+        states.append((disks[0]['name'], int(str(disks[0]['size'])),
+                       [(c['name'], c['type'], c.get('fstype'), c.get('uuid'), int(str(c['size']))) for c in kids],
+                       sorted(str(m) for c in kids for m in (c.get('mountpoints') or [c.get('mountpoint')]) if m)))
+    req(states[0] == states[1] and '/' in states[0][3], 'root disk partitions/filesystems/UUIDs/mounts unchanged by the scratch format')
+
+
+def scratch_cmp(text):
+    # the zero-prefix comparison is a recorded diagnostic: status 0 (equal, no output) or 1 (one cmp difference line); anything else is invalid
+    m = re.fullmatch(r'(.*)\nrc=(\d+)\n', text, re.S)
+    req(m is not None, 'scratch cmp record shape')
+    out, rc = m.group(1), int(m.group(2))
+    req((rc == 0 and out == '') or (rc == 1 and re.fullmatch(r'/dev/nvme\d+n1 /dev/zero differ: byte [1-9]\d*, line [1-9]\d*', out) is not None), 'scratch cmp status 0 or 1 with its exact output')
+    return {'rc': rc, 'output': out}
+
+
 def verify_bootstrap(ev, pins, term):
     instance, exit_ = pins['instance_id'], term['exit']
     sup = {}
@@ -481,16 +532,24 @@ def verify_bootstrap(ev, pins, term):
         m = re.fullmatch(r'([0-9a-f]{64})  (\S+)', line)
         req(m is not None and m.group(2) not in sup, 'support syntax')
         sup[m.group(2)] = m.group(1)
-    req(sha(ev.b('support.sha256')) == pins['support']['manifest_sha256'] and sup == pins['support']['files'], 'support manifest and 8 source pins')
+    req(sha(ev.b('support.sha256')) == pins['support']['manifest_sha256'] and sup == pins['support']['files'], 'support manifest and 9 source pins')
     req(sha(ev.b('gate-config-template.json')) == sup['gate-config-template.json'], 'archived gate template equals frozen support')
     bind_body = ev.b('scratch-launch-binding.json')
     req(sha(bind_body) == pins['binding']['sha256'] and ev.b('scratch-launch-binding.json.sha256') == (sha(bind_body) + '  scratch-launch-binding.json\n').encode(), 'binding pin and exact companion bytes')
     binding = decode(bind_body)
-    keys(binding, ('schema', 'instance_id', 'volume_id', 'device', 'size_bytes'), 'binding keys')
-    req(binding['schema'] == 'borsuk-scratch-launch-binding-v1' and binding['instance_id'] == instance and binding['device'] == '/dev/sdf'
-        and ie(binding['size_bytes'], 42949672960) and binding['volume_id'] == pins['binding']['volume_id'], 'binding content')
+    keys(binding, ('schema', 'instance_id', 'volume_id', 'root_volume_id', 'device', 'size_bytes', 'availability_zone', 'volume_type', 'encrypted', 'multi_attach', 'snapshot_empty',
+                   'state', 'attached_device', 'delete_on_termination', 'create_time_epoch', 'attach_time_epoch', 'launch_time_epoch', 'describe_instances_sha256', 'describe_volumes_sha256'), 'binding v2 keys')
+    req(binding['schema'] == 'borsuk-scratch-launch-binding-v2' and binding['instance_id'] == instance and binding['device'] == '/dev/sdf' and binding['attached_device'] == '/dev/sdf'
+        and ie(binding['size_bytes'], 42949672960) and binding['volume_id'] == pins['binding']['volume_id'] and re.fullmatch(r'vol-[0-9a-f]{8,17}', binding['root_volume_id']) is not None
+        and binding['root_volume_id'] != binding['volume_id'] and binding['volume_type'] == 'gp3' and binding['encrypted'] is True and binding['multi_attach'] is False
+        and binding['snapshot_empty'] is True and binding['delete_on_termination'] is True and binding['state'] == 'in-use'
+        and re.fullmatch(r'[a-z]{2}-[a-z]+-[0-9][a-z]', binding['availability_zone']) is not None
+        and all(isint(binding[k]) and binding[k] > 0 for k in ('create_time_epoch', 'attach_time_epoch', 'launch_time_epoch'))
+        and hexs(binding['describe_instances_sha256']) and hexs(binding['describe_volumes_sha256']), 'binding v2 content')
     lsblk_identity(ev.t('scratch-before.txt'), 'before', binding['volume_id'])
     lsblk_identity(ev.t('scratch-after.txt'), 'after', binding['volume_id'])
+    root_unchanged(ev.t('scratch-before.txt'), ev.t('scratch-after.txt'), binding['root_volume_id'])
+    binding_cmp = scratch_cmp(ev.t('scratch-cmp.txt'))
     for n, e in (('bootstrap.exit', exit_), ('transport-unit.exit', 0), ('parity-unit.exit', 0), ('chain-unit.exit', exit_)):
         req(ev.b(n) == ('%d\n' % e).encode(), 'original ' + n)
     ok = {'schema': 'borsuk-parity-service-exit-v1', 'exit_code': 'exited', 'exit_status': '0', 'service_result': 'success'}
@@ -518,7 +577,7 @@ def verify_bootstrap(ev, pins, term):
         boot, now, n, stop = (int(x) for x in r[1:])
         req(n == need_s and stop - boot == 14400 and boot <= now and now + n <= stop, 'remaining-absolute-time admission ' + r[0])
     req(int(rows[1][2]) >= int(rows[0][2]), 'admission order')
-    return sup, binding
+    return sup, binding, binding_cmp
 
 
 # ----------------------------------------------------------------------------- gate finalization and chain
@@ -755,7 +814,7 @@ def main():
     ev = stream_archive(R / 'evidence.tar.gz', pins, parse_manifest(manifest_body))
     tops = {n for n in ev.meta if '/' not in n}
     req(TOP <= tops and tops <= TOP | OPTIONAL_TOP and all(n.startswith(('evidence-local/', 'evidence-chain/')) for n in ev.meta if '/' in n), 'exact archive roster')
-    sup, binding = verify_bootstrap(ev, pins, term)
+    sup, binding, binding_cmp = verify_bootstrap(ev, pins, term)
     state_last = bounded(R / 'state.txt', 65536).decode().split()[-1]
     req(state_last == 'terminated', 'watcher final state')
     ec2 = verify_ec2(R, pins, instance, binding, bounded(R / 'launch-time.txt', 4096).decode())
@@ -767,7 +826,7 @@ def main():
         bootstrap_exit=exit_, chain_disposition=disposition[exit_], baseline_native_exit=exit_, baseline_closed_nonzero=exit_ != 0,
         cloud_final_manager={k: manager[k] for k in ('exit_code', 'exit_status', 'service_result', 'final_exit')}, chain_unit_manager=ev.j('chain-exit.json'),
         cloud_final_mapping_status='TARGET_UNVERIFIED_PROSPECTIVE_PINNED', baseline_result=chain['baseline_result'], generation_root_sha256=chain['generation_root_sha256'],
-        ec2=ec2, performance_claim=False, scientific_success_asserted=False, quality_not_evaluated=True, baseline_output_opaque=True,
+        ec2=ec2, scratch_cmp=binding_cmp, binding_schema=binding['schema'], performance_claim=False, scientific_success_asserted=False, quality_not_evaluated=True, baseline_output_opaque=True,
         open_seams=['cloud-final exit mapping unproven on the real target (canary must exercise 0,2,3)', 'volume deletion proof not supported by source',
                     'instance role input-write restriction not supported by source', 'watcher manifest_verified:false (this replay checked the manifest)'])))
 

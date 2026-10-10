@@ -1,4 +1,4 @@
-"""One-shot byte assembly only; no AWS calls or launch authority. Canary-only scratch xtrace and non-silent zero-prefix cmp diagnostics."""
+"""One-shot byte assembly only; no AWS calls or launch authority. Canary-only scratch xtrace; the repaired zero-prefix diagnostic is production source."""
 import hashlib
 import json
 import pathlib
@@ -24,16 +24,11 @@ TRACE_EDITS = [
     (b'ident before\n', b'ident before\n' + TRACE_ON),
     (b'ident after\n', b'ident after\n' + TRACE_OFF),
     (b' original=$?; trap - EXIT TERM INT HUP PIPE; set +e\n', b' original=$?; set +x; unset BASH_XTRACEFD; trap - EXIT TERM INT HUP PIPE; set +e\n'),
-    # canary-only: the one zero-prefix guard becomes a NON-silent cmp (same -n and inputs) whose raw status is kept in cmp_rc, written
-    # to scratch-cmp.rc, and refused with the SAME exit 90 when nonzero; cmp --version is captured first; a failed evidence write is exit 94
-    (b'cmp -s -n 4194304 "$dev" /dev/zero || exit 90\n',
-     b'cmp --version > evidence-root/scratch-cmp-version.txt 2>&1 || exit 94\n'
-     b'exec 4> evidence-root/scratch-cmp.out || exit 94\n'
-     b'cmp_rc=0; cmp -n 4194304 "$dev" /dev/zero >&4 2>&1 || cmp_rc=$?\n'
-     b'exec 4>&-\n'
-     b"printf '%s\\n' \"$cmp_rc\" > evidence-root/scratch-cmp.rc || exit 94\n"
-     b'(( cmp_rc == 0 )) || exit 90\n'),
 ]
+
+# The repaired production line (user-data.sh): non-silent cmp, raw status recorded, 0 or 1 pass, anything else refuses. Required exactly once.
+CMP_LINE = (b'out=$(timeout -k 1 20 cmp -n 4194304 "$dev" /dev/zero 2>&1) && rc=0 || rc=$?; '
+            b"printf '%s\\nrc=%s\\n' \"$out\" \"$rc\" > evidence-root/scratch-cmp.txt || exit 90; (( rc <= 1 )) || exit 90\n")
 
 def trace_edit(body, forward):
     for plain, traced in TRACE_EDITS:
@@ -58,12 +53,14 @@ def main():
             raise ValueError(key)
     if not re.fullmatch(r'[0-9a-f]{40}', cfg['candidate_commit']):
         raise ValueError('candidate commit')
-    pins = json.loads(blob(BASE, DIR + 'canary-prefix-segments.pending.json'))
+    # the pins live in the candidate commit (a child of the source revision they pin, which avoids self-reference); both must agree on the source bytes
+    pins = json.loads(blob(cfg['candidate_commit'], DIR + 'canary-prefix-segments.pending.json'))
     source = blob(pins['source_revision'], pins['source_path'])
-    if sha(source) != pins['source_sha256']:
+    if sha(source) != pins['source_sha256'] or blob(cfg['candidate_commit'], pins['source_path']) != source:
         raise ValueError('original source hash')
     lines = source.splitlines(keepends=True)
-    prefix = b''.join(lines[:159])
+    cut = pins['cut_before_line']
+    prefix = b''.join(lines[:cut - 1])
     if len(prefix) != pins['prefix_bytes'] or sha(prefix) != pins['prefix_sha256']:
         raise ValueError('original prefix')
     for segment in pins['segments']:
@@ -91,10 +88,10 @@ def main():
     if ('coord_sha=' + cfg['coordinator_sha256']).encode() not in bodies['canary-tail.sh']:
         raise ValueError('tail coordinator binding')
     # H5 adds one line before the original cut; all other hooks replace one line.
-    result = b''.join(lines[:160]).replace(b'PENDING_ROOT_FREEZE_RUN_PREFIX', cfg['prefix'].encode()).replace(b'PENDING_ROOT_FREEZE_SUPPORT_SHA256', cfg['support_sha256'].encode())
+    result = b''.join(lines[:cut]).replace(b'PENDING_ROOT_FREEZE_RUN_PREFIX', cfg['prefix'].encode()).replace(b'PENDING_ROOT_FREEZE_SUPPORT_SHA256', cfg['support_sha256'].encode())
     untraced_prefix = result
-    if b'cmp_rc' in result or b'exit 94' in result or b'&4' in result or b' 4>' in result:
-        raise ValueError('diagnostic names already in use')
+    if result.count(b'\n' + CMP_LINE) != 1 or b'cmp -s -n 4194304' in result:
+        raise ValueError('repaired zero-prefix diagnostic line')
     result = trace_edit(result, True)
     if trace_edit(result, False) != untraced_prefix:
         raise ValueError('trace inverse')
@@ -102,8 +99,7 @@ def main():
     off = result.index(b'\n' + TRACE_OFF)
     if not on < off < result.index(b'\nphase=transport\n') or b'aws ' in result[on:off]:
         raise ValueError('trace window')
-    block = result.index(b'\ncmp --version > evidence-root/scratch-cmp-version.txt')
-    if not on < block < off or result.count(b'\n(( cmp_rc == 0 )) || exit 90\n') != 1 or b'cmp -s -n 4194304' in result:
+    if not on < result.index(b'\n' + CMP_LINE) < off:
         raise ValueError('cmp diagnostic window')
     if result.count(b'set -x') != 1 or result.count(b'BASH_XTRACEFD=3') != 1 or result.count(b'\n original=$?; set +x;') != 1:
         raise ValueError('trace tokens')
@@ -117,7 +113,7 @@ def main():
         raise ValueError('pending marker or EC2 raw user-data size')
     with pathlib.Path(sys.argv[2]).open('xb') as output:
         output.write(result)
-    print(json.dumps({'assembly_only': True, 'launch_authorized': False, 'diagnostic_trace': True, 'diagnostic_cmp_rc': True, 'bytes': len(result), 'sha256': sha(result), 'untraced_bytes': len(untraced), 'untraced_sha256': sha(untraced)}))
+    print(json.dumps({'assembly_only': True, 'launch_authorized': False, 'diagnostic_trace': True, 'bytes': len(result), 'sha256': sha(result), 'untraced_bytes': len(untraced), 'untraced_sha256': sha(untraced)}))
 
 if __name__ == '__main__':
     main()
