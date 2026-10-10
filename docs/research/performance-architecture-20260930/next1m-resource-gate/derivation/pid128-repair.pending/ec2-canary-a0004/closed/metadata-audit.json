@@ -1,0 +1,35 @@
+{
+  "status": "DISPOSABLE_SUPERVISOR_CANARY_METADATA_AUTHENTICATED",
+  "instance_id": "i-0612ad24ad4bc9912",
+  "source_commit": "3a1b3ca9f6f9872290b1169989cc286881dfbca2",
+  "archive_bytes": 296572,
+  "archive_sha256": "c6a93469fe4766d6501caecca9a8e14a9724d7126b911dfd4c22798f12713c3d",
+  "archive_members": 1428,
+  "sealed_regular_files": 1222,
+  "component_checks": 48,
+  "positive_components": 4,
+  "refusal_components": 44,
+  "native_cli_usage_exits": [
+    1,
+    1,
+    2,
+    2
+  ],
+  "escaped_witness_and_original_drain_bound": true,
+  "original_exits": [
+    0,
+    0,
+    0
+  ],
+  "terminated": true,
+  "volume_absent": true,
+  "full_chain_replay_exercised": false,
+  "ann_executed": false,
+  "performance_claim": false,
+  "local_action": "closed metadata and opaque hashes only; no fixture/native/runtime-validator execution",
+  "remaining": [
+    "complete native chain/collector qualification on exact source and real1M inputs",
+    "Q32 quality gate",
+    "fresh physical cold S3 measurements"
+  ]
+}
