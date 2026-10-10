@@ -162,7 +162,7 @@ phase=transport
 support=/mnt/borsuk-platform-support
 mkdir "$support" /mnt/borsuk-pool-pid /mnt/borsuk-pid-evidence
 for spec in \
-  'wrapper-canary.sh:17040:f6ba855c7a5895c75decb79be864a0015af8fad4d7402312ea76c8c6c97545ba' \
+  'wrapper-canary.sh:17821:2c9463b2d4326621dcc1d8ed884f9c2dc61379da826a1e073d0f70ec157a06f1' \
   'run_native_scale_build_gate.sh:62014:b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452' \
   'verify-closed.py:77732:437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a'; do
     name=${spec%%:*}; rest=${spec#*:}; bytes=${rest%%:*}; expected=${rest#*:}
