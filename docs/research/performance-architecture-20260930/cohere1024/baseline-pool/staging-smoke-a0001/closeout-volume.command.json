@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "ec2", "describe-volumes", "--volume-ids", "vol-0a73045a5924e49a4", "--output", "json"]

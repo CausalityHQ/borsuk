@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "ec2", "describe-instances", "--instance-ids", "i-0b0512f091cdcf796", "--query", "Reservations[].Instances[].{Id:InstanceId,State:State.Name,Volumes:BlockDeviceMappings[].Ebs.VolumeId}", "--output", "json"]

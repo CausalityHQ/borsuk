@@ -1,0 +1,30 @@
+{
+  "status": "STAGING_SMOKE_ACCEPTED_ONLY",
+  "instance_id": "i-0b0512f091cdcf796",
+  "controller_original_exit": 1,
+  "bootstrap_original_exit": 99,
+  "expected_failure": true,
+  "artifact_count": 5,
+  "artifacts_authenticated": true,
+  "terminated": true,
+  "root_volume_absent": true,
+  "native_qualified": false,
+  "performance_claim": false,
+  "real": [
+    "SDK/imports",
+    "archive/source admission",
+    "CLI refusal",
+    "time/tee",
+    "terminal upload",
+    "termination/collection"
+  ],
+  "mocked": [
+    "source_check in shell fixture",
+    "stage_record in shell fixture"
+  ],
+  "remaining": [
+    "five native gates",
+    "full compiled 42/80 name sets",
+    "real PID128 query falsifier"
+  ]
+}
