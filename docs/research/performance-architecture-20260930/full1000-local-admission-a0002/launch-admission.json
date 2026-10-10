@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-full1000-local-admission-launch-v1",
+  "started_epoch": 1791661512,
+  "external_deadline_epoch": 1791669312,
+  "client_token": "borsuk-full1000-local-admission-a0002-1791661512",
+  "user_data_sha256": "5ee02cdc9e722c2227fb444c42cf955df834e222f309b92cdc839c83697dab11",
+  "watcher_sha256": "1e5eb06fb89ffddf1ec8f124086555fc8c812fc3bfa43bd304fd5f64668fc2a9",
+  "controller_commit": "4c159fc2a9f1c0450b414f8772f19f09459d2120",
+  "native_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "support_sha256": "c4c93f4cfb7376555ba0ac142105aa52fbc7957fbdeed0064c4154c8e3b027bc",
+  "source_static_checks": true,
+  "runtime_qualified": false,
+  "ann_run": true,
+  "performance_claim": false,
+  "scope": "correctness admission panel32 over sealed1000 inputs; retain generation; no cold performance acceptance",
+  "total_modeled_ceiling_usd": 1.8
+}
