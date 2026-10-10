@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-next1m-canary-worker-source-checkpoint-v1",
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "source_parent": "e22192a98b06293c14cb737b448487939e368d53",
+  "worker": {
+    "bytes": 11785,
+    "sha256": "031ff62770b0a07d794495a8f92c2f0dfaa4645ae3f58b66be35a277366eb69a"
+  },
+  "cli": "BUCKET PREFIX CONTENT_ADDRESSED_ASSETS_PREFIX LAUNCH_EPOCH",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "Spot",
+  "local_checks": {
+    "unit": "run-p1130247-i709845195.service",
+    "invocation": "09c03aa8c4f24217b02a3915479d9b42",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0,
+    "memory_peak_bytes": 40265318,
+    "limits": "CPU1/AllowedCPUs0/256MiB/noSwap/PID128/120s"
+  },
+  "executed_worker": false,
+  "ann_measurement": false,
+  "performance_claim": false,
+  "remaining": [
+    "source review of new worker and launch/cleanup early failures",
+    "canary observer durable registration before launch and failed-response ownership proof",
+    "full-chain collector refusal coverage on exact source",
+    "root launcher/watcher terminal-schema and archive replay adaptation",
+    "fresh quote, immutable asset staging, source/config freeze",
+    "one causality EC2 real mechanical canary; termination and root-volume deletion proof before acceptance"
+  ]
+}
