@@ -1,0 +1,14 @@
+{
+  "status": "CLOSED_EXECUTION_INVALID_STAGING_KEY_DEFECT",
+  "instance_id": "i-0640c44050a3e57ba",
+  "source_commit": "e2467df6156c23037307df8c1fae27ebedd8c8b7",
+  "archive_sha256": "e8e905e88b92a3f02e05d1de834fa7af0d61c53401e607d9957f7ee7d3debe6b",
+  "archive_bytes": 3252,
+  "terminated": true,
+  "volume_absent": true,
+  "cause": "root uploaded named keys; frozen worker requests SHA256 content-addressed keys; original NoSuchKey exit254 before fixtures",
+  "repair": "stage and opaque readback exact assets/SHA256 paths before next freeze",
+  "ann_executed": false,
+  "performance_claim": false,
+  "next_attempt": "distinct causality EC2 a0004; no same-request retry"
+}
