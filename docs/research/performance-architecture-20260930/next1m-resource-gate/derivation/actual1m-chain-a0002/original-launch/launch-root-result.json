@@ -1,0 +1,12 @@
+{
+  "instance_id": "i-0df6baa2bf2b499ff",
+  "volumes": [
+    "vol-08493f1b07a59f756",
+    "vol-06551676433d69f85"
+  ],
+  "watcher_unit": "borsuk-next1m-scale-a0002-watch.service",
+  "watcher_started": true,
+  "instance_final_evidence": "describe-original-01.stdout",
+  "scratch_volume_final_evidence": "describe-scratch-volume-01.stdout",
+  "performance_claim": false
+}

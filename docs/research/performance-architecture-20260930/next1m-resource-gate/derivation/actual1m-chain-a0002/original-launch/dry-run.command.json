@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "15", "ec2", "run-instances", "--cli-input-json", "file:///tmp/borsuk-next1m-native-a0002-603fd5f9/launch-request.json", "--dry-run"]

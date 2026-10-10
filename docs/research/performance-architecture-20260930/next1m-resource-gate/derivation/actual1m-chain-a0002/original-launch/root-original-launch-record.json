@@ -1,0 +1,23 @@
+{
+  "status": "ORIGINAL_REAL1M_NATIVE_Q32_RUNNING_REPLAY_PENDING",
+  "instance_id": "i-0df6baa2bf2b499ff",
+  "volume_ids": [
+    "vol-08493f1b07a59f756",
+    "vol-06551676433d69f85"
+  ],
+  "watcher_unit": "borsuk-next1m-scale-a0002-watch.service",
+  "watcher_invocation_id": "f64e492a0ecd4b2697a63ff8996ba4a7",
+  "controller_source": "603fd5f96b5880ebeaf6919ad4b77775742a0ee7",
+  "root_freeze_commit": "b37c004f5fc5cf6b6b9692cab0d1f38b767884da",
+  "native_baseline_source": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "producer_source": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "native_role_tree_difference": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "library_algorithm_and_dependencies_unchanged": true,
+  "aws_profile": "causality",
+  "market": "spot",
+  "no_local_native_or_validator_execution": true,
+  "quality_reduction_pending": true,
+  "performance_claim": false
+}
