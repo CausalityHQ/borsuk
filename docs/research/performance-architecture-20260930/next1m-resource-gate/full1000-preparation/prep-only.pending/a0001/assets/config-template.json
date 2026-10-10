@@ -1,0 +1,130 @@
+{
+  "schema": "borsuk-cohere-native-cohort-config-v3",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "embedding_column": "emb",
+  "document_id_column": "_id",
+  "geometry": {
+    "corpus": 1000000,
+    "queries": 1000,
+    "dimensions": 1024,
+    "k": 10
+  },
+  "corpus_intervals": [
+    {
+      "start": 0,
+      "end": 100000
+    },
+    {
+      "start": 101000,
+      "end": 1001000
+    }
+  ],
+  "reserved_query_interval": {
+    "start": 100000,
+    "end": 101000
+  },
+  "shards": [
+    {
+      "bytes": 216612385,
+      "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3",
+      "publisher_path": "en/0000.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0000.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216746705,
+      "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b",
+      "publisher_path": "en/0001.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0001.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216645218,
+      "sha256": "57ea548a95cc455997ee70ecdac98e19641e3c1db51cd45a4d52cc9017be87b8",
+      "publisher_path": "en/0002.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0002.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216311581,
+      "sha256": "fe5a8e01a3dba351c000fa019340ee8162880c0927dda2fab59ce802d830ea48",
+      "publisher_path": "en/0003.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0003.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 214758303,
+      "sha256": "5240dfc163f58b540fa0647f064a2cdda02d9c981e9268ef4a3319fd9b042e73",
+      "publisher_path": "en/0004.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0004.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216790181,
+      "sha256": "17f2357bbb91c068e5eaf15ade457ff6603c2cdbd757d21270912b48ad4d3062",
+      "publisher_path": "en/0005.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0005.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 217259568,
+      "sha256": "d2a27a94ecd315f0f82058979993bfabfd180ac0ffaaf6237b521df6fe621598",
+      "publisher_path": "en/0006.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0006.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 217022068,
+      "sha256": "4e0a32d44461c775fd42b01915a4ab8ad57c437854575f84e57cbccd796b9175",
+      "publisher_path": "en/0007.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0007.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 217443476,
+      "sha256": "0dafef2112c4b7c7427634dc44823c4afdccd7ca54544279f3d1d6cc0d002020",
+      "publisher_path": "en/0008.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0008.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216040478,
+      "sha256": "1d02c056f05c658bc074ef30db1b9da22b16e47620a92cab90867b5a98fd3699",
+      "publisher_path": "en/0009.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0009.parquet",
+      "rows": 100000
+    },
+    {
+      "bytes": 216623894,
+      "sha256": "e46f909cfc63ac7f7e62b6394f8026fd450ee5aff01a2fdbb9f8e187dbb8e39a",
+      "publisher_path": "en/0010.parquet",
+      "path": "/mnt/borsuk-scale1m/input/en/0010.parquet",
+      "rows": 100000
+    }
+  ],
+  "output_parent": {
+    "path": "/mnt/borsuk-scale1m/prepared-parent",
+    "device": null,
+    "inode": null
+  },
+  "resources": {
+    "batch_rows": 256,
+    "max_batch_bytes": 268435456,
+    "max_footer_bytes": 1048576,
+    "max_id_bytes": 1024,
+    "max_row_group_compressed_bytes": 268435456,
+    "max_row_group_rows": 10000,
+    "max_row_group_uncompressed_bytes": 1073741824,
+    "modeled_memory_bytes": 7516192768,
+    "cpu_limit": 4,
+    "actual_memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "scratch_bytes": 17179869184,
+    "timeout_seconds": 2400,
+    "truth_block_rows": 256,
+    "caller_memory_bytes": 67108864,
+    "caller_scratch_bytes": 1610612736,
+    "temporary_reserve_bytes": 67108864
+  }
+}

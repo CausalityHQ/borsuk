@@ -1,0 +1,1 @@
+V5 removes only nonexistent derivation/generation/query artifact names from prep-only evidence copy roster. V4 was16295B with pending pins; real prefix/SHA expansion could exceed EC2 UserData16384B. V5 is source-only and retains all preparation evidence. Frozen UserData must independently pass byte cap after exact pins substitution.

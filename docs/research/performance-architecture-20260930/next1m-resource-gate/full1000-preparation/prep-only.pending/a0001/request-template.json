@@ -1,0 +1,69 @@
+{
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 80,
+        "VolumeType": "gp3"
+      }
+    },
+    {
+      "DeviceName": "/dev/sdf",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 40,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "ClientToken": "borsuk-next1m-chain-a0001-1791600381",
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.59",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "InstanceType": "c7i.2xlarge",
+  "MaxCount": 1,
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "MinCount": 1,
+  "Placement": {
+    "AvailabilityZone": "eu-central-1c"
+  },
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-next1m-chain-chain-a0001"
+        },
+        {
+          "Key": "Project",
+          "Value": "borsuk"
+        }
+      ]
+    }
+  ]
+}

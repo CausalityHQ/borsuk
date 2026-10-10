@@ -1,0 +1,133 @@
+[
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0000.parquet",
+    "relative_path": "input/en/0000.parquet",
+    "bytes": 216612385,
+    "sha256": "2c6abfffa7dd336113251b3e6f3fe4ee16688ead7c67b99593cbadc5589e28b3"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0001.parquet",
+    "relative_path": "input/en/0001.parquet",
+    "bytes": 216746705,
+    "sha256": "1ce373d5730494429a64a0f788c62f71226ded2bc670aaf9399204e91e544c3b"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0002.parquet",
+    "relative_path": "input/en/0002.parquet",
+    "bytes": 216645218,
+    "sha256": "57ea548a95cc455997ee70ecdac98e19641e3c1db51cd45a4d52cc9017be87b8"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0003.parquet",
+    "relative_path": "input/en/0003.parquet",
+    "bytes": 216311581,
+    "sha256": "fe5a8e01a3dba351c000fa019340ee8162880c0927dda2fab59ce802d830ea48"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0004.parquet",
+    "relative_path": "input/en/0004.parquet",
+    "bytes": 214758303,
+    "sha256": "5240dfc163f58b540fa0647f064a2cdda02d9c981e9268ef4a3319fd9b042e73"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0005.parquet",
+    "relative_path": "input/en/0005.parquet",
+    "bytes": 216790181,
+    "sha256": "17f2357bbb91c068e5eaf15ade457ff6603c2cdbd757d21270912b48ad4d3062"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0006.parquet",
+    "relative_path": "input/en/0006.parquet",
+    "bytes": 217259568,
+    "sha256": "d2a27a94ecd315f0f82058979993bfabfd180ac0ffaaf6237b521df6fe621598"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0007.parquet",
+    "relative_path": "input/en/0007.parquet",
+    "bytes": 217022068,
+    "sha256": "4e0a32d44461c775fd42b01915a4ab8ad57c437854575f84e57cbccd796b9175"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0008.parquet",
+    "relative_path": "input/en/0008.parquet",
+    "bytes": 217443476,
+    "sha256": "0dafef2112c4b7c7427634dc44823c4afdccd7ca54544279f3d1d6cc0d002020"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0009.parquet",
+    "relative_path": "input/en/0009.parquet",
+    "bytes": 216040478,
+    "sha256": "1d02c056f05c658bc074ef30db1b9da22b16e47620a92cab90867b5a98fd3699"
+  },
+  {
+    "kind": "https",
+    "url": "https://huggingface.co/datasets/CohereLabs/wikipedia-2023-11-embed-multilingual-v3/resolve/ade45fb52bd549f5e8c065636fe4160a43c2af36/en/0010.parquet",
+    "relative_path": "input/en/0010.parquet",
+    "bytes": 216623894,
+    "sha256": "e46f909cfc63ac7f7e62b6394f8026fd450ee5aff01a2fdbb9f8e187dbb8e39a"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261006/cohere-native-preflight-a0002/retained/prepared/queries.f32",
+    "etag": "\"1553426815b5dbf6d916ccd12f1c227a\"",
+    "relative_path": "historical/requests",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/prepare_cohere_native_cohort",
+    "etag": "\"9d3eba0e43cdd72aec7cd341fa1d7a62-2\"",
+    "relative_path": "bin/prepare_cohere_native_cohort",
+    "bytes": 10015160,
+    "sha256": "a3a828beec8d898fdf1d26a3b6673ea16be5407da864222dc9a394c2d28221fb"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261010/pid128-native-inputs/59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3/baseline",
+    "etag": "\"0d19638df7eb46fa2ed1c7f0b1ac4d20\"",
+    "relative_path": "bin/check_cohere_native_baseline",
+    "bytes": 17029632,
+    "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_two_bit_generation",
+    "etag": "\"107f2acf759373861d4e76405506b6cc\"",
+    "relative_path": "bin/build_two_bit_generation",
+    "bytes": 4444504,
+    "sha256": "73c0d7da26dc5c52f7b548d04590221b13e0c883af5e0a10990bfae7268b01fe"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/publish_two_bit_generation",
+    "etag": "\"52190475b221cc1726998401c3933b15-2\"",
+    "relative_path": "bin/publish_two_bit_generation",
+    "bytes": 15964832,
+    "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982"
+  },
+  {
+    "kind": "s3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/build_sq8_source",
+    "etag": "\"d7a1c95a131c8097eb0cf27b4cd84b9f\"",
+    "relative_path": "bin/build_sq8_source",
+    "bytes": 4273936,
+    "sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66"
+  }
+]
