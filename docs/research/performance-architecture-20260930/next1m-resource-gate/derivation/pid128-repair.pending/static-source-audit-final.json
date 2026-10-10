@@ -1,0 +1,37 @@
+{
+  "schema": "borsuk-next1m-pid128-wrapper-source-check-v1",
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "candidate_bytes": 61935,
+  "candidate_sha256": "d4a53423a66fda91d9ddfcee1ce6fc4f9a283d7b34ca5bd3e73336cb9bf027b8",
+  "native_chain_commands_and_validators_byte_identical": true,
+  "phase_schema": "borsuk-native-scale-build-gate-config-v2",
+  "preparation_seals_unchanged": true,
+  "bash_n": {
+    "exit": 0,
+    "unit": "run-p2710258-i707235843.service"
+  },
+  "shellcheck": {
+    "exit": 0,
+    "unit": "run-p2743699-i707265529.service",
+    "invocation": "8738e207729a4b6890862588d852676c",
+    "peak_reported": "227.9MiB",
+    "swap": 0
+  },
+  "limits": {
+    "cpu_quota_percent": 100,
+    "allowed_cpu": 0,
+    "memory_max": 268435456,
+    "swap_max": 0,
+    "tasks_max": 128,
+    "runtime_max_seconds": 120
+  },
+  "prior_first_builder_anchor_failure_and_shellcheck_info_exit1_preserved_in_transcript": true,
+  "runtime_or_fixture_or_native_execution": false,
+  "bootstrap_verifier_canary_wiring": "PENDING",
+  "remaining": [
+    "wire existing user-data, wrapper canary and verifier",
+    "review stable exact-source composition",
+    "causality EC2 mechanics/admission/staging",
+    "new recorded 1M Q32 gate and independent closure"
+  ]
+}

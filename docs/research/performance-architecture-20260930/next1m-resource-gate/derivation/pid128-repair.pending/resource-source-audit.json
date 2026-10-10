@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-next1m-resource-source-audit-v1",
+  "status": "SOURCE_ARITHMETIC_ONLY",
+  "native_changed_paths": [
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs"
+  ],
+  "source_diff_from": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "source_diff_to": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "transport_bytes_historical": 2438351737,
+  "noncorpus_prepared_bytes": 201013278,
+  "evidence_reserve_bytes": 1073741824,
+  "caller_retained_requirement_bytes": 3713106839,
+  "caller_scratch_bytes_original": 4193879871,
+  "derive_required_scratch_bytes": 17601119807,
+  "derive_original_aggregate_bytes": 17601119807,
+  "original_total_disk_proposal_bytes": 27581982055,
+  "r7_100k_scratch_guard_bytes": 17179869184,
+  "unmodified_r7_accepts_original_1m_aggregate": false,
+  "host_limits_unchanged": {
+    "construction_memory": 8589934592,
+    "query_memory": 536870912,
+    "swap": 0,
+    "pids": 128
+  },
+  "not_a_peak_measurement": true,
+  "runtime_executed": false,
+  "consultation_in_progress": "abd75a492ac64617"
+}

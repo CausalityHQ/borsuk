@@ -1,9 +1,9 @@
 {
-  "schema": "borsuk-native-scale-build-gate-config-v1",
+  "schema": "borsuk-native-scale-build-gate-config-v2",
   "scratch_root": "/mnt/borsuk-scale1m/prepared-parent",
   "disk_proposal_bytes": 27581982055,
   "disk_min_available_bytes": 23284968777,
-  "deadline_seconds": 9600,
+  "deadline_seconds": 10000,
   "prepared": {
     "complete": {
       "path": "/mnt/borsuk-scale1m/prepared-parent/cohort/complete.json",
@@ -41,8 +41,8 @@
   "binaries": {
     "baseline": {
       "path": "/mnt/borsuk-scale1m/assets/bin/check_cohere_native_baseline",
-      "bytes": 17303448,
-      "sha256": "4f25ed9db388e899f42459a4fd184f19dad594fc5f5a38c01a10d945f3b9beb1"
+      "bytes": 17029632,
+      "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
     },
     "generation": {
       "path": "/mnt/borsuk-scale1m/assets/bin/build_two_bit_generation",

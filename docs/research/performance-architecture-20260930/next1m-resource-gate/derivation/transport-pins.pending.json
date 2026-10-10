@@ -97,11 +97,11 @@
   {
     "kind": "s3",
     "bucket": "borsuk-bench-453182569524-euc1",
-    "key": "research/semantic-router/20261009/scale-derivation-qualification-a0002/supplemental/check_cohere_native_baseline",
-    "etag": "\"bf3278a35c0aad3c7d2b3d819330b1f7-3\"",
+    "key": "research/semantic-router/20261010/pid128-native-inputs/59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3/baseline",
+    "etag": "\"0d19638df7eb46fa2ed1c7f0b1ac4d20\"",
     "relative_path": "bin/check_cohere_native_baseline",
-    "bytes": 17303448,
-    "sha256": "4f25ed9db388e899f42459a4fd184f19dad594fc5f5a38c01a10d945f3b9beb1"
+    "bytes": 17029632,
+    "sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3"
   },
   {
     "kind": "s3",

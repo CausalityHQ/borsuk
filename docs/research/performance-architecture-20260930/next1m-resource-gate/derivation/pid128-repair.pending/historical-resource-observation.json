@@ -1,0 +1,76 @@
+{
+  "schema": "borsuk-next1m-historical-resource-observation-v1",
+  "historical_attempt": "actual1m-chain-a0001",
+  "disposition": "EXECUTION_INVALID_PRESERVED",
+  "source_metadata_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/authenticated-invalid-evidence/small-members.json",
+  "source_metadata_sha256": "aaa9132eb36ad8bb77472954691a310ec57ce978f0ec67c7fd1f83408bced19b",
+  "disk_samples": {
+    "evidence-chain/disk.after-publish.txt": "label=after-publish\nfs_block=4096 blocks=10243384 free=5504573 avail=5500477\n5140023128\t/mnt/borsuk-scale1m/prepared-parent/derived\n5472467000\t/mnt/borsuk-scale1m/prepared-parent/store\n4500466862\t/mnt/borsuk-scale1m/prepared-parent/generation\n420\t/mnt/borsuk-scale1m/prepared-parent/publication-receipt.json\nabsent /mnt/borsuk-scale1m/prepared-parent/query\n",
+    "evidence-chain/disk.admission.txt": "total_cap_bytes=27581982055 fresh_free_required_bytes=23284968777 fs_total=41956900864 fs_avail=37643059200 prepared_five_output_bytes=4297013278 total_cap_minus_prepared=23284968777\n",
+    "evidence-chain/disk.after-stage.txt": "label=after-stage\nfs_block=4096 blocks=10243384 free=7686469 avail=7682373\n5140023128\t/mnt/borsuk-scale1m/prepared-parent/derived\n1036000000\t/mnt/borsuk-scale1m/prepared-parent/store\nabsent /mnt/borsuk-scale1m/prepared-parent/generation\nabsent /mnt/borsuk-scale1m/prepared-parent/publication-receipt.json\nabsent /mnt/borsuk-scale1m/prepared-parent/query\n",
+    "evidence-chain/disk.after-generation.txt": "label=after-generation\nfs_block=4096 blocks=10243384 free=6587710 avail=6583614\n5140023128\t/mnt/borsuk-scale1m/prepared-parent/derived\n1036000000\t/mnt/borsuk-scale1m/prepared-parent/store\n4500466862\t/mnt/borsuk-scale1m/prepared-parent/generation\nabsent /mnt/borsuk-scale1m/prepared-parent/publication-receipt.json\nabsent /mnt/borsuk-scale1m/prepared-parent/query\n",
+    "evidence-chain/disk.after-derive.txt": "label=after-derive\nfs_block=4096 blocks=10243384 free=7939403 avail=7935307\n5140023128\t/mnt/borsuk-scale1m/prepared-parent/derived\nabsent /mnt/borsuk-scale1m/prepared-parent/store\nabsent /mnt/borsuk-scale1m/prepared-parent/generation\nabsent /mnt/borsuk-scale1m/prepared-parent/publication-receipt.json\nabsent /mnt/borsuk-scale1m/prepared-parent/query\n",
+    "evidence-chain/disk.before.txt": "label=before\nfs_block=4096 blocks=10243384 free=9194296 avail=9190200\nabsent /mnt/borsuk-scale1m/prepared-parent/derived\nabsent /mnt/borsuk-scale1m/prepared-parent/store\nabsent /mnt/borsuk-scale1m/prepared-parent/generation\nabsent /mnt/borsuk-scale1m/prepared-parent/publication-receipt.json\nabsent /mnt/borsuk-scale1m/prepared-parent/query\n"
+  },
+  "phase_rss_kib": {
+    "stage": 3488,
+    "publish": 262724,
+    "generation": 455184,
+    "baseline": 51680,
+    "derive": 1054608
+  },
+  "no_runtime_executed": true,
+  "sampled_disk_not_peak_bound": true,
+  "no_scientific_acceptance": true,
+  "cohort_receipt_geometry": {
+    "corpus_intervals": [
+      {
+        "end": 100000,
+        "start": 0
+      },
+      {
+        "end": 1001000,
+        "start": 101000
+      }
+    ],
+    "corpus_rows": 1000000,
+    "dimensions": 1024,
+    "k": 10,
+    "query_rows": 32,
+    "query_source_ordinals": [
+      100000,
+      100032
+    ],
+    "reserved_query_interval": {
+      "end": 101000,
+      "start": 100000
+    }
+  },
+  "cohort_output_pins": [
+    {
+      "bytes": 4096000000,
+      "name": "corpus.f32",
+      "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+    },
+    {
+      "bytes": 131072,
+      "name": "queries.f32",
+      "sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+    },
+    {
+      "bytes": 200873446,
+      "name": "corpus.ids.jsonl",
+      "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+    },
+    {
+      "bytes": 6200,
+      "name": "queries.ids.jsonl",
+      "sha256": "e27fa2d4d0a22a4f9f4dbb9eb2aeeeb0681f48c7e2193e3aa57a2b49cb5ddeb4"
+    },
+    {
+      "bytes": 2560,
+      "name": "truth.u64",
+      "sha256": "36e83267ebfe5efb86db28c778d18897563a8c6c0784933e2b8d6d05cf31bb93"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-next1m-existing-s3-publication-source-audit-v1",
+  "status": "EXISTING_CAPABILITY_SOURCE_IDENTIFIED",
+  "path": "crates/borsuk/src/bin/publish_two_bit_generation.rs",
+  "source_blob": "6e1db0d39016b1c940be4b03b2a9a7fcf0b86fb9",
+  "source_sha256": "cb3dd549a0c14d936a44a17165b9c99045218a05be2be6e5740d3ede85bbfbfb",
+  "same_blob_revisions": [
+    "HEAD",
+    "bc3082a8210c4370ebadae4ba093a7c211072b62",
+    "4c2e535fef1fdc2e61fa003358614287bb8ed488"
+  ],
+  "producer_elf": {
+    "bytes": 15964832,
+    "sha256": "076afd99e6dc6c814461161fd3bab0fd7bc1ab4db68c1337c8c98137fef15982",
+    "qualification_pointer": "docs/research/performance-architecture-20260930/cohere1024/baseline-pool/pid128/native-campaign.pending/native-input-draft/producer-admission.json"
+  },
+  "prior_real_s3_publication_pointer": "docs/research/performance-architecture-20260930/cohere1024/retained-s3-publication/admission-a0002/root-verification.json",
+  "prior_s3_scope": "100k_only_not_1m",
+  "no_new_backend_needed": true,
+  "runtime_executed": false,
+  "remaining": "actual1M S3 source-bound input admission and disposable staging after repaired local Q32 screen"
+}
