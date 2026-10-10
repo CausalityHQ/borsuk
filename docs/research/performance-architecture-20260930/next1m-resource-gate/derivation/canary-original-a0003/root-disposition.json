@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0a42ebce98bb09cd9",
+  "watcher_exit": 0,
+  "terminated": true,
+  "both_volumes_absent": true,
+  "archive_sha256": "ea1641550f77ad4c26fd86be5b9b7dc822a598732340918a1d0aecf0f3ad152a",
+  "archive_bytes": 9940,
+  "archive_inventory_verified": true,
+  "cmp_version": "GNU diffutils 3.10",
+  "cmp_exit": 1,
+  "cmp_first_difference_byte": 4097,
+  "cmp_error": false,
+  "nonzero_bytes_origin": "UNPROVEN",
+  "scratch_guard_unchanged": true,
+  "native_run": false,
+  "performance_claim": false,
+  "scientific_rejection": false,
+  "userdata_attribute_api_verification": "UNVERIFIED: separate read-only API command timed out; no canary restart",
+  "first_archive_check": "complete archive authenticated; inventory JSON write failed on wrong attribute name; corrected check exit0 with meta"
+}
