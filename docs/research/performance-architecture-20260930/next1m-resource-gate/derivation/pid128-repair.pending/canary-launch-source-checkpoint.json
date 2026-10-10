@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-next1m-canary-launch-source-checkpoint-v1",
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "parent": "168c343702e570a3ea09aa64a9c5b50fc10866cd",
+  "files": {
+    "next1m-canary-launch-once.sh": {
+      "bytes": 3671,
+      "sha256": "c692400d198e7b254098ce98a89223307831637fff0168634b1138e10e7ecf37"
+    },
+    "next1m-canary-freeze.py": {
+      "bytes": 2982,
+      "sha256": "f31cd3a0e929a06d29f3c64f9d54acd083858d85db277ab4f49ec65436515935"
+    },
+    "next1m-canary-request.pending.json": {
+      "bytes": 1478,
+      "sha256": "c4a2279da28aee742057240ca2cbe44967a4ba7b02271adda010377b27eb285f"
+    },
+    "next1m-canary-support-roster.pending.json": {
+      "bytes": 444,
+      "sha256": "75b7ffbe94be856d5e95f9b81074e2d19c0f8c39b1679b3f591a25357073dfe3"
+    }
+  },
+  "static_check": {
+    "unit": "run-p1308415-i710006233.service",
+    "invocation": "65c2df582cf944f48e5eea3aef6c83f2",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0,
+    "py_compile_exit": 0
+  },
+  "aws_run_instances_executed": false,
+  "metadata_freeze_executed": false,
+  "runtime_executed": false,
+  "request_placeholders_preserved": true,
+  "remaining": [
+    "independent source review of launch/worker/watcher/canary ensemble",
+    "root frozen admission, fresh quote and exact asset uploads",
+    "one disposable causality EC2 execution and root closure replay",
+    "separate exact-source full-chain collector refusal test coverage"
+  ]
+}
