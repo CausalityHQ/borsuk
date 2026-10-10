@@ -70,7 +70,7 @@ mock_env; DEV_SIZE=1; run_case 'wrong size' 90 0
 mock_env; BLKID_RC=0; run_case 'signature present (blkid rc 0)' 90 0
 mock_env; WIPEFS='x'; run_case 'wipefs signature' 90 0
 mock_env; MOUNTS=/mnt/x; run_case 'mounted' 90 0
-mock_env; SWAP=/dev/nvme1n1; run_case 'swap on the device' 90 0
+mock_env; SWAP="$MOCK/dev/nvme1n1"; run_case 'swap on the device' 90 0
 mock_env; ROWS=2; run_case 'child device rows' 90 0
 mock_env; CMPFILE_DIR=1; run_case 'evidence write failure' 90 0
 echo "scenarios failed: $fails"
