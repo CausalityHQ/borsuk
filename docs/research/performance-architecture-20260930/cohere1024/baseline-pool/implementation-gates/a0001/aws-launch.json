@@ -1,0 +1,11 @@
+{
+  "instance_id": "i-0264e85db8db76a91",
+  "nodes": {
+    "0": {
+      "instance_id": "i-0264e85db8db76a91"
+    }
+  },
+  "prefix": "research/semantic-router/20261010/baseline-pool-implementation-gates-a0001",
+  "source_commit": "3b7cea83180d102bfd182c1920946006aa57ef24",
+  "source_archive_sha256": "dee6632f99475a1c7e2db41fab7d4ec284dc9ff07bfd08fd511d693a961da16c"
+}

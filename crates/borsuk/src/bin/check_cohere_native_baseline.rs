@@ -546,6 +546,18 @@ fn default_fetch_parallelism() -> usize {
     16
 }
 
+fn query_runtime(fetch_parallelism: usize) -> Result<tokio::runtime::Runtime> {
+    require(
+        matches!(fetch_parallelism, 16 | 32),
+        "fetch_parallelism must be 16 or 32",
+    )?;
+    Ok(tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        // Local object-store opens, seeks and reads can each enqueue blocking work.
+        .max_blocking_threads(fetch_parallelism)
+        .build()?)
+}
+
 // Only tests can construct a smaller shape or exercise reporting underfill.
 #[derive(Clone, Copy)]
 struct Shape {
@@ -2510,10 +2522,7 @@ fn execute_paths(
         output_path,
         shape,
         |c, shape, out, p| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?
-                .block_on(query_and_seal(c, shape, out, p))
+            query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
         },
     )
 }
@@ -2661,10 +2670,7 @@ fn main() {
             Path::new(&args[3]),
             Shape::PRODUCTION,
             |c, shape, out, p| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?
-                    .block_on(query_and_seal(c, shape, out, p))
+                query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
             },
         )
     } else {
@@ -2697,11 +2703,8 @@ pub(crate) fn scale_reducer_native_fixture(
         count: if prefix { 1 } else { 2 },
         ..Shape::tiny(32)
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let (dir, mut value) =
-        runtime.block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
+    let (dir, mut value) = query_runtime(default_fetch_parallelism())?
+        .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":32,"end":34});
     if panel {
         value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[if prefix { 0 } else { 1 }],"trace":false});
@@ -2709,7 +2712,7 @@ pub(crate) fn scale_reducer_native_fixture(
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("scale-native-result.jsonl");
     let status = execute_paths_status(&config, &sha, &result, shape, |c, shape, out, progress| {
-        runtime.block_on(query_and_seal(c, shape, out, progress))
+        query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, progress))
     })?;
     require(
         matches!(status, Status::Measured),
@@ -2947,6 +2950,10 @@ mod tests {
                 validate_config(&config, shape).is_ok(),
                 matches!(parallelism, 16 | 32)
             );
+            assert_eq!(
+                query_runtime(config.fetch_parallelism).is_ok(),
+                matches!(parallelism, 16 | 32)
+            );
             if matches!(parallelism, 16 | 32) {
                 let admission = limits(&config).unwrap();
                 assert_eq!(admission.max_parallel_gets, parallelism);
@@ -2972,6 +2979,95 @@ mod tests {
                 assert_eq!(output[1]["fetch_parallelism"], parallelism);
                 assert_eq!(output[1]["source_cache"], "off");
             }
+        }
+    }
+    #[test]
+    fn query_runtime_bounds_blocking_threads_and_drains() {
+        use std::{
+            sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+            time::Duration,
+        };
+
+        #[derive(Default)]
+        struct Jobs {
+            active: AtomicUsize,
+            peak: AtomicUsize,
+            completed: AtomicUsize,
+            release: AtomicBool,
+        }
+
+        struct RuntimeCleanup {
+            runtime: Option<tokio::runtime::Runtime>,
+            jobs: Arc<Jobs>,
+        }
+        impl Drop for RuntimeCleanup {
+            fn drop(&mut self) {
+                self.jobs.release.store(true, Ordering::SeqCst);
+                if let Some(runtime) = self.runtime.take() {
+                    runtime.shutdown_timeout(Duration::from_secs(1));
+                }
+            }
+        }
+
+        for parallelism in [16, 32] {
+            let jobs = Arc::new(Jobs::default());
+            let cleanup = RuntimeCleanup {
+                runtime: Some(query_runtime(parallelism).unwrap()),
+                jobs: jobs.clone(),
+            };
+            let runtime = cleanup.runtime.as_ref().unwrap();
+            let mut handles = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            for _ in 0..64 {
+                let jobs = jobs.clone();
+                handles.push(runtime.spawn_blocking(move || {
+                    let active = jobs.active.fetch_add(1, Ordering::SeqCst) + 1;
+                    jobs.peak.fetch_max(active, Ordering::SeqCst);
+                    while !jobs.release.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    jobs.active.fetch_sub(1, Ordering::SeqCst);
+                    jobs.completed.fetch_add(1, Ordering::SeqCst);
+                }));
+            }
+            let saturated = runtime.block_on(async {
+                tokio::time::timeout_at(deadline, async {
+                    while jobs.active.load(Ordering::SeqCst) < parallelism {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    // Give excess workers time to expose an uncapped pool before release.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                })
+                .await
+                .is_ok()
+            });
+            // Cleanup gets a separate finite grace after releasing every blocked job.
+            jobs.release.store(true, Ordering::SeqCst);
+            let (drained_in_time, joined) = runtime.block_on(async {
+                let drain = async {
+                    let mut joined = true;
+                    for handle in handles {
+                        joined &= handle.await.is_ok();
+                    }
+                    joined
+                };
+                match tokio::time::timeout(Duration::from_secs(5), drain).await {
+                    Ok(joined) => (true, joined),
+                    Err(_) => (false, false),
+                }
+            });
+            // Also bounds shutdown on a failed drain or an earlier panic.
+            drop(cleanup);
+            assert!(
+                saturated && drained_in_time,
+                "deadline at cap {parallelism}"
+            );
+            assert!(joined, "blocking job failed at cap {parallelism}");
+            assert_eq!(jobs.completed.load(Ordering::SeqCst), 64);
+            assert_eq!(jobs.active.load(Ordering::SeqCst), 0);
+            let peak = jobs.peak.load(Ordering::SeqCst);
+            assert!(peak <= parallelism, "peak {peak} exceeds cap {parallelism}");
+            assert_eq!(peak, parallelism, "pool did not saturate");
         }
     }
     fn records(path: &Path) -> Vec<Value> {
@@ -3342,7 +3438,8 @@ mod tests {
         let output = dir.path().join("wrong-calibration.jsonl");
         let mut out = Output::create(&output).unwrap();
         let mut progress = Progress::default();
-        let error = runtime
+        let error = query_runtime(c.fetch_parallelism)
+            .unwrap()
             .block_on(query_and_seal(&c, shape, &mut out, &mut progress))
             .err()
             .unwrap()
@@ -3515,151 +3612,156 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn actual_native_queries_seal_and_reduce_against_literal_oracles() {
-        let shape = Shape::tiny(257);
-        let (dir, c) = fixture(shape).await;
-        let (path, sha) = write_config(dir.path(), &c);
-        let output = dir.path().join("results");
-        // execute_paths owns a runtime; do not nest it inside this fixture runtime.
-        let c = config(&path, &sha, shape).unwrap();
-        {
-            let raw = std::fs::read(dir.path().join("raw")).unwrap();
-            let mut directions = std::collections::BTreeSet::new();
-            for (id, row) in raw.chunks_exact(D * 4).enumerate() {
-                let values = row
-                    .chunks_exact(4)
-                    .map(|word| f32::from_le_bytes(word.try_into().unwrap()))
-                    .collect::<Vec<_>>();
-                let norm2 = values.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>();
-                assert_eq!(norm2, ((id + 2) as f64).powi(2));
-                directions.insert(
-                    values
-                        .iter()
-                        .map(|&v| (v / (id + 2) as f32).to_bits())
-                        .collect::<Vec<_>>(),
-                );
+    #[test]
+    fn actual_native_queries_seal_and_reduce_against_literal_oracles() {
+        for parallelism in [16, 32] {
+            let shape = Shape::tiny(257);
+            let (dir, mut c) = query_runtime(parallelism).unwrap().block_on(fixture(shape));
+            c["fetch_parallelism"] = json!(parallelism);
+            let (path, sha) = write_config(dir.path(), &c);
+            let output = dir.path().join("results");
+            let c = config(&path, &sha, shape).unwrap();
+            let runtime = query_runtime(c.fetch_parallelism).unwrap();
+            {
+                let raw = std::fs::read(dir.path().join("raw")).unwrap();
+                let mut directions = std::collections::BTreeSet::new();
+                for (id, row) in raw.chunks_exact(D * 4).enumerate() {
+                    let values = row
+                        .chunks_exact(4)
+                        .map(|word| f32::from_le_bytes(word.try_into().unwrap()))
+                        .collect::<Vec<_>>();
+                    let norm2 = values.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>();
+                    assert_eq!(norm2, ((id + 2) as f64).powi(2));
+                    directions.insert(
+                        values
+                            .iter()
+                            .map(|&v| (v / (id + 2) as f32).to_bits())
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                assert_eq!(directions.len(), shape.rows);
+                assert!(directions.len() >= 20);
+                let requests = std::fs::read(&c.requests.path).unwrap();
+                assert_eq!(request_row(&requests, 0).unwrap()[0], 3.);
+                assert_eq!(request_row(&requests, 1).unwrap()[1], 5.);
             }
-            assert_eq!(directions.len(), shape.rows);
-            assert!(directions.len() >= 20);
-            let requests = std::fs::read(&c.requests.path).unwrap();
-            assert_eq!(request_row(&requests, 0).unwrap()[0], 3.);
-            assert_eq!(request_row(&requests, 1).unwrap()[1], 5.);
-        }
-        let mut out = Output::create(&output).unwrap();
-        assert!(!out.directory_synced);
-        let mut p = Progress::default();
-        let seal = query_and_seal(&c, shape, &mut out, &mut p).await.unwrap();
-        assert!(!p.truth_opened && p.sealed && out.directory_synced);
-        let rows = records(&output);
-        let queries = rows
-            .iter()
-            .filter(|r| r["phase"] == "query")
-            .collect::<Vec<_>>();
-        assert_eq!(queries.len(), 2);
-        let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
-        let literal_bits = [
-            0x3d80_0000_u32,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f00_0000,
-            0x3f80_0000,
-        ];
-        for (i, query) in queries.iter().enumerate() {
-            // Independently normalize the specified 3e0/5e1 queries to e0/e1.
-            // Decode one scalar coordinate from stored SQ8 code with low=-1,
-            // step=1/16: squared distance = stored_norm + 1 - 2*coordinate.
-            // No production normalization, scoring, or returned IDs feed this oracle.
-            let mut oracle = sq8
-                .chunks_exact(D + 12)
-                .enumerate()
-                .map(|(physical, record)| {
-                    let id = u64::from_le_bytes(record[..8].try_into().unwrap());
-                    let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
-                    let coordinate = -1. + f32::from(record[12 + i]) / 16.;
-                    (physical, id, (norm + 1. - 2. * coordinate).to_bits())
-                })
-                .collect::<Vec<_>>();
-            oracle.sort_by(|a, b| {
-                f32::from_bits(a.2)
-                    .total_cmp(&f32::from_bits(b.2))
-                    .then(a.1.cmp(&b.1))
-            });
-            assert_eq!(
-                oracle[..K].iter().map(|r| r.1).collect::<Vec<_>>(),
-                TRUTH_IDS[i]
-            );
-            assert_eq!(
-                oracle[..K].iter().map(|r| r.2).collect::<Vec<_>>(),
-                literal_bits
-            );
-            assert_eq!((oracle[K - 1].1, oracle[K].1), (8, 9));
-            assert_eq!(oracle[K - 1].2, oracle[K].2); // tie crosses the k10 boundary
-            assert_eq!(oracle[K - 1].0, 256); // ID8 is the one-row SQ8 tail
-            assert!(oracle[..K].iter().all(|r| r.0 as u64 != r.1));
-            assert_eq!(query["returned_count"], 10);
-            for (rank, hit) in query["returned"].as_array().unwrap().iter().enumerate() {
-                assert_eq!(hit["id"], TRUTH_IDS[i][rank]);
-                assert_eq!(hit["score_bits"], oracle[rank].2);
-            }
-            assert_eq!(
-                query["sum"]["submitted_gets"].as_u64().unwrap(),
-                ["router", "source", "sq8"]
-                    .iter()
-                    .map(|key| query["charges"][*key]["submitted_gets"].as_u64().unwrap())
-                    .sum::<u64>()
-            );
-            assert!(
-                query["charges"]["source"]["verified_bytes"]
-                    .as_u64()
-                    .unwrap()
-                    > 0
-            );
-        }
-        assert_eq!(rows.last().unwrap()["phase"], "all_queries_sealed");
-        let summary = reduce(&c, &mut out, &seal, &mut p).unwrap();
-        assert_eq!(summary["status"], "MEASURED");
-        assert_eq!(summary["total_hits10"], 20);
-        assert_eq!(summary["mean_recall10"], 1.0);
-        assert_eq!(summary["physical_s3_measured"], false);
-        assert_eq!(
-            records(&output)
-                .iter()
-                .filter(|r| r["phase"] == "recall")
-                .count(),
-            2
-        );
-        assert!(Output::create(&output).is_err());
-        let failed_path = dir.path().join("directory-sync-failure");
-        let mut failed = Output::create(&failed_path).unwrap();
-        // Same directory identity, but O_PATH cannot fsync: exercise the real failure
-        // after the ACTUAL two native queries and sealed-file writes have completed.
-        failed.directory = OpenOptions::new()
-            .read(true)
-            .custom_flags(rustix::fs::OFlags::PATH.bits() as i32)
-            .open(dir.path())
-            .unwrap();
-        let mut p = Progress::default();
-        assert!(
-            query_and_seal(&c, shape, &mut failed, &mut p)
-                .await
-                .is_err()
-        );
-        assert_eq!(p.completed, 2);
-        assert_eq!(p.stage, "seal_directory_sync");
-        assert!(!p.sealed && !p.truth_opened && !failed.directory_synced);
-        assert_eq!(
-            records(&failed_path)
+            let mut out = Output::create(&output).unwrap();
+            assert!(!out.directory_synced);
+            let mut p = Progress::default();
+            let seal = runtime
+                .block_on(query_and_seal(&c, shape, &mut out, &mut p))
+                .unwrap();
+            assert!(!p.truth_opened && p.sealed && out.directory_synced);
+            let rows = records(&output);
+            let queries = rows
                 .iter()
                 .filter(|r| r["phase"] == "query")
-                .count(),
-            2
-        );
+                .collect::<Vec<_>>();
+            assert_eq!(queries.len(), 2);
+            let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
+            let literal_bits = [
+                0x3d80_0000_u32,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f00_0000,
+                0x3f80_0000,
+            ];
+            for (i, query) in queries.iter().enumerate() {
+                // Independently normalize the specified 3e0/5e1 queries to e0/e1.
+                // Decode one scalar coordinate from stored SQ8 code with low=-1,
+                // step=1/16: squared distance = stored_norm + 1 - 2*coordinate.
+                // No production normalization, scoring, or returned IDs feed this oracle.
+                let mut oracle = sq8
+                    .chunks_exact(D + 12)
+                    .enumerate()
+                    .map(|(physical, record)| {
+                        let id = u64::from_le_bytes(record[..8].try_into().unwrap());
+                        let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+                        let coordinate = -1. + f32::from(record[12 + i]) / 16.;
+                        (physical, id, (norm + 1. - 2. * coordinate).to_bits())
+                    })
+                    .collect::<Vec<_>>();
+                oracle.sort_by(|a, b| {
+                    f32::from_bits(a.2)
+                        .total_cmp(&f32::from_bits(b.2))
+                        .then(a.1.cmp(&b.1))
+                });
+                assert_eq!(
+                    oracle[..K].iter().map(|r| r.1).collect::<Vec<_>>(),
+                    TRUTH_IDS[i]
+                );
+                assert_eq!(
+                    oracle[..K].iter().map(|r| r.2).collect::<Vec<_>>(),
+                    literal_bits
+                );
+                assert_eq!((oracle[K - 1].1, oracle[K].1), (8, 9));
+                assert_eq!(oracle[K - 1].2, oracle[K].2); // tie crosses the k10 boundary
+                assert_eq!(oracle[K - 1].0, 256); // ID8 is the one-row SQ8 tail
+                assert!(oracle[..K].iter().all(|r| r.0 as u64 != r.1));
+                assert_eq!(query["returned_count"], 10);
+                for (rank, hit) in query["returned"].as_array().unwrap().iter().enumerate() {
+                    assert_eq!(hit["id"], TRUTH_IDS[i][rank]);
+                    assert_eq!(hit["score_bits"], oracle[rank].2);
+                }
+                assert_eq!(
+                    query["sum"]["submitted_gets"].as_u64().unwrap(),
+                    ["router", "source", "sq8"]
+                        .iter()
+                        .map(|key| query["charges"][*key]["submitted_gets"].as_u64().unwrap())
+                        .sum::<u64>()
+                );
+                assert!(
+                    query["charges"]["source"]["verified_bytes"]
+                        .as_u64()
+                        .unwrap()
+                        > 0
+                );
+            }
+            assert_eq!(rows.last().unwrap()["phase"], "all_queries_sealed");
+            let summary = reduce(&c, &mut out, &seal, &mut p).unwrap();
+            assert_eq!(summary["status"], "MEASURED");
+            assert_eq!(summary["total_hits10"], 20);
+            assert_eq!(summary["mean_recall10"], 1.0);
+            assert_eq!(summary["physical_s3_measured"], false);
+            assert_eq!(
+                records(&output)
+                    .iter()
+                    .filter(|r| r["phase"] == "recall")
+                    .count(),
+                2
+            );
+            assert!(Output::create(&output).is_err());
+            let failed_path = dir.path().join("directory-sync-failure");
+            let mut failed = Output::create(&failed_path).unwrap();
+            // Same directory identity, but O_PATH cannot fsync: exercise the real failure
+            // after the ACTUAL two native queries and sealed-file writes have completed.
+            failed.directory = OpenOptions::new()
+                .read(true)
+                .custom_flags(rustix::fs::OFlags::PATH.bits() as i32)
+                .open(dir.path())
+                .unwrap();
+            let mut p = Progress::default();
+            assert!(
+                runtime
+                    .block_on(query_and_seal(&c, shape, &mut failed, &mut p))
+                    .is_err()
+            );
+            assert_eq!(p.completed, 2);
+            assert_eq!(p.stage, "seal_directory_sync");
+            assert!(!p.sealed && !p.truth_opened && !failed.directory_synced);
+            assert_eq!(
+                records(&failed_path)
+                    .iter()
+                    .filter(|r| r["phase"] == "query")
+                    .count(),
+                2
+            );
+        }
     }
     #[test]
     fn missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed() {
@@ -4440,11 +4542,12 @@ mod tests {
                 shape,
                 |c, shape, out, p| {
                     out.fail_query_output = true;
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap()
-                        .block_on(query_and_seal_with(c, shape, out, p, || {
+                    query_runtime(c.fetch_parallelism)?.block_on(query_and_seal_with(
+                        c,
+                        shape,
+                        out,
+                        p,
+                        || {
                             Ok(Reader::Stub {
                                 store: Arc::new(ChunkedStore::new(
                                     Arc::new(object_store::prefix::PrefixStore::new(
@@ -4455,7 +4558,8 @@ mod tests {
                                 )),
                                 stats: recorded.stats.clone(),
                             })
-                        }))
+                        },
+                    ))
                 },
             )
         })
@@ -4528,10 +4632,7 @@ mod tests {
         let (path, sha) = write_config(dir, value);
         let output = dir.join(name);
         let status = execute_paths_status(&path, &sha, &output, shape, |c, shape, out, p| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?
-                .block_on(query_and_seal(c, shape, out, p))
+            query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
         })
         .unwrap();
         (status, records(&output))
@@ -5857,7 +5958,8 @@ mod tests {
         capped.cap = 100;
         let mut p = Progress::default();
         assert!(
-            runtime
+            query_runtime(c.fetch_parallelism)
+                .unwrap()
                 .block_on(query_and_seal(&c, shape, &mut capped, &mut p))
                 .is_err()
         );

@@ -1,0 +1,15 @@
+{
+  "status": "FULL_42_80_TEST_ROSTERS_AUTHENTICATED",
+  "instance_id": "i-0264e85db8db76a91",
+  "terminal_sha256": "26c9a40a0c5528444c50466ae53c5d152c44a7ee30e134c7fc796bdd0ec99d0b",
+  "roster_sha256": "a58f341a363ab194180b21796b63a8da138b5b9858055b8db7a7a419de5cb33e",
+  "test_counts": {
+    "baseline-pool-bin-tests": 42,
+    "baseline-pool-replay-tests": 80
+  },
+  "stage_count": 5,
+  "baseline_elf_bytes": 17029632,
+  "baseline_elf_sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3",
+  "pid128_falsifier_qualified": false,
+  "performance_claim": false
+}

@@ -1,0 +1,17 @@
+{
+  "status": "NATIVE_COMPILER_SYNTHETIC_CORRECTNESS_QUALIFIED_ONLY",
+  "source_file_count": 426,
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "instance_id": "i-0264e85db8db76a91",
+  "stage_count": 5,
+  "test_counts": [
+    42,
+    80
+  ],
+  "swap_bytes": 0,
+  "oom_kills": 0,
+  "compiler_pid_peak": 43,
+  "pid128_real_query_qualified": false,
+  "performance_claim": false
+}
