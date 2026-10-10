@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-full1000-preparation-launch-v1",
+  "started_epoch": 1791656032,
+  "external_deadline_epoch": 1791663832,
+  "client_token": "borsuk-full1000-preparation-a0001-1791656032",
+  "user_data_sha256": "b0b5ce7b6a24710cb04541cc775a1c5c48e0074f0d9a1eac0a649488b5972b2f",
+  "watcher_sha256": "b75ed8825d83919d6dd2de46ea901a8e8af0b412d5f40964ad1f58e7f02d5eea",
+  "controller_commit": "5cd20a61d16d808cd0f46510deb16a660d55d685",
+  "native_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "support_sha256": "afcb286064a028f05470b8799e1af9074e52c511f67026867cc4f7622fd62295",
+  "spot_quote_usd_per_hour": "0.203800",
+  "source_static_checks": true,
+  "runtime_qualified": false,
+  "ann_run": false,
+  "performance_claim": false,
+  "original_failures_preserved": true
+}
