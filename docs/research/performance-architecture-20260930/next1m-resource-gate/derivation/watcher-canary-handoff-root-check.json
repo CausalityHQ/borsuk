@@ -1,0 +1,13 @@
+{
+  "source_base": "9a85df30db1622835eefff2a86b8db0b3911fe2a",
+  "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-watch-original.sh",
+  "original_sha256": "32cdc4d34a00ad763e1a92f96f27b288cbdd88747bdc3be2d852c9c5ea89eef0",
+  "repaired_sha256": "5e276aa229abf8222c56c4303a8baf69220ce5dc3b3cbce77437c1d0c24191bd",
+  "finding": "original watcher would terminate on exact successful canary bootstrap99 before coordinator verdict",
+  "change": "Exclude ONLY phase canary + original_exit99 + exit99 from early bootstrap failure; keep verdict/instance/hard deadline paths",
+  "bash_syntax": "PASS",
+  "jq_syntax": "PASS",
+  "runtime_qualification": "UNRUN",
+  "deadlines_or_resource_caps_changed": false,
+  "historical_frozen_watchers_changed": false
+}

@@ -92,11 +92,12 @@ while (( $(date +%s) < hard_stop )); do
     break
   fi
   # A setup failure publishes no coordinator verdict; stop on its bounded immutable terminal marker.
+  # The exact canary/99/99 handoff queued the coordinator: wait for its verdict under the SAME hard stop.
   if aws_call s3api head-object --bucket "$bucket" --key "$prefix/terminal.json" > remote-results/bootstrap.head.json 2>remote-results/bootstrap.head.stderr; then
     if jq -e '(.ContentLength | type == "number" and floor == . and . > 0 and . <= 65536) and (.ETag | type == "string" and length > 0 and length <= 256)' remote-results/bootstrap.head.json > /dev/null; then
       bootstrap_etag=$(jq -r .ETag remote-results/bootstrap.head.json)
       if aws_call s3api get-object --bucket "$bucket" --key "$prefix/terminal.json" --if-match "$bootstrap_etag" remote-results/bootstrap-terminal.json > remote-results/bootstrap.get.json 2>remote-results/bootstrap.get.stderr; then
-        if jq -e --arg i "$instance" '.schema == "borsuk-native-scale-build-bootstrap-closed-v1" and .instance_id == $i and .performance_claim == false and (.original_exit | type == "number" and floor == . and . >= 1 and . <= 255) and (.exit | type == "number" and floor == . and . >= 90 and . <= 99)' remote-results/bootstrap-terminal.json > /dev/null; then
+        if jq -e --arg i "$instance" '.schema == "borsuk-native-scale-build-bootstrap-closed-v1" and .instance_id == $i and .performance_claim == false and (.original_exit | type == "number" and floor == . and . >= 1 and . <= 255) and (.exit | type == "number" and floor == . and . >= 90 and . <= 99) and ((.phase == "canary" and .original_exit == 99 and .exit == 99) | not)' remote-results/bootstrap-terminal.json > /dev/null; then
           reason=bootstrap_failure
           break
         fi
