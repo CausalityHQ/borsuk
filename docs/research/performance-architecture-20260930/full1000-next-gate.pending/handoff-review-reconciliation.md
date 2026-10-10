@@ -1,0 +1,17 @@
+# Assembled handoff review reconciliation
+
+Group 4dde3ff280a5458d completed; both full labelled answers are retained. Its exact input c50454f4 remains immutable. Later candidates correct demonstrated findings rather than replacing that evidence.
+
+1. Closure failure: closure-failure-support.pending.sh first attempts a small create-only INVALID receipt independently of archive creation, within a finite 25-second window. A separate capped log snapshot is provisional, may have a live producer, and cannot establish closure. bad() writes the original exit/phase/calling line to the console and shuts down after the bounded attempt. Early failures before authenticated support loading can only use the console; no untrusted helper is sourced. service-stop.failure-aware.pending.sh emits explicit INVALID/missing-terminal evidence instead of silently requiring a nonexistent terminal. Network or disk failure can still prevent receipt persistence; absence never becomes success.
+
+2. Unchecked evidence operations: user-data.checked-closure.pending.sh checks manager copying, bounded comparisons, manifest size, archive size/hash statuses and lowercase 64-hex digest. The final candidate incorporates these corrections. Failed archive construction or authentication enters the INVALID preservation path, never reports a successful authenticated archive.
+
+3. Result closure assertion: retain-panel-result.closure-neutral.pending.sh records source closure as unknown and requires external native closure/replay. Matching snapshot bytes alone make no producer-drain assertion. The exact original collector must establish invocation, manager, full closure roster, actual native exit and cgroup drain before acceptance.
+
+4. Finite closure: logger polling is bounded through close_run, then its original parent waits only after disappearance/zombie observation. The complete find/sort/hash pipeline is bounded and size-capped. Normal closure receives 540 seconds, reserving 30 of the original 570 for the failure receipt; the machine deadline remains independent. No failure extends the machine lifetime.
+
+5. Remote object identity: retain-generation-source.rechecked.pending.sh compares each HEAD ETag/version with its PUT response. It rechecks all twelve identities before uploading the native head and all thirteen before the completion marker. Version pins are retained when present. This is identity/length proof, explicitly not remote whole-body SHA proof; native S3 retained publication must reauthenticate every body. Concurrent mutation after recheck remains outside the immutable-source prerequisite and must be rejected by native validation.
+
+The final candidate uses the original two-hour machine envelope and a 3600-second native chain / 3680-second observer, derived from the closed historical approximately 18-minute construction. Transport/remap consume separate admitted windows. A valid published generation is retained even when the closed baseline returns 2/3, so an output-cap or query failure does not discard already authenticated build inputs; failed producer/publication/collector paths are not eligible.
+
+Remaining target gates: EC2-only fault checks for receipt/hash/logger/identity failures; separate actual SDK/systemd/staging/drain canary; source-bound full-body admission and complete-line sealing; native S3 rebind, S3 panel and triple parity. No local runtime, native execution, new scientific result, launch approval or cold measurement is established here.

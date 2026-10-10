@@ -1,0 +1,794 @@
+{
+  "id": "4dde3ff280a5458d",
+  "status": "completed",
+  "started_at": 1791658779,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "Distinct assembled EC2 handoff release review at c50454f4 after completed group6162f3b6ad694420 reviewed only four panel adaptation files. New bootstrap, opaque 10-body transport, remap, result collection and head-last source retention were explicitly outside that review; no duplicate consultation or experiment.",
+  "rolling_6h_count": 7,
+  "prompt_preview": "Read-only review of assembled EC2-only successor handoff, NOT launch approval or scientific acceptance. Authoritative candidate ref devbox/prod-ready-v9-full1000-preparation-pending commit c50454f4c3d46377d790f880a2ec3b7f216c6fe3; exact files under docs/research/performance-architecture-20260930/full1000-next-gate.pending also in /tmp/borsuk-full1000-next-gate-source. Read user-data.retained-generation.pending.sh, retain-generation-source.pending.sh, retain-panel-result.pending.sh, transport-fullcohort.pending.py, map-authenticated-prepared.pending.sh, run_full1000_local_panel.review-repaired.pending.sh, local-panel-gate-config.pending.json, local-panel-transport.etag-bound.pending.json. Existing original observer/collector/service-stop and derivation config in /tmp/borsuk-next1m-native-a0002-603fd5f9/assets. Previous complete review+reconciliation retained in candidate; do not repeat settled panel selection review. Check exact closure/error propagation, support roster/authentication, body placement/disk accounting, finite deadlines, result preservation, original native exit mapping, 13-object whitelist/wholeSHA/create-only/head-last/immutability, and whether retained bytes can support native S3 rebind later. Outer prefix/support SHA intentionally PENDING; no launch frozen. Native c3e52c8b and parity afb70da unchanged. Inspect relevant committed two_bit_store metadata/head definitions if needed. No runtime/tests/mocks/native/Cargo/raw corpus/query/truth/network/AWS/new consults/children/edits/broad scans; all execution must be causality EC2. Return demonstrated blockers and minimal fixes, distinguishing target canary unknowns. Physical checkout is dirty/stale: use exact git-show or named /tmp source, no reset.",
+  "prompt_sha256": "9b0b093edd5203fad817824b681ed780b736d6ba74f61e15854f16b600dfadfc",
+  "prompt_bytes": 1739,
+  "fingerprint": "f69d5e1487c16f66cb34d0e453f377acfe66425cebb193c00f27cc6e9b43e818",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "d025e3fd8a004965",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791658779,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791659979,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only review of assembled EC2-only successor handoff, NOT launch approval or scientific acceptance. Authoritative candidate ref devbox/prod-ready-v9-full1000-preparation-pending commit c50454f4c3d46377d790f880a2ec3b7f216c6fe3; exact files under docs/research/performance-architecture-20260930/full1000-next-gate.pending also in /tmp/borsuk-full1000-next-gate-source. Read user-data.retained-generation.pending.sh, retain-generation-source.pending.sh, retain-panel-result.pending.sh, transport-fullcohort.pending.py, map-authenticated-prepared.pending.sh, run_full1000_local_panel.review-repaired.pending.sh, local-panel-gate-config.pending.json, local-panel-transport.etag-bound.pending.json. Existing original observer/collector/service-stop and derivation config in /tmp/borsuk-next1m-native-a0002-603fd5f9/assets. Previous complete review+reconciliation retained in candidate; do not repeat settled panel selection review. Check exact closure/error propagation, support roster/authentication, body placement/disk accounting, finite deadlines, result preservation, original native exit mapping, 13-object whitelist/wholeSHA/create-only/head-last/immutability, and whether retained bytes can support native S3 rebind later. Outer prefix/support SHA intentionally PENDING; no launch frozen. Native c3e52c8b and parity afb70da unchanged. Inspect relevant committed two_bit_store metadata/head definitions if needed. No runtime/tests/mocks/native/Cargo/raw corpus/query/truth/network/AWS/new consults/children/edits/broad scans; all execution must be causality EC2. Return demonstrated blockers and minimal fixes, distinguishing target canary unknowns. Physical checkout is dirty/stale: use exact git-show or named /tmp source, no reset.",
+      "prompt_sha256": "bac2eb6bd98a367334817114a5025dc1ed28c9b8b1b1ad8ff7e6f10a686405ed",
+      "prompt_bytes": 2123,
+      "fingerprint": "ed45ad340c2167ff3ce6f9f0bfc901374870cce9fad16cba4d0605c8fe64eddf",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "e737996bec9936cb927215e8cd0eefc83db6bcc91d3c69763abeac960eeb1fb3",
+      "reused": false,
+      "critique_id": "4dde3ff280a5458d",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-d025e3fd8a004965.service",
+      "pid": 2865623,
+      "pgid": 2865623,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791658779,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1167,
+          "started_at": 1791658812
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791659229,
+      "event_cursor": 80,
+      "events": [
+        {
+          "seq": 57,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 58,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 59,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 60,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 61,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 62,
+          "at": 1791658956,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 63,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 64,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 65,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 66,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 67,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 68,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 69,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 70,
+          "at": 1791658965,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 71,
+          "at": 1791658999,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 72,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 73,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 74,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 75,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 76,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 77,
+          "at": 1791659081,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 78,
+          "at": 1791659159,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 79,
+          "at": 1791659229,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 80,
+          "at": 1791659229,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791658779,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 · $4 cap · 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791658780,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791658780,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791658810,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791658811,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791658812,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider limit reached; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 73,
+            "at": 1791659081,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 74,
+            "at": 1791659081,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 75,
+            "at": 1791659081,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 76,
+            "at": 1791659081,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 77,
+            "at": 1791659081,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 78,
+            "at": 1791659159,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 79,
+            "at": 1791659229,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 80,
+            "at": 1791659229,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "What this change does: the handoff authenticates the prepared cohort, runs the bounded native chain, and preserves generation bytes for a later S3 rebind. Static review of **c50454f4** found four closure blockers. This is not launch approval or scientific acceptance.\n\n1. **Closure failures can bypass evidence preservation.** `bad()` immediately shuts down and exits. Failed stop queries, inventory checks, size checks or archive creation call it before uploading evidence or writing `terminal.json` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), lines 34–73). The bootstrap stop hook also requires that terminal file. Consequently, these execution failures can leave no durable diagnostic receipt before instance disposal.  \n   **Minimal fix:** reserve a bounded emergency path that attempts to publish the original exit, failing closure step and capped diagnostics before shutdown. Keep the outcome INVALID.\n\n2. **Some closure errors do not change the reported exit.** After `set +e`, the native-manager copy at line 42 and archive SHA calculation at line 72 have no failure handling. A failed SHA command can leave an empty digest while later uploads succeed and `final.exit` remains zero ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72)).  \n   **Minimal fix:** explicitly check these operations and require a 64-character lowercase hexadecimal archive digest. Preserve the failed command’s status separately.\n\n3. **Result retention claims closure without requiring closure proof.** The bootstrap invokes retention on failure exits too, but the retainer always emits `source_closed:true` ([retainer](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20)). Observer and collector failure cleanup is best effort; it can return without proving drain. Hashing and copying matching bytes establishes a snapshot, not that its producer has stopped.  \n   **Minimal fix:** assert closure only when the exact observer’s authenticated outer closure and drain proof are present. Preserve other output as a provisional snapshot with `source_closed:false`.\n\n4. **The closure deadline does not bound the entire closure.** `wait \"$log_pid\"`, the body comparisons and the manifest sort run outside `close_run` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40), lines 61 and 69). They can consume the preservation window without triggering its timeout handling.  \n   **Minimal fix:** bound log draining and each complete comparison/hash pipeline by the remaining closure budget, routing expiration through the emergency preservation path.\n\nThe retained format itself appears sufficient. Its **13 objects** match the committed native fixture: ten metadata objects, SQ8, canonical payload and original head. Whole local bodies are hashed, writes are create-only, and head is uploaded last. The native rebind API accepts a changed actual SQ8 ETag while preserving the old metadata bytes; no coefficient or old-ETag rewriting is needed.\n\nSupport authentication and placement are coherent: twelve support bodies, ten transport bodies and six mapped prepared bodies. Transport staging occupies the root filesystem; the copied cohort occupies scratch. Capacity admission remains distinct from a usage quota.\n\nTarget canary unknowns remain: actual transfer/hash durations, SDK memory use, S3 permissions and copy behavior, source immutability during later native copying, result serialization caps, remote whole-body readback, and external bootstrap-exit/termination evidence. S3 HEAD length checks alone do not establish remote SHA authenticity.\n\n**Verdict:** fix the four closure issues before freezing the handoff. PENDING prefix/support SHA are intentional. No files were edited; no runtime, data, network, AWS, tests, consultations or children were used.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "You've hit your weekly limit · resets Oct 13, 12am (UTC)",
+        "codex": "What this change does: the handoff authenticates the prepared cohort, runs the bounded native chain, and preserves generation bytes for a later S3 rebind. Static review of **c50454f4** found four closure blockers. This is not launch approval or scientific acceptance.\n\n1. **Closure failures can bypass evidence preservation.** `bad()` immediately shuts down and exits. Failed stop queries, inventory checks, size checks or archive creation call it before uploading evidence or writing `terminal.json` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), lines 34–73). The bootstrap stop hook also requires that terminal file. Consequently, these execution failures can leave no durable diagnostic receipt before instance disposal.  \n   **Minimal fix:** reserve a bounded emergency path that attempts to publish the original exit, failing closure step and capped diagnostics before shutdown. Keep the outcome INVALID.\n\n2. **Some closure errors do not change the reported exit.** After `set +e`, the native-manager copy at line 42 and archive SHA calculation at line 72 have no failure handling. A failed SHA command can leave an empty digest while later uploads succeed and `final.exit` remains zero ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72)).  \n   **Minimal fix:** explicitly check these operations and require a 64-character lowercase hexadecimal archive digest. Preserve the failed command’s status separately.\n\n3. **Result retention claims closure without requiring closure proof.** The bootstrap invokes retention on failure exits too, but the retainer always emits `source_closed:true` ([retainer](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20)). Observer and collector failure cleanup is best effort; it can return without proving drain. Hashing and copying matching bytes establishes a snapshot, not that its producer has stopped.  \n   **Minimal fix:** assert closure only when the exact observer’s authenticated outer closure and drain proof are present. Preserve other output as a provisional snapshot with `source_closed:false`.\n\n4. **The closure deadline does not bound the entire closure.** `wait \"$log_pid\"`, the body comparisons and the manifest sort run outside `close_run` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40), lines 61 and 69). They can consume the preservation window without triggering its timeout handling.  \n   **Minimal fix:** bound log draining and each complete comparison/hash pipeline by the remaining closure budget, routing expiration through the emergency preservation path.\n\nThe retained format itself appears sufficient. Its **13 objects** match the committed native fixture: ten metadata objects, SQ8, canonical payload and original head. Whole local bodies are hashed, writes are create-only, and head is uploaded last. The native rebind API accepts a changed actual SQ8 ETag while preserving the old metadata bytes; no coefficient or old-ETag rewriting is needed.\n\nSupport authentication and placement are coherent: twelve support bodies, ten transport bodies and six mapped prepared bodies. Transport staging occupies the root filesystem; the copied cohort occupies scratch. Capacity admission remains distinct from a usage quota.\n\nTarget canary unknowns remain: actual transfer/hash durations, SDK memory use, S3 permissions and copy behavior, source immutability during later native copying, result serialization caps, remote whole-body readback, and external bootstrap-exit/termination evidence. S3 HEAD length checks alone do not establish remote SHA authenticity.\n\n**Verdict:** fix the four closure issues before freezing the handoff. PENDING prefix/support SHA are intentional. No files were edited; no runtime, data, network, AWS, tests, consultations or children were used."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 2123,
+      "output_bytes": 3927,
+      "elapsed_seconds": 450,
+      "progress": "devbox-ask: claude consult still running (0m 30s)\ndevbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)",
+      "progress_truncated": false,
+      "result": "What this change does: the handoff authenticates the prepared cohort, runs the bounded native chain, and preserves generation bytes for a later S3 rebind. Static review of **c50454f4** found four closure blockers. This is not launch approval or scientific acceptance.\n\n1. **Closure failures can bypass evidence preservation.** `bad()` immediately shuts down and exits. Failed stop queries, inventory checks, size checks or archive creation call it before uploading evidence or writing `terminal.json` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), lines 34–73). The bootstrap stop hook also requires that terminal file. Consequently, these execution failures can leave no durable diagnostic receipt before instance disposal.  \n   **Minimal fix:** reserve a bounded emergency path that attempts to publish the original exit, failing closure step and capped diagnostics before shutdown. Keep the outcome INVALID.\n\n2. **Some closure errors do not change the reported exit.** After `set +e`, the native-manager copy at line 42 and archive SHA calculation at line 72 have no failure handling. A failed SHA command can leave an empty digest while later uploads succeed and `final.exit` remains zero ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72)).  \n   **Minimal fix:** explicitly check these operations and require a 64-character lowercase hexadecimal archive digest. Preserve the failed command’s status separately.\n\n3. **Result retention claims closure without requiring closure proof.** The bootstrap invokes retention on failure exits too, but the retainer always emits `source_closed:true` ([retainer](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20)). Observer and collector failure cleanup is best effort; it can return without proving drain. Hashing and copying matching bytes establishes a snapshot, not that its producer has stopped.  \n   **Minimal fix:** assert closure only when the exact observer’s authenticated outer closure and drain proof are present. Preserve other output as a provisional snapshot with `source_closed:false`.\n\n4. **The closure deadline does not bound the entire closure.** `wait \"$log_pid\"`, the body comparisons and the manifest sort run outside `close_run` ([bootstrap source](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40), lines 61 and 69). They can consume the preservation window without triggering its timeout handling.  \n   **Minimal fix:** bound log draining and each complete comparison/hash pipeline by the remaining closure budget, routing expiration through the emergency preservation path.\n\nThe retained format itself appears sufficient. Its **13 objects** match the committed native fixture: ten metadata objects, SQ8, canonical payload and original head. Whole local bodies are hashed, writes are create-only, and head is uploaded last. The native rebind API accepts a changed actual SQ8 ETag while preserving the old metadata bytes; no coefficient or old-ETag rewriting is needed.\n\nSupport authentication and placement are coherent: twelve support bodies, ten transport bodies and six mapped prepared bodies. Transport staging occupies the root filesystem; the copied cohort occupies scratch. Capacity admission remains distinct from a usage quota.\n\nTarget canary unknowns remain: actual transfer/hash durations, SDK memory use, S3 permissions and copy behavior, source immutability during later native copying, result serialization caps, remote whole-body readback, and external bootstrap-exit/termination evidence. S3 HEAD length checks alone do not establish remote SHA authenticity.\n\n**Verdict:** fix the four closure issues before freezing the handoff. PENDING prefix/support SHA are intentional. No files were edited; no runtime, data, network, AWS, tests, consultations or children were used.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "8d5a57665aba40ab",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791658779,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791659979,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only review of assembled EC2-only successor handoff, NOT launch approval or scientific acceptance. Authoritative candidate ref devbox/prod-ready-v9-full1000-preparation-pending commit c50454f4c3d46377d790f880a2ec3b7f216c6fe3; exact files under docs/research/performance-architecture-20260930/full1000-next-gate.pending also in /tmp/borsuk-full1000-next-gate-source. Read user-data.retained-generation.pending.sh, retain-generation-source.pending.sh, retain-panel-result.pending.sh, transport-fullcohort.pending.py, map-authenticated-prepared.pending.sh, run_full1000_local_panel.review-repaired.pending.sh, local-panel-gate-config.pending.json, local-panel-transport.etag-bound.pending.json. Existing original observer/collector/service-stop and derivation config in /tmp/borsuk-next1m-native-a0002-603fd5f9/assets. Previous complete review+reconciliation retained in candidate; do not repeat settled panel selection review. Check exact closure/error propagation, support roster/authentication, body placement/disk accounting, finite deadlines, result preservation, original native exit mapping, 13-object whitelist/wholeSHA/create-only/head-last/immutability, and whether retained bytes can support native S3 rebind later. Outer prefix/support SHA intentionally PENDING; no launch frozen. Native c3e52c8b and parity afb70da unchanged. Inspect relevant committed two_bit_store metadata/head definitions if needed. No runtime/tests/mocks/native/Cargo/raw corpus/query/truth/network/AWS/new consults/children/edits/broad scans; all execution must be causality EC2. Return demonstrated blockers and minimal fixes, distinguishing target canary unknowns. Physical checkout is dirty/stale: use exact git-show or named /tmp source, no reset.",
+      "prompt_sha256": "be4368eded3647abc6201ef3fb0b7828385b556f68a22cc016b631306440712c",
+      "prompt_bytes": 2157,
+      "fingerprint": "9c0bc65eefcab7616e3eb93e932b89e76d29cd38e7afde8b11d7f3eac84420e7",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "ed45ad340c2167ff3ce6f9f0bfc901374870cce9fad16cba4d0605c8fe64eddf",
+      "reused": false,
+      "critique_id": "4dde3ff280a5458d",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-8d5a57665aba40ab.service",
+      "pid": 2865737,
+      "pgid": 2865737,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791658779
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791659186,
+      "event_cursor": 86,
+      "events": [
+        {
+          "seq": 63,
+          "at": 1791658973,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 64,
+          "at": 1791658973,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 65,
+          "at": 1791658973,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 66,
+          "at": 1791658990,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 67,
+          "at": 1791658990,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 68,
+          "at": 1791658990,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 69,
+          "at": 1791658994,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 70,
+          "at": 1791658994,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 71,
+          "at": 1791658996,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 72,
+          "at": 1791659012,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 73,
+          "at": 1791659024,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 74,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 75,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 76,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 77,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 78,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 79,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 80,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 81,
+          "at": 1791659071,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 82,
+          "at": 1791659113,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 83,
+          "at": 1791659141,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 84,
+          "at": 1791659149,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 85,
+          "at": 1791659184,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 86,
+          "at": 1791659186,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 79,
+            "at": 1791659071,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 80,
+            "at": 1791659071,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 81,
+            "at": 1791659071,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 82,
+            "at": 1791659113,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 83,
+            "at": 1791659141,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 84,
+            "at": 1791659149,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 85,
+            "at": 1791659184,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 86,
+            "at": 1791659186,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "What this change does: `c50454f4` assembles the EC2 local-panel run, preserves its result, and uploads the original generation for later native S3 rebind. **The handoff still has failure-handling blockers.** These are demonstrated source paths, not observed runtime failures.\n\n1. **[P1] Cleanup failures can prevent all durable failure reporting.**  \n   In [user-data.retained-generation.pending.sh](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), `bad()` immediately shuts down and exits. Drain, inventory, size-check and tar failures reach it before `terminal.json` or `final.exit` exists. The [bootstrap stop hook](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/service-stop.sh:7) then also exits because it requires that terminal.\n   \n   **Minimal fix:** retain the original exit and failing phase in a small fallback receipt independently of archive construction; make the stop hook report a missing terminal. Preserve safe, bounded evidence when the full archive cannot be built.\n\n2. **[P1] Result retention asserts closure without proving native drain.**  \n   [The outer EXIT handler](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:67) calls retention even after observer failure. Its own cleanup checks only transport/parity units. The [observer’s failure cleanup](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run-native-chain-observer.sh:22) can fail identity lookup or stop without establishing drain. Nevertheless, [the result descriptor](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20) unconditionally writes `source_closed:true`.\n   \n   **Minimal fix:** bind that assertion to the original invocation’s successful closure or explicit failure-drain proof. Without proof, preserve available bytes as provisional evidence and report closure as unverified.\n\n3. **[P1] Archive-hash failure can leave the bootstrap exit successful.**  \n   [Line 72](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72) runs the archive-size and SHA commands under `set +e` without checking their statuses. If size succeeds but hashing times out, the positive-size check passes; uploads and terminal creation can finish with an empty SHA and exit `0`.\n   \n   **Minimal fix:** check both assignments explicitly and require a 64-character hexadecimal digest before declaring authenticated evidence. Propagate failure while retaining the original native exit.\n\n4. **[P2] The 570-second closure budget does not bound logger draining.**  \n   [The plain `wait \"$log_pid\"`](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40) bypasses `close_run`. A stalled logger or surviving pipe writer can consume the remaining lifetime before archival. The five-hour shutdown remains a separate backstop.\n   \n   **Minimal fix:** bound logger draining by the remaining closure budget, retaining its actual status and reserving time for the fallback receipt.\n\n5. **[P2] Retention can associate the wrong remote object with the authenticated SHA.**  \n   [The upload helper](/tmp/borsuk-full1000-next-gate-source/retain-generation-source.pending.sh:59) records the PUT response but validates subsequent HEAD only by length. A same-length replacement between PUT and HEAD is accepted, and its ETag is recorded alongside the original local SHA. Earlier objects are not rechecked before head publication.\n   \n   **Minimal fix:** bind HEAD to the PUT’s returned ETag/version and recheck those identities before publishing head/completion. Preserve version pins where available. Later native whole-body validation would reject corruption, but cannot recover discarded source bytes.\n\nThe inspected source otherwise supports the intended design: the authenticated support roster is explicit; root-disk admission includes all ten transport bodies; scratch holds the copied cohort separately; and the retention roster matches ten semantic metadata objects, two payloads and head last. Create-only writes and local whole-file SHA checks are present. The committed native rebind API permits preserving the historical local ETag while approving the actual imported S3 ETag.\n\n**EC2 canary unknowns:** SDK streaming/resource behavior, systemd stop-hook and exit behavior, actual deadlines, complete-line limits, and successful retained import/rebind. Immediate post-terminal instance cleanup also needs binding in the eventual launch controller; this script normally schedules shutdown at five hours.\n\n**Verdict: fix 1–5 before closing this source handoff.** PENDING prefix/support pins are intentional. No files changed; no runtime, tests, native execution, network/AWS calls, consultations or children were run.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "What this change does: `c50454f4` assembles the EC2 local-panel run, preserves its result, and uploads the original generation for later native S3 rebind. **The handoff still has failure-handling blockers.** These are demonstrated source paths, not observed runtime failures.\n\n1. **[P1] Cleanup failures can prevent all durable failure reporting.**  \n   In [user-data.retained-generation.pending.sh](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), `bad()` immediately shuts down and exits. Drain, inventory, size-check and tar failures reach it before `terminal.json` or `final.exit` exists. The [bootstrap stop hook](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/service-stop.sh:7) then also exits because it requires that terminal.\n   \n   **Minimal fix:** retain the original exit and failing phase in a small fallback receipt independently of archive construction; make the stop hook report a missing terminal. Preserve safe, bounded evidence when the full archive cannot be built.\n\n2. **[P1] Result retention asserts closure without proving native drain.**  \n   [The outer EXIT handler](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:67) calls retention even after observer failure. Its own cleanup checks only transport/parity units. The [observer’s failure cleanup](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run-native-chain-observer.sh:22) can fail identity lookup or stop without establishing drain. Nevertheless, [the result descriptor](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20) unconditionally writes `source_closed:true`.\n   \n   **Minimal fix:** bind that assertion to the original invocation’s successful closure or explicit failure-drain proof. Without proof, preserve available bytes as provisional evidence and report closure as unverified.\n\n3. **[P1] Archive-hash failure can leave the bootstrap exit successful.**  \n   [Line 72](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72) runs the archive-size and SHA commands under `set +e` without checking their statuses. If size succeeds but hashing times out, the positive-size check passes; uploads and terminal creation can finish with an empty SHA and exit `0`.\n   \n   **Minimal fix:** check both assignments explicitly and require a 64-character hexadecimal digest before declaring authenticated evidence. Propagate failure while retaining the original native exit.\n\n4. **[P2] The 570-second closure budget does not bound logger draining.**  \n   [The plain `wait \"$log_pid\"`](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40) bypasses `close_run`. A stalled logger or surviving pipe writer can consume the remaining lifetime before archival. The five-hour shutdown remains a separate backstop.\n   \n   **Minimal fix:** bound logger draining by the remaining closure budget, retaining its actual status and reserving time for the fallback receipt.\n\n5. **[P2] Retention can associate the wrong remote object with the authenticated SHA.**  \n   [The upload helper](/tmp/borsuk-full1000-next-gate-source/retain-generation-source.pending.sh:59) records the PUT response but validates subsequent HEAD only by length. A same-length replacement between PUT and HEAD is accepted, and its ETag is recorded alongside the original local SHA. Earlier objects are not rechecked before head publication.\n   \n   **Minimal fix:** bind HEAD to the PUT’s returned ETag/version and recheck those identities before publishing head/completion. Preserve version pins where available. Later native whole-body validation would reject corruption, but cannot recover discarded source bytes.\n\nThe inspected source otherwise supports the intended design: the authenticated support roster is explicit; root-disk admission includes all ten transport bodies; scratch holds the copied cohort separately; and the retention roster matches ten semantic metadata objects, two payloads and head last. Create-only writes and local whole-file SHA checks are present. The committed native rebind API permits preserving the historical local ETag while approving the actual imported S3 ETag.\n\n**EC2 canary unknowns:** SDK streaming/resource behavior, systemd stop-hook and exit behavior, actual deadlines, complete-line limits, and successful retained import/rebind. Immediate post-terminal instance cleanup also needs binding in the eventual launch controller; this script normally schedules shutdown at five hours.\n\n**Verdict: fix 1–5 before closing this source handoff.** PENDING prefix/support pins are intentional. No files changed; no runtime, tests, native execution, network/AWS calls, consultations or children were run."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 2157,
+      "output_bytes": 4733,
+      "elapsed_seconds": 407,
+      "progress": "devbox-ask: codex consult still running (0m 30s)\nReading additional input from stdin...\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)",
+      "progress_truncated": false,
+      "result": "What this change does: `c50454f4` assembles the EC2 local-panel run, preserves its result, and uploads the original generation for later native S3 rebind. **The handoff still has failure-handling blockers.** These are demonstrated source paths, not observed runtime failures.\n\n1. **[P1] Cleanup failures can prevent all durable failure reporting.**  \n   In [user-data.retained-generation.pending.sh](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:16), `bad()` immediately shuts down and exits. Drain, inventory, size-check and tar failures reach it before `terminal.json` or `final.exit` exists. The [bootstrap stop hook](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/service-stop.sh:7) then also exits because it requires that terminal.\n   \n   **Minimal fix:** retain the original exit and failing phase in a small fallback receipt independently of archive construction; make the stop hook report a missing terminal. Preserve safe, bounded evidence when the full archive cannot be built.\n\n2. **[P1] Result retention asserts closure without proving native drain.**  \n   [The outer EXIT handler](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:67) calls retention even after observer failure. Its own cleanup checks only transport/parity units. The [observer’s failure cleanup](/tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run-native-chain-observer.sh:22) can fail identity lookup or stop without establishing drain. Nevertheless, [the result descriptor](/tmp/borsuk-full1000-next-gate-source/retain-panel-result.pending.sh:20) unconditionally writes `source_closed:true`.\n   \n   **Minimal fix:** bind that assertion to the original invocation’s successful closure or explicit failure-drain proof. Without proof, preserve available bytes as provisional evidence and report closure as unverified.\n\n3. **[P1] Archive-hash failure can leave the bootstrap exit successful.**  \n   [Line 72](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:72) runs the archive-size and SHA commands under `set +e` without checking their statuses. If size succeeds but hashing times out, the positive-size check passes; uploads and terminal creation can finish with an empty SHA and exit `0`.\n   \n   **Minimal fix:** check both assignments explicitly and require a 64-character hexadecimal digest before declaring authenticated evidence. Propagate failure while retaining the original native exit.\n\n4. **[P2] The 570-second closure budget does not bound logger draining.**  \n   [The plain `wait \"$log_pid\"`](/tmp/borsuk-full1000-next-gate-source/user-data.retained-generation.pending.sh:40) bypasses `close_run`. A stalled logger or surviving pipe writer can consume the remaining lifetime before archival. The five-hour shutdown remains a separate backstop.\n   \n   **Minimal fix:** bound logger draining by the remaining closure budget, retaining its actual status and reserving time for the fallback receipt.\n\n5. **[P2] Retention can associate the wrong remote object with the authenticated SHA.**  \n   [The upload helper](/tmp/borsuk-full1000-next-gate-source/retain-generation-source.pending.sh:59) records the PUT response but validates subsequent HEAD only by length. A same-length replacement between PUT and HEAD is accepted, and its ETag is recorded alongside the original local SHA. Earlier objects are not rechecked before head publication.\n   \n   **Minimal fix:** bind HEAD to the PUT’s returned ETag/version and recheck those identities before publishing head/completion. Preserve version pins where available. Later native whole-body validation would reject corruption, but cannot recover discarded source bytes.\n\nThe inspected source otherwise supports the intended design: the authenticated support roster is explicit; root-disk admission includes all ten transport bodies; scratch holds the copied cohort separately; and the retention roster matches ten semantic metadata objects, two payloads and head last. Create-only writes and local whole-file SHA checks are present. The committed native rebind API permits preserving the historical local ETag while approving the actual imported S3 ETag.\n\n**EC2 canary unknowns:** SDK streaming/resource behavior, systemd stop-hook and exit behavior, actual deadlines, complete-line limits, and successful retained import/rebind. Immediate post-terminal instance cleanup also needs binding in the eventual launch controller; this script normally schedules shutdown at five hours.\n\n**Verdict: fix 1–5 before closing this source handoff.** PENDING prefix/support pins are intentional. No files changed; no runtime, tests, native execution, network/AWS calls, consultations or children were run.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791659230,
+  "elapsed_seconds": 450,
+  "input_bytes": 1739,
+  "output_bytes": 8660
+}
