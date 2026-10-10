@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "e2467df6156c23037307df8c1fae27ebedd8c8b7",
+  "client_token": "borsuk-next1m-canary-a0003-56fe514b30725eda",
+  "watch_unit": "borsuk-next1m-canary-a0003-56fe514b30725eda.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0003-56fe514b30725eda/run",
+  "assets": "research/semantic-router/20261010/next1m-supervisor-canary-source/e2467df6/assets",
+  "launch_authority": true,
+  "prior_attempt": "a0002",
+  "prior_attempt_closed": true,
+  "repair_reason": "bind escaped fixture normal drain to original manager and witness; no ANN algorithm change",
+  "launched_epoch": 1791639292,
+  "bootstrap_sha256": "77b0f46292654ae3b974851b1ac12b6aaabbf115aa791e8d4f804ef61e5a4bfe",
+  "watch_sha256": "9ad7dc972d82143c376385a428244955404115c169ed30f5287af04cb7496185",
+  "request_sha256": "3fc3caca83fd90587c897e81ebf59c11815a0a52d73a97728b0bc16316cb13cd",
+  "support_roster": [
+    {
+      "name": "wrapper-canary.sh",
+      "bytes": 17821,
+      "sha256": "2c9463b2d4326621dcc1d8ed884f9c2dc61379da826a1e073d0f70ec157a06f1"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 62014,
+      "sha256": "b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452"
+    },
+    {
+      "name": "verify-closed.py",
+      "bytes": 77732,
+      "sha256": "437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a"
+    }
+  ]
+}

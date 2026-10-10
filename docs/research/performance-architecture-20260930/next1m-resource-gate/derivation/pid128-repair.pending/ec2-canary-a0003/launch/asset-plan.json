@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "e2467df6156c23037307df8c1fae27ebedd8c8b7",
+  "client_token": "borsuk-next1m-canary-a0003-56fe514b30725eda",
+  "watch_unit": "borsuk-next1m-canary-a0003-56fe514b30725eda.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0003-56fe514b30725eda/run",
+  "assets": "research/semantic-router/20261010/next1m-supervisor-canary-source/e2467df6/assets",
+  "launch_authority": false,
+  "prior_attempt": "a0002",
+  "prior_attempt_closed": true,
+  "repair_reason": "bind escaped fixture normal drain to original manager and witness; no ANN algorithm change"
+}
