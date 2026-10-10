@@ -1,0 +1,12 @@
+{
+  "instance_id": "i-0afabe5c23713402b",
+  "volumes": [
+    "vol-05170ac5b1072efb9",
+    "vol-00c8c40624a16f653"
+  ],
+  "watcher_unit": "borsuk-next1m-canary-a0007-watch.service",
+  "watcher_started": true,
+  "instance_final_evidence": "describe-original-01.stdout",
+  "scratch_volume_final_evidence": "describe-scratch-volume-01.stdout",
+  "performance_claim": false
+}

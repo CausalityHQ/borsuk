@@ -1,0 +1,86 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "two stale global source-count assertions in attachment fixture after introducing instance observer",
+  "source_commit": "6b582018d6d5385e0b715201366743ea409555a6",
+  "instance_id": "i-0afabe5c23713402b",
+  "original_launch": {
+    "session": 23888,
+    "unit": "run-p174680-i675319053.service",
+    "invocation": "ece0af6ecc2a459bad93fb321d7a9d4f",
+    "exit": 0,
+    "wall_seconds": 26.604
+  },
+  "watcher": {
+    "unit": "borsuk-next1m-canary-a0007-watch.service",
+    "invocation": "8a59d0edd9244a41867796c026a65cfe",
+    "exit": 0
+  },
+  "collection": {
+    "session": 46521,
+    "unit": "run-p269848-i675434808.service",
+    "invocation": "b98eae66ed3f4c3b81d9b4d1067019bd",
+    "exit": 0
+  },
+  "archive_authentication": {
+    "unit": "run-p279898-i675451179.service",
+    "invocation": "970f485ed73a4f49b34260c907de6738",
+    "exit": 0,
+    "archive": {
+      "bytes": 11297,
+      "sha256": "b4daeed6b140ecafa1cb04cd9b85e936feb111e23b822e135bec31fe96a45a72"
+    }
+  },
+  "fixture_results": {
+    "instance_observer": {
+      "exit": 0,
+      "pass_lines": 56
+    },
+    "formatting": {
+      "exit": 0,
+      "pass_lines": 15
+    },
+    "scratch_observer": {
+      "exit": 1,
+      "pass_lines": 45,
+      "failures": [
+        "FAIL only the observation passes keep=True",
+        "FAIL sleep appears only inside settle and as its argument"
+      ]
+    },
+    "ownership_proof": "NOT_RUN"
+  },
+  "remote_resources": {
+    "wall_seconds": 0.271,
+    "cpu_seconds": 0.267418,
+    "peak_bytes": 6463488,
+    "swap_bytes": 0,
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "private_network": true,
+    "runtime_max_seconds": 120
+  },
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-0afabe5c23713402b",
+    "terminated": true,
+    "volumes": [
+      "vol-05170ac5b1072efb9",
+      "vol-00c8c40624a16f653"
+    ],
+    "both_volumes_absent": true,
+    "reason": "bootstrap_failure",
+    "user_data_sha256": "edcdab587cd938c0a37d410b76bf3571b8b4d66644d37db44cf6d92ed9bbec01",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "actual_formatting": "NOT_RUN",
+  "platform_canary": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "repair_commit": "af2d07c69a6a14cdcba3557f1c71e9bb5fa03760",
+  "next_action": "rerun same behavioral fixtures with global source assertions for exactly two known observers; no production change"
+}

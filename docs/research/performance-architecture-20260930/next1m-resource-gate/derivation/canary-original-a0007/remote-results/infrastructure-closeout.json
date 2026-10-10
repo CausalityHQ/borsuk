@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-canary-infrastructure-closeout-v1",
+  "instance_id": "i-0afabe5c23713402b",
+  "terminated": true,
+  "volumes": [
+    "vol-05170ac5b1072efb9",
+    "vol-00c8c40624a16f653"
+  ],
+  "both_volumes_absent": true,
+  "reason": "bootstrap_failure",
+  "user_data_sha256": "edcdab587cd938c0a37d410b76bf3571b8b4d66644d37db44cf6d92ed9bbec01",
+  "late": false,
+  "canary_replay_pending": true,
+  "performance_claim": false
+}

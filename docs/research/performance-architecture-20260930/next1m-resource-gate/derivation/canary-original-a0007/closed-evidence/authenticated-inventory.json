@@ -1,0 +1,61 @@
+{
+  "instance_id": "i-0afabe5c23713402b",
+  "original_exit": 94,
+  "phase": "scratch-fixtures",
+  "archive": {
+    "bytes": 11297,
+    "sha256": "b4daeed6b140ecafa1cb04cd9b85e936feb111e23b822e135bec31fe96a45a72"
+  },
+  "members": {
+    "systemd-after-native-chain.txt": [
+      6607,
+      "297e99e6683dbaad829670b6cf9751fc0bd19a4919d420a00bcec33e36f3351e"
+    ],
+    "bootstrap.exit": [
+      3,
+      "6fc16b03d8c15b9885876848a301a01816cccaf7b48e74f2b51db99c007a3bd5"
+    ],
+    "support.sha256": [
+      803,
+      "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0"
+    ],
+    "systemd-after-cohort-parity.txt": [
+      6611,
+      "322b37c381885ac18c042489d30b7eb0f3ea90abf4dba44c684ed3a90238b5c6"
+    ],
+    "environment.txt": [
+      1617,
+      "373e7ec1072dd1fb41d48e5873ae2bec7bfd646fbc376813d72d1d599334d42b"
+    ],
+    "scratch-fixtures.systemd": [
+      9054,
+      "355fdba7ecfbc344561f6e42146993c7ce299a8e48ea74048c6fdb29203f2080"
+    ],
+    "scratch-fixtures.stderr": [
+      221,
+      "4397dada04693c0daf39f9ea7c2b56fd5c09acbebb070f0d98cd4729e55b8322"
+    ],
+    "scratch-fixtures.stdout": [
+      8694,
+      "4d8a44234911bab3b696feedba53467178f0be7f1c83b2b73b6958de086c0067"
+    ],
+    "gate-config-template.json": [
+      4332,
+      "270e79c439915dda8183f89b539683a95a297b8c31d165ddea138615a9019082"
+    ],
+    "scratch-fixtures.exit": [
+      2,
+      "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    ],
+    "bootstrap.log": [
+      10193,
+      "81e0f102cbe658bbb7f0a28c3d2066c9dae5de1a4d135f03d08a0df85bb1eb2a"
+    ],
+    "cloud-final-unit.txt": [
+      1017,
+      "aff1214d5127f76869be18e057f9af6e231068a3e1dd3d595688c3ce1ab4321d"
+    ]
+  },
+  "authentication": "PASS",
+  "performance_claim": false
+}

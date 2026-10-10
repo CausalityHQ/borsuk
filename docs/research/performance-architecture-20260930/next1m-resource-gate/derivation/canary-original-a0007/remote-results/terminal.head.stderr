@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (404) when calling the HeadObject operation (reached max retries: 0): Not Found

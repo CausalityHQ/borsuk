@@ -1,0 +1,184 @@
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-0d31f389374293de6",
+            "OwnerId": "453182569524",
+            "Groups": [],
+            "Instances": [
+                {
+                    "Architecture": "x86_64",
+                    "BlockDeviceMappings": [
+                        {
+                            "DeviceName": "/dev/sda1",
+                            "Ebs": {
+                                "AttachTime": "2026-10-10T01:10:00+00:00",
+                                "DeleteOnTermination": true,
+                                "Status": "attaching",
+                                "VolumeId": "vol-05170ac5b1072efb9",
+                                "EbsCardIndex": 0
+                            }
+                        },
+                        {
+                            "DeviceName": "/dev/sdf",
+                            "Ebs": {
+                                "AttachTime": "2026-10-10T01:09:59.863000+00:00",
+                                "DeleteOnTermination": true,
+                                "Status": "attaching",
+                                "VolumeId": "vol-00c8c40624a16f653",
+                                "EbsCardIndex": 0
+                            }
+                        }
+                    ],
+                    "ClientToken": "borsuk-next1m-canary-a0007-1791594582",
+                    "EbsOptimized": false,
+                    "EnaSupport": true,
+                    "Hypervisor": "xen",
+                    "IamInstanceProfile": {
+                        "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+                        "Id": "AIPAWTA6JHQ2J3ZONR2IU"
+                    },
+                    "InstanceLifecycle": "spot",
+                    "NetworkInterfaces": [
+                        {
+                            "Association": {
+                                "IpOwnerId": "amazon",
+                                "PublicDnsName": "ec2-3-74-223-56.eu-central-1.compute.amazonaws.com",
+                                "PublicIp": "3.74.223.56"
+                            },
+                            "Attachment": {
+                                "AttachTime": "2026-10-10T01:10:00+00:00",
+                                "AttachmentId": "eni-attach-04e7843d0737576a9",
+                                "DeleteOnTermination": true,
+                                "DeviceIndex": 0,
+                                "Status": "attaching",
+                                "NetworkCardIndex": 0
+                            },
+                            "Description": "",
+                            "Groups": [
+                                {
+                                    "GroupId": "sg-0b1fd3e4fbde4af0d",
+                                    "GroupName": "borsuk-bench-sg"
+                                }
+                            ],
+                            "Ipv6Addresses": [],
+                            "MacAddress": "0a:ff:db:7b:c0:b1",
+                            "NetworkInterfaceId": "eni-0a1e5885851e11071",
+                            "OwnerId": "453182569524",
+                            "PrivateDnsName": "ip-172-31-1-22.eu-central-1.compute.internal",
+                            "PrivateIpAddress": "172.31.1.22",
+                            "PrivateIpAddresses": [
+                                {
+                                    "Association": {
+                                        "IpOwnerId": "amazon",
+                                        "PublicDnsName": "ec2-3-74-223-56.eu-central-1.compute.amazonaws.com",
+                                        "PublicIp": "3.74.223.56"
+                                    },
+                                    "Primary": true,
+                                    "PrivateDnsName": "ip-172-31-1-22.eu-central-1.compute.internal",
+                                    "PrivateIpAddress": "172.31.1.22"
+                                }
+                            ],
+                            "SourceDestCheck": true,
+                            "Status": "in-use",
+                            "SubnetId": "subnet-0a12dbed0ca6fac25",
+                            "VpcId": "vpc-02bed5aadbc3c0a2d",
+                            "InterfaceType": "interface",
+                            "Operator": {
+                                "Managed": false
+                            }
+                        }
+                    ],
+                    "RootDeviceName": "/dev/sda1",
+                    "RootDeviceType": "ebs",
+                    "SecurityGroups": [
+                        {
+                            "GroupId": "sg-0b1fd3e4fbde4af0d",
+                            "GroupName": "borsuk-bench-sg"
+                        }
+                    ],
+                    "SourceDestCheck": true,
+                    "SpotInstanceRequestId": "sir-2viqmktk",
+                    "Tags": [
+                        {
+                            "Key": "Project",
+                            "Value": "borsuk"
+                        },
+                        {
+                            "Key": "Name",
+                            "Value": "borsuk-next1m-chain-canary-a0007"
+                        }
+                    ],
+                    "VirtualizationType": "hvm",
+                    "CpuOptions": {
+                        "CoreCount": 4,
+                        "ThreadsPerCore": 2
+                    },
+                    "CapacityReservationSpecification": {
+                        "CapacityReservationPreference": "open"
+                    },
+                    "HibernationOptions": {
+                        "Configured": false
+                    },
+                    "MetadataOptions": {
+                        "State": "pending",
+                        "HttpTokens": "required",
+                        "HttpPutResponseHopLimit": 2,
+                        "HttpEndpoint": "enabled",
+                        "HttpProtocolIpv6": "disabled",
+                        "InstanceMetadataTags": "disabled"
+                    },
+                    "EnclaveOptions": {
+                        "Enabled": false
+                    },
+                    "BootMode": "uefi-preferred",
+                    "PlatformDetails": "Linux/UNIX",
+                    "UsageOperation": "RunInstances",
+                    "UsageOperationUpdateTime": "2026-10-10T01:10:00+00:00",
+                    "PrivateDnsNameOptions": {
+                        "HostnameType": "ip-name",
+                        "EnableResourceNameDnsARecord": false,
+                        "EnableResourceNameDnsAAAARecord": false
+                    },
+                    "MaintenanceOptions": {
+                        "AutoRecovery": "default",
+                        "RebootMigration": "default"
+                    },
+                    "CurrentInstanceBootMode": "uefi",
+                    "NetworkPerformanceOptions": {
+                        "BandwidthWeighting": "default"
+                    },
+                    "Operator": {
+                        "Managed": false,
+                        "HiddenByDefault": false
+                    },
+                    "InstanceId": "i-0afabe5c23713402b",
+                    "ImageId": "ami-0b8a830d6339a9758",
+                    "State": {
+                        "Code": 0,
+                        "Name": "pending"
+                    },
+                    "PrivateDnsName": "ip-172-31-1-22.eu-central-1.compute.internal",
+                    "PublicDnsName": "ec2-3-74-223-56.eu-central-1.compute.amazonaws.com",
+                    "StateTransitionReason": "",
+                    "AmiLaunchIndex": 0,
+                    "ProductCodes": [],
+                    "InstanceType": "c7i.2xlarge",
+                    "LaunchTime": "2026-10-10T01:10:00+00:00",
+                    "Placement": {
+                        "AvailabilityZoneId": "euc1-az1",
+                        "GroupName": "",
+                        "Tenancy": "default",
+                        "AvailabilityZone": "eu-central-1c"
+                    },
+                    "Monitoring": {
+                        "State": "disabled"
+                    },
+                    "SubnetId": "subnet-0a12dbed0ca6fac25",
+                    "VpcId": "vpc-02bed5aadbc3c0a2d",
+                    "PrivateIpAddress": "172.31.1.22",
+                    "PublicIpAddress": "3.74.223.56"
+                }
+            ]
+        }
+    ]
+}
