@@ -1,0 +1,17 @@
+[
+  {
+    "name": "collector-smoke.sh",
+    "bytes": 14093,
+    "sha256": "de33ff52adee978a9e2b4aa7bb00289460e307f53d5842f4a0b6f92db2f88cf1"
+  },
+  {
+    "name": "collect-native-chain-outer.sh",
+    "bytes": 10100,
+    "sha256": "d32fae330c753cecfdb9d54141a83580a52417df2974c8d49d3f4b7f1f9f7d75"
+  },
+  {
+    "name": "observer-command.sh",
+    "bytes": 643,
+    "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+  }
+]
