@@ -1,0 +1,16 @@
+{
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-02d5f87519ed17267",
+  "reason": "root pre-created watcher-owned remote-results directory",
+  "watcher_exit": 19,
+  "instance_terminated": true,
+  "deleted_volumes": [
+    "vol-0367fd941f50f005b",
+    "vol-0d71c71c94330c70a"
+  ],
+  "native_executed": "UNVERIFIED",
+  "transport_memory_repair_qualified": false,
+  "terminal_absent_at_observation": true,
+  "performance_claim": false,
+  "next_change": "Keep watcher-owned results directory absent; enforce precondition before RunInstances"
+}

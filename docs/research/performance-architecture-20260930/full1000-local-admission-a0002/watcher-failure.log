@@ -1,0 +1,7 @@
+Oct 10 19:45:36 vps-6b513f64 systemd[61545]: Started borsuk-next1m-scale-a1003-watch.service - [systemd-run] /usr/bin/bash /tmp/borsuk-full1000-local-admission-a0002/watch-preparation.sh i-02d5f87519ed17267 1791661512 5ee02cdc9e722c2227fb444c42cf955df834e222f309b92cdc839c83697dab11.
+Oct 10 19:45:36 vps-6b513f64 bash[962475]: mkdir: remote-results: File exists
+Oct 10 19:45:36 vps-6b513f64 bash[962437]: watcher glue failure (raw exit 1)
+Oct 10 19:46:24 vps-6b513f64 bash[962437]: exact original instance i-02d5f87519ed17267 terminated after the glue failure; collection skipped: INVALID
+Oct 10 19:46:24 vps-6b513f64 systemd[61545]: borsuk-next1m-scale-a1003-watch.service: Main process exited, code=exited, status=19/n/a
+Oct 10 19:46:24 vps-6b513f64 systemd[61545]: borsuk-next1m-scale-a1003-watch.service: Failed with result 'exit-code'.
+Oct 10 19:46:24 vps-6b513f64 systemd[61545]: borsuk-next1m-scale-a1003-watch.service: Consumed 7.862s CPU time over 48.201s wall clock time, 75.8M memory peak.
