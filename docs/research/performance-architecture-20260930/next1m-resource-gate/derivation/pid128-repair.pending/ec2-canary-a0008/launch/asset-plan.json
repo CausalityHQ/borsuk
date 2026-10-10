@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+  "client_token": "borsuk-next1m-canary-a0008-d48c00e87c1e3f7f",
+  "watch_unit": "borsuk-next1m-canary-a0008-d48c00e87c1e3f7f.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0008-d48c00e87c1e3f7f/run",
+  "assets": "research/semantic-router/20261010/next1m-collector-smoke-source/73886fff/assets",
+  "launch_authority": false,
+  "prior_attempt": "a0007",
+  "prior_attempt_closed": true,
+  "purpose": "collector-only real systemd smoke; all native phase metadata synthetic; no ANN or data"
+}

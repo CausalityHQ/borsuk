@@ -1,0 +1,39 @@
+{
+  "status": "SOURCE_ONLY_ADAPTER_RUNTIME_UNVERIFIED",
+  "input_revision": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+  "inputs": {
+    "next1m-canary-worker.sh": "091e218b892bbabb2e9cbfea898c9777e5da0db33937ebb91a230cfcfeaae9c3",
+    "next1m-canary-watch.sh": "9ad7dc972d82143c376385a428244955404115c169ed30f5287af04cb7496185",
+    "next1m-canary-freeze.py": "b462f0b7a3e5a1ef13cba0c77849b1acc59de3db1e7e28cfd9f9df47362156b8",
+    "next1m-canary-launch-once.sh": "c68d2d9fb32e036121112ee958b118e61a995dbbd2ca1809fe0c8265fa6a7c3f",
+    "collector-smoke.sh": "de33ff52adee978a9e2b4aa7bb00289460e307f53d5842f4a0b6f92db2f88cf1",
+    "collect-native-chain-outer.sh": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477",
+    "observer-command.sh": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+  },
+  "outputs": {
+    "next1m-collector-worker.sh": {
+      "bytes": 14155,
+      "sha256": "fa5b30a938a57fc265b7c73d4cc8b4d1bac296f9051edaca65f068dc13c88141"
+    },
+    "next1m-collector-watch.sh": {
+      "bytes": 7385,
+      "sha256": "1b936ba5ec33aa18d818c9d11ab8f77e7b5cfb993d6608c3366684bb2401540e"
+    },
+    "next1m-collector-freeze.py": {
+      "bytes": 4455,
+      "sha256": "4ffc28d3ae7ab03f61c05f401d3a4ac2cb8cfeca13edebfaa3fcf347b5db127f"
+    },
+    "next1m-collector-launch-once.sh": {
+      "bytes": 4838,
+      "sha256": "ae3994a62b7f3d60fe843a74135b4a8d8ab90de1ecec4f7df0e1d7996ef0c369"
+    }
+  },
+  "new_controller_framework": false,
+  "ann_execution": false,
+  "native_binary_downloads": false,
+  "staging_timeout_seconds": 300,
+  "parent_runtime_seconds": 310,
+  "parent_timeout_stop_seconds": 10,
+  "launch_authority": false,
+  "performance_claim": false
+}

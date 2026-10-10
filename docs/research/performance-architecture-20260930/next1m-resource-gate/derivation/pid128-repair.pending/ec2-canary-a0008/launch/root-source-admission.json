@@ -1,0 +1,26 @@
+{
+  "schema": "borsuk-next1m-disposable-canary-root-source-admission-v1",
+  "status": "READY_DISPOSABLE_COLLECTOR_SMOKE",
+  "source_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "ann_measurement": false,
+  "total_cost_cap_usd": 0.6,
+  "quote_observed_epoch": 1791642445,
+  "quote_instance_type": "c7i.2xlarge",
+  "quote_usd_per_hour": "0.215100",
+  "quote_sha256": "42d68790be0b4b1c884b99e8ad1a66d2502dd48a97b05962c828a4eaec2eebbb",
+  "review_group": "fe86c3258f2a4710",
+  "both_original_reviews_reconciled": true,
+  "observed_platform_repair_commit": "73886fff6b1e7ddea0e5a548d997cfab939eab35",
+  "prior_attempt_closed": true,
+  "files": {
+    "next1m-canary-worker.sh": "fa5b30a938a57fc265b7c73d4cc8b4d1bac296f9051edaca65f068dc13c88141",
+    "next1m-canary-watch.sh": "1b936ba5ec33aa18d818c9d11ab8f77e7b5cfb993d6608c3366684bb2401540e",
+    "next1m-canary-launch-once.sh": "ae3994a62b7f3d60fe843a74135b4a8d8ab90de1ecec4f7df0e1d7996ef0c369",
+    "next1m-canary-freeze.py": "4ffc28d3ae7ab03f61c05f401d3a4ac2cb8cfeca13edebfaa3fcf347b5db127f",
+    "next1m-canary-request.pending.json": "c4a2279da28aee742057240ca2cbe44967a4ba7b02271adda010377b27eb285f",
+    "support-roster.json": "ee1581a2a621fa2d871c36b05628fa2832aef51fdeaf287f072f2ceb2cecca84",
+    "canary-execution-envelope.pending.json": "c524c3b45c4e8435ccadbc913a66d01397f743a92fc6dfaa8862f86f4690ae34"
+  }
+}

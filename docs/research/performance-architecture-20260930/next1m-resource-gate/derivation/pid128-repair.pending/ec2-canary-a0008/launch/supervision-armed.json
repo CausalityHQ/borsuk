@@ -1,0 +1,7 @@
+{
+  "schema": "borsuk-canary-root-supervision-armed-v1",
+  "instance_id": "i-0a070b07a5d215e62",
+  "invocation_id": "d0befd6cca2a4b69b0203efd0bc21481",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0008-d48c00e87c1e3f7f/run",
+  "cleanup_trap_installed": true
+}
