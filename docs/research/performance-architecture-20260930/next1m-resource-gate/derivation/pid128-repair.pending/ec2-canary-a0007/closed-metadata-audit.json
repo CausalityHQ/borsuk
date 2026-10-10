@@ -1,0 +1,36 @@
+{
+  "status": "COLLECTOR_NINE_CASES_AUTHENTICATED_OUTER_INVALID",
+  "source_commit": "70448857f8016cb3ed68029387c60eec9c45c3c2",
+  "instance_id": "i-07ecdbc6eb997bddc",
+  "archive_bytes": 26171,
+  "archive_sha256": "db787e6940506d396c3156b320c9fb0e7bf93893d4dab51d0cc8806e012a242a",
+  "sealed_regular_files": 291,
+  "completed_cases": [
+    "positive0",
+    "positive2",
+    "positive3",
+    "exit-disagreement",
+    "wrong-config",
+    "truncated-seal",
+    "replaced",
+    "populated",
+    "deadline"
+  ],
+  "original_exits": [
+    0,
+    0,
+    0
+  ],
+  "collector_live_cleanup_proved": true,
+  "terminated": true,
+  "volume_absent": true,
+  "all_phase_metadata_synthetic": true,
+  "ann_executed": false,
+  "performance_claim": false,
+  "full_native_chain_qualified": false,
+  "local_action": "closed metadata and opaque hash audit only; no fixture/native/runtime-validator execution",
+  "remaining": [
+    "exact-source real1M native gate and Q32 recall screen",
+    "fresh physical cold S3 measurements"
+  ]
+}

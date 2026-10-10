@@ -1,0 +1,174 @@
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-0645e3de9c96ffab4",
+            "OwnerId": "453182569524",
+            "Groups": [],
+            "Instances": [
+                {
+                    "Architecture": "x86_64",
+                    "BlockDeviceMappings": [
+                        {
+                            "DeviceName": "/dev/sda1",
+                            "Ebs": {
+                                "AttachTime": "2026-10-10T14:23:03+00:00",
+                                "DeleteOnTermination": true,
+                                "Status": "attaching",
+                                "VolumeId": "vol-028c54e44e23a220c",
+                                "EbsCardIndex": 0
+                            }
+                        }
+                    ],
+                    "ClientToken": "borsuk-next1m-canary-a0007-fa1b043c5a280fdb",
+                    "EbsOptimized": false,
+                    "EnaSupport": true,
+                    "Hypervisor": "xen",
+                    "IamInstanceProfile": {
+                        "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+                        "Id": "AIPAWTA6JHQ2J3ZONR2IU"
+                    },
+                    "InstanceLifecycle": "spot",
+                    "NetworkInterfaces": [
+                        {
+                            "Association": {
+                                "IpOwnerId": "amazon",
+                                "PublicDnsName": "ec2-18-159-149-18.eu-central-1.compute.amazonaws.com",
+                                "PublicIp": "18.159.149.18"
+                            },
+                            "Attachment": {
+                                "AttachTime": "2026-10-10T14:23:02+00:00",
+                                "AttachmentId": "eni-attach-0138cf894ac93f1ce",
+                                "DeleteOnTermination": true,
+                                "DeviceIndex": 0,
+                                "Status": "attaching",
+                                "NetworkCardIndex": 0
+                            },
+                            "Description": "",
+                            "Groups": [
+                                {
+                                    "GroupId": "sg-0b1fd3e4fbde4af0d",
+                                    "GroupName": "borsuk-bench-sg"
+                                }
+                            ],
+                            "Ipv6Addresses": [],
+                            "MacAddress": "02:ff:d2:95:a5:f7",
+                            "NetworkInterfaceId": "eni-04f5a38a33ce687ec",
+                            "OwnerId": "453182569524",
+                            "PrivateDnsName": "ip-172-31-17-113.eu-central-1.compute.internal",
+                            "PrivateIpAddress": "172.31.17.113",
+                            "PrivateIpAddresses": [
+                                {
+                                    "Association": {
+                                        "IpOwnerId": "amazon",
+                                        "PublicDnsName": "ec2-18-159-149-18.eu-central-1.compute.amazonaws.com",
+                                        "PublicIp": "18.159.149.18"
+                                    },
+                                    "Primary": true,
+                                    "PrivateDnsName": "ip-172-31-17-113.eu-central-1.compute.internal",
+                                    "PrivateIpAddress": "172.31.17.113"
+                                }
+                            ],
+                            "SourceDestCheck": true,
+                            "Status": "in-use",
+                            "SubnetId": "subnet-034528fbd6977848f",
+                            "VpcId": "vpc-02bed5aadbc3c0a2d",
+                            "InterfaceType": "interface",
+                            "Operator": {
+                                "Managed": false
+                            }
+                        }
+                    ],
+                    "RootDeviceName": "/dev/sda1",
+                    "RootDeviceType": "ebs",
+                    "SecurityGroups": [
+                        {
+                            "GroupId": "sg-0b1fd3e4fbde4af0d",
+                            "GroupName": "borsuk-bench-sg"
+                        }
+                    ],
+                    "SourceDestCheck": true,
+                    "SpotInstanceRequestId": "sir-h4y7myzj",
+                    "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": "borsuk-next1m-canary-a0007-fa1b043c5a280fdb"
+                        },
+                        {
+                            "Key": "Owner",
+                            "Value": "borsuk/prod-ready-v9"
+                        }
+                    ],
+                    "VirtualizationType": "hvm",
+                    "CpuOptions": {
+                        "CoreCount": 4,
+                        "ThreadsPerCore": 2
+                    },
+                    "CapacityReservationSpecification": {
+                        "CapacityReservationPreference": "open"
+                    },
+                    "HibernationOptions": {
+                        "Configured": false
+                    },
+                    "MetadataOptions": {
+                        "State": "pending",
+                        "HttpTokens": "required",
+                        "HttpPutResponseHopLimit": 2,
+                        "HttpEndpoint": "enabled",
+                        "HttpProtocolIpv6": "disabled",
+                        "InstanceMetadataTags": "disabled"
+                    },
+                    "EnclaveOptions": {
+                        "Enabled": false
+                    },
+                    "BootMode": "uefi-preferred",
+                    "PlatformDetails": "Linux/UNIX",
+                    "UsageOperation": "RunInstances",
+                    "UsageOperationUpdateTime": "2026-10-10T14:23:02+00:00",
+                    "PrivateDnsNameOptions": {
+                        "HostnameType": "ip-name",
+                        "EnableResourceNameDnsARecord": false,
+                        "EnableResourceNameDnsAAAARecord": false
+                    },
+                    "MaintenanceOptions": {
+                        "AutoRecovery": "default",
+                        "RebootMigration": "default"
+                    },
+                    "CurrentInstanceBootMode": "uefi",
+                    "NetworkPerformanceOptions": {
+                        "BandwidthWeighting": "default"
+                    },
+                    "Operator": {
+                        "Managed": false,
+                        "HiddenByDefault": false
+                    },
+                    "InstanceId": "i-07ecdbc6eb997bddc",
+                    "ImageId": "ami-0b8a830d6339a9758",
+                    "State": {
+                        "Code": 0,
+                        "Name": "pending"
+                    },
+                    "PrivateDnsName": "ip-172-31-17-113.eu-central-1.compute.internal",
+                    "PublicDnsName": "ec2-18-159-149-18.eu-central-1.compute.amazonaws.com",
+                    "StateTransitionReason": "",
+                    "AmiLaunchIndex": 0,
+                    "ProductCodes": [],
+                    "InstanceType": "c7i.2xlarge",
+                    "LaunchTime": "2026-10-10T14:23:02+00:00",
+                    "Placement": {
+                        "AvailabilityZoneId": "euc1-az2",
+                        "GroupName": "",
+                        "Tenancy": "default",
+                        "AvailabilityZone": "eu-central-1a"
+                    },
+                    "Monitoring": {
+                        "State": "disabled"
+                    },
+                    "SubnetId": "subnet-034528fbd6977848f",
+                    "VpcId": "vpc-02bed5aadbc3c0a2d",
+                    "PrivateIpAddress": "172.31.17.113",
+                    "PublicIpAddress": "18.159.149.18"
+                }
+            ]
+        }
+    ]
+}

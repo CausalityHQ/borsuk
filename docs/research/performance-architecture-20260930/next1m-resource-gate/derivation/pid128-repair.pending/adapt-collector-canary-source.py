@@ -22,9 +22,11 @@ new='/usr/bin/taskset -c 0 /usr/bin/timeout -k 10 300 /bin/bash "$support/collec
 assert worker.count(old)==1;worker=worker.replace(old,new)
 worker=worker.replace('RuntimeMaxSec=1510','RuntimeMaxSec=310').replace('SECONDS+1520','SECONDS+320').replace('+1690 <=','+490 <=')
 worker=worker.replace('/mnt/borsuk-pid-evidence/canary/result.json','/mnt/borsuk-pid-evidence/collector-smoke/result.json').replace('WRAPPER_CHECKS_VERIFIED','COLLECTOR_MECHANICS_VERIFIED').replace('WRAPPER_CANARY_ROOT_REPLAY_REQUIRED','COLLECTOR_SMOKE_ROOT_REPLAY_REQUIRED').replace('CLI_USAGE_ONLY_PENDING_ROOT_REPLAY','SYNTHETIC_COLLECTOR_ONLY_PENDING_ROOT_REPLAY').replace('native_cli_usage_only:true','native_cli_usage_only:false,synthetic_chain_metadata:true')
+assert worker.count('.[0].ann_run==false')==1
+worker=worker.replace('.[0].ann_run==false','.[0].ann_executed==false and .[0].synthetic_chain_metadata==true')
 watch=(D/'next1m-canary-watch.sh').read_text().replace('.native_cli_usage_only==true','.native_cli_usage_only==false and .synthetic_chain_metadata==true').replace('CLI_USAGE_ONLY_PENDING_ROOT_REPLAY','SYNTHETIC_COLLECTOR_ONLY_PENDING_ROOT_REPLAY')
 freeze=(D/'next1m-canary-freeze.py').read_text().replace("{'wrapper-canary.sh','run_native_scale_build_gate.sh','verify-closed.py'}","{'collector-smoke.sh','collect-native-chain-outer.sh','observer-command.sh'}").replace('READY_DISPOSABLE_SUPERVISOR_CANARY','READY_DISPOSABLE_COLLECTOR_SMOKE')
-launch=(D/'next1m-canary-launch-once.sh').read_text();assert launch.count('canary-a0004-')==1;launch=launch.replace('canary-a0004-','canary-a0007-')
+launch=(D/'next1m-canary-launch-once.sh').read_text();assert launch.count('canary-a0004-')==1;launch=launch.replace('canary-a0004-','canary-a0008-')
 # Pending adapter only; no launch/freeze/native fixture execution.
 outputs={}
 for name,body in [('next1m-collector-worker.sh',worker),('next1m-collector-watch.sh',watch),('next1m-collector-freeze.py',freeze),('next1m-collector-launch-once.sh',launch)]:
