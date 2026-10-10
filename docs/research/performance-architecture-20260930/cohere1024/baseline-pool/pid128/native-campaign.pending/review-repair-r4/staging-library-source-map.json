@@ -1,0 +1,231 @@
+{
+  "recipe_sha256": "40edcc412a842320f1e2abbaa4b743051da46d66c8df67fbf86afc9f028a87fe",
+  "library_sha256": "b2dc0740e5c643576fb6c18ef6630cefef9fc052c1a9e3e59310d78428f40c95",
+  "fragments": [
+    {
+      "name": "readonly constants",
+      "first_line": 24,
+      "last_line": 41,
+      "bytes": 2188,
+      "sha256": "24837d651c3a254675c30c445d278ec5a705bb3277c00590d81560eae930d510"
+    },
+    {
+      "name": "die",
+      "first_line": 20,
+      "last_line": 20,
+      "bytes": 52,
+      "sha256": "c6c77855afb5a2e59d8a38dba5c8bcbbf267a1d944877bc6c1bd683935ad0da5"
+    },
+    {
+      "name": "canonical",
+      "first_line": 46,
+      "last_line": 48,
+      "bytes": 120,
+      "sha256": "608557caa9c9006cde39a5c72f789dbec899a17f6b6d271d09e72dc1f07e6375"
+    },
+    {
+      "name": "new_path",
+      "first_line": 49,
+      "last_line": 52,
+      "bytes": 149,
+      "sha256": "6232db0c499014a27006d49a6da23aa3faab48d5fa832df5e4ba5876fa99d873"
+    },
+    {
+      "name": "sha_of",
+      "first_line": 53,
+      "last_line": 53,
+      "bytes": 86,
+      "sha256": "703c24d7faa0f621212f6a7adffaf65cdf1039a6bed6a9c22f25f49ca05995b7"
+    },
+    {
+      "name": "authenticate",
+      "first_line": 54,
+      "last_line": 62,
+      "bytes": 566,
+      "sha256": "d7d3e5c5a97b423f6584f8088653ec07e8c27388a43dbd377542b5666fe70dd8"
+    },
+    {
+      "name": "descriptor",
+      "first_line": 63,
+      "last_line": 63,
+      "bytes": 96,
+      "sha256": "3f8e24102cca87b259f83feade9137f64625f5f98997d1d95aff26d80a8e77d0"
+    },
+    {
+      "name": "small_json",
+      "first_line": 64,
+      "last_line": 70,
+      "bytes": 221,
+      "sha256": "99cd55c1ed710dd4c232d4b142251a53ae7149d27a390e951e6d7154f3d6d787"
+    },
+    {
+      "name": "one_object",
+      "first_line": 71,
+      "last_line": 78,
+      "bytes": 348,
+      "sha256": "7bdc8df64b669318d20fee3c7b4dd774300b595473d43c6ea028f57e521bdd78"
+    },
+    {
+      "name": "auth_art",
+      "first_line": 79,
+      "last_line": 83,
+      "bytes": 193,
+      "sha256": "a3b4d6f9904aebc7e78dbf85462bd7c83bbc135c4f86044e8189325353d5cf82"
+    },
+    {
+      "name": "manager",
+      "first_line": 102,
+      "last_line": 117,
+      "bytes": 930,
+      "sha256": "cefc4920b6777a8942b3c562ba8431445429ab86801608dc1f581cf2a168091d"
+    },
+    {
+      "name": "owned",
+      "first_line": 120,
+      "last_line": 128,
+      "bytes": 531,
+      "sha256": "5a83605ce56eb93b5062e44ce3d2e86775446be7c7591f315527b407fba73ff8"
+    },
+    {
+      "name": "drained",
+      "first_line": 129,
+      "last_line": 129,
+      "bytes": 95,
+      "sha256": "b9041dc80b7c4e79473910e0ed2db35a9038bbc2dde653851468fafdf027dcf1"
+    },
+    {
+      "name": "cleanup_owned",
+      "first_line": 130,
+      "last_line": 161,
+      "bytes": 1742,
+      "sha256": "c3640c1d3c5e51283fb872ccff017cc284ad65e1a094282c80517421cdba9281"
+    },
+    {
+      "name": "finish",
+      "first_line": 162,
+      "last_line": 188,
+      "bytes": 1791,
+      "sha256": "13b6c2264bbf1ece45cc325e546fc5afeb1784392402fd9f4d79ccd1875781e3"
+    },
+    {
+      "name": "snapshot",
+      "first_line": 196,
+      "last_line": 212,
+      "bytes": 802,
+      "sha256": "c56e6caad0c3876dfb4a61a72e7a73c846f36bbf50470744d809a2623b6e8b60"
+    },
+    {
+      "name": "check_limits",
+      "first_line": 213,
+      "last_line": 221,
+      "bytes": 619,
+      "sha256": "557f5efaadfd0c1336a9ea7f333dc37033b9527a18c45b552ed8686d7825628e"
+    },
+    {
+      "name": "check_events",
+      "first_line": 222,
+      "last_line": 232,
+      "bytes": 838,
+      "sha256": "964142338c5da5dc33684ac8083f8894cc9e8fcdbe9512ba22af2df60cccd8c8"
+    },
+    {
+      "name": "mono_cs",
+      "first_line": 285,
+      "last_line": 285,
+      "bytes": 87,
+      "sha256": "93baf2adef3c655c9b0fb34effc52b45030a2eda7a98839b0e9863967aad1ff8"
+    },
+    {
+      "name": "observe",
+      "first_line": 286,
+      "last_line": 317,
+      "bytes": 1850,
+      "sha256": "98a023bdc41b4619c6d0b111fda59df22ca418c638af7b2d4c0023f2f03ebb20"
+    },
+    {
+      "name": "run_phase",
+      "first_line": 318,
+      "last_line": 444,
+      "bytes": 9144,
+      "sha256": "50978890e308bd5d64d7055f2245310b47c3b0228ac33210028b14bec6a07e8c"
+    },
+    {
+      "name": "cfg",
+      "first_line": 463,
+      "last_line": 463,
+      "bytes": 38,
+      "sha256": "53d2ed5a022ff37723f69aa26f6ffd3b020b9abe706ef64fb1d05b0c1e88af40"
+    },
+    {
+      "name": "scratch_snapshot",
+      "first_line": 531,
+      "last_line": 545,
+      "bytes": 1271,
+      "sha256": "a049d46bd830a99921edb01b452b732673cc0da0019a33bcd7d6ed178315756c"
+    },
+    {
+      "name": "etag_of",
+      "first_line": 563,
+      "last_line": 570,
+      "bytes": 398,
+      "sha256": "3d41bbf62040837bc7e9c5dc804024a9aedac8c016a5bd808431be739ad70d47"
+    },
+    {
+      "name": "validate_result",
+      "first_line": 578,
+      "last_line": 653,
+      "bytes": 6649,
+      "sha256": "cf8c779ba4ea0e2532a2b1a7f84e76e9e1a38b1194b3326ac6e7f344d60b8904"
+    },
+    {
+      "name": "immutable_snapshot",
+      "first_line": 655,
+      "last_line": 664,
+      "bytes": 529,
+      "sha256": "77903f9f648c60716d8406eff0c5a33cba26ab0b3da6b0d0780e6b037703582b"
+    },
+    {
+      "name": "verify_state",
+      "first_line": 665,
+      "last_line": 673,
+      "bytes": 559,
+      "sha256": "41666fdd112776b16591a25596e0ae63efbc5b736bbc8f2bdf74b09378041748"
+    },
+    {
+      "name": "authenticate_admission_closure",
+      "first_line": 675,
+      "last_line": 773,
+      "bytes": 7686,
+      "sha256": "3b5a7df388187279771044004921e9f6d94d0db73671068379fbe0b5bd3ddb40"
+    },
+    {
+      "name": "INNER",
+      "first_line": 235,
+      "last_line": 243,
+      "bytes": 260,
+      "sha256": "2d441135ad364bbe6697f09717f1aa00ff5adba3cda97302a6112ccc6f7dc21c"
+    },
+    {
+      "name": "OUTER",
+      "first_line": 244,
+      "last_line": 252,
+      "bytes": 262,
+      "sha256": "2ad9fef7c7a1aad3858ac859b8d006b41e875bbb3f19a68619cecdb676c712be"
+    },
+    {
+      "name": "PAYLOAD",
+      "first_line": 253,
+      "last_line": 284,
+      "bytes": 1477,
+      "sha256": "d1c00a1567d5c346d858c1fe3510e6e2665483445d747fce689c05d5abbde0fa"
+    },
+    {
+      "name": "JQ_F32",
+      "first_line": 548,
+      "last_line": 562,
+      "bytes": 655,
+      "sha256": "635f84961ee650ca379b9c8117710c47f5ea74336d17c16a380c270a8d75dd71"
+    }
+  ],
+  "executed": false
+}
