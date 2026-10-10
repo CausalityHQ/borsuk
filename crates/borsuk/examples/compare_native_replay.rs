@@ -12,6 +12,8 @@
 //! Evidence CLI: --source-utilization CONFIG CONFIG_SHA256 NEW_REPORT_JSON.
 //! Scored completion is query-dependent: this is a hindsight byte bound only.
 //! Direct closure SQ8 costs are counterfactual; no scores or recall are evaluated.
+//! Header binding: --bind-completed-scale AUTHORITY AUTHORITY_SHA NEW_CONFIG.
+//! Independently pins v7 headers for --completed-scale; does not establish closure.
 #![recursion_limit = "256"]
 
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
@@ -1899,23 +1901,779 @@ fn quantiles(samples: &[u64]) -> Result<(u64, [u64; 4])> {
 fn read_config<T: DeserializeOwned>(config_path: &Path, config_sha: &str) -> Result<(T, u64)> {
     require(valid_sha(config_sha), "reduction config SHA256")?;
     require(config_path.to_str().is_some(), "config path must be UTF-8")?;
-    let mut file = open_input(config_path)?;
-    let original = file_identity(&file)?;
+    read_config_file(
+        &open_input(config_path)?,
+        config_path,
+        config_sha,
+        CONFIG_CAP,
+    )
+}
+
+fn read_config_file<T: DeserializeOwned>(
+    mut file: &File,
+    config_path: &Path,
+    config_sha: &str,
+    cap: u64,
+) -> Result<(T, u64)> {
+    require(valid_sha(config_sha), "reduction config SHA256")?;
+    require(config_path.to_str().is_some(), "config path must be UTF-8")?;
+    let original = file_identity(file)?;
     require(
-        original.len > 0 && original.len <= CONFIG_CAP,
+        original.len > 0 && original.len <= cap,
         "small reduction config",
     )?;
     let mut body = Vec::with_capacity(original.len as usize);
-    Read::take(&mut file, CONFIG_CAP + 1).read_to_end(&mut body)?;
+    Read::take(&mut file, cap + 1).read_to_end(&mut body)?;
     require(
         body.len() as u64 == original.len
-            && file_identity(&file)? == original
+            && file_identity(file)? == original
             && file_identity(&open_input(config_path)?)? == original
             && format!("{:x}", Sha256::digest(&body)) == config_sha,
         "config SHA/length/identity",
     )?;
     let UniqueJson(value) = serde_json::from_slice(&body)?;
     Ok((serde_json::from_value(value)?, original.len))
+}
+
+const HEADER_AUTHORITY_SCHEMA: &str = "borsuk-completed-header-authority-v1";
+const HEADER_JSON_CAP: u64 = 65_536;
+const HEADER_RESULT_CAP: u64 = 32 * 1024 * 1024;
+const BASELINE_BINARY_SHA: &str =
+    "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3";
+const RESERVED_QUERIES_SHA: &str =
+    "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e";
+// Exact include_bytes identities at c3e52c8; executable provenance is an external gate.
+const BASELINE_HEADER_SOURCES: [(&str, &str); 7] = [
+    (
+        "runner_source_sha256",
+        "d5e593e5f8e2aa02697b366cc3bcd8e6fa4160071ea0e2ac337063f9ff0023c4",
+    ),
+    (
+        "generation_source_sha256",
+        "6acb7cdbb23d790aee8bfbcba8924ae09f0c7c7738e87ca2b3e40006fd0e3f38",
+    ),
+    (
+        "router_source_sha256",
+        "2961d9295d49e217e4b8c24ef734b09f079fa112306e65655962cebba17c7ae5",
+    ),
+    (
+        "codec_source_sha256",
+        "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+    ),
+    (
+        "source_plane_source_sha256",
+        "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+    ),
+    (
+        "sq8_range_source_sha256",
+        "3f6407664d5f2c1be817e4b32e6a9dce8d4bf8e66ca455e237d0e7b0716ad711",
+    ),
+    (
+        "returned_source_sha256",
+        "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+    ),
+];
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HeaderAuthority {
+    schema: String,
+    config: CompletedInput,
+    result: CompletedInput,
+    cohort: CompletedInput,
+    binary_sha256: String,
+    sources: Value,
+}
+
+fn header_path(path: &Path) -> Result<()> {
+    require(
+        path.is_absolute() && path.to_str().is_some() && path.as_os_str().len() <= 4096,
+        "absolute bounded UTF-8 header path",
+    )
+}
+
+fn header_file(path: &Path) -> Result<File> {
+    header_path(path)?;
+    let file = open_input(path)?;
+    require(file.metadata()?.nlink() == 1, "single-link header artifact")?;
+    file_identity(&file)?;
+    Ok(file)
+}
+
+fn header_pin(pin: &CompletedInput, cap: u64) -> Result<()> {
+    header_path(&pin.path)?;
+    require(
+        pin.bytes > 0 && pin.bytes <= cap && valid_sha(&pin.sha256),
+        "bounded header artifact pin",
+    )
+}
+
+fn header_json(pin: &CompletedInput) -> Result<Value> {
+    header_pin(pin, HEADER_JSON_CAP)?;
+    let file = header_file(&pin.path)?;
+    let original = file_identity(&file)?;
+    require(original.len == pin.bytes, "header JSON length")?;
+    let (value, _) = read_config_file(&file, &pin.path, &pin.sha256, HEADER_JSON_CAP)?;
+    recheck_header_file(&file, &pin.path, &original)?;
+    Ok(value)
+}
+
+fn recheck_header_file(file: &File, path: &Path, original: &FileIdentity) -> Result<()> {
+    require(
+        file.metadata()?.nlink() == 1
+            && file_identity(file)? == *original
+            && file_identity(&header_file(path)?)? == *original,
+        "header artifact mutation/path identity",
+    )
+}
+
+fn authenticated_headers(pin: &CompletedInput) -> Result<[Value; 2]> {
+    header_pin(pin, HEADER_RESULT_CAP)?;
+    let mut file = header_file(&pin.path)?;
+    let original = file_identity(&file)?;
+    require(original.len == pin.bytes, "header result length")?;
+    let mut digest = Sha256::new();
+    let mut total = 0_u64;
+    let mut headers = [Vec::new(), Vec::new()];
+    let mut row = 0;
+    let mut block = [0_u8; 8192];
+    loop {
+        let n = file.read(&mut block)?;
+        if n == 0 {
+            break;
+        }
+        total = plus(total, n as u64)?;
+        require(total <= pin.bytes, "header result growth")?;
+        digest.update(&block[..n]);
+        for &byte in &block[..n] {
+            if row == 2 {
+                break;
+            }
+            if byte == b'\n' {
+                require(!headers[row].is_empty(), "nonempty native header")?;
+                row += 1;
+            } else {
+                require(
+                    headers[row].len() < HEADER_JSON_CAP as usize,
+                    "native header cap",
+                )?;
+                headers[row].push(byte);
+            }
+        }
+    }
+    require(
+        total == pin.bytes && format!("{:x}", digest.finalize()) == pin.sha256,
+        "header result whole-body SHA/EOF",
+    )?;
+    recheck_header_file(&file, &pin.path, &original)?;
+    require(row == 2, "two newline-terminated native headers")?;
+    // No header is parsed or compared until the entire closed artifact authenticates.
+    let UniqueJson(identity) = serde_json::from_slice(&headers[0])?;
+    let UniqueJson(inputs) = serde_json::from_slice(&headers[1])?;
+    Ok([identity, inputs])
+}
+
+fn expected_scale_headers(
+    a: &HeaderAuthority,
+    mut c: Value,
+    receipt: &Value,
+) -> Result<[Value; 2]> {
+    require(
+        a.schema == HEADER_AUTHORITY_SCHEMA && a.binary_sha256 == BASELINE_BINARY_SHA,
+        "original baseline header authority/binary",
+    )?;
+    require(
+        a.sources
+            .as_object()
+            .is_some_and(|s| s.len() == BASELINE_HEADER_SOURCES.len())
+            && BASELINE_HEADER_SOURCES
+                .iter()
+                .all(|(name, sha)| a.sources[*name] == *sha),
+        "exact baseline component source authority",
+    )?;
+    let config = c.as_object_mut().ok_or("original native config object")?;
+    // The original native Config defaults only this field.
+    config.entry("fetch_parallelism").or_insert(json!(16));
+    fields(
+        &c,
+        "schema dataset revision metric tie_rule corpus_intervals reserved_query_interval cohort_receipt derivation_receipt producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 scratch_parent requests truth native_source max_memory_bytes fetch_parallelism serving execution",
+    )?;
+    require(
+        c["schema"] == "borsuk-cohere-native-baseline-config-v7"
+            && c["rows"] == 1_000_000
+            && c["dimensions"] == 1024
+            && c["k"] == 10
+            && c["profile"] == "scale1m"
+            && matches!(c["count"].as_u64(), Some(32 | 1000))
+            && c["corpus_intervals"]
+                == json!([{"start":0,"end":100_000},{"start":101_000,"end":1_001_000}])
+            && c["reserved_query_interval"] == json!({"start":100_000,"end":101_000})
+            && receipt["reserved_queries_sha256"] == RESERVED_QUERIES_SHA,
+        "frozen scale geometry/reserved query seal",
+    )?;
+    header_path(Path::new(
+        c["scratch_parent"].as_str().ok_or("scratch parent")?,
+    ))?;
+    for role in ["cohort_receipt", "derivation_receipt", "requests", "truth"] {
+        let pin: CompletedInput = serde_json::from_value(c[role].clone())?;
+        header_pin(
+            &pin,
+            if matches!(role, "requests" | "truth") {
+                4_096_000
+            } else {
+                HEADER_JSON_CAP
+            },
+        )?;
+    }
+    require(
+        c["cohort_receipt"]["bytes"] == a.cohort.bytes
+            && c["cohort_receipt"]["sha256"] == a.cohort.sha256
+            && c["requests"]["path"] != c["truth"]["path"],
+        "original cohort binding/distinct request and truth paths",
+    )?;
+    fields(
+        &c["native_source"],
+        "source_sha256 sq8_sha256 source_order_sha256",
+    )?;
+    let count = c["count"].as_u64().ok_or("native count")? as usize;
+    require(
+        receipt["schema"] == "borsuk-cohere-native-cohort-receipt-v3"
+            && receipt["status"] == "COMPLETE"
+            && receipt["dataset"] == c["dataset"]
+            && receipt["revision"] == c["revision"]
+            && receipt["geometry"]
+                == json!({"corpus_rows":1_000_000,"query_rows":count,
+                "dimensions":1024,"k":10,"corpus_intervals":c["corpus_intervals"],
+                "reserved_query_interval":c["reserved_query_interval"],
+                "query_source_ordinals":[100_000,100_000+count]}),
+        "authenticated original cohort geometry",
+    )?;
+    let outputs = receipt["outputs"].as_array().ok_or("cohort output seals")?;
+    for (name, bytes, sha) in [
+        ("corpus.f32", 4_096_000_000_u64, None),
+        (
+            "queries.f32",
+            count as u64 * 4096,
+            c["requests"]["sha256"].as_str(),
+        ),
+        (
+            "truth.u64",
+            count as u64 * 80,
+            c["truth"]["sha256"].as_str(),
+        ),
+    ] {
+        let mut found = outputs.iter().filter(|v| v["name"] == name);
+        let seal = found.next().ok_or("missing original cohort output seal")?;
+        require(
+            found.next().is_none()
+                && seal["bytes"] == bytes
+                && seal["sha256"].as_str().is_some_and(valid_sha)
+                && sha.is_none_or(|sha| seal["sha256"] == sha),
+            "unique cohort output geometry/SHA",
+        )?;
+    }
+    // Literal fields mirror check_cohere_native_baseline.rs at c3e52c8, not the result.
+    let mut identity = json!({"schema":"borsuk-cohere-native-baseline-result-v7","phase":"identity",
+        "config_sha256":a.config.sha256,"binary_sha256":a.binary_sha256,
+        "fetch_parallelism":c["fetch_parallelism"],"serving":c["serving"],"execution":c["execution"],
+        "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
+        "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "s3_credential_source":"imds_instance_role_only",
+        "native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
+        "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
+        "external_gate_required":true,"truth_opened":false});
+    for (name, sha) in BASELINE_HEADER_SOURCES {
+        identity[name] = json!(sha);
+    }
+    let mut bound = json!({"phase":"bound_inputs","source_cache":"off","truth_opened":false,
+        "credential_source":if c["backend"]["kind"] == "s3" { json!("imds_instance_role_only") } else { Value::Null },
+        "reserved_queries_sha256":receipt["reserved_queries_sha256"],
+        "cohort_receipt_sha256":c["cohort_receipt"]["sha256"],
+        "derivation_receipt_sha256":c["derivation_receipt"]["sha256"],
+        "selected_count":scale_ordinals(&c, count)?.len()});
+    for name in "dataset revision fetch_parallelism serving metric tie_rule rows dimensions count k corpus_source_first query_source_first profile backend generation_prefix generation_root_sha256 corpus_intervals reserved_query_interval producer_authority max_memory_bytes execution".split_whitespace() {
+        bound[name] = c[name].clone();
+    }
+    for role in ["requests", "truth"] {
+        for name in ["bytes", "sha256"] {
+            bound[format!("{role}_{name}")] = c[role][name].clone();
+        }
+    }
+    for (dest, source) in [
+        ("native_source_sha256", "source_sha256"),
+        ("native_sq8_sha256", "sq8_sha256"),
+        ("native_order_sha256", "source_order_sha256"),
+    ] {
+        bound[dest] = c["native_source"][source].clone();
+    }
+    validate_scale_row(&serde_json::to_vec(&identity)?, "identity")?;
+    validate_scale_row(&serde_json::to_vec(&bound)?, "bound_inputs")?;
+    validate_scale_inputs(&serde_json::from_value(bound.clone())?, &bound)?;
+    Ok([identity, bound])
+}
+
+fn bind_completed_scale(authority_path: &Path, authority_sha: &str) -> Result<Value> {
+    let file = header_file(authority_path)?;
+    let original = file_identity(&file)?;
+    let (a, _): (HeaderAuthority, _) =
+        read_config_file(&file, authority_path, authority_sha, HEADER_JSON_CAP)?;
+    recheck_header_file(&file, authority_path, &original)?;
+    let c = header_json(&a.config)?;
+    let receipt = header_json(&a.cohort)?;
+    let [identity, bound] = expected_scale_headers(&a, c, &receipt)?;
+    require(
+        authenticated_headers(&a.result)? == [identity.clone(), bound.clone()],
+        "native headers differ from independent authority",
+    )?;
+    let value = json!({"schema":SCALE_CONFIG_SCHEMA,
+        "input":{"path":a.result.path,"bytes":a.result.bytes,"sha256":a.result.sha256},
+        "expected_identity":identity,"expected_bound_inputs":bound});
+    require(
+        (serde_json::to_vec(&value)?.len() as u64) < CONFIG_CAP,
+        "completed config cap",
+    )?;
+    Ok(value)
+}
+
+#[cfg(test)]
+mod completed_header_binding_tests {
+    use super::*;
+
+    fn sha(body: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(body))
+    }
+
+    fn put(path: &Path, body: &[u8]) -> Value {
+        std::fs::write(path, body).unwrap();
+        json!({"path":path,"bytes":body.len(),"sha256":sha(body)})
+    }
+
+    fn put_json(path: &Path, value: &Value) -> Value {
+        put(path, &serde_json::to_vec(value).unwrap())
+    }
+
+    fn bind(dir: &Path, authority: &Value) -> Result<Value> {
+        let path = dir.join("authority.json");
+        let pin = put_json(&path, authority);
+        bind_completed_scale(&path, pin["sha256"].as_str().unwrap())
+    }
+
+    fn result_body(rows: &[Value; 2]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for row in rows {
+            serde_json::to_writer(&mut body, row).unwrap();
+            body.push(b'\n');
+        }
+        // Binder authenticates these bytes; only the separate reducer interprets them.
+        body.extend_from_slice(b"query/seal/terminal validation belongs to --completed-scale\n");
+        body
+    }
+
+    fn fixture(dir: &Path, count: usize, s3: bool) -> (Value, Value, Value, [Value; 2]) {
+        let requests = if count == 1000 {
+            RESERVED_QUERIES_SHA.to_owned()
+        } else {
+            "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667".into()
+        };
+        let truth = "b".repeat(64);
+        let intervals = json!([{"start":0,"end":100_000},{"start":101_000,"end":1_001_000}]);
+        let reserved = json!({"start":100_000,"end":101_000});
+        let execution = if count == 32 {
+            json!({"mode":"full"})
+        } else {
+            json!({"mode":"diagnostic_panel","ordinals":(0..32).collect::<Vec<_>>(),"trace":false})
+        };
+        let backend = if s3 {
+            json!({"kind":"s3","bucket":"borsuk-test","region":"eu-central-1",
+                "physical_prefix":"retained","sq8_object_key":format!("generation/objects/{}", "e".repeat(64)),"sq8_etag":"\"pinned-etag\""})
+        } else {
+            json!({"kind":"local","store_root":"/original/store"})
+        };
+        let producer = json!({"source_commit":"1".repeat(40),"executable_sha256":"2".repeat(64),
+            "producer_source_sha256":"3".repeat(64),"sq8_source_sha256":"4".repeat(64),"source_order_source_sha256":"5".repeat(64)});
+        let receipt = json!({"schema":"borsuk-cohere-native-cohort-receipt-v3","status":"COMPLETE",
+            "dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","reserved_queries_sha256":RESERVED_QUERIES_SHA,
+            "geometry":{"corpus_rows":1_000_000,"query_rows":count,"dimensions":1024,"k":10,
+                "corpus_intervals":intervals,"reserved_query_interval":reserved,"query_source_ordinals":[100_000,100_000+count]},
+            "outputs":[{"name":"corpus.f32","bytes":4_096_000_000_u64,"sha256":"c".repeat(64)},
+                {"name":"queries.f32","bytes":count*4096,"sha256":requests},
+                {"name":"truth.u64","bytes":count*80,"sha256":truth}]});
+        let cohort = put_json(&dir.join("cohort.json"), &receipt);
+        let mut original_cohort = cohort.clone();
+        original_cohort["path"] = json!("/original/cohort.json");
+        let config = json!({"schema":"borsuk-cohere-native-baseline-config-v7",
+            "dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","metric":"cosine","tie_rule":"corpus_ordinal_ascending",
+            "rows":1_000_000,"dimensions":1024,"count":count,"k":10,"corpus_source_first":0,"query_source_first":100_000,
+            "profile":"scale1m","backend":backend,"generation_prefix":"generation","generation_root_sha256":"a".repeat(64),
+            "scratch_parent":"/original/scratch","requests":{"path":"/original/queries.f32","bytes":count*4096,"sha256":requests},
+            "truth":{"path":"/original/truth.u64","bytes":count*80,"sha256":truth},
+            "native_source":{"source_sha256":"d".repeat(64),"sq8_sha256":"e".repeat(64),"source_order_sha256":"f".repeat(64)},
+            "corpus_intervals":intervals,"reserved_query_interval":reserved,"cohort_receipt":original_cohort,
+            "derivation_receipt":{"path":"/original/derivation.json","bytes":4096,"sha256":"6".repeat(64)},
+            "producer_authority":producer,"max_memory_bytes":536_870_912,"fetch_parallelism":16,
+            "serving":{"mode":"baseline"},"execution":execution});
+        let config_pin = put_json(&dir.join("config.json"), &config);
+        let sources: serde_json::Map<String, Value> = BASELINE_HEADER_SOURCES
+            .iter()
+            .map(|(key, value)| (key.to_string(), json!(value)))
+            .collect();
+        // Independent full native-emission golden: never call expected_scale_headers here.
+        let mut identity = json!({"schema":"borsuk-cohere-native-baseline-result-v7","phase":"identity",
+            "config_sha256":config_pin["sha256"],"binary_sha256":BASELINE_BINARY_SHA,
+            "fetch_parallelism":16,"serving":{"mode":"baseline"},"execution":execution,
+            "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
+            "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
+            "s3_credential_source":"imds_instance_role_only",
+            "native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
+            "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
+            "external_gate_required":true,"truth_opened":false});
+        identity.as_object_mut().unwrap().extend(sources.clone());
+        let bound = json!({"phase":"bound_inputs","dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","metric":"cosine","tie_rule":"corpus_ordinal_ascending",
+            "rows":1_000_000,"dimensions":1024,"count":count,"k":10,"corpus_source_first":0,"query_source_first":100_000,
+            "profile":"scale1m","backend":backend,"generation_prefix":"generation","generation_root_sha256":"a".repeat(64),
+            "credential_source":if s3 { json!("imds_instance_role_only") } else { Value::Null },
+            "requests_bytes":count*4096,"requests_sha256":requests,"truth_bytes":count*80,"truth_sha256":truth,
+            "native_source_sha256":"d".repeat(64),"native_sq8_sha256":"e".repeat(64),"native_order_sha256":"f".repeat(64),
+            "corpus_intervals":intervals,"reserved_query_interval":reserved,"reserved_queries_sha256":RESERVED_QUERIES_SHA,
+            "cohort_receipt_sha256":cohort["sha256"],"derivation_receipt_sha256":"6".repeat(64),"producer_authority":producer,
+            "max_memory_bytes":536_870_912,"fetch_parallelism":16,"serving":{"mode":"baseline"},"source_cache":"off",
+            "execution":execution,"selected_count":32,"truth_opened":false});
+        let headers = [identity, bound];
+        let result = put(&dir.join("result.jsonl"), &result_body(&headers));
+        (
+            json!({"schema":HEADER_AUTHORITY_SCHEMA,"config":config_pin,"result":result,
+            "cohort":cohort,"binary_sha256":BASELINE_BINARY_SHA,"sources":sources}),
+            config,
+            receipt,
+            headers,
+        )
+    }
+
+    #[test]
+    fn bind_completed_scale_independent_headers() {
+        for (count, s3) in [(32, false), (1000, false), (1000, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let (a, _, _, expected) = fixture(dir.path(), count, s3);
+            let value = bind(dir.path(), &a).unwrap();
+            let config: CompletedConfig = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(config.schema, SCALE_CONFIG_SCHEMA);
+            assert_eq!(config.expected_identity, expected[0]);
+            assert_eq!(config.expected_bound_inputs, expected[1]);
+            assert_eq!(value.as_object().unwrap().len(), 4);
+            assert!(value.get("status").is_none());
+            let output = dir.path().join("completed.json");
+            assert!(execute_report(&output, SCALE_CONFIG_SCHEMA, || Ok(value.clone())).unwrap());
+            let body = std::fs::read(&output).unwrap();
+            assert!(body.len() <= CONFIG_CAP as usize);
+            let (roundtrip, _): (CompletedConfig, _) = read_config(&output, &sha(&body)).unwrap();
+            assert_eq!(roundtrip.expected_bound_inputs, expected[1]);
+            assert!(
+                execute_report(&output, SCALE_CONFIG_SCHEMA, || panic!("occupied output")).is_err()
+            );
+            assert_eq!(std::fs::read(output).unwrap(), body);
+        }
+    }
+
+    #[test]
+    fn bind_completed_scale_native_default_and_full_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut a, mut c, _, mut rows) = fixture(dir.path(), 1000, false);
+        c.as_object_mut().unwrap().remove("fetch_parallelism");
+        c["execution"] = json!({"mode":"full"});
+        a["config"] = put_json(&dir.path().join("config.json"), &c);
+        rows[0]["config_sha256"] = a["config"]["sha256"].clone();
+        for row in &mut rows {
+            row["execution"] = json!({"mode":"full"});
+        }
+        rows[1]["selected_count"] = json!(1000);
+        a["result"] = put(&dir.path().join("result.jsonl"), &result_body(&rows));
+        let value = bind(dir.path(), &a).unwrap();
+        assert_eq!(value["expected_identity"], rows[0]);
+        assert_eq!(value["expected_bound_inputs"], rows[1]);
+        c["fetch_parallelism"] = json!(32);
+        a["config"] = put_json(&dir.path().join("config.json"), &c);
+        rows[0]["config_sha256"] = a["config"]["sha256"].clone();
+        for row in &mut rows {
+            row["fetch_parallelism"] = json!(32);
+        }
+        a["result"] = put(&dir.path().join("result.jsonl"), &result_body(&rows));
+        assert_eq!(
+            bind(dir.path(), &a).unwrap()["expected_bound_inputs"],
+            rows[1]
+        );
+    }
+
+    #[test]
+    fn bind_completed_scale_rejects_pins_geometry_and_cohort() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, c, receipt, _) = fixture(dir.path(), 1000, true);
+        let authority_path = dir.path().join("authority.json");
+        put_json(&authority_path, &a);
+        assert!(bind_completed_scale(&authority_path, &"0".repeat(64)).is_err());
+        for (name, _) in BASELINE_HEADER_SOURCES {
+            let mut bad = a.clone();
+            bad["sources"][name] = json!("0".repeat(64));
+            assert!(
+                bind(dir.path(), &bad)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("component source")
+            );
+        }
+        for pointer in [
+            "/schema",
+            "/binary_sha256",
+            "/config/sha256",
+            "/cohort/sha256",
+            "/result/sha256",
+        ] {
+            let mut bad = a.clone();
+            *bad.pointer_mut(pointer).unwrap() = json!("0".repeat(64));
+            assert!(bind(dir.path(), &bad).is_err(), "{pointer}");
+        }
+        for (pointer, value) in [
+            ("/rows", json!(100_000)),
+            ("/dimensions", json!(true)),
+            ("/count", json!(1000.0)),
+            ("/k", json!(false)),
+            ("/profile", json!("native100k")),
+            ("/fetch_parallelism", json!(true)),
+            ("/max_memory_bytes", json!(1)),
+            ("/serving/mode", json!("direct_closure")),
+            ("/execution/trace", json!(0)),
+            ("/execution/ordinals/0", json!(false)),
+            ("/corpus_intervals/1/start", json!(100_000)),
+            ("/backend/kind", json!("unknown")),
+            ("/producer_authority/executable_sha256", json!(false)),
+            ("/native_source/source_sha256", json!("bad")),
+            ("/cohort_receipt/sha256", json!("0".repeat(64))),
+            ("/cohort_receipt/bytes", json!(true)),
+            ("/requests/bytes", json!(true)),
+            ("/requests/sha256", json!("0".repeat(64))),
+        ] {
+            let mut bad_c = c.clone();
+            *bad_c.pointer_mut(pointer).unwrap() = value;
+            let mut bad = a.clone();
+            bad["config"] = put_json(&dir.path().join("bad-config.json"), &bad_c);
+            let error = bind(dir.path(), &bad).unwrap_err().to_string();
+            assert!(
+                !error.contains("differ from independent authority"),
+                "{pointer}: {error}"
+            );
+        }
+        for (pointer, value) in [
+            ("/schema", json!("wrong")),
+            ("/status", json!("INCOMPLETE")),
+            ("/reserved_queries_sha256", json!("0".repeat(64))),
+            ("/geometry/query_rows", json!(32)),
+            ("/geometry/k", json!(true)),
+            ("/outputs/1/sha256", json!("0".repeat(64))),
+            ("/outputs/2/bytes", json!(true)),
+            ("/outputs/0/bytes", json!(1)),
+        ] {
+            let mut bad_receipt = receipt.clone();
+            *bad_receipt.pointer_mut(pointer).unwrap() = value;
+            let mut bad = a.clone();
+            bad["cohort"] = put_json(&dir.path().join("bad-cohort.json"), &bad_receipt);
+            let mut bad_c = c.clone();
+            bad_c["cohort_receipt"] = bad["cohort"].clone();
+            bad["config"] = put_json(&dir.path().join("bad-config.json"), &bad_c);
+            let error = bind(dir.path(), &bad).unwrap_err().to_string();
+            assert!(
+                !error.contains("differ from independent authority"),
+                "{pointer}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_completed_scale_rejects_header_value_type_unknown_and_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, c, receipt, rows) = fixture(dir.path(), 32, false);
+        for (index, pointer, value) in [
+            (0, "/phase", json!("bound_inputs")),
+            (0, "/truth_opened", json!(0)),
+            (0, "/fetch_parallelism", json!(16.0)),
+            (0, "/external_gate_required", json!(1)),
+            (1, "/phase", json!("identity")),
+            (1, "/rows", json!(true)),
+            (1, "/backend/store_root", json!("/changed/store")),
+            (1, "/selected_count", json!(31)),
+        ] {
+            let mut bad_rows = rows.clone();
+            *bad_rows[index].pointer_mut(pointer).unwrap() = value;
+            let mut bad = a.clone();
+            bad["result"] = put(&dir.path().join("bad-result"), &result_body(&bad_rows));
+            assert!(
+                bind(dir.path(), &bad)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("differ from independent authority"),
+                "{pointer}"
+            );
+        }
+        for pointer in ["", "/backend", "/execution", "/producer_authority"] {
+            let mut bad_rows = rows.clone();
+            bad_rows[1].pointer_mut(pointer).unwrap()["unexpected"] = json!(true);
+            let mut bad = a.clone();
+            bad["result"] = put(&dir.path().join("bad-result"), &result_body(&bad_rows));
+            assert!(bind(dir.path(), &bad).is_err());
+        }
+        for role in ["authority", "config", "cohort", "result"] {
+            let original = match role {
+                "authority" => serde_json::to_vec(&a).unwrap(),
+                "config" => serde_json::to_vec(&c).unwrap(),
+                "cohort" => serde_json::to_vec(&receipt).unwrap(),
+                _ => result_body(&rows),
+            };
+            let original = String::from_utf8(original).unwrap();
+            let duplicated = original.replacen('{', "{\"duplicate\":0,\"duplicate\":1,", 1);
+            let mut bad = a.clone();
+            let path = dir.path().join("duplicate.json");
+            let pin = put(&path, duplicated.as_bytes());
+            let error = if role == "authority" {
+                bind_completed_scale(&path, pin["sha256"].as_str().unwrap()).unwrap_err()
+            } else {
+                bad[role] = pin;
+                bind(dir.path(), &bad).unwrap_err()
+            };
+            assert!(error.to_string().contains("duplicate JSON key"));
+        }
+        for pointer in ["", "/sources", "/config", "/cohort", "/result"] {
+            let mut bad = a.clone();
+            bad.pointer_mut(pointer).unwrap()["unexpected"] = json!(true);
+            assert!(bind(dir.path(), &bad).is_err(), "{pointer}");
+        }
+        for pointer in [
+            "",
+            "/backend",
+            "/execution",
+            "/serving",
+            "/requests",
+            "/native_source",
+        ] {
+            let mut bad_c = c.clone();
+            bad_c.pointer_mut(pointer).unwrap()["unexpected"] = json!(true);
+            let mut bad = a.clone();
+            bad["config"] = put_json(&dir.path().join("unknown-config.json"), &bad_c);
+            let error = bind(dir.path(), &bad).unwrap_err().to_string();
+            assert!(
+                !error.contains("differ from independent authority"),
+                "{pointer}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bind_completed_scale_authenticates_whole_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, _, _, rows) = fixture(dir.path(), 32, false);
+        let original = result_body(&rows);
+        let path = dir.path().join("result.jsonl");
+        for change in 0..3 {
+            let mut body = original.clone();
+            match change {
+                0 => {
+                    body.pop();
+                }
+                1 => body.push(b' '),
+                _ => {
+                    let last = body.len() - 2;
+                    body[last] ^= 1;
+                }
+            }
+            std::fs::write(&path, body).unwrap();
+            assert!(bind(dir.path(), &a).is_err());
+        }
+        // A malformed first row must not be parsed before a wrong tail SHA is rejected.
+        let body = b"not JSON\n{}\ntail\n";
+        let mut bad = a.clone();
+        bad["result"] = put(&path, body);
+        bad["result"]["sha256"] = json!("0".repeat(64));
+        assert!(
+            bind(dir.path(), &bad)
+                .unwrap_err()
+                .to_string()
+                .contains("whole-body SHA/EOF")
+        );
+        for body in [b"{}\n{}".to_vec(), vec![b' '; HEADER_JSON_CAP as usize + 1]] {
+            bad["result"] = put(&path, &body);
+            assert!(bind(dir.path(), &bad).is_err());
+        }
+        for (role, cap) in [
+            ("config", HEADER_JSON_CAP),
+            ("cohort", HEADER_JSON_CAP),
+            ("result", HEADER_RESULT_CAP),
+        ] {
+            let mut bad = a.clone();
+            bad[role]["bytes"] = json!(cap + 1);
+            assert!(bind(dir.path(), &bad).is_err());
+        }
+    }
+
+    #[test]
+    fn bind_completed_scale_rejects_links_mutation_and_occupied_output() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let (a, _, _, _) = fixture(dir.path(), 32, false);
+        let path = dir.path().join("result.jsonl");
+        let link = dir.path().join("result-link");
+        symlink(&path, &link).unwrap();
+        let mut bad = a.clone();
+        bad["result"]["path"] = json!(link);
+        assert!(bind(dir.path(), &bad).is_err());
+        let parent_link = dir.path().join("parent-link");
+        symlink(dir.path(), &parent_link).unwrap();
+        bad["result"]["path"] = json!(parent_link.join("result.jsonl"));
+        assert!(bind(dir.path(), &bad).is_err());
+        let hard = dir.path().join("hard-link");
+        std::fs::hard_link(&path, &hard).unwrap();
+        assert!(bind(dir.path(), &a).is_err());
+        std::fs::remove_file(hard).unwrap();
+        let file = header_file(&path).unwrap();
+        let stamp = file_identity(&file).unwrap();
+        let body = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        assert!(recheck_header_file(&file, &path, &stamp).is_err());
+        let file = header_file(&path).unwrap();
+        let stamp = file_identity(&file).unwrap();
+        let mut changed = body;
+        changed[0] ^= 1;
+        std::fs::write(&path, &changed).unwrap();
+        assert!(recheck_header_file(&file, &path, &stamp).is_err());
+        assert!(execute_report(&link, SCALE_CONFIG_SCHEMA, || panic!("occupied symlink")).is_err());
+        let fifo = dir.path().join("fifo");
+        rustix::fs::mkfifoat(rustix::fs::CWD, &fifo, Mode::RUSR | Mode::WUSR).unwrap();
+        assert!(header_file(&fifo).is_err());
+    }
+
+    #[test]
+    fn bind_completed_scale_publication_rejects_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, _, _, _) = fixture(dir.path(), 32, false);
+        let value = bind(dir.path(), &a).unwrap();
+        for hard_link in [false, true] {
+            let output = dir.path().join(if hard_link {
+                "hard-output"
+            } else {
+                "replaced-output"
+            });
+            let result = execute_report(&output, SCALE_CONFIG_SCHEMA, || {
+                if hard_link {
+                    std::fs::hard_link(&output, dir.path().join("output-alias"))?;
+                } else {
+                    std::fs::remove_file(&output)?;
+                    std::fs::write(&output, b"replacement")?;
+                }
+                Ok(value.clone())
+            });
+            assert!(result.is_err());
+        }
+    }
 }
 
 fn reduce_completed(config_path: &Path, config_sha: &str) -> Result<Value> {
@@ -3431,6 +4189,12 @@ fn execute_report(
     serde_json::to_writer(&mut out, &report)?;
     out.write_all(b"\n")?;
     out.file.sync_all()?;
+    if schema == SCALE_CONFIG_SCHEMA {
+        require(
+            out.file.metadata()?.nlink() == 1,
+            "single-link completed config",
+        )?;
+    }
     let current = file_identity(&open_input(output)?)?;
     let bound_dir = dir.metadata()?;
     let current_dir = parent(output)?.metadata()?;
@@ -3444,12 +4208,32 @@ fn execute_report(
         || (schema == SCALE_PARITY_REPORT_SCHEMA
             && report["schema"] == SCALE_PARITY_REPORT_SCHEMA
             && report["status"] == "EXACT_PREFIX_PARITY"
-            && report["complete"] == true))
+            && report["complete"] == true)
+        || (schema == SCALE_CONFIG_SCHEMA
+            && report["schema"] == SCALE_CONFIG_SCHEMA
+            && report.get("expected_identity").is_some()
+            && report.get("expected_bound_inputs").is_some()))
 }
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    let binding = args
+        .get(1)
+        .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if binding {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --bind-completed-scale AUTHORITY AUTHORITY_SHA NEW_CONFIG",
+            )?;
+            let output = Path::new(&args[4]);
+            header_path(output)?;
+            let config = bind_completed_scale(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("authority SHA256 encoding")?,
+            )?;
+            return execute_report(output, SCALE_CONFIG_SCHEMA, || Ok(config));
+        }
         if args.get(1).is_some_and(|arg| arg == "--source-utilization") {
             require(
                 args.len() == 5,
@@ -3543,10 +4327,10 @@ fn main() {
     })();
     match result {
         Ok(true) => (),
-        Ok(false) => std::process::exit(2),
+        Ok(false) => std::process::exit(if binding { 98 } else { 2 }),
         Err(e) => {
             eprintln!("INVALID: {e}; external gates required");
-            std::process::exit(2);
+            std::process::exit(if binding { 98 } else { 2 });
         }
     }
 }
