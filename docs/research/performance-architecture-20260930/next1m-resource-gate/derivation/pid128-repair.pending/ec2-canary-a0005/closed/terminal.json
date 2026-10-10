@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-validator-ec2-v1",
+  "status": "INVALID",
+  "phase": "canary",
+  "instance_id": "i-095f40cd27aaffaa1",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0005-c80f4c34e37502fa/run",
+  "bootstrap_sha256": "baa695d71c26eceb9e7f0e255404e29d1619d117ef69533a9dab8a29ffb1f9b9",
+  "bootstrap_exit": 94,
+  "test_exit": 94,
+  "cleanup_exit": 0,
+  "native_execution_status": "SYNTHETIC_COLLECTOR_ONLY_PENDING_ROOT_REPLAY",
+  "ann_executed": false,
+  "real_platform_programs": true,
+  "native_cli_usage_only": false,
+  "synthetic_chain_metadata": true,
+  "performance_claim": false,
+  "production_qualification": false,
+  "evidence_sha256": "7ffd43edaf0d93a3eb17f3aa114dcc36178d8ed40817e01fe82a4d0a6c307ec9",
+  "evidence_bytes": 17378
+}

@@ -1,0 +1,12 @@
+{
+  "status": "STATIC_ONLY_RUNTIME_UNVERIFIED",
+  "failure_attempt": "a0005",
+  "change": "one noclobber override on authenticated owned cgroup.kill control file",
+  "unit": "run-p1313852-i714220164.service",
+  "invocation_id": "97c12600f26644dea2a2f5bebd8a4289",
+  "bash_n_exit": 0,
+  "shellcheck_exit": 0,
+  "sha256": "d32fae330c753cecfdb9d54141a83580a52417df2974c8d49d3f4b7f1f9f7d75",
+  "local_runtime_executed": false,
+  "ann_executed": false
+}

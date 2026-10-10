@@ -30,7 +30,7 @@ failure_cleanup() {
            grep -Fx "InvocationID=$id" <<< "$identity" >/dev/null &&
            grep -Fx "ControlGroup=/system.slice/$unit" <<< "$identity" >/dev/null; then
             if [[ -d $cg && ! -L $cg && $(realpath -e "$cg") == "$cg" ]]; then
-                printf '1\n' > "$cg/cgroup.kill" || cleanup=1
+                printf '1\n' >| "$cg/cgroup.kill" || cleanup=1
             fi
             timeout --kill-after=1 5 systemctl stop "$unit" > "$out/failure-stop.stdout" 2> "$out/failure-stop.stderr" || cleanup=1
             if [[ -e $cg/cgroup.events ]]; then
