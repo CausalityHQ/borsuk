@@ -1,0 +1,88 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "platform_disposition": "NOT_RUN",
+  "reason": "three demonstrated platform glue defects: cgroup jq invocation, AWS stderr-prefix matcher, exact99 handoff assertion",
+  "instance_id": "i-02eab9c9baa8a26b2",
+  "source_commit": "b9e12f58803e9e6a1e7a34ac0d811357573c6218",
+  "original_launch": {
+    "session": 30350,
+    "unit": "run-p397953-i675562702.service",
+    "invocation": "cb0169a6204c4686a10a1fedd7504fe7",
+    "exit": 0,
+    "wall_seconds": 15.049
+  },
+  "watcher": {
+    "unit": "borsuk-next1m-canary-a0008-watch.service",
+    "invocation": "6660f8f5fb7e425eaa7009d08fe38b86",
+    "exit": 0
+  },
+  "archive_authentication": {
+    "unit": "run-p586283-i675746992.service",
+    "invocation": "fa64c2fd021a4c5bb7e057bf4bdad8f9",
+    "exit": 0,
+    "members": 82,
+    "archive": {
+      "bytes": 21134,
+      "sha256": "b3fd4dfdafa272ff7e0f981ebe969852994905676fc592c02bc955b28f76639f"
+    }
+  },
+  "fixture_results": {
+    "all_four_exit": 0,
+    "pass_lines": 184,
+    "attachment_settle": 47,
+    "instance_settle": 56,
+    "formatting": 15,
+    "ownership_proof": 66
+  },
+  "fixture_resources": {
+    "stderr_observed_wall_seconds": 0.374,
+    "stderr_observed_cpu_seconds": 0.366,
+    "stderr_observed_memory_peak": "4.4M",
+    "swap": "0B",
+    "systemd_show_after_success": "unit collected/not-found; do not treat default property values as actual resource readback",
+    "requested_limits_bound_in_frozen_bootstrap": true
+  },
+  "tail_steps": {
+    "T1": 0,
+    "T2": 0,
+    "T3": 1,
+    "T4": 1,
+    "T5": 0
+  },
+  "t3_cleanup_proved": true,
+  "iam_actual": {
+    "put_exit": 254,
+    "delete_exit": 254,
+    "error_code": "AccessDenied",
+    "identity_policy_explicit_deny": true,
+    "matcher_did_not_accept_cli_prefix": true
+  },
+  "bootstrap_original": {
+    "original_exit": 99,
+    "exit": 99,
+    "manager_exit_status": "1",
+    "manager_result": "exit-code"
+  },
+  "actual_scratch_formatting": "SUCCESS",
+  "cloud_final_fixture_cases": "NOT_RUN",
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-02eab9c9baa8a26b2",
+    "terminated": true,
+    "volumes": [
+      "vol-0965b18143c5e7fd9",
+      "vol-09eee30bae82b022a"
+    ],
+    "both_volumes_absent": true,
+    "reason": "terminal",
+    "user_data_sha256": "e836a137d6db9d18933ed1ddaab9c8a1ba1b5abd9dbde28a505b16ba5a404e32",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "next_action": "same-worker exact two-file source repair, then remote failing-layer-first platform validation"
+}

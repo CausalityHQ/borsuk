@@ -1,0 +1,89 @@
+{
+  "schema": "borsuk-canary-verdict-v1",
+  "instance_id": "i-02eab9c9baa8a26b2",
+  "verdict": "NOT_RUN",
+  "reasons": [
+    "W: original terminal.json shape",
+    "finalize: step W did not complete",
+    "finalize: step C0 did not complete",
+    "finalize: step C1 did not complete",
+    "finalize: step case0 did not complete",
+    "finalize: step case2 did not complete",
+    "finalize: step case3 did not complete",
+    "finalize: step C4 did not complete"
+  ],
+  "steps_completed": [],
+  "roster_publications": [
+    {
+      "name": "original.json",
+      "rc": "missing"
+    },
+    {
+      "name": "admission.json",
+      "rc": "missing"
+    },
+    {
+      "name": "listing-summary.json",
+      "rc": "missing"
+    },
+    {
+      "name": "steps.jsonl",
+      "rc": "0"
+    },
+    {
+      "name": "case-0.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-0.manager.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-0.result.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-0.status.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-2.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-2.manager.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-2.result.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-2.status.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-3.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-3.manager.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-3.result.json",
+      "rc": "missing"
+    },
+    {
+      "name": "case-3.status.json",
+      "rc": "missing"
+    }
+  ],
+  "roster_writer_failure": false,
+  "verdict_publication": "its own exit status is recorded only locally in verdict.put.rc and on the console; absence of the object means NOT_COMPLETE",
+  "acceptance": "PROVISIONAL_REQUIRES_ROOT_REPLAY_TERMINATION_AND_VOLUME_DELETION",
+  "native_chain_closed": false,
+  "scientific_claim": false,
+  "performance_claim": false,
+  "finished_epoch": 1791595013
+}
