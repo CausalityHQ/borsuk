@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-scratch-admission-decision-v1",
+  "source_commit": "0e03cf161bd56d781d712ef52ce741618c7df389",
+  "review_group": "527bc9ee0c2b42f3",
+  "decision": "GO_SOURCE_REPAIR_HOLD_RUNTIME",
+  "historical_attempts_immutable": true,
+  "cmp_difference_origin": "UNPROVEN",
+  "ownership_required_before_binding": true,
+  "fresh_describe_volumes_required": true,
+  "empty_snapshot_required": true,
+  "comparison_allowed_statuses": [
+    0,
+    1
+  ],
+  "comparison_error_refuses": true,
+  "device_identity_rechecked_before_format": true,
+  "root_device_explicitly_excluded": true,
+  "root_filesystem_unchanged_required": true,
+  "producer_guest_verifier_binding_version_updated_together": true,
+  "format_force_forbidden": true,
+  "minimum_gate": "source-bound mocked formatting once for owned fresh cmp1, zero for invalid ownership/device/proof/signature/use/cmp error; then one unchanged-envelope disposable staging canary",
+  "native_algorithm_changed": false,
+  "runtime_qualified": false,
+  "ann_result": false,
+  "performance_claim": false,
+  "review_correction": "DeleteOnTermination belongs to DescribeInstances mapping; RunInstances may return empty mapping list; do not infer absence of snapshot from omitted launch-request field alone"
+}
