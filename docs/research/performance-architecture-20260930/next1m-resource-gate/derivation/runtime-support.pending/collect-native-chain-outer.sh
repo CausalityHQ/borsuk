@@ -74,7 +74,8 @@ capture_drain() {
 }
 # Capture exact original invocation and exit fields before stop or GC. No --wait with retention.
 while :; do
-    manager systemctl show "$unit" -p Id -p Description -p InvocationID -p ControlGroup -p MainPID -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus >| "$out/poll.tmp"
+    manager systemctl show "$unit" -p Id -p Description -p InvocationID -p ControlGroup -p MainPID -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus >| "$out/poll.next"
+    mv -f "$out/poll.next" "$out/poll.tmp"
     [[ $(sed -n 's/^InvocationID=//p' "$out/poll.tmp") == "$id" &&
        $(sed -n 's/^Id=//p' "$out/poll.tmp") == "$unit" &&
        $(sed -n 's/^Description=//p' "$out/poll.tmp") == "$unit" ]] || exit 98

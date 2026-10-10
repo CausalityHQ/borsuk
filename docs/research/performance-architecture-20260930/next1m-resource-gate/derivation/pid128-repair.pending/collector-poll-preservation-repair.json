@@ -1,0 +1,12 @@
+{
+  "status": "STATIC_ONLY_RUNTIME_UNVERIFIED",
+  "failure_attempt": "a0006",
+  "change": "publish manager poll snapshot only after successful bounded query",
+  "unit": "run-p1523498-i714422227.service",
+  "invocation_id": "b130aaeb13d2429abd08c869ede68e08",
+  "bash_n_exit": 0,
+  "shellcheck_exit": 0,
+  "sha256": "20cce1722ff5a9a30057352f36336dd84221309a91e5501333ebaf6820f9c477",
+  "local_runtime_executed": false,
+  "ann_executed": false
+}
