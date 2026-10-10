@@ -1,0 +1,10 @@
+{
+  "candidate_commit": "d291f240c122965f3edaaf887c55ae0e2e4f7da5",
+  "coordinator_sha256": "b2ec593fe50776462dcb403237f1a971361bfa2249e8c303f9d4815ed968700b",
+  "fragment_sha256": "96b9a7b8a74af189954aa04dc589b0e4fbf9e0d725f3f0fa7ca5ab05e6204a24",
+  "prefix": "research/semantic-router/20261010/actual1m-scale-chain-canary-a0012",
+  "started_epoch": 1791599664,
+  "support_sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0",
+  "tail_sha256": "e47a0fbd15f2121b210ce5d1fbe2cc2d1266bebedb9e9e00d47db273d4d0b36c",
+  "wrapper_sha256": "bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f"
+}
