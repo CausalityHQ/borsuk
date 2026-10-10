@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "3a1b3ca9f6f9872290b1169989cc286881dfbca2",
+  "client_token": "borsuk-next1m-canary-a0004-97010f25a45c5cec",
+  "watch_unit": "borsuk-next1m-canary-a0004-97010f25a45c5cec.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0004-97010f25a45c5cec/run",
+  "assets": "research/semantic-router/20261010/next1m-supervisor-canary-source/3a1b3ca9/assets",
+  "launch_authority": false,
+  "prior_attempt": "a0003",
+  "prior_attempt_closed": true,
+  "repair_reason": "stage exact content-addressed assets; unchanged canary and native algorithm"
+}

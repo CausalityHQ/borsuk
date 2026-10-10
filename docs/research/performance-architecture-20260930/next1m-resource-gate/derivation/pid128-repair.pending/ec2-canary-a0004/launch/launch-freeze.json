@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-next1m-canary-root-asset-plan-v1",
+  "source_commit": "3a1b3ca9f6f9872290b1169989cc286881dfbca2",
+  "client_token": "borsuk-next1m-canary-a0004-97010f25a45c5cec",
+  "watch_unit": "borsuk-next1m-canary-a0004-97010f25a45c5cec.service",
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0004-97010f25a45c5cec/run",
+  "assets": "research/semantic-router/20261010/next1m-supervisor-canary-source/3a1b3ca9/assets",
+  "launch_authority": true,
+  "prior_attempt": "a0003",
+  "prior_attempt_closed": true,
+  "repair_reason": "stage exact content-addressed assets; unchanged canary and native algorithm",
+  "launched_epoch": 1791639571,
+  "bootstrap_sha256": "158117bb0f1697e8090902fe52be42cce188b0de16667b40c934f4435eb80c47",
+  "watch_sha256": "9ad7dc972d82143c376385a428244955404115c169ed30f5287af04cb7496185",
+  "request_sha256": "3c4397e959d3bf820eb0f2be16990672c4e732a3f1d3de819e457e25cbca8ec2",
+  "support_roster": [
+    {
+      "name": "wrapper-canary.sh",
+      "bytes": 17821,
+      "sha256": "2c9463b2d4326621dcc1d8ed884f9c2dc61379da826a1e073d0f70ec157a06f1"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 62014,
+      "sha256": "b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452"
+    },
+    {
+      "name": "verify-closed.py",
+      "bytes": 77732,
+      "sha256": "437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a"
+    }
+  ]
+}
