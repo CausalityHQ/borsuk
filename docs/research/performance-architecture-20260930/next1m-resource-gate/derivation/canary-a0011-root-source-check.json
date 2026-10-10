@@ -1,0 +1,27 @@
+{
+  "schema": "borsuk-canary-root-source-check-v1",
+  "source_commit": "ed5d45fa254e846d136cca5876a02ca02e953c7e",
+  "base": "6ce3037aaba86a73151193fcb25931c2b6921f52",
+  "owned_delta": [
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-coordinator.sh",
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-tail.sh"
+  ],
+  "source_sha256": {
+    "coordinator": "b2ec593fe50776462dcb403237f1a971361bfa2249e8c303f9d4815ed968700b",
+    "tail": "e47a0fbd15f2121b210ce5d1fbe2cc2d1266bebedb9e9e00d47db273d4d0b36c"
+  },
+  "fixture_sha256": "856e4e1a63a8ea2f9705e6774e418821ea40d8cbbc5883ca3f0d8f8f8b0b3818",
+  "fixture_embedded_closed_bodies_match": 9,
+  "fragment_matches_authenticated_archive": true,
+  "both_inverses_exact": true,
+  "hook_clause_unchanged": true,
+  "budgets_commands_reload_unchanged": true,
+  "runtime": "UNRUN",
+  "target_retention": "UNVERIFIED",
+  "ann_run": false,
+  "performance_claim": false,
+  "diagnosis_raw_sha256": "efaf2a357c6fb37abd8addb09431ed22e7218667d3f2759e2cae4fbe435a8305",
+  "diagnosis_display_copy_sha256": "910e95310c98d8dedd79cd1e39bd69615b667597283e72a0d2aa5e67ff03399f",
+  "diagnosis_copy_change": "trailing whitespace only; raw original preserved in /tmp",
+  "integration_first_attempt": "diff --check refused one trailing space in diagnosis copy, no ref mutation"
+}
