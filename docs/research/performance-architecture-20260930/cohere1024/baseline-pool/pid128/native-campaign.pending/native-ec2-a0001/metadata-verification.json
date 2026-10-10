@@ -1,0 +1,264 @@
+{
+  "status": "PID128_REAL_INPUT_MECHANICS_METADATA_VERIFIED",
+  "instance_id": "i-098477877e462a70d",
+  "terminated": true,
+  "root_volume_absent": true,
+  "archive_sha256": "c6514c9545817c6b88d60d94f6eeb0144fd8627f804c722828675a268c3f7468",
+  "archive_bytes": 709904,
+  "archive_regular_files": 1661,
+  "sealed_manifest_entries": 1499,
+  "replay_entries": 18,
+  "stages": {
+    "admission": {
+      "actual_outer_exit": 0,
+      "manifest_entries": 781,
+      "drain_state": "removed",
+      "terminal": {
+        "schema": "borsuk-native-pid128-terminal-v1",
+        "status": "SOURCE_ADMITTED_ROOT_GATE_REQUIRED",
+        "stage": "closure",
+        "config_sha256": "a696c3370a49c5e87cc96ebdc5cae51698f62e0a26db4414cf9e7a38d1cba6b5",
+        "original_exit": 0,
+        "intended_exit": 0,
+        "cleanup_exit": 0,
+        "phases_completed": [
+          "prepare",
+          "derive",
+          "copy",
+          "generation",
+          "publish",
+          "diagnostic"
+        ],
+        "original_observer_manager_and_outer_exits_required": true,
+        "root_instance_and_volume_closure_required": true,
+        "performance_claim": false,
+        "cold_claim": false,
+        "competitor_claim": false,
+        "one_million_claim": false
+      }
+    },
+    "staging": {
+      "actual_outer_exit": 0,
+      "manifest_entries": 195,
+      "drain_state": "removed",
+      "terminal": {
+        "schema": "borsuk-native-pid128-terminal-v1",
+        "status": "NATIVE_STAGING_SMOKE_ROOT_GATE_REQUIRED",
+        "stage": "closure",
+        "config_sha256": "6c7cc37de51492f56fa541f8d5b78546be7385f73649e7e753780e2c5697d17f",
+        "original_exit": 0,
+        "intended_exit": 0,
+        "cleanup_exit": 0,
+        "phases_completed": [
+          "diagnostic"
+        ],
+        "original_observer_manager_and_outer_exits_required": true,
+        "root_instance_and_volume_closure_required": true,
+        "performance_claim": false,
+        "cold_claim": false,
+        "competitor_claim": false,
+        "one_million_claim": false
+      }
+    },
+    "negative": {
+      "actual_outer_exit": 98,
+      "manifest_entries": 162,
+      "drain_state": "removed",
+      "terminal": {
+        "schema": "borsuk-native-pid128-terminal-v1",
+        "status": "INVALID",
+        "stage": "diagnostic",
+        "config_sha256": "4bc93b776e930fe2b2e492c40ba0effca445894e38395f88c89de099b4c77cb2",
+        "original_exit": 98,
+        "intended_exit": 98,
+        "cleanup_exit": 0,
+        "phases_completed": [],
+        "original_observer_manager_and_outer_exits_required": true,
+        "root_instance_and_volume_closure_required": true,
+        "performance_claim": false,
+        "cold_claim": false,
+        "competitor_claim": false,
+        "one_million_claim": false
+      }
+    },
+    "widths": {
+      "actual_outer_exit": 0,
+      "manifest_entries": 361,
+      "drain_state": "removed",
+      "terminal": {
+        "schema": "borsuk-native-pid128-terminal-v1",
+        "status": "PID128_MECHANICS_CLOSED_ROOT_REPLAY_REQUIRED",
+        "stage": "closure",
+        "config_sha256": "08d1ff9da8c2a1ad8f984559ae54193a25c3e9406b0405f7441fd72b14a2dbcf",
+        "original_exit": 0,
+        "intended_exit": 0,
+        "cleanup_exit": 0,
+        "phases_completed": [
+          "query16",
+          "query32"
+        ],
+        "original_observer_manager_and_outer_exits_required": true,
+        "root_instance_and_volume_closure_required": true,
+        "performance_claim": false,
+        "cold_claim": false,
+        "competitor_claim": false,
+        "one_million_claim": false
+      }
+    }
+  },
+  "phases": [
+    {
+      "path": "borsuk-pid-evidence/admission/phases/copy/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 10,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 110419968,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/admission/phases/derive/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 10,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 536104960,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/admission/phases/diagnostic/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 18,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 27271168,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/admission/phases/generation/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 10,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 512839680,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/admission/phases/prepare/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 10,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 463060992,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/admission/phases/publish/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 11,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 479277056,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/negative/phases/diagnostic/",
+      "native_exit": null,
+      "controlled_timeout": true,
+      "pids_peak": 12,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 4378624,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/staging/phases/diagnostic/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 33,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 29364224,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/widths/phases/query16/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 26,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 30507008,
+      "drain_state": "removed"
+    },
+    {
+      "path": "borsuk-pid-evidence/widths/phases/query32/",
+      "native_exit": 0,
+      "controlled_timeout": false,
+      "pids_peak": 42,
+      "pids_max_events": 0,
+      "memory_peak_bytes": 34275328,
+      "drain_state": "removed"
+    }
+  ],
+  "controlled_negative": {
+    "schema": "borsuk-native-pid128-negative-proof-v1",
+    "status": "EXPECTED_TIMEOUT_AND_DRAIN",
+    "unit": "borsuk-pid128-01c4ff96-019b-4da2-bea8-60bf4b8b3c4d-diagnostic.service",
+    "invocation_id": "a5369927acf94f77aca70166549bbcf9",
+    "timeout_exit": 124,
+    "minimum_timeout_centiseconds": 500,
+    "child_pid": 13686,
+    "elapsed_centiseconds": 1524,
+    "resource_events_unchanged": true,
+    "descendant_alive_after_timeout": true,
+    "drain_before_natural_exit": true,
+    "performance_claim": false
+  },
+  "native_summaries": {
+    "16": {
+      "status": "MEASURED",
+      "queries": 32,
+      "mean_recall10": 0.990625,
+      "recall_numerator": 317,
+      "recall_denominator": 320,
+      "underfilled_queries": 0,
+      "query_wall_ns": 4632340211,
+      "observed_process_peak_bytes": 34390016,
+      "physical_s3_measured": false,
+      "population_percentiles_valid": false,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 1536,
+        "verified_bytes": 1208040192
+      },
+      "requests_sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667",
+      "truth_sha256": "6992e3bb38c7eaf9bec1140801cbab9daa4393c0be492c2fafbb09f7301a504b",
+      "generation_root_sha256": "fa98eabbc6462cafbadfe0dc48ac7a5f64c0b21c34fca57d8d8aeec7102158c7"
+    },
+    "32": {
+      "status": "MEASURED",
+      "queries": 32,
+      "mean_recall10": 0.990625,
+      "recall_numerator": 317,
+      "recall_denominator": 320,
+      "underfilled_queries": 0,
+      "query_wall_ns": 4717572646,
+      "observed_process_peak_bytes": 37412864,
+      "physical_s3_measured": false,
+      "population_percentiles_valid": false,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 1536,
+        "verified_bytes": 1208040192
+      },
+      "requests_sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667",
+      "truth_sha256": "6992e3bb38c7eaf9bec1140801cbab9daa4393c0be492c2fafbb09f7301a504b",
+      "generation_root_sha256": "fa98eabbc6462cafbadfe0dc48ac7a5f64c0b21c34fca57d8d8aeec7102158c7"
+    }
+  },
+  "local_native_execution": false,
+  "local_request_truth_opened": false,
+  "performance_claim": false,
+  "cold_claim": false,
+  "competitor_claim": false,
+  "population_recall_claim": false,
+  "remaining": "Prospective cold S3 fixture/protocol, runtime input and disposable staging gates, then actual matched cold execution. No full-cohort or competitor acceptance from this prefix mechanics gate."
+}
