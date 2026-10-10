@@ -505,7 +505,7 @@ cleanup_owned() {
     while ! drained && (( SECONDS < end )); do sleep 0.05; done
     if ! drained; then
         owned || return 1
-        printf '1\n' > "$owned_cg/cgroup.kill" || return 1
+        printf '1\n' >| "$owned_cg/cgroup.kill" || return 1
         printf 'cgroup.kill=1\n' > "$phase_dir/cleanup.kill.txt" || cleanup_rc=1
     fi
     end=$manager_deadline

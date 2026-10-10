@@ -26,7 +26,7 @@ cleanup() {
            grep -Fx "ControlGroup=/system.slice/$unit" <<< "$show" >/dev/null; then
             cg=/sys/fs/cgroup/system.slice/$unit
             if [[ -d $cg && ! -L $cg && $(realpath -e "$cg") == "$cg" ]]; then
-                printf '1\n' > "$cg/cgroup.kill"
+                printf '1\n' >| "$cg/cgroup.kill"
             fi
             timeout -k 1 5 systemctl stop "$unit" > "$root/evidence-root/chain-failure-stop.stdout" 2> "$root/evidence-root/chain-failure-stop.stderr"
         fi
