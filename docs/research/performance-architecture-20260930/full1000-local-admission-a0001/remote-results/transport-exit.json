@@ -1,0 +1,6 @@
+{
+  "schema": "borsuk-parity-service-exit-v1",
+  "exit_code": "killed",
+  "exit_status": "TERM",
+  "service_result": "oom-kill"
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-full1000-local-admission-failure-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0d3ddaa09b5830cbd",
+  "stage": "transport",
+  "service_result": "oom-kill",
+  "transport_limit_bytes": 268435456,
+  "reported_memory_peak": "271.4MiB",
+  "swap_peak_bytes": 0,
+  "native_executed": false,
+  "performance_claim": false,
+  "instance_terminated": true,
+  "deleted_volumes": [
+    "vol-0ee6f107e62288732",
+    "vol-0aa6aef59081b851f"
+  ],
+  "archive_bytes": 10533,
+  "archive_sha256": "51c4dee09d6720dbfadd37d3634f61724ab4a7855421ef2aaa17880d4d302012",
+  "bootstrap_exit": 91,
+  "cloud_final_exit": 1,
+  "next_change": "Transport MemoryMax 256MiB to 1GiB; native code, inputs and limits unchanged",
+  "exact_memory_composition": "NOT_MEASURED"
+}

@@ -1,0 +1,53 @@
+{
+  "status": "FROZEN_SOURCE_ONLY_NATIVE_LOCAL_ADMISSION",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "market": "spot",
+  "instance_type": "c7i.2xlarge",
+  "native_seconds": 3600,
+  "transport_seconds": 900,
+  "machine_stop_seconds": 7200,
+  "external_stop_seconds": 7800,
+  "termination_grace_seconds": 120,
+  "construction": {
+    "cpu": 4,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 128
+  },
+  "scratch_volume_gib": 40,
+  "root_volume_gib": 80,
+  "max_spot_bid_usd_per_hour": 0.59,
+  "compute_ceiling_usd": 1.3,
+  "ancillary_ceiling_usd": 0.5,
+  "total_ceiling_usd": 1.8,
+  "retention": {
+    "create_only": true,
+    "per_body_cap_bytes": 5368709120,
+    "source_objects": 13,
+    "native_head_last": true,
+    "downstream_whole_sha_required": true,
+    "storage_cost_scope": "new retention first30days projection; existing and continuing retention metered separately"
+  },
+  "interruption": "INVALID_PRESERVE_NO_AUTO_RETRY",
+  "ann_run": true,
+  "performance_claim": false,
+  "maximum_ancillary_usd": 0.5,
+  "controller_commit": "a84b244fc51c50eac2acb94eb7d6939200523b68",
+  "spot_quote_usd_per_hour": "0.203800",
+  "observer_seconds": 3680,
+  "retention_seconds": 1800,
+  "native_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "scope": "Full1000 inputs, original panel32 correctness admission and generation retention; not cold measurement",
+  "independent_native_replay_required": true,
+  "separate_staging_canary_required_before_measurement": true,
+  "transport": {
+    "cpu": 1,
+    "memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "pids": 128,
+    "seconds": 900
+  },
+  "previous_attempt": "full1000-local-admission-a0001",
+  "causal_change": "Transport MemoryMax 256MiB to 1GiB; native code, inputs and limits unchanged"
+}
