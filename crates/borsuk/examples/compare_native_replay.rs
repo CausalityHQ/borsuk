@@ -1279,7 +1279,7 @@ struct Run {
     completed: Option<CompletedEvidence>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct FileIdentity {
     dev: u64,
     ino: u64,
@@ -2008,14 +2008,49 @@ fn header_pin(pin: &CompletedInput, cap: u64) -> Result<()> {
     )
 }
 
-fn header_json(pin: &CompletedInput) -> Result<Value> {
+#[derive(Debug)]
+struct HeaderSnapshot {
+    file: File,
+    path: PathBuf,
+    identity: FileIdentity,
+}
+
+impl HeaderSnapshot {
+    fn recheck(&self) -> Result<()> {
+        recheck_header_file(&self.file, &self.path, &self.identity)
+    }
+}
+
+#[derive(Debug)]
+struct BoundHeaders {
+    value: Value,
+    inputs: [HeaderSnapshot; 4],
+}
+
+impl BoundHeaders {
+    fn recheck(&self) -> Result<()> {
+        for input in &self.inputs {
+            input.recheck()?;
+        }
+        Ok(())
+    }
+}
+
+fn header_json(pin: &CompletedInput) -> Result<(Value, HeaderSnapshot)> {
     header_pin(pin, HEADER_JSON_CAP)?;
     let file = header_file(&pin.path)?;
     let original = file_identity(&file)?;
     require(original.len == pin.bytes, "header JSON length")?;
     let (value, _) = read_config_file(&file, &pin.path, &pin.sha256, HEADER_JSON_CAP)?;
     recheck_header_file(&file, &pin.path, &original)?;
-    Ok(value)
+    Ok((
+        value,
+        HeaderSnapshot {
+            file,
+            path: pin.path.clone(),
+            identity: original,
+        },
+    ))
 }
 
 fn recheck_header_file(file: &File, path: &Path, original: &FileIdentity) -> Result<()> {
@@ -2027,7 +2062,7 @@ fn recheck_header_file(file: &File, path: &Path, original: &FileIdentity) -> Res
     )
 }
 
-fn authenticated_headers(pin: &CompletedInput) -> Result<[Value; 2]> {
+fn authenticated_headers(pin: &CompletedInput) -> Result<([Value; 2], HeaderSnapshot)> {
     header_pin(pin, HEADER_RESULT_CAP)?;
     let mut file = header_file(&pin.path)?;
     let original = file_identity(&file)?;
@@ -2070,7 +2105,82 @@ fn authenticated_headers(pin: &CompletedInput) -> Result<[Value; 2]> {
     // No header is parsed or compared until the entire closed artifact authenticates.
     let UniqueJson(identity) = serde_json::from_slice(&headers[0])?;
     let UniqueJson(inputs) = serde_json::from_slice(&headers[1])?;
-    Ok([identity, inputs])
+    Ok((
+        [identity, inputs],
+        HeaderSnapshot {
+            file,
+            path: pin.path.clone(),
+            identity: original,
+        },
+    ))
+}
+
+// Match the original native Config admission, without changing historical reducers.
+fn validate_header_descriptors(c: &Value) -> Result<()> {
+    let key = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 512
+            && s.split('/').all(|p| {
+                !p.is_empty()
+                    && p != "."
+                    && p != ".."
+                    && p.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+            })
+    };
+    require(
+        c["generation_prefix"].as_str().is_some_and(key),
+        "native generation prefix",
+    )?;
+    match c["backend"]["kind"].as_str() {
+        Some("local") => header_path(Path::new(
+            c["backend"]["store_root"]
+                .as_str()
+                .ok_or("local store root")?,
+        )),
+        Some("s3") => {
+            let backend = &c["backend"];
+            let bucket = backend["bucket"].as_str().ok_or("S3 bucket")?;
+            let region = backend["region"].as_str().ok_or("S3 region")?;
+            let etag = backend["sq8_etag"].as_str().ok_or("S3 ETag")?;
+            require(
+                (3..=63).contains(&bucket.len())
+                    && bucket.parse::<std::net::Ipv4Addr>().is_err()
+                    && bucket.split('.').all(|p| {
+                        !p.is_empty()
+                            && !p.starts_with('-')
+                            && !p.ends_with('-')
+                            && p.bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    }),
+                "native S3 bucket descriptor",
+            )?;
+            require(
+                (3..=63).contains(&region.len())
+                    && !region.starts_with('-')
+                    && !region.ends_with('-')
+                    && region
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "native S3 region descriptor",
+            )?;
+            require(
+                backend["physical_prefix"].as_str().is_some_and(key)
+                    && backend["sq8_object_key"].as_str().is_some_and(key),
+                "native S3 keys",
+            )?;
+            require(
+                (3..=256).contains(&etag.len())
+                    && etag.starts_with('"')
+                    && etag.ends_with('"')
+                    && etag.as_bytes()[1..etag.len() - 1]
+                        .iter()
+                        .all(|&b| (0x21..=0x7e).contains(&b) && b != b'"'),
+                "native S3 quoted ETag",
+            )
+        }
+        _ => Err("native backend descriptor".into()),
+    }
 }
 
 fn expected_scale_headers(
@@ -2094,6 +2204,7 @@ fn expected_scale_headers(
     let config = c.as_object_mut().ok_or("original native config object")?;
     // The original native Config defaults only this field.
     config.entry("fetch_parallelism").or_insert(json!(16));
+    validate_header_descriptors(&c)?;
     fields(
         &c,
         "schema dataset revision metric tie_rule corpus_intervals reserved_query_interval cohort_receipt derivation_receipt producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 scratch_parent requests truth native_source max_memory_bytes fetch_parallelism serving execution",
@@ -2212,17 +2323,18 @@ fn expected_scale_headers(
     Ok([identity, bound])
 }
 
-fn bind_completed_scale(authority_path: &Path, authority_sha: &str) -> Result<Value> {
+fn bind_completed_scale(authority_path: &Path, authority_sha: &str) -> Result<BoundHeaders> {
     let file = header_file(authority_path)?;
     let original = file_identity(&file)?;
     let (a, _): (HeaderAuthority, _) =
         read_config_file(&file, authority_path, authority_sha, HEADER_JSON_CAP)?;
     recheck_header_file(&file, authority_path, &original)?;
-    let c = header_json(&a.config)?;
-    let receipt = header_json(&a.cohort)?;
+    let (c, config_pin) = header_json(&a.config)?;
+    let (receipt, cohort_pin) = header_json(&a.cohort)?;
     let [identity, bound] = expected_scale_headers(&a, c, &receipt)?;
+    let (actual, result_pin) = authenticated_headers(&a.result)?;
     require(
-        authenticated_headers(&a.result)? == [identity.clone(), bound.clone()],
+        actual == [identity.clone(), bound.clone()],
         "native headers differ from independent authority",
     )?;
     let value = json!({"schema":SCALE_CONFIG_SCHEMA,
@@ -2232,12 +2344,98 @@ fn bind_completed_scale(authority_path: &Path, authority_sha: &str) -> Result<Va
         (serde_json::to_vec(&value)?.len() as u64) < CONFIG_CAP,
         "completed config cap",
     )?;
-    Ok(value)
+    let binding = BoundHeaders {
+        value,
+        inputs: [
+            HeaderSnapshot {
+                file,
+                path: authority_path.to_owned(),
+                identity: original,
+            },
+            config_pin,
+            cohort_pin,
+            result_pin,
+        ],
+    };
+    binding.recheck()?;
+    Ok(binding)
+}
+
+fn publish_bound_headers(output: &Path, binding: BoundHeaders) -> Result<bool> {
+    publish_bound_headers_with_sync(output, binding, |file, _| file.sync_all())
+}
+
+// This narrow sync adapter lets tests exercise the actual publication boundaries.
+// Other report modes retain their original writer and dispatch.
+fn publish_bound_headers_with_sync(
+    output: &Path,
+    binding: BoundHeaders,
+    mut sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<bool> {
+    header_path(output)?;
+    binding.recheck()?;
+    let mut expected = serde_json::to_vec(&binding.value)?;
+    expected.push(b'\n');
+    require(
+        expected.len() as u64 <= CONFIG_CAP,
+        "completed config publication cap",
+    )?;
+    let dir = parent(output)?;
+    let parent_identity = dir.metadata()?;
+    let mut file = File::from(openat(
+        &dir,
+        output.file_name().ok_or("output filename")?,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK
+            | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?);
+    let created = file_identity(&file)?;
+    file.write_all(&expected)?;
+    sync(&file, false)?;
+    let mut readback = header_file(output)?;
+    let published = file_identity(&readback)?;
+    require(
+        published.dev == created.dev
+            && published.ino == created.ino
+            && published.len == expected.len() as u64
+            && file_identity(&file)? == published,
+        "completed config descriptor identity",
+    )?;
+    let mut actual = Vec::with_capacity(expected.len());
+    Read::take(&mut readback, CONFIG_CAP + 1).read_to_end(&mut actual)?;
+    require(actual == expected, "completed config readback content")?;
+    recheck_header_file(&readback, output, &published)?;
+    binding.recheck()?;
+    sync(&dir, true)?;
+    // Both input and output identity checks remain live through directory sync.
+    recheck_header_file(&readback, output, &published)?;
+    require(
+        file.metadata()?.nlink() == 1 && file_identity(&file)? == published,
+        "completed config final descriptor",
+    )?;
+    let current_parent = parent(output)?.metadata()?;
+    require(
+        parent_identity.dev() == current_parent.dev()
+            && parent_identity.ino() == current_parent.ino(),
+        "completed config parent identity",
+    )?;
+    binding.recheck()?;
+    Ok(true)
 }
 
 #[cfg(test)]
 mod completed_header_binding_tests {
     use super::*;
+
+    // Frozen independently from the reviewed c3e52c8 emission and source-pin roster.
+    // Changing a production pin must not silently change the golden oracle.
+    const GOLDEN_BINARY: &str = "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3";
+    const GOLDEN_RESERVED: &str =
+        "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e";
 
     fn sha(body: &[u8]) -> String {
         format!("{:x}", Sha256::digest(body))
@@ -2255,7 +2453,7 @@ mod completed_header_binding_tests {
     fn bind(dir: &Path, authority: &Value) -> Result<Value> {
         let path = dir.join("authority.json");
         let pin = put_json(&path, authority);
-        bind_completed_scale(&path, pin["sha256"].as_str().unwrap())
+        bind_completed_scale(&path, pin["sha256"].as_str().unwrap()).map(|binding| binding.value)
     }
 
     fn result_body(rows: &[Value; 2]) -> Vec<u8> {
@@ -2271,7 +2469,7 @@ mod completed_header_binding_tests {
 
     fn fixture(dir: &Path, count: usize, s3: bool) -> (Value, Value, Value, [Value; 2]) {
         let requests = if count == 1000 {
-            RESERVED_QUERIES_SHA.to_owned()
+            GOLDEN_RESERVED.to_owned()
         } else {
             "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667".into()
         };
@@ -2293,7 +2491,7 @@ mod completed_header_binding_tests {
             "producer_source_sha256":"3".repeat(64),"sq8_source_sha256":"4".repeat(64),"source_order_source_sha256":"5".repeat(64)});
         let receipt = json!({"schema":"borsuk-cohere-native-cohort-receipt-v3","status":"COMPLETE",
             "dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
-            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","reserved_queries_sha256":RESERVED_QUERIES_SHA,
+            "revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","reserved_queries_sha256":GOLDEN_RESERVED,
             "geometry":{"corpus_rows":1_000_000,"query_rows":count,"dimensions":1024,"k":10,
                 "corpus_intervals":intervals,"reserved_query_interval":reserved,"query_source_ordinals":[100_000,100_000+count]},
             "outputs":[{"name":"corpus.f32","bytes":4_096_000_000_u64,"sha256":"c".repeat(64)},
@@ -2315,13 +2513,18 @@ mod completed_header_binding_tests {
             "producer_authority":producer,"max_memory_bytes":536_870_912,"fetch_parallelism":16,
             "serving":{"mode":"baseline"},"execution":execution});
         let config_pin = put_json(&dir.join("config.json"), &config);
-        let sources: serde_json::Map<String, Value> = BASELINE_HEADER_SOURCES
-            .iter()
-            .map(|(key, value)| (key.to_string(), json!(value)))
-            .collect();
+        let sources = json!({
+            "runner_source_sha256":"d5e593e5f8e2aa02697b366cc3bcd8e6fa4160071ea0e2ac337063f9ff0023c4",
+            "generation_source_sha256":"6acb7cdbb23d790aee8bfbcba8924ae09f0c7c7738e87ca2b3e40006fd0e3f38",
+            "router_source_sha256":"2961d9295d49e217e4b8c24ef734b09f079fa112306e65655962cebba17c7ae5",
+            "codec_source_sha256":"eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+            "source_plane_source_sha256":"dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+            "sq8_range_source_sha256":"3f6407664d5f2c1be817e4b32e6a9dce8d4bf8e66ca455e237d0e7b0716ad711",
+            "returned_source_sha256":"a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b"
+        }).as_object().unwrap().clone();
         // Independent full native-emission golden: never call expected_scale_headers here.
         let mut identity = json!({"schema":"borsuk-cohere-native-baseline-result-v7","phase":"identity",
-            "config_sha256":config_pin["sha256"],"binary_sha256":BASELINE_BINARY_SHA,
+            "config_sha256":config_pin["sha256"],"binary_sha256":GOLDEN_BINARY,
             "fetch_parallelism":16,"serving":{"mode":"baseline"},"execution":execution,
             "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
             "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
@@ -2337,7 +2540,7 @@ mod completed_header_binding_tests {
             "credential_source":if s3 { json!("imds_instance_role_only") } else { Value::Null },
             "requests_bytes":count*4096,"requests_sha256":requests,"truth_bytes":count*80,"truth_sha256":truth,
             "native_source_sha256":"d".repeat(64),"native_sq8_sha256":"e".repeat(64),"native_order_sha256":"f".repeat(64),
-            "corpus_intervals":intervals,"reserved_query_interval":reserved,"reserved_queries_sha256":RESERVED_QUERIES_SHA,
+            "corpus_intervals":intervals,"reserved_query_interval":reserved,"reserved_queries_sha256":GOLDEN_RESERVED,
             "cohort_receipt_sha256":cohort["sha256"],"derivation_receipt_sha256":"6".repeat(64),"producer_authority":producer,
             "max_memory_bytes":536_870_912,"fetch_parallelism":16,"serving":{"mode":"baseline"},"source_cache":"off",
             "execution":execution,"selected_count":32,"truth_opened":false});
@@ -2345,7 +2548,7 @@ mod completed_header_binding_tests {
         let result = put(&dir.join("result.jsonl"), &result_body(&headers));
         (
             json!({"schema":HEADER_AUTHORITY_SCHEMA,"config":config_pin,"result":result,
-            "cohort":cohort,"binary_sha256":BASELINE_BINARY_SHA,"sources":sources}),
+            "cohort":cohort,"binary_sha256":GOLDEN_BINARY,"sources":sources}),
             config,
             receipt,
             headers,
@@ -2374,6 +2577,18 @@ mod completed_header_binding_tests {
                 execute_report(&output, SCALE_CONFIG_SCHEMA, || panic!("occupied output")).is_err()
             );
             assert_eq!(std::fs::read(output).unwrap(), body);
+            let authority = dir.path().join("authority.json");
+            let pin = put_json(&authority, &a);
+            let binding =
+                bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+            let native_output = dir.path().join("native-completed.json");
+            assert!(publish_bound_headers(&native_output, binding).unwrap());
+            let published = std::fs::read(&native_output).unwrap();
+            assert_eq!(serde_json::from_slice::<Value>(&published).unwrap(), value);
+            let binding =
+                bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+            assert!(publish_bound_headers(&native_output, binding).is_err());
+            assert_eq!(std::fs::read(&native_output).unwrap(), published);
         }
     }
 
@@ -2464,6 +2679,32 @@ mod completed_header_binding_tests {
                 "{pointer}: {error}"
             );
         }
+        // Repin both inputs and matching emitted headers: header mismatch must not
+        // hide admission of a descriptor the original native executable rejects.
+        for (pointer, value) in [
+            ("/generation_prefix", json!("../x")),
+            ("/backend/bucket", json!("Bad_Bucket")),
+            ("/backend/bucket", json!("127.0.0.1")),
+            ("/backend/region", json!("-eu-central-1")),
+            ("/backend/physical_prefix", json!("retained//x")),
+            (
+                "/backend/sq8_object_key",
+                json!(format!("../objects/{}", "e".repeat(64))),
+            ),
+            ("/backend/sq8_etag", json!("unquoted")),
+            ("/backend/sq8_etag", json!("\"bad\"quote\"")),
+        ] {
+            let (mut bad, mut config, _, mut rows) = fixture(dir.path(), 1000, true);
+            *config.pointer_mut(pointer).unwrap() = value.clone();
+            *rows[1].pointer_mut(pointer).unwrap() = value;
+            bad["config"] = put_json(&dir.path().join("bad-config.json"), &config);
+            rows[0]["config_sha256"] = bad["config"]["sha256"].clone();
+            bad["result"] = put(&dir.path().join("bad-result.jsonl"), &result_body(&rows));
+            assert!(
+                bind(dir.path(), &bad).is_err(),
+                "native descriptor: {pointer}"
+            );
+        }
         for (pointer, value) in [
             ("/schema", json!("wrong")),
             ("/status", json!("INCOMPLETE")),
@@ -2546,6 +2787,35 @@ mod completed_header_binding_tests {
             let mut bad = a.clone();
             bad.pointer_mut(pointer).unwrap()["unexpected"] = json!(true);
             assert!(bind(dir.path(), &bad).is_err(), "{pointer}");
+        }
+        for role in ["config", "result"] {
+            for policy in ["execution", "serving", "backend", "producer_authority"] {
+                let original = if role == "config" {
+                    serde_json::to_vec(&c).unwrap()
+                } else {
+                    result_body(&rows)
+                };
+                let original = String::from_utf8(original).unwrap();
+                let needle = format!("\"{policy}\":{{");
+                assert!(original.contains(&needle));
+                let duplicated = original.replacen(
+                    &needle,
+                    &format!("{needle}\"duplicate\":0,\"duplicate\":1,"),
+                    1,
+                );
+                let mut bad = a.clone();
+                bad[role] = put(
+                    &dir.path().join("nested-duplicate.json"),
+                    duplicated.as_bytes(),
+                );
+                assert!(
+                    bind(dir.path(), &bad)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("duplicate JSON key"),
+                    "nested duplicate {role}/{policy}"
+                );
+            }
         }
         for pointer in [
             "",
@@ -2653,6 +2923,102 @@ mod completed_header_binding_tests {
 
     #[test]
     fn bind_completed_scale_publication_rejects_mutation() {
+        for role in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let (a, _, _, _) = fixture(dir.path(), 32, false);
+            let authority = dir.path().join("authority.json");
+            let pin = put_json(&authority, &a);
+            let binding =
+                bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+            let input = binding.inputs[role].path.clone();
+            let output = dir.path().join("completed.json");
+            assert!(
+                publish_bound_headers_with_sync(&output, binding, |file, directory| {
+                    file.sync_all()?;
+                    if directory {
+                        let mut body = std::fs::read(&input)?;
+                        body[0] ^= 1;
+                        std::fs::write(&input, body)?;
+                    }
+                    Ok(())
+                })
+                .is_err(),
+                "input role {role} changed at directory sync"
+            );
+        }
+        for role in 0..4 {
+            for mutation in 0..3 {
+                let dir = tempfile::tempdir().unwrap();
+                let (a, _, _, _) = fixture(dir.path(), 32, false);
+                let authority = dir.path().join("authority.json");
+                let pin = put_json(&authority, &a);
+                let binding =
+                    bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+                let path = binding.inputs[role].path.clone();
+                let body = std::fs::read(&path).unwrap();
+                match mutation {
+                    0 => {
+                        let mut changed = body.clone();
+                        changed[0] ^= 1;
+                        std::fs::write(&path, changed).unwrap();
+                    }
+                    1 => {
+                        std::fs::remove_file(&path).unwrap();
+                        std::fs::write(&path, body).unwrap();
+                    }
+                    _ => std::fs::hard_link(&path, dir.path().join("input-alias")).unwrap(),
+                }
+                let output = dir.path().join("completed.json");
+                assert!(
+                    publish_bound_headers(&output, binding).is_err(),
+                    "input role {role}, mutation {mutation}"
+                );
+                assert!(!output.exists());
+            }
+        }
+        for directory_boundary in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (a, _, _, _) = fixture(dir.path(), 32, false);
+            let authority = dir.path().join("authority.json");
+            let pin = put_json(&authority, &a);
+            let binding =
+                bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+            let output = dir.path().join("completed.json");
+            let outcome = publish_bound_headers_with_sync(&output, binding, |file, directory| {
+                file.sync_all()?;
+                if directory == directory_boundary {
+                    let mut body = std::fs::read(&output)?;
+                    body[0] ^= 1;
+                    std::fs::write(&output, body)?;
+                }
+                Ok(())
+            });
+            assert!(
+                outcome.is_err(),
+                "same-length output mutation, directory={directory_boundary}"
+            );
+        }
+        for fail_directory in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (a, _, _, _) = fixture(dir.path(), 32, false);
+            let authority = dir.path().join("authority.json");
+            let pin = put_json(&authority, &a);
+            let binding =
+                bind_completed_scale(&authority, pin["sha256"].as_str().unwrap()).unwrap();
+            assert!(
+                publish_bound_headers_with_sync(
+                    &dir.path().join("completed.json"),
+                    binding,
+                    |file, directory| {
+                        if directory == fail_directory {
+                            return Err(io::Error::other("injected sync failure"));
+                        }
+                        file.sync_all()
+                    }
+                )
+                .is_err()
+            );
+        }
         let dir = tempfile::tempdir().unwrap();
         let (a, _, _, _) = fixture(dir.path(), 32, false);
         let value = bind(dir.path(), &a).unwrap();
@@ -4232,7 +4598,7 @@ fn main() {
                 Path::new(&args[2]),
                 args[3].to_str().ok_or("authority SHA256 encoding")?,
             )?;
-            return execute_report(output, SCALE_CONFIG_SCHEMA, || Ok(config));
+            return publish_bound_headers(output, config);
         }
         if args.get(1).is_some_and(|arg| arg == "--source-utilization") {
             require(
