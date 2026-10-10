@@ -1,0 +1,48 @@
+{
+  "status": "SOURCE_ONLY_ADAPTER_RUNTIME_UNVERIFIED",
+  "input_revision": "0fe4f9b5e0b685d8bc5557558e7777de4791135f",
+  "inputs": {
+    "next1m-canary-worker.sh": "091e218b892bbabb2e9cbfea898c9777e5da0db33937ebb91a230cfcfeaae9c3",
+    "next1m-canary-watch.sh": "9ad7dc972d82143c376385a428244955404115c169ed30f5287af04cb7496185",
+    "next1m-canary-freeze.py": "b462f0b7a3e5a1ef13cba0c77849b1acc59de3db1e7e28cfd9f9df47362156b8",
+    "next1m-canary-launch-once.sh": "c68d2d9fb32e036121112ee958b118e61a995dbbd2ca1809fe0c8265fa6a7c3f",
+    "collector-smoke.sh": "db0db88fdbea2b4a6bfeee8b5b279270c474b34835f82e6eb5df45cb1d151c30",
+    "collect-native-chain-outer.sh": "a15dafd8d0a67f84f3eb3e41f6958676b00b848b58e60c9df7cac9977f8549a3",
+    "observer-command.sh": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+  },
+  "outputs": {
+    "next1m-collector-worker.sh": {
+      "bytes": 14109,
+      "sha256": "62734d96a8ca681a634f8fc0bfeb917aebb92b8da71979101366ba91c884c19a"
+    },
+    "next1m-collector-watch.sh": {
+      "bytes": 7385,
+      "sha256": "1b936ba5ec33aa18d818c9d11ab8f77e7b5cfb993d6608c3366684bb2401540e"
+    },
+    "next1m-collector-freeze.py": {
+      "bytes": 4455,
+      "sha256": "4ffc28d3ae7ab03f61c05f401d3a4ac2cb8cfeca13edebfaa3fcf347b5db127f"
+    },
+    "next1m-collector-launch-once.sh": {
+      "bytes": 4838,
+      "sha256": "e286327fec634e1f48ec9940a4f6bec4a8da121dfb92f46f58a56df9adda2160"
+    }
+  },
+  "new_controller_framework": false,
+  "ann_execution": false,
+  "native_binary_downloads": false,
+  "staging_timeout_seconds": 300,
+  "parent_runtime_seconds": 310,
+  "parent_timeout_stop_seconds": 10,
+  "launch_authority": false,
+  "performance_claim": false,
+  "static": {
+    "unit": "run-p489693-i713396855.service",
+    "invocation_id": "cd0f9754401548c99d06740c3d5f8ea3",
+    "bash_syntax_exit": 0,
+    "shellcheck_exit": 0,
+    "python_syntax_exit": 0
+  },
+  "independent_smoke_review_group": "fe86c3258f2a4710",
+  "both_reviews_pending": true
+}
