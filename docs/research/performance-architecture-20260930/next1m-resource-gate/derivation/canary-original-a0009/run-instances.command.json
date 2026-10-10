@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "15", "ec2", "run-instances", "--cli-input-json", "file:///data/target/borsuk-cold-membership-native/scale-maintenance-qualification-a0002/next1m-derivation-draft/canary-original-a0009/launch-request.json"]

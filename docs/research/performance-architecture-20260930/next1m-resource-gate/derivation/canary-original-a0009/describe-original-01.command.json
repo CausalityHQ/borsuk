@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "15", "ec2", "describe-instances", "--instance-ids", "i-0a0c7ae809e357160"]

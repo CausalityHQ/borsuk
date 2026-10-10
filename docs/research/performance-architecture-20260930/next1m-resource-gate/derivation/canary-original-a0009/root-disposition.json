@@ -1,0 +1,35 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "root bootstrap did not download tail/coordinator before source-bound fault fixture",
+  "source_commit": "731fb4a366e71383a1b31f03200f8983697664c1",
+  "instance_id": "i-0a0c7ae809e357160",
+  "original_exit": 94,
+  "fixture_exit": 1,
+  "archive_authentication": {
+    "bytes": 10087,
+    "sha256": "09fe27f6de7b3844272bbf21c2ff704ed27781e6aec55555050c2c064efa3ad2"
+  },
+  "archive_members": 12,
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-0a0c7ae809e357160",
+    "terminated": true,
+    "volumes": [
+      "vol-0d897c7f63071b5ba",
+      "vol-01ac91ed00219d37b"
+    ],
+    "both_volumes_absent": true,
+    "reason": "bootstrap_failure",
+    "user_data_sha256": "d7df499150fbc3f658dcf3847355618e7cf66fda939168f6fe4e32edf74cef7f",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "scratch_formatting": "NOT_RUN",
+  "platform": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "next_action": "download existing SHA-pinned tail/coordinator before unchanged fixture; new recorded attempt"
+}
