@@ -1,0 +1,19 @@
+{
+  "source_commit": "859ea0a851468e614b8a10f75a6c3cc2f50555c2",
+  "base": "45cb982eaf1a283abd0df8f1899f0d158c209c39",
+  "source_path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/launch-one-canary.py",
+  "bytes": 9718,
+  "sha256": "cf5d1d8131b57993689ec897f61d7c901693a9f853eb3dfda379a84f71791640",
+  "source_check": "PASS",
+  "unchanged_functions": [
+    "epoch",
+    "scratch_proof",
+    "checked"
+  ],
+  "one_run_instances": true,
+  "one_claim": true,
+  "timeout_partial_evidence": true,
+  "post_call_and_pre_success_deadline_checks": true,
+  "runtime_fixtures": "UNRUN",
+  "native_or_paid_run": false
+}

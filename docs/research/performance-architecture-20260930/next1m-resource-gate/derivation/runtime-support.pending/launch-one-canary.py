@@ -7,10 +7,16 @@ a=json.loads((root/'launch-admission.json').read_bytes())
 r=json.loads((root/'launch-request.json').read_bytes())
 env=dict(os.environ,AWS_MAX_ATTEMPTS='1',AWS_RETRY_MODE='standard',AWS_PAGER='')
 instance=None;watch_started=False
-def aws(name,args):
-    cmd=['aws','--profile','causality','--region','eu-central-1','--cli-connect-timeout','5','--cli-read-timeout','15',*args]
+def aws(name,args,limit=25,keep=False):
+    cmd=['aws','--profile','causality','--region','eu-central-1','--cli-connect-timeout','5','--cli-read-timeout',str(max(1,min(15,int(limit)))),*args]
     (root/(name+'.command.json')).write_text(json.dumps(cmd)+'\n')
-    result=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=25)
+    try:
+        result=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=min(25,limit))
+    except subprocess.TimeoutExpired as e:
+        if keep:
+            # observation calls only: retain the capped partial output and an explicit timeout outcome under the SAME name, then propagate (no retry)
+            (root/(name+'.stdout')).write_bytes((e.stdout or b'')[:65536]);(root/(name+'.stderr')).write_bytes((e.stderr or b'')[:65536]);(root/(name+'.exit')).write_text('TIMEOUT\n')
+        raise
     (root/(name+'.stdout')).write_bytes(result.stdout);(root/(name+'.stderr')).write_bytes(result.stderr)
     (root/(name+'.exit')).write_text(str(result.returncode)+'\n')
     return result
@@ -39,6 +45,22 @@ def scratch_proof(started,zone,instance,info,described,now):
     assert started-60<=launched<=min(now+60,started+240)
     assert launched-60<=created<=launched+60 and created-5<=attached<=launched+120
     return {'scratch':scratch,'root':rootvol,'launched':launched,'created':created,'attached':attached}
+def settle(observe,volume,instance,clock,sleep,window=30,spacing=2,limit=12):
+    # Finite observation of ONLY the scratch attachment: one DescribeVolumes per observation (an AWS error is never retried), every call clamped to the time left,
+    # each raw body distinct and <=64 KiB. 'attaching' is transient and is never accepted as final; anything malformed or foreign is refused immediately.
+    start=clock()
+    for n in range(1,limit+1):
+        left=window-(clock()-start);assert left>=3
+        rc,body=observe(n,min(25,left));assert clock()-start<=window   # a call that finished after the window can never succeed
+        assert rc==0 and type(body) is bytes and 0<len(body)<=65536
+        volumes=json.loads(body)['Volumes'];assert type(volumes) is list and len(volumes)==1 and volumes[0]['VolumeId']==volume
+        att=volumes[0]['Attachments'];assert type(att) is list and len(att)==1 and att[0]['InstanceId']==instance and att[0]['Device']=='/dev/sdf' and att[0]['VolumeId']==volume
+        if att[0]['State']=='attached':
+            assert clock()-start<=window   # and re-checked after parsing, immediately before success
+            return n,body,json.loads(body)
+        assert att[0]['State']=='attaching'
+        sleep(min(spacing,max(0,window-(clock()-start)-3)))
+    raise AssertionError('scratch attachment did not settle')
 assert time.time()-a['started_epoch']<180
 assert hashlib.sha256((root/'user-data.sh').read_bytes()).hexdigest()==a['user_data_sha256']
 assert hashlib.sha256((root/'watch-original.sh').read_bytes()).hexdigest()==a['watcher_sha256']
@@ -60,9 +82,9 @@ try:
     (root/'volume-ids.json').write_text(json.dumps(volumes)+'\n')
     # ---- API gate BEFORE the binding is published (single attempt, no retry loop; any failure leaves no binding and the cleanup below terminates the instance)
     zone=r['Placement']['AvailabilityZone']
-    described=checked('describe-scratch-volume',['ec2','describe-volumes','--volume-ids',scratch])
-    raw_instances=(root/'describe-original.stdout').read_bytes();raw_volumes=(root/'describe-scratch-volume.stdout').read_bytes()
-    assert len(raw_instances)<=65536 and len(raw_volumes)<=65536
+    seen,raw_volumes,described=settle(lambda i,left:(lambda x:(x.returncode,x.stdout))(aws('describe-scratch-volume-%02d'%i,['ec2','describe-volumes','--volume-ids',scratch],left,True)),scratch,instance,time.monotonic,time.sleep)
+    final_evidence='describe-scratch-volume-%02d.stdout'%seen;assert (root/final_evidence).read_bytes()==raw_volumes
+    raw_instances=(root/'describe-original.stdout').read_bytes();assert len(raw_instances)<=65536
     proof=scratch_proof(a['started_epoch'],zone,instance,info,described,int(time.time()));assert proof['scratch']==scratch
     binding={'schema':'borsuk-scratch-launch-binding-v2','instance_id':instance,'volume_id':scratch,'root_volume_id':proof['root'],'device':'/dev/sdf','size_bytes':42949672960,'availability_zone':zone,
              'volume_type':'gp3','encrypted':True,'multi_attach':False,'snapshot_empty':True,'state':'in-use','attached_device':'/dev/sdf','delete_on_termination':True,
@@ -76,7 +98,7 @@ try:
     cmd=['systemd-run','--user','--unit='+WATCH_UNIT,'-p','CPUQuota=100%','-p','AllowedCPUs=0','-p','MemoryMax=256M','-p','MemorySwapMax=0','-p','TasksMax=128','-p','RuntimeMaxSec=3900s','-p','Environment=AWS_MAX_ATTEMPTS=1','-p','Environment=AWS_PAGER=','bash',str(root/'watch-original.sh'),instance,str(a['started_epoch']),a['user_data_sha256']]
     subprocess.run(cmd,check=True,timeout=10)
     watch_started=True
-    (root/'launch-root-result.json').write_text(json.dumps({'instance_id':instance,'volumes':volumes,'watcher_unit':WATCH_UNIT+'.service','watcher_started':True,'performance_claim':False},indent=2)+'\n')
+    (root/'launch-root-result.json').write_text(json.dumps({'instance_id':instance,'volumes':volumes,'watcher_unit':WATCH_UNIT+'.service','watcher_started':True,'scratch_volume_final_evidence':final_evidence,'performance_claim':False},indent=2)+'\n')
     print(instance)
 except BaseException:
     if instance is None:
