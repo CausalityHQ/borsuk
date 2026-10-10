@@ -1,0 +1,62 @@
+{
+  "schema": "borsuk-next1m-disposable-canary-original-launch-v1",
+  "status": "ORIGINAL_INSTANCE_LAUNCHED_NOT_YET_TERMINAL",
+  "source_commit": "b3af3bf2c9bcff61558d7e929705bdbc324d3ab7",
+  "attempt": "a0001",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "spot",
+  "instance_id": "i-0c855769bfc73f88f",
+  "watch_unit": "borsuk-next1m-canary-a0001-bba7bd7615c7aefc.service",
+  "watch_invocation": "b67d2285b3a448dab78d520ad5bbed28",
+  "watcher_cleanup_armed": true,
+  "prefix": "research/semantic-router/20261010/borsuk-next1m-canary-a0001-bba7bd7615c7aefc/run",
+  "launch_epoch": 1791637973,
+  "quote_usd_per_hour": "0.215100",
+  "total_cost_cap_usd": 0.6,
+  "original_launcher_exit": 0,
+  "run_instances_calls": 1,
+  "runtime_scope": "Bash supervision fixtures and qualified ELF CLI usage only",
+  "ann_measurement": false,
+  "performance_claim": false,
+  "artifacts": {
+    "launch-freeze.json": {
+      "bytes": 1272,
+      "sha256": "5f780f9cfdb09c4c8bd0df93d8da7b025f0ce155a4a236a49d90b23b8dbc94de"
+    },
+    "root-source-admission.json": {
+      "bytes": 1392,
+      "sha256": "f0db5d1e44b963ecd5059ec7cfe848ef15a20d3961c9a43bdf5fdb145966ac18"
+    },
+    "request.json": {
+      "bytes": 1526,
+      "sha256": "6b49930f92eced9a14e4143a937e7daf7b30469cb8a8fa9f1450c9b266b314b1"
+    },
+    "bootstrap.sh": {
+      "bytes": 14988,
+      "sha256": "0c671d336778078674a3d6a839d57c5855f0d004a4b653a426db0989523e9fa5"
+    },
+    "spot-quote.json": {
+      "bytes": 417,
+      "sha256": "b1cf67ac8259190d3f040adaf4977c8523ec4a39072ff52548f0b8b849b9f853"
+    },
+    "run-instances.json": {
+      "bytes": 5300,
+      "sha256": "3fa5c3445f3e3bf7839b500e8a114c4460849e090d743487b7ca409e04bfa738"
+    },
+    "run-instances.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "watch.initial.show": {
+      "bytes": 113,
+      "sha256": "7daf6486aaa27ba30de1e6e3169ee4345dde6d40b68fa4612f4f5dd346fd82e6"
+    }
+  },
+  "remaining": [
+    "collect original watcher terminal exit",
+    "prove original instance termination and sole root volume deletion",
+    "authenticate full terminal evidence and mechanics replay",
+    "separate real1M input admission then fresh native run"
+  ]
+}

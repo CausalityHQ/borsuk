@@ -1,0 +1,68 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.2xlarge",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "ClientToken": "borsuk-next1m-canary-a0001-bba7bd7615c7aefc",
+  "IamInstanceProfile": {
+    "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+  },
+  "NetworkInterfaces": [
+    {
+      "AssociatePublicIpAddress": true,
+      "DeviceIndex": 0,
+      "Groups": [
+        "sg-0b1fd3e4fbde4af0d"
+      ],
+      "SubnetId": "subnet-034528fbd6977848f"
+    }
+  ],
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "VolumeSize": 48,
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "DeleteOnTermination": true
+      }
+    }
+  ],
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.60"
+    }
+  },
+  "MetadataOptions": {
+    "HttpTokens": "required",
+    "HttpEndpoint": "enabled"
+  },
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-next1m-canary-a0001-bba7bd7615c7aefc"
+        },
+        {
+          "Key": "Owner",
+          "Value": "borsuk/prod-ready-v9"
+        }
+      ]
+    },
+    {
+      "ResourceType": "volume",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-next1m-canary-a0001-bba7bd7615c7aefc"
+        }
+      ]
+    }
+  ]
+}
