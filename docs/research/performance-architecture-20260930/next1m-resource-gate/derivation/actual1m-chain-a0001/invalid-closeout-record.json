@@ -1,0 +1,241 @@
+{
+  "schema": "borsuk-native-q32-invalid-closeout-record-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0e842b3f25121d177",
+  "native_recall_observation": {
+    "numerator": 314,
+    "denominator": 320,
+    "accepted": false,
+    "physical_s3_measured": false
+  },
+  "pids_max_events": 23,
+  "infrastructure_closed": true,
+  "performance_claim": false,
+  "inventory": [
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/root-launch-request.json",
+      "bytes": 18495,
+      "sha256": "a0e961ee1a371bab77285c16a073c6f81654638a5c6ca7d79c38585abcd2bac4"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/evidence.tar.gz",
+      "bytes": 299058,
+      "sha256": "45018517d187c4eacf8a12623897062a284b219d2324fca94e6c5a3079f4ac8c"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/console.json",
+      "bytes": 71767,
+      "sha256": "86b43369c8ee73e8ccad4981e836bacbc248b8b566643b999c9c1685aeb18bfc"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminal.json",
+      "bytes": 525,
+      "sha256": "2252caf2664ff4b126889d1bab21dbab34870131e61cddb30db2b556f63e0ee0"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/manager.head.json",
+      "bytes": 259,
+      "sha256": "b09e315e97fb6237c6930094b2805e79b29a96895efc580d86ba024b19cc6187"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/launch-time.txt",
+      "bytes": 157,
+      "sha256": "63a9e6fa5ce9cb6f44e5c05cee8eaa6708d8de646a9d0bd7d5070a3b636afda9"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminal.head.json",
+      "bytes": 259,
+      "sha256": "91d53e7fab232f2db7ff57fd297fbb7cb22d7f7e6b190c2cadf06d31c9299503"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/manifest.get.json",
+      "bytes": 337,
+      "sha256": "e69ae8cb7801706791a1d51b27f13b33c147b5d1b3f4279f6b41db0d34e06c5b"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/root-launch-response.json",
+      "bytes": 5263,
+      "sha256": "810600148a55e01d8fc094320a0f686bde3327d156d0cffa1d53d1976b0e0297"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/state.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/artifacts.sha256",
+      "bytes": 21773,
+      "sha256": "82d6c0ff162ccf280c0b5bdd037a8a1cd1c4a3a5969d656bdf401d68083a6fc7"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminate.json",
+      "bytes": 329,
+      "sha256": "1d717271324a677f5b02ca9b21e91e3fed0c672bdee27a10e86b9dd5bc8bbc1d"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/state.txt",
+      "bytes": 61,
+      "sha256": "24081d5001ad7cd134fff32759d19657485af5f11b1c13907bb42106291331fc"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/root-scratch-volume.json",
+      "bytes": 1148,
+      "sha256": "948dbaa78207dbf65311aafff2ca7ca85320123c00241ba3593b3800488f4060"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/watcher-reason.txt",
+      "bytes": 9,
+      "sha256": "770b1fadc4019d4de6b2fd32561beaa2c8cffa7837f43c85cbeff1e211c60702"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/root-instance-terminated.json",
+      "bytes": 4058,
+      "sha256": "9d3e0a985229fea1a9da6dfc7ce3454b2d049648c491f89ea289dad6f1b3bf8c"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminal.get.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/console.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/root-instance-running.json",
+      "bytes": 8494,
+      "sha256": "1b9906d56ca7b243ee3e94bb2478fcd219c32af00773296ec796e3f6fce55688"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/evidence.get.json",
+      "bytes": 338,
+      "sha256": "c6b8c4974803241c872c258b07e39ea84a0847e9db70d21834d7ad18cbefb5b8"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/manager.head.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminal.head.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/remote-results/terminal.get.json",
+      "bytes": 335,
+      "sha256": "0fa3c3d532133f08c046a300f4d266b49f7d4a2aa99d107ef6b532d6e88bfb1f"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout/describe-terminated.command.json",
+      "bytes": 190,
+      "sha256": "c2359df59a6e1e0a925a6ffc86c39fd7d700f8f97bca63a8e387e31ed46acac8"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-terminated.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0820d1d944b7638d1.command.json",
+      "bytes": 188,
+      "sha256": "d6ea9aa04d7883648a5c3c9d4e5035c10403e046019221383a2f0b850447d392"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0820d1d944b7638d1.stderr",
+      "bytes": 178,
+      "sha256": "7e6a7c6109944e3dc8b92e40d0f034f55b29f98cda8d1b0ac78561398c55e30d"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0f70727aa9a745124.command.json",
+      "bytes": 188,
+      "sha256": "dd45d37179b876b8b44be13576ef8bc8868fb6d10045691861da0b57257cb5ec"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/manager-get.stdout",
+      "bytes": 335,
+      "sha256": "a14c4ab4b3b8064dab32300019e5945433d1f78edc569e053ecf0eee6536485d"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-terminated.stdout",
+      "bytes": 4058,
+      "sha256": "9d3e0a985229fea1a9da6dfc7ce3454b2d049648c491f89ea289dad6f1b3bf8c"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0820d1d944b7638d1.exit",
+      "bytes": 4,
+      "sha256": "935c13c9dd91be5099b33b68eb3e7bae188757853dfdff01ac9e0fda758e8552"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0f70727aa9a745124.exit",
+      "bytes": 4,
+      "sha256": "935c13c9dd91be5099b33b68eb3e7bae188757853dfdff01ac9e0fda758e8552"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0f70727aa9a745124.stderr",
+      "bytes": 178,
+      "sha256": "2b94291982eae756741f345b56eb776b3bf962009a7b7a4dffa289fd50a85272"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-terminated.command.json",
+      "bytes": 190,
+      "sha256": "c2359df59a6e1e0a925a6ffc86c39fd7d700f8f97bca63a8e387e31ed46acac8"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0820d1d944b7638d1.stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-vol-0f70727aa9a745124.stdout",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/manager-get.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/manager-get.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/describe-terminated.stderr",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/bootstrap-manager.json",
+      "bytes": 252,
+      "sha256": "271d712d3844e962f5cd369b183703b6cfce5a8f1d29d63524db980509764199"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-closeout-observation-a0002/manager-get.command.json",
+      "bytes": 469,
+      "sha256": "aedbdc48110792356f3f2ffb3fe651743dbf0b5e537602e6b6f7d49f2ab80ebc"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/authenticated-invalid-evidence/inventory.json",
+      "bytes": 26544,
+      "sha256": "495287ef33c13e988b9a94b51603ab9eab54539ce00b8deca7093ea9c03af738"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/authenticated-invalid-evidence/small-members.json",
+      "bytes": 283027,
+      "sha256": "aaa9132eb36ad8bb77472954691a310ec57ce978f0ec67c7fd1f83408bced19b"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/root-infrastructure-closeout.json",
+      "bytes": 608,
+      "sha256": "b5e00f85308b8ba2d757cc26fa81fd5f074322599131f68fe1a2da12a106ae9c"
+    },
+    {
+      "path": "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/actual1m-chain-a0001/execution-invalid-decision.md",
+      "bytes": 1962,
+      "sha256": "c96b7cce7b37100236654c192bbae3acde45bf80edfbe0e7f4fbeb5b0ec340a2"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+launch_time_raw=2026-10-10T02:47:07+00:00 launch_epoch=1791600427 supplied_started=1791600381 effective_started=1791600381 supplied_minus_launch_seconds=-46

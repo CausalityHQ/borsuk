@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-native-scale-root-closeout-v1",
+  "instance_id": "i-0e842b3f25121d177",
+  "terminated": true,
+  "volumes": [
+    "vol-0f70727aa9a745124",
+    "vol-0820d1d944b7638d1"
+  ],
+  "both_volumes_absent": true,
+  "watcher_exit": 10,
+  "bootstrap_exit": 93,
+  "original_exit": 93,
+  "phase": "chain-validation",
+  "chain_unit_exit": 98,
+  "manager_authenticated": true,
+  "archive_authenticated": {
+    "bytes": 299058,
+    "sha256": "45018517d187c4eacf8a12623897062a284b219d2324fca94e6c5a3079f4ac8c"
+  },
+  "classification": "EXECUTION_INVALID_DIAGNOSIS_PENDING",
+  "performance_claim": false
+}
