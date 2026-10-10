@@ -1,0 +1,46 @@
+{
+  "status": "REMOTE_COLLECTOR_SMOKE_SOURCE_ONLY_UNRUN",
+  "plan_consultation": "72663aa8c1f34869",
+  "plan_provider": "codex",
+  "plan_model": "gpt-6.1-sol",
+  "source_sha256": "db0db88fdbea2b4a6bfeee8b5b279270c474b34835f82e6eb5df45cb1d151c30",
+  "positive_cases": [
+    "positive0",
+    "positive2",
+    "positive3"
+  ],
+  "refusal_cases": [
+    "exit-disagreement",
+    "wrong-config",
+    "truncated-seal",
+    "replaced",
+    "populated",
+    "deadline"
+  ],
+  "all_phase_metadata_synthetic": true,
+  "real_kernel_and_systemd_required": true,
+  "ann_executed": false,
+  "performance_claim": false,
+  "planned_host": "causality EC2 Spot only",
+  "resources": {
+    "cpu": 1,
+    "memory_mib": 256,
+    "pids": 128,
+    "swap": 0,
+    "outer_runtime_seconds": 300,
+    "internal_batch_admission_seconds": 240,
+    "collector_per_case_timeout_seconds": 28
+  },
+  "static": {
+    "unit": "run-p190909-i713089798.service",
+    "invocation_id": "a22ec8e475de42f68f99c219e12666bb",
+    "bash_n_exit": 0,
+    "shellcheck_exit": 0
+  },
+  "remaining": [
+    "independent source critique",
+    "source-bound staging/cleanup adapter using existing EC2 canary machinery",
+    "one remote original smoke and closure audit",
+    "exact-source real 1M native gate"
+  ]
+}
