@@ -1,0 +1,64 @@
+{
+  "schema": "borsuk-native-header-binding-root-launch-freeze-v1",
+  "status": "ROOT_AUTHORIZED_COMPILER_AND_PLATFORM_CANARY_ONLY",
+  "candidate_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
+  "corrected_protocol_commit": "8bed4ae0519d545cf4f256ab697d74ed2a89d783",
+  "original_protocol_commit": "622008119fea4b8bbf697fe77eae0dce13b2e32f",
+  "source_archive": {
+    "bytes": 4215586,
+    "sha256": "a13670d429e7abe520370b07643f9d27f8509799e8aa318c6e073b694698dd01",
+    "s3_key": "research/semantic-router/20261010/native-header-binding-qualification-a0001/inputs/source.tar.gz",
+    "create_only_uploaded": true,
+    "whole_readback_equal": true
+  },
+  "payload_sha256": {
+    "setup": "a6e1d9226a1bd1db22cbd428ae2a7ffec36f02c470c1f1d47d90387cb49bd3c6",
+    "canary-success": "683adf7b7b1fc4dac181d9a50a68383579e70c1e38d3de301e1a81f8d1f6b946",
+    "canary-nonzero": "f31debc463c31e1c37c0e2160b2046979edb845fb5136f2ba4e3d09ea2a85831",
+    "canary-timeout": "fda06b1be64c3990e04c89930e9e3f2a586729c6e82a219c13dff10b1a0a038f",
+    "header-binding-tests": "e0872d3cd0ce77cfc93379de909f4795ed727606e24e5a7765cc2059ed8ced81",
+    "replay-regressions": "b955e431a3550c8b726c896219060905ab4832e700625dacae5240c2a9562dfc",
+    "release-reducer": "9f20e354c9434e5bf3485b60e365773850950807d382d32ad2b0c35738fc3a6c",
+    "workspace-clippy": "6ade7b7b56a8b36155780db7da442e024de380da3e0361713f0d3bc5a73a5e0f",
+    "real-workspace-test-build": "7e969589d5166de9398370f2181c57fa8452f4bc3d9ace776f41bb79a259afaf"
+  },
+  "launch_request_sha256": "12589cf17b588e03cb14bae986205b246fda9482fc44ff29b970a8752e1f045a",
+  "launch_user_data_sha256": "34cc995518766a569ce8263ccb4dfcbd055addcb3adce9a1c4416c382266e655",
+  "user_data_invocation": "aws ec2 run-instances --cli-input-json file://launch-request.pending.json --user-data file://launch-user-data.pending.txt; CLI performs base64 encoding, source is raw UTF-8",
+  "user_data_reference": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html",
+  "dry_run": {
+    "original_cli_exit": 254,
+    "error_code": "DryRunOperation",
+    "request_would_have_succeeded": true,
+    "wrapper_wrongly_expected_255_and_exit_1_preserved": true
+  },
+  "verified_infrastructure": {
+    "ami": "ami-0b8a830d6339a9758",
+    "subnet": "subnet-0a12dbed0ca6fac25",
+    "security_group": "sg-0b1fd3e4fbde4af0d",
+    "profile": "borsuk-bench-profile",
+    "az": "eu-central-1c",
+    "ssm_core_role_policy": true,
+    "s3_role_policy": true
+  },
+  "cost": {
+    "spot_quote_usd_per_hour": 0.2038,
+    "max_spot_bid_usd_per_hour": 0.6,
+    "total_reservation_usd": 1.65
+  },
+  "root_external_stop_seconds": 8880,
+  "machine_backup_stop_seconds": 9000,
+  "root_external_stop_command": "Exact instance only, AWS_MAX_ATTEMPTS=1, 25-second terminate request, independently retained user timer. Cancel only after authenticated terminal, exact-instance termination and wait.",
+  "ssm_output": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "prefix": "research/semantic-router/20261010/native-header-binding-qualification-a0001/ssm",
+    "must_record_original_command_ids": true
+  },
+  "scope": "Compiler correctness + disposable platform mechanics; no real corpus, ANN recall/performance, or vendor comparison. Same instance only, no automatic retry.",
+  "full_reviews_reconciled": "06b4c174db4b44fb",
+  "runtime_canary_remains_unverified": true,
+  "native_source_remains_unverified": true,
+  "claims_quality": false,
+  "claims_performance": false,
+  "claims_vendor_win": false
+}
