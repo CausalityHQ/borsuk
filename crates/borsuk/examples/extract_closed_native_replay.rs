@@ -298,7 +298,11 @@ impl Destination {
     fn finish(&mut self) -> Result<()> {
         self.check_files()?;
         for (relative, (file, dev, ino)) in self.directories.iter().rev() {
-            let path = self.path.join(relative);
+            let path = if relative.is_empty() {
+                self.path.clone()
+            } else {
+                self.path.join(relative)
+            };
             canonical(&path)?;
             let m = file.metadata()?;
             require(
@@ -328,7 +332,11 @@ impl Destination {
         )?;
         self.check_files()?;
         for (relative, (file, dev, ino)) in &self.directories {
-            let path = self.path.join(relative);
+            let path = if relative.is_empty() {
+                self.path.clone()
+            } else {
+                self.path.join(relative)
+            };
             canonical(&path)?;
             let m = file.metadata()?;
             require(
