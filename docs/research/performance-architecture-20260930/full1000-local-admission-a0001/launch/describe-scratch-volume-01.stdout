@@ -1,0 +1,34 @@
+{
+    "Volumes": [
+        {
+            "AvailabilityZoneId": "euc1-az1",
+            "Iops": 3000,
+            "VolumeType": "gp3",
+            "MultiAttachEnabled": false,
+            "Throughput": 125,
+            "Operator": {
+                "Managed": false,
+                "HiddenByDefault": false
+            },
+            "VolumeId": "vol-0aa6aef59081b851f",
+            "Size": 40,
+            "SnapshotId": "",
+            "AvailabilityZone": "eu-central-1c",
+            "State": "in-use",
+            "CreateTime": "2026-10-10T19:31:46.612000+00:00",
+            "Attachments": [
+                {
+                    "DeleteOnTermination": true,
+                    "EbsCardIndex": 0,
+                    "VolumeId": "vol-0aa6aef59081b851f",
+                    "InstanceId": "i-0d3ddaa09b5830cbd",
+                    "Device": "/dev/sdf",
+                    "State": "attached",
+                    "AttachTime": "2026-10-10T19:31:46+00:00"
+                }
+            ],
+            "Encrypted": true,
+            "KmsKeyId": "arn:aws:kms:eu-central-1:453182569524:key/178b1b36-e23a-46f7-bbbc-ec94874c9924"
+        }
+    ]
+}

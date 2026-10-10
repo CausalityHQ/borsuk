@@ -1,0 +1,1 @@
+["aws", "--profile", "causality", "--region", "eu-central-1", "--cli-connect-timeout", "5", "--cli-read-timeout", "15", "ec2", "run-instances", "--cli-input-json", "file:///tmp/borsuk-full1000-local-admission-a0001/launch-request.json"]
