@@ -1,0 +1,32 @@
+[
+  [
+    "run-platform-pair.sh",
+    5152,
+    "c8d66709c10498ecd625dc37dbb86ee8f30c1508e2ba6f7cb21af038eac7d932"
+  ],
+  [
+    "run-platform-canary.sh",
+    3342,
+    "0ec6b4f5717ddb4e50ea03363288446f17f4b3da2dde0e2b79d2c416ce54644c"
+  ],
+  [
+    "collect-stage-outer.sh",
+    14630,
+    "ac51d8b718acff95158c83dafd14d1da5a3919f3ed80077c3e071596ffdf5023"
+  ],
+  [
+    "observer-command.sh",
+    643,
+    "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+  ],
+  [
+    "timeout-descendant.sh",
+    992,
+    "1bda564e59d140aa5f28fa82b046d6678504ead9133b262c4513e6e8ce7b4436"
+  ],
+  [
+    "staging-library.sh",
+    44094,
+    "4f2943c8dd73df94fee7d1b7569e6af186424bbeefeec14c47bd9f502f36cc1c"
+  ]
+]
