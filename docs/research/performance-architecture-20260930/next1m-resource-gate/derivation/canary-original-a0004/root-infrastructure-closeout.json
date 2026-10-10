@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-canary-infrastructure-closeout-v1",
+  "instance_id": "i-001370d203c1b4f2e",
+  "terminated": true,
+  "volumes": [
+    "vol-033c44b8f1746d7ad",
+    "vol-0c649e190901dd065"
+  ],
+  "both_volumes_absent": true,
+  "reason": "prepublication API gate refused transient attaching state",
+  "binding_published": false,
+  "watcher_started": false,
+  "guest_fixture_result": "NOT_RUN",
+  "ann_run": false,
+  "performance_claim": false,
+  "disposition": "EXECUTION_INVALID"
+}

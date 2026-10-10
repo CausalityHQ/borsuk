@@ -1,0 +1,47 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "source_commit": "deb619df49d18a9366d39b10af2b568b4b341ec6",
+  "instance_id": "i-001370d203c1b4f2e",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "pre-publication attachment readiness race: observed attaching, strict attached gate refused",
+  "launch_original": {
+    "session": 66756,
+    "unit": "run-p2895906-i673866341.service",
+    "invocation": "964a28a8597d4b409f81b00ed82b14b9",
+    "exit": 1,
+    "runtime_seconds": 7.435
+  },
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-001370d203c1b4f2e",
+    "terminated": true,
+    "volumes": [
+      "vol-033c44b8f1746d7ad",
+      "vol-0c649e190901dd065"
+    ],
+    "both_volumes_absent": true,
+    "reason": "prepublication API gate refused transient attaching state",
+    "binding_published": false,
+    "watcher_started": false,
+    "guest_fixture_result": "NOT_RUN",
+    "ann_run": false,
+    "performance_claim": false,
+    "disposition": "EXECUTION_INVALID"
+  },
+  "closure_original": {
+    "session": 43296,
+    "unit": "run-p2967934-i673924702.service",
+    "invocation": "379d6ca1e024453c82650f74067798dc",
+    "exit": 0,
+    "runtime_seconds": 8.256
+  },
+  "first_closure_observation": "root-closeout retained: instance still shutting-down; observation exit1, not terminal instance failure",
+  "binding_published": false,
+  "fixture_runtime": "NOT_RUN",
+  "guest_environment_canary": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "historical_attempts_preserved": true,
+  "next_action": "Observe attachment to final attached within prospective finite30s deadline, then unchanged proof; retain every raw response; no current claim reset or retry"
+}
