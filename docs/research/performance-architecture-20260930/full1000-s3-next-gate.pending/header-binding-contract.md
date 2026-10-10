@@ -1,0 +1,13 @@
+# Completed-config binding seam
+
+SOURCE ONLY, runtime UNVERIFIED. The minimal Python file is experiment glue, not an ANN implementation or product component. It must execute only on causality EC2 under CPU1/256MiB/swap0/PID128/120s. Local verification was py_compile only; no source function was invoked against data.
+
+CLI: `python3 bind-completed-config.py AUTHORITY AUTHORITY_SHA NEW_COMPLETED_CONFIG`.
+
+Root constructs and freezes an authority with exact keys schema/config/result/cohort/binary_sha256/sources. Schema is borsuk-completed-header-authority-v1. The three artifacts carry absolute path/bytes/sha256; config and cohort are <=64KiB; closed result <=32MiB. Original config bytes must come from an independently authenticated original archive, or the finalized new S3 native config. Root validates archive/manifest and original native/manager/outer closure before invoking this glue. Root must independently pin binary/source authority: the script does not establish compiler provenance or verify the binary executable itself.
+
+Sources are the exact seven include_bytes component hashes in baseline-source-pins.json, computed from native source c3e52c8. Original baseline binary is SHA59fe47aa...11bfc3. Native result schema is v7. Expected identity and complete bound-input row are reconstructed independently from pinned config, cohort reserved-query seal, binary and source authority, matching the literal native emission source. Only after whole-result SHA/EOF and filesystem-stamp verification are the first two native rows compared exactly (including phase, all keys/types and nested values). Unknown row additions cannot be dropped. Header equality uses canonical JSON bytes to distinguish bools from integer values.
+
+Fresh output is completed-native-reduction-config-v4 (<=32KiB), create-exclusive, synced file then containing directory; any failure exits98. The caller requires original normal manager and outer exits0 plus actual closed native reduction. File existence is not acceptance. This binder does not validate query rows, seals, terminal, truth, recall or provenance equivalence; the qualified Rust reducer and external generation-component gate still do that. No quality outcome is inferred here.
+
+Remaining remote falsifiers: both real historical and a0004 completed runs; wrong pinned config/SHA/source identity, unknown native header field, duplicate JSON field, changed header value/type, trailing/truncated result, occupied output and failed publication; native reducer and triple-parity execution under original supervised exits. Separate real-S3 canary remains prerequisite to full1000 cold measurement.
