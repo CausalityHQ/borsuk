@@ -1,0 +1,793 @@
+{
+  "id": "6162f3b6ad694420",
+  "status": "completed",
+  "started_at": 1791657905,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "Distinct result-gated successor review after full1000 preparation a0002 closed successfully; prior critique covered preparation/retention, not this new full-cohort local-panel adaptation. No duplicate question or paid experiment.",
+  "rolling_6h_count": 7,
+  "prompt_preview": "Read-only bounded review of NEW full1000 local-panel candidate. Read /tmp/borsuk-full1000-next-gate-source/local-panel-review-input.md in full, then exact four stable files named there and original /tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run_native_scale_build_gate.sh. Compare exact delta and committed runner c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38:crates/borsuk/src/bin/check_cohere_native_baseline.rs only relevant ranges. Closed prep receipts /tmp/borsuk-full1000-preparation-a0002/closed-text-receipts and independent-preparation-decision.md are textual evidence; raw corpus/query/truth unopened. Need blockers before remote source-bound admission and separate canary, not launch approval/performance. Check hidden Q32 assumptions, strict geometry/seals, panel serialization/output caps, source-component equivalence, resource/disk arithmetic, closure. Outer transport remap intentionally pending, not claimed done. No edits, tests/runtime/Cargo/native/network/AWS/new consultations/children or broad scans; stay read-only/source-local. Return precise findings/evidence and minimal correction.",
+  "prompt_sha256": "eadc7e74ff0a34f7c8cbd8efef523b83245a0c92fc75462fa86cf38165780888",
+  "prompt_bytes": 1108,
+  "fingerprint": "f03df23f7e7d44b4041c25bc2616cf5554187b155a6214504f76da03ff8309ef",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "a56e79951b214191",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791657905,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791659105,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only bounded review of NEW full1000 local-panel candidate. Read /tmp/borsuk-full1000-next-gate-source/local-panel-review-input.md in full, then exact four stable files named there and original /tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run_native_scale_build_gate.sh. Compare exact delta and committed runner c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38:crates/borsuk/src/bin/check_cohere_native_baseline.rs only relevant ranges. Closed prep receipts /tmp/borsuk-full1000-preparation-a0002/closed-text-receipts and independent-preparation-decision.md are textual evidence; raw corpus/query/truth unopened. Need blockers before remote source-bound admission and separate canary, not launch approval/performance. Check hidden Q32 assumptions, strict geometry/seals, panel serialization/output caps, source-component equivalence, resource/disk arithmetic, closure. Outer transport remap intentionally pending, not claimed done. No edits, tests/runtime/Cargo/native/network/AWS/new consultations/children or broad scans; stay read-only/source-local. Return precise findings/evidence and minimal correction.",
+      "prompt_sha256": "8f2ca4654b151ca479059652e82ae44812da5e5fc95b107ca4bc2f2a774bc6cf",
+      "prompt_bytes": 1492,
+      "fingerprint": "e737996bec9936cb927215e8cd0eefc83db6bcc91d3c69763abeac960eeb1fb3",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "4800ec65b0e6f00a4c541c4daa97278080a354b8dcc714484c14597e757b2291",
+      "reused": false,
+      "critique_id": "6162f3b6ad694420",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-a56e79951b214191.service",
+      "pid": 2130237,
+      "pgid": 2130237,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791657905,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1189,
+          "started_at": 1791657916
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791658256,
+      "event_cursor": 81,
+      "events": [
+        {
+          "seq": 58,
+          "at": 1791658045,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 59,
+          "at": 1791658058,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 60,
+          "at": 1791658058,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 61,
+          "at": 1791658063,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 62,
+          "at": 1791658067,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 63,
+          "at": 1791658078,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 64,
+          "at": 1791658078,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 65,
+          "at": 1791658078,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 66,
+          "at": 1791658080,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 67,
+          "at": 1791658091,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 68,
+          "at": 1791658091,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 69,
+          "at": 1791658091,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 70,
+          "at": 1791658092,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 71,
+          "at": 1791658147,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 72,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 73,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 74,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 75,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 76,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 77,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 78,
+          "at": 1791658180,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 79,
+          "at": 1791658181,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 80,
+          "at": 1791658253,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 81,
+          "at": 1791658255,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791657905,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 · $4 cap · 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791657906,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791657906,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791657914,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791657916,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791657916,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider limit reached; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 74,
+            "at": 1791658180,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 75,
+            "at": 1791658180,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 76,
+            "at": 1791658180,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 77,
+            "at": 1791658180,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 78,
+            "at": 1791658180,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 79,
+            "at": 1791658181,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 80,
+            "at": 1791658253,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 81,
+            "at": 1791658255,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "**Verdict: no demonstrated source blocker in the exact full1000/panel32 delta.** The candidate remains unqualified for execution until the acknowledged outer transport work, source-bound admission and separate canary are closed. One stale disk bound should be corrected before freezing.\n\n1. **The disk validator retains the Q32 minimum.**  \n   [Candidate gate, line 145](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) still accepts `disk_proposal_bytes >= 27581982055`, although the new proposal is `27586214240`. A configuration retaining the old total would pass this check while understating the declared envelope by **4,232,185 bytes**.  \n   **Minimal correction:** raise that minimum to `27586214240`. This does not break the supplied configuration, which already contains the correct value.\n\n2. **The pending transport needs a placement and copy-count contract.**  \n   The transport stages bodies under `assets/prepared/*`; the gate expects `prepared-parent/cohort/*`. This is explicitly acknowledged as pending, so it is **unfinished outer glue, not a concealed source defect**. Before admission, bind the final mapping, dedicated mount identity and 40 GiB device bound. If remapping copies bodies while retaining their staging copies, account for another **4,301,245,463 bytes**, plus the receipt.  \n   The gate’s [disk check](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:843) checks available capacity; it does not enforce `disk_proposal_bytes` as a usage quota.\n\n3. **Closure requires the result body and external acceptance checks.**  \n   The wrapper deliberately treats baseline output as opaque and [requires external replay](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:95). Its closure manifest seals evidence files, while the result body lives in the scratch query directory.  \n   **Minimal correction to the outer acceptance contract:** retain that body, verify its recorded length/SHA and durable seal, check the exact ordinal sequence `0..31`, selected/executed count **32**, population count **1000**, terminal status and denominator **320**. Collect actual wrapper/manager/outer exits and cleanup evidence. `NATIVE_CHAIN_CLOSED` alone cannot establish query completion or full1000 qualification.\n\n4. **Source-component equivalence remains an external evidence dependency.**  \n   Corpus identity, derivation configuration and producer authority are unchanged. The committed runner binds normalized source, SQ8, source order and exact calibration bits through the derivation and generation receipts. However, it explicitly labels producer qualification an external prerequisite; the supplied preparation receipts establish cohort identity, not executable-to-source equivalence.  \n   **Minimal correction:** bind the existing accepted producer/component qualification receipt into the new frozen admission evidence. This calls for evidence reuse, not recompilation or repeated preparation.\n\nThe substantive checks are coherent:\n\n- **No hidden Q32 population assumption found.** At committed runner `c3e52c8b`, `population`, `validate_population`, `selected_len` and `ordinal_at` support count 1000 with 32 original ordinals. All 1000 request rows are authenticated and validated; all 1000 truth rows are checked after the selected results are durably sealed.\n- **Geometry and seals agree.** The candidate, transport descriptors and closed preparation receipt agree on 1M/1000/D1024/k10, corpus intervals, reserved-query interval and output identities.\n- **Memory and output bounds account for the change.** The runner charges the full request body and 131,072 bytes of panel buffers with tracing disabled. The 65,536-byte panel-line cap and 64 MiB result-file cap are distinct from the wrapper’s 1 MiB stdout cap. Actual fit under 512 MiB still requires admission evidence.\n- **Disk arithmetic is correct:**  \n  `3,964,928 + 189,817 + 77,440 = 4,232,185` additional body bytes.  \n  `27,586,214,240 − 4,301,245,463 = 23,284,968,777` fresh bytes, matching the unchanged fresh-space requirement.\n\nReusing the corpus-only derivation is justified by the unchanged corpus and configuration. The historical first-32 panel is useful for integration continuity; it cannot establish population recall or tail latency. The runner correctly marks those claims invalid for panel execution.\n\nRead-only source review only. No edits, tests, native execution, network/AWS access or consultations; raw corpus, query and truth bodies remained unopened.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "You've hit your weekly limit · resets Oct 13, 12am (UTC)",
+        "codex": "**Verdict: no demonstrated source blocker in the exact full1000/panel32 delta.** The candidate remains unqualified for execution until the acknowledged outer transport work, source-bound admission and separate canary are closed. One stale disk bound should be corrected before freezing.\n\n1. **The disk validator retains the Q32 minimum.**  \n   [Candidate gate, line 145](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) still accepts `disk_proposal_bytes >= 27581982055`, although the new proposal is `27586214240`. A configuration retaining the old total would pass this check while understating the declared envelope by **4,232,185 bytes**.  \n   **Minimal correction:** raise that minimum to `27586214240`. This does not break the supplied configuration, which already contains the correct value.\n\n2. **The pending transport needs a placement and copy-count contract.**  \n   The transport stages bodies under `assets/prepared/*`; the gate expects `prepared-parent/cohort/*`. This is explicitly acknowledged as pending, so it is **unfinished outer glue, not a concealed source defect**. Before admission, bind the final mapping, dedicated mount identity and 40 GiB device bound. If remapping copies bodies while retaining their staging copies, account for another **4,301,245,463 bytes**, plus the receipt.  \n   The gate’s [disk check](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:843) checks available capacity; it does not enforce `disk_proposal_bytes` as a usage quota.\n\n3. **Closure requires the result body and external acceptance checks.**  \n   The wrapper deliberately treats baseline output as opaque and [requires external replay](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:95). Its closure manifest seals evidence files, while the result body lives in the scratch query directory.  \n   **Minimal correction to the outer acceptance contract:** retain that body, verify its recorded length/SHA and durable seal, check the exact ordinal sequence `0..31`, selected/executed count **32**, population count **1000**, terminal status and denominator **320**. Collect actual wrapper/manager/outer exits and cleanup evidence. `NATIVE_CHAIN_CLOSED` alone cannot establish query completion or full1000 qualification.\n\n4. **Source-component equivalence remains an external evidence dependency.**  \n   Corpus identity, derivation configuration and producer authority are unchanged. The committed runner binds normalized source, SQ8, source order and exact calibration bits through the derivation and generation receipts. However, it explicitly labels producer qualification an external prerequisite; the supplied preparation receipts establish cohort identity, not executable-to-source equivalence.  \n   **Minimal correction:** bind the existing accepted producer/component qualification receipt into the new frozen admission evidence. This calls for evidence reuse, not recompilation or repeated preparation.\n\nThe substantive checks are coherent:\n\n- **No hidden Q32 population assumption found.** At committed runner `c3e52c8b`, `population`, `validate_population`, `selected_len` and `ordinal_at` support count 1000 with 32 original ordinals. All 1000 request rows are authenticated and validated; all 1000 truth rows are checked after the selected results are durably sealed.\n- **Geometry and seals agree.** The candidate, transport descriptors and closed preparation receipt agree on 1M/1000/D1024/k10, corpus intervals, reserved-query interval and output identities.\n- **Memory and output bounds account for the change.** The runner charges the full request body and 131,072 bytes of panel buffers with tracing disabled. The 65,536-byte panel-line cap and 64 MiB result-file cap are distinct from the wrapper’s 1 MiB stdout cap. Actual fit under 512 MiB still requires admission evidence.\n- **Disk arithmetic is correct:**  \n  `3,964,928 + 189,817 + 77,440 = 4,232,185` additional body bytes.  \n  `27,586,214,240 − 4,301,245,463 = 23,284,968,777` fresh bytes, matching the unchanged fresh-space requirement.\n\nReusing the corpus-only derivation is justified by the unchanged corpus and configuration. The historical first-32 panel is useful for integration continuity; it cannot establish population recall or tail latency. The runner correctly marks those claims invalid for panel execution.\n\nRead-only source review only. No edits, tests, native execution, network/AWS access or consultations; raw corpus, query and truth bodies remained unopened."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1492,
+      "output_bytes": 4587,
+      "elapsed_seconds": 351,
+      "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)",
+      "progress_truncated": false,
+      "result": "**Verdict: no demonstrated source blocker in the exact full1000/panel32 delta.** The candidate remains unqualified for execution until the acknowledged outer transport work, source-bound admission and separate canary are closed. One stale disk bound should be corrected before freezing.\n\n1. **The disk validator retains the Q32 minimum.**  \n   [Candidate gate, line 145](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) still accepts `disk_proposal_bytes >= 27581982055`, although the new proposal is `27586214240`. A configuration retaining the old total would pass this check while understating the declared envelope by **4,232,185 bytes**.  \n   **Minimal correction:** raise that minimum to `27586214240`. This does not break the supplied configuration, which already contains the correct value.\n\n2. **The pending transport needs a placement and copy-count contract.**  \n   The transport stages bodies under `assets/prepared/*`; the gate expects `prepared-parent/cohort/*`. This is explicitly acknowledged as pending, so it is **unfinished outer glue, not a concealed source defect**. Before admission, bind the final mapping, dedicated mount identity and 40 GiB device bound. If remapping copies bodies while retaining their staging copies, account for another **4,301,245,463 bytes**, plus the receipt.  \n   The gate’s [disk check](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:843) checks available capacity; it does not enforce `disk_proposal_bytes` as a usage quota.\n\n3. **Closure requires the result body and external acceptance checks.**  \n   The wrapper deliberately treats baseline output as opaque and [requires external replay](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:95). Its closure manifest seals evidence files, while the result body lives in the scratch query directory.  \n   **Minimal correction to the outer acceptance contract:** retain that body, verify its recorded length/SHA and durable seal, check the exact ordinal sequence `0..31`, selected/executed count **32**, population count **1000**, terminal status and denominator **320**. Collect actual wrapper/manager/outer exits and cleanup evidence. `NATIVE_CHAIN_CLOSED` alone cannot establish query completion or full1000 qualification.\n\n4. **Source-component equivalence remains an external evidence dependency.**  \n   Corpus identity, derivation configuration and producer authority are unchanged. The committed runner binds normalized source, SQ8, source order and exact calibration bits through the derivation and generation receipts. However, it explicitly labels producer qualification an external prerequisite; the supplied preparation receipts establish cohort identity, not executable-to-source equivalence.  \n   **Minimal correction:** bind the existing accepted producer/component qualification receipt into the new frozen admission evidence. This calls for evidence reuse, not recompilation or repeated preparation.\n\nThe substantive checks are coherent:\n\n- **No hidden Q32 population assumption found.** At committed runner `c3e52c8b`, `population`, `validate_population`, `selected_len` and `ordinal_at` support count 1000 with 32 original ordinals. All 1000 request rows are authenticated and validated; all 1000 truth rows are checked after the selected results are durably sealed.\n- **Geometry and seals agree.** The candidate, transport descriptors and closed preparation receipt agree on 1M/1000/D1024/k10, corpus intervals, reserved-query interval and output identities.\n- **Memory and output bounds account for the change.** The runner charges the full request body and 131,072 bytes of panel buffers with tracing disabled. The 65,536-byte panel-line cap and 64 MiB result-file cap are distinct from the wrapper’s 1 MiB stdout cap. Actual fit under 512 MiB still requires admission evidence.\n- **Disk arithmetic is correct:**  \n  `3,964,928 + 189,817 + 77,440 = 4,232,185` additional body bytes.  \n  `27,586,214,240 − 4,301,245,463 = 23,284,968,777` fresh bytes, matching the unchanged fresh-space requirement.\n\nReusing the corpus-only derivation is justified by the unchanged corpus and configuration. The historical first-32 panel is useful for integration continuity; it cannot establish population recall or tail latency. The runner correctly marks those claims invalid for panel execution.\n\nRead-only source review only. No edits, tests, native execution, network/AWS access or consultations; raw corpus, query and truth bodies remained unopened.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "c2763d2c2ff34ce3",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791657905,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791659105,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only bounded review of NEW full1000 local-panel candidate. Read /tmp/borsuk-full1000-next-gate-source/local-panel-review-input.md in full, then exact four stable files named there and original /tmp/borsuk-next1m-native-a0002-603fd5f9/assets/run_native_scale_build_gate.sh. Compare exact delta and committed runner c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38:crates/borsuk/src/bin/check_cohere_native_baseline.rs only relevant ranges. Closed prep receipts /tmp/borsuk-full1000-preparation-a0002/closed-text-receipts and independent-preparation-decision.md are textual evidence; raw corpus/query/truth unopened. Need blockers before remote source-bound admission and separate canary, not launch approval/performance. Check hidden Q32 assumptions, strict geometry/seals, panel serialization/output caps, source-component equivalence, resource/disk arithmetic, closure. Outer transport remap intentionally pending, not claimed done. No edits, tests/runtime/Cargo/native/network/AWS/new consultations/children or broad scans; stay read-only/source-local. Return precise findings/evidence and minimal correction.",
+      "prompt_sha256": "fb353113d9f71da5891dc19f6fd43b5d731a1c2f3266ccdec9fcb5469e3ea0f3",
+      "prompt_bytes": 1526,
+      "fingerprint": "2b0d26af004c40b6dd702f3547cb4e37cdd1ab1b942a62d66695f57a25e0a122",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "e737996bec9936cb927215e8cd0eefc83db6bcc91d3c69763abeac960eeb1fb3",
+      "reused": false,
+      "critique_id": "6162f3b6ad694420",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-c2763d2c2ff34ce3.service",
+      "pid": 2130373,
+      "pgid": 2130373,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1200,
+          "started_at": 1791657905
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791658160,
+      "event_cursor": 52,
+      "events": [
+        {
+          "seq": 29,
+          "at": 1791658018,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 30,
+          "at": 1791658019,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 31,
+          "at": 1791658019,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 32,
+          "at": 1791658020,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 33,
+          "at": 1791658024,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 34,
+          "at": 1791658026,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 35,
+          "at": 1791658027,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 36,
+          "at": 1791658033,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 37,
+          "at": 1791658033,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 38,
+          "at": 1791658044,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 39,
+          "at": 1791658044,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 40,
+          "at": 1791658045,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 41,
+          "at": 1791658045,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 42,
+          "at": 1791658057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 43,
+          "at": 1791658066,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 44,
+          "at": 1791658066,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 45,
+          "at": 1791658066,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 46,
+          "at": 1791658085,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 47,
+          "at": 1791658101,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 48,
+          "at": 1791658108,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 49,
+          "at": 1791658108,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 50,
+          "at": 1791658108,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 51,
+          "at": 1791658153,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 52,
+          "at": 1791658160,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 45,
+            "at": 1791658066,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 46,
+            "at": 1791658085,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 47,
+            "at": 1791658101,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 48,
+            "at": 1791658108,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 49,
+            "at": 1791658108,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 50,
+            "at": 1791658108,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 51,
+            "at": 1791658153,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 52,
+            "at": 1791658160,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "What this change does: authenticates the full 1M/1,000-query cohort, preserves the query-free derivation, then executes original ordinals 0–31 through the diagnostic-panel runner.\n\n**No demonstrated blocker in the generated gate’s full1000 selection logic. One correction is needed before using the separate admission template.**\n\n1. **Admission-template scratch is outside the declared scratch mount.**  \n   [Template line 51](/tmp/borsuk-full1000-next-gate-source/local-panel32-config.receipt-bound.pending.json:51) uses `/mnt/borsuk-scale1m/admission/local-scratch`, whereas [the gate configuration](/tmp/borsuk-full1000-next-gate-source/local-panel-gate-config.pending.json:3) reserves `/mnt/borsuk-scale1m/prepared-parent`. At `c3e52c8`, runner lines 2048–2054 pass this path into generation opening. Using the template as written can put native scratch on a filesystem outside the admitted disk budget.  \n   **Minimal correction:** use a fresh directory beneath the declared scratch mount, or explicitly admit and account for a separate mount. The wrapper-generated baseline configuration already uses the correct mount.\n\n2. **The new schema retains the old disk-admission floor.**  \n   [Gate lines 145–146](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) accept the old total, `27,581,982,055`, and any positive fresh-space requirement. Thus an accidentally regenerated configuration can understate the envelope and still pass validation. The supplied configuration itself is correct.  \n   **Minimal correction:** enforce at least `27,586,214,240` total and `23,284,968,777` fresh bytes for this schema.\n\nThe principal unresolved admission check is **complete query-record serialization at 1M**. At `c3e52c8`, runner lines 1985–1986 activate the 65,536-byte panel line cap; lines 2292 and 2329 still serialize `TwoBitPlanTrace` with `trace:false`. The inspected execution tests use tiny populations; the worst-case diagnostic test at 5151–5209 sizes the optional diagnostic object, not the complete 1M query record. This establishes a coverage gap, **not evidence of an actual overflow**. Source-bound admission must demonstrate all 32 records fit and reach the durable seal. An overflow is execution INVALID.\n\nChecks that held:\n\n- All six prepared-file pins agree across configuration, transport and closed textual receipts.\n- Runner validation covers all 1,000 request rows and all 1,000 truth rows; selected queries and recall use original ordinals. The denominator is 320, and population-performance claims remain disabled.\n- The derivation configuration pin, producer authority and generation/publication logic are unchanged. This preserves the existing qualification dependency; it does not independently re-establish component equivalence.\n- Disk arithmetic is consistent: five prepared bodies total `4,301,245,463` bytes; adding `23,284,968,777` fresh bytes gives the proposed total.\n- Closure still distinguishes native nonzero exits, requires manager/log/resource evidence, and explicitly leaves result replay and instance termination to external verification.\n\n**Verdict:** correct item 1 before using that admission template; tighten item 2 before freezing the gate. Outer transport remapping, source-bound execution, separate canary and external closure remain pending, as declared.\n\nNot checked: runtime behavior or actual output sizes. No files changed, raw bodies opened, tests/builds run, network used, or agents launched.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "What this change does: authenticates the full 1M/1,000-query cohort, preserves the query-free derivation, then executes original ordinals 0–31 through the diagnostic-panel runner.\n\n**No demonstrated blocker in the generated gate’s full1000 selection logic. One correction is needed before using the separate admission template.**\n\n1. **Admission-template scratch is outside the declared scratch mount.**  \n   [Template line 51](/tmp/borsuk-full1000-next-gate-source/local-panel32-config.receipt-bound.pending.json:51) uses `/mnt/borsuk-scale1m/admission/local-scratch`, whereas [the gate configuration](/tmp/borsuk-full1000-next-gate-source/local-panel-gate-config.pending.json:3) reserves `/mnt/borsuk-scale1m/prepared-parent`. At `c3e52c8`, runner lines 2048–2054 pass this path into generation opening. Using the template as written can put native scratch on a filesystem outside the admitted disk budget.  \n   **Minimal correction:** use a fresh directory beneath the declared scratch mount, or explicitly admit and account for a separate mount. The wrapper-generated baseline configuration already uses the correct mount.\n\n2. **The new schema retains the old disk-admission floor.**  \n   [Gate lines 145–146](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) accept the old total, `27,581,982,055`, and any positive fresh-space requirement. Thus an accidentally regenerated configuration can understate the envelope and still pass validation. The supplied configuration itself is correct.  \n   **Minimal correction:** enforce at least `27,586,214,240` total and `23,284,968,777` fresh bytes for this schema.\n\nThe principal unresolved admission check is **complete query-record serialization at 1M**. At `c3e52c8`, runner lines 1985–1986 activate the 65,536-byte panel line cap; lines 2292 and 2329 still serialize `TwoBitPlanTrace` with `trace:false`. The inspected execution tests use tiny populations; the worst-case diagnostic test at 5151–5209 sizes the optional diagnostic object, not the complete 1M query record. This establishes a coverage gap, **not evidence of an actual overflow**. Source-bound admission must demonstrate all 32 records fit and reach the durable seal. An overflow is execution INVALID.\n\nChecks that held:\n\n- All six prepared-file pins agree across configuration, transport and closed textual receipts.\n- Runner validation covers all 1,000 request rows and all 1,000 truth rows; selected queries and recall use original ordinals. The denominator is 320, and population-performance claims remain disabled.\n- The derivation configuration pin, producer authority and generation/publication logic are unchanged. This preserves the existing qualification dependency; it does not independently re-establish component equivalence.\n- Disk arithmetic is consistent: five prepared bodies total `4,301,245,463` bytes; adding `23,284,968,777` fresh bytes gives the proposed total.\n- Closure still distinguishes native nonzero exits, requires manager/log/resource evidence, and explicitly leaves result replay and instance termination to external verification.\n\n**Verdict:** correct item 1 before using that admission template; tighten item 2 before freezing the gate. Outer transport remapping, source-bound execution, separate canary and external closure remain pending, as declared.\n\nNot checked: runtime behavior or actual output sizes. No files changed, raw bodies opened, tests/builds run, network used, or agents launched."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 1526,
+      "output_bytes": 3503,
+      "elapsed_seconds": 255,
+      "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)",
+      "progress_truncated": false,
+      "result": "What this change does: authenticates the full 1M/1,000-query cohort, preserves the query-free derivation, then executes original ordinals 0–31 through the diagnostic-panel runner.\n\n**No demonstrated blocker in the generated gate’s full1000 selection logic. One correction is needed before using the separate admission template.**\n\n1. **Admission-template scratch is outside the declared scratch mount.**  \n   [Template line 51](/tmp/borsuk-full1000-next-gate-source/local-panel32-config.receipt-bound.pending.json:51) uses `/mnt/borsuk-scale1m/admission/local-scratch`, whereas [the gate configuration](/tmp/borsuk-full1000-next-gate-source/local-panel-gate-config.pending.json:3) reserves `/mnt/borsuk-scale1m/prepared-parent`. At `c3e52c8`, runner lines 2048–2054 pass this path into generation opening. Using the template as written can put native scratch on a filesystem outside the admitted disk budget.  \n   **Minimal correction:** use a fresh directory beneath the declared scratch mount, or explicitly admit and account for a separate mount. The wrapper-generated baseline configuration already uses the correct mount.\n\n2. **The new schema retains the old disk-admission floor.**  \n   [Gate lines 145–146](/tmp/borsuk-full1000-next-gate-source/run_full1000_local_panel.schema-bound.pending.sh:145) accept the old total, `27,581,982,055`, and any positive fresh-space requirement. Thus an accidentally regenerated configuration can understate the envelope and still pass validation. The supplied configuration itself is correct.  \n   **Minimal correction:** enforce at least `27,586,214,240` total and `23,284,968,777` fresh bytes for this schema.\n\nThe principal unresolved admission check is **complete query-record serialization at 1M**. At `c3e52c8`, runner lines 1985–1986 activate the 65,536-byte panel line cap; lines 2292 and 2329 still serialize `TwoBitPlanTrace` with `trace:false`. The inspected execution tests use tiny populations; the worst-case diagnostic test at 5151–5209 sizes the optional diagnostic object, not the complete 1M query record. This establishes a coverage gap, **not evidence of an actual overflow**. Source-bound admission must demonstrate all 32 records fit and reach the durable seal. An overflow is execution INVALID.\n\nChecks that held:\n\n- All six prepared-file pins agree across configuration, transport and closed textual receipts.\n- Runner validation covers all 1,000 request rows and all 1,000 truth rows; selected queries and recall use original ordinals. The denominator is 320, and population-performance claims remain disabled.\n- The derivation configuration pin, producer authority and generation/publication logic are unchanged. This preserves the existing qualification dependency; it does not independently re-establish component equivalence.\n- Disk arithmetic is consistent: five prepared bodies total `4,301,245,463` bytes; adding `23,284,968,777` fresh bytes gives the proposed total.\n- Closure still distinguishes native nonzero exits, requires manager/log/resource evidence, and explicitly leaves result replay and instance termination to external verification.\n\n**Verdict:** correct item 1 before using that admission template; tighten item 2 before freezing the gate. Outer transport remapping, source-bound execution, separate canary and external closure remain pending, as declared.\n\nNot checked: runtime behavior or actual output sizes. No files changed, raw bodies opened, tests/builds run, network used, or agents launched.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791658300,
+  "elapsed_seconds": 351,
+  "input_bytes": 1108,
+  "output_bytes": 8090
+}
