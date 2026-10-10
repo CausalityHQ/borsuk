@@ -52,6 +52,23 @@ finish() {
         if [[ ! -e $cg && ! -L $cg ]]; then
             # Absence alone cannot exclude a queued start. Require original terminal+stop proof.
             local terminal=${4:-} stop_exit=${5:-}
+            if [[ ! -f $stop_exit ]]; then
+                # No prior stop: authenticate the still-loaded ORIGINAL terminal before stopping.
+                left=$((cleanup_deadline-SECONDS-2)); ((left>6)) || return 1
+                timeout -k 1 5 systemctl show "$unit" -p InvocationID -p Description -p MainPID -p ActiveState -p SubState -p ExecMainCode > "$root/$tag.cleanup.terminal.show" || return 1
+                current=$(< "$root/$tag.cleanup.terminal.show")
+                grep -Fx "InvocationID=$expected" <<< "$current" >/dev/null || return 1
+                grep -Fx "Description=$unit" <<< "$current" >/dev/null || return 1
+                grep -Fx MainPID=0 <<< "$current" >/dev/null || return 1
+                grep -Fx ExecMainCode=1 <<< "$current" >/dev/null || return 1
+                grep -Ex 'ActiveState=(active|failed)' <<< "$current" >/dev/null || return 1
+                grep -Ex 'SubState=(exited|failed)' <<< "$current" >/dev/null || return 1
+                [[ ! -e $cg && ! -L $cg ]] || return 1
+                timeout -k 1 5 systemctl stop "$unit" > "$root/$tag.cleanup.stop" 2>&1 || return 1
+                [[ ! -e $cg && ! -L $cg ]] || return 1
+                printf '%s\n' 'REMOVED_ORIGINAL_TERMINAL_AUTHENTICATED_THEN_STOPPED' > "$root/$tag.cleanup.removed" || return 1
+                return 0
+            fi
             [[ -f $terminal && ! -L $terminal && -f $stop_exit && ! -L $stop_exit ]] || return 1
             [[ $(stat -c %s "$stop_exit") == 2 && $(< "$stop_exit") == 0 ]] || return 1
             grep -Fx "InvocationID=$expected" "$terminal" >/dev/null || return 1
@@ -145,9 +162,9 @@ phase=transport
 support=/mnt/borsuk-platform-support
 mkdir "$support" /mnt/borsuk-pool-pid /mnt/borsuk-pid-evidence
 for spec in \
-  'wrapper-canary.sh:16648:aab33fc75ec9738bdc1c5f7abf048a497615287f729985c77883ec03e8372a85' \
+  'wrapper-canary.sh:17040:f6ba855c7a5895c75decb79be864a0015af8fad4d7402312ea76c8c6c97545ba' \
   'run_native_scale_build_gate.sh:62014:b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452' \
-  'verify-closed.py:77200:5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e'; do
+  'verify-closed.py:77732:437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a'; do
     name=${spec%%:*}; rest=${spec#*:}; bytes=${rest%%:*}; expected=${rest#*:}
     ((bytes<=131072))
     setup 30 aws s3api get-object --bucket "$bucket" --key "$assets/$expected" "$support/$name" > "$root/$name.download.json"

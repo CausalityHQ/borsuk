@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-next1m-canary-a0001-closed-decision-v1",
+  "status": "EXECUTION_INVALID_SETUP_OBSERVATION_DEFECT",
+  "instance_id": "i-0c855769bfc73f88f",
+  "watch_invocation": "b67d2285b3a448dab78d520ad5bbed28",
+  "original_watch_exit": 0,
+  "original_canary_exit": 1,
+  "original_bootstrap_exit": 94,
+  "original_cleanup_exit": 1,
+  "original_instance_terminated": true,
+  "sole_root_volume_absent": true,
+  "archive": {
+    "bytes": 143365,
+    "sha256": "5fe31585c3a13993099226b25822f6ea1405544a0d18ef40f2ee71c71ba09ed0"
+  },
+  "root_archive_metadata_admission": "contains exactly one intentional FIFO canary/fifo; no symlink/hardlink/device; FIFO not extracted",
+  "diagnosis": [
+    "default full systemctl show omitted final ControlGroup; original initial/final InvocationID matched and original payload drain state=removed with exact path/id",
+    "outer canary group also removed before worker finish; no prior stop receipt, so cleanup remained unproven rather than inventing ownership"
+  ],
+  "source_repairs": [
+    "missing final ControlGroup accepted only with exact original removed-path/invocation drain proof; foreign path still refused",
+    "parent removed-group cleanup authenticates live original terminal InvocationID/Description/MainPID/ExecCode before stopping; absent unidentified registrations remain INVALID",
+    "new component refusal checks missing final group with state=empty"
+  ],
+  "native_algorithm_changed": false,
+  "recall_threshold_changed": false,
+  "performance_claim": false,
+  "remaining_unrun": [
+    "component refusal suite after first replay failure",
+    "exit17, timeout, log overflow, escaped descendant and ELF usage cases",
+    "new repaired source runtime qualification"
+  ],
+  "source_size_limit": {
+    "worker_bytes": 16127,
+    "bootstrap_example_bytes": 16340,
+    "limit": 16384
+  }
+}

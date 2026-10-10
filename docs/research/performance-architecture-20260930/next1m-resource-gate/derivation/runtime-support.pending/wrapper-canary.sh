@@ -9,7 +9,7 @@ wrapper=$(realpath -e -- "$1"); bins=$(realpath -e -- "$2"); out=$3
 [[ $out == /* && ! -e $out && ! -L $out && -d ${out%/*} ]] || exit 125
 [[ $(sha256sum "$wrapper" | cut -d' ' -f1) == b5e13fc8cab07303e8c9dbaa075e934447cc930dee4f12a215ec163e54be9452 ]] || exit 125
 replay=${wrapper%/*}/verify-closed.py
-[[ -f $replay && ! -L $replay && $(sha256sum "$replay" | cut -d' ' -f1) == 5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e ]] || exit 125
+[[ -f $replay && ! -L $replay && $(sha256sum "$replay" | cut -d' ' -f1) == 437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a ]] || exit 125
 (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) || exit 125
 (( EUID == 0 )) || exit 125
 [[ $(< /proc/self/cgroup) == "0::/system.slice/borsuk-next1m-canary.service" ]] || exit 125
@@ -200,6 +200,10 @@ for tag,name,code in [('fixture-build0','fixture',0),('fixture-query0','baseline
                 b[key]=b''.join((json.dumps(r)+'\n').encode() for r in records)
         expect_refusal(tag+'-'+field+'-'+('absent' if value else 'empty'),bodies,name,code,mutate)
     expect_refusal(tag+'-drain-path',bodies,name,code,lambda b:rewrite(b,'phase/drain.json',lambda o:o.update(path='/sys/fs/cgroup/system.slice/foreign.service')))
+    def missing_cgroup_without_removal(b):
+        b['phase/manager.final.txt']=('\n'.join(line for line in b['phase/manager.final.txt'].decode().splitlines() if not line.startswith('ControlGroup='))+'\n').encode()
+        rewrite(b,'phase/drain.json',lambda o:o.update(state='empty'))
+    expect_refusal(tag+'-cgroup-omitted-without-removal',bodies,name,code,missing_cgroup_without_removal)
     release=int(bodies['phase/release.uptime_cs'])
     expect_refusal(tag+'-elapsed-too-long',bodies,name,code,lambda b:b.update({'phase/drain.uptime_cs':('%d\n'%(release+9301)).encode()}))
     def changed_runtime(b):

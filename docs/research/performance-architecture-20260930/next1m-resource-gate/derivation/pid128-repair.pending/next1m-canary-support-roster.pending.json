@@ -1,8 +1,8 @@
 [
   {
     "name": "wrapper-canary.sh",
-    "bytes": 16648,
-    "sha256": "aab33fc75ec9738bdc1c5f7abf048a497615287f729985c77883ec03e8372a85"
+    "bytes": 17040,
+    "sha256": "f6ba855c7a5895c75decb79be864a0015af8fad4d7402312ea76c8c6c97545ba"
   },
   {
     "name": "run_native_scale_build_gate.sh",
@@ -11,7 +11,7 @@
   },
   {
     "name": "verify-closed.py",
-    "bytes": 77200,
-    "sha256": "5b5feb8d54792f1705d4611d82463cf94ead05b346d22c16d088d0d59736380e"
+    "bytes": 77732,
+    "sha256": "437eb6d80d9d4954337b7edeca6a09be060bd09a950afba08536af92de0ab80a"
   }
 ]

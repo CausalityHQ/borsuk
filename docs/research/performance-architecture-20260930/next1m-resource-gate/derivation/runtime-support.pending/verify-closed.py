@@ -738,7 +738,16 @@ def verify_phase_observer(ev, prefix, name, want, timeout_seconds):
         req(manager_runtime_us(manager.get('RuntimeMaxUSec')) == (timeout_seconds + 80) * 1000000,
             'payload manager runtime ceiling equals frozen supervision allowance')
     cg = '/sys/fs/cgroup/system.slice/' + unit
-    req(initial.get('ControlGroup') == '/system.slice/' + unit and final.get('ControlGroup') in ('', '/system.slice/' + unit), 'payload cgroup identity')
+    req(initial.get('ControlGroup') == '/system.slice/' + unit, 'payload initial cgroup identity')
+    reported_final = final.get('ControlGroup')
+    if reported_final is None or reported_final == '':
+        # Default systemctl show omits this property after original-path removal.
+        removal = ev.j(prefix + 'drain.json')
+        req(removal.get('schema') == 'borsuk-native-pid128-payload-drain-v1' and
+            removal.get('path') == cg and removal.get('invocation_id') == ident and
+            removal.get('state') == 'removed', 'missing final cgroup requires bound removal')
+    else:
+        req(reported_final == '/system.slice/' + unit, 'payload final cgroup identity')
     req(final.get('MainPID') == '0' and final.get('ExecMainCode') == '1' and final.get('ExecMainStatus') == str(want) and
         final.get('Result') == ('success' if want == 0 else 'exit-code'), 'payload original manager exit')
     req(ev.b(prefix + 'manager.start.exit') == ev.b(prefix + 'manager.stop.exit') == b'0\n' and
