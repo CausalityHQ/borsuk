@@ -1,0 +1,87 @@
+{
+  "schema": "borsuk-canary-root-disposition-v1",
+  "source_commit": "dc12a288b4aafffdc57efa85aa536db36db963d7",
+  "instance_id": "i-0c490a6cfb002c1ee",
+  "disposition": "EXECUTION_INVALID",
+  "reason": "source-bound swap fixture injected a different device path than the mock guard sees; actual production gate and ANN were not executed",
+  "launch_original": {
+    "session": 72508,
+    "unit": "run-p3483933-i674459853.service",
+    "invocation": "648f884934104c65bc38c025f1eaced1",
+    "exit": 0,
+    "runtime_seconds": 11.291
+  },
+  "watcher_original": {
+    "unit": "borsuk-next1m-canary-a0005-watch.service",
+    "invocation": "20ddd090ec824b3d96ae562bbe7f7d42",
+    "exit": 0
+  },
+  "collection_original": {
+    "session": 12061,
+    "unit": "run-p3592830-i674570424.service",
+    "invocation": "16162fe5142a499c96349a015f05b3f8",
+    "exit": 0,
+    "runtime_seconds": 24.116
+  },
+  "archive_authentication": {
+    "unit": "run-p3639043-i674593808.service",
+    "invocation": "934f17747aa04a6b920b96858e73dcae",
+    "exit": 0,
+    "members": 12,
+    "archive": {
+      "bytes": 11076,
+      "sha256": "c8c9787b9e567723c9ea183d34ee9d0db89acffed50d6b068be2b70c11eccbbb"
+    }
+  },
+  "fixture_results": {
+    "attachment_settle": {
+      "exit": 0,
+      "pass_lines": 47
+    },
+    "ownership_proof": {
+      "exit": 0,
+      "pass_lines": 66
+    },
+    "formatting_mock": {
+      "exit": 1,
+      "pass_lines": 13,
+      "failed_lines": [
+        "FAIL swap on the device exit=0 (want 90) mkfs=1 (want 0)"
+      ]
+    }
+  },
+  "remote_fixture_resources": {
+    "wall_seconds": 0.332,
+    "cpu_seconds": 0.3277,
+    "memory_peak_bytes": 4648960,
+    "swap_peak_bytes": 0,
+    "private_network": true,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "runtime_max_seconds": 120
+  },
+  "cleanup": {
+    "schema": "borsuk-canary-infrastructure-closeout-v1",
+    "instance_id": "i-0c490a6cfb002c1ee",
+    "terminated": true,
+    "volumes": [
+      "vol-02573034a727105e7",
+      "vol-04e8407561b0042b7"
+    ],
+    "both_volumes_absent": true,
+    "reason": "bootstrap_failure",
+    "user_data_sha256": "23880d72f9d69f2ce9ea0897f8c05b2d791d8dbd70c6a1b488f5f8bf70eb8189",
+    "late": false,
+    "canary_replay_pending": true,
+    "performance_claim": false
+  },
+  "binding_published": true,
+  "actual_formatting": "NOT_RUN",
+  "platform_canary": "NOT_RUN",
+  "ann_run": false,
+  "algorithm_rejection": false,
+  "performance_claim": false,
+  "historical_attempts_preserved": true,
+  "one_line_fixture_repair_commit": "f4604b524ff96680322df0f144c899fe8335cacf",
+  "next_action": "Retest unchanged refusal expected90/mkfs0 with the actual mock device swap path, then platform canary; retain original failed evidence"
+}

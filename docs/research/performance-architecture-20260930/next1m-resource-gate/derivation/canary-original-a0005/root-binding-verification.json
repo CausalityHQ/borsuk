@@ -1,0 +1,14 @@
+{
+  "status": "PREPUBLICATION_BINDING_AUTHENTICATED",
+  "instance_id": "i-0c490a6cfb002c1ee",
+  "binding_sha256": "0da44462000bfeec29f175b3fd7f0bad77b5b919cc136e316b378574418b8b63",
+  "raw_describe_instances_sha256": "b26723d27df07036a90e76e0ddf8b78a54fc4c6bbca6abb3df45edfc26bfbb0d",
+  "raw_describe_volumes_sha256": "18f37c7f00e494155a99956beb3983be89ff17dbe69233705e238605f0022a29",
+  "final_evidence_basename": "describe-scratch-volume-01.stdout",
+  "volume_id": "vol-04e8407561b0042b7",
+  "root_volume_id": "vol-02573034a727105e7",
+  "snapshot_empty": true,
+  "attachment_state": "attached",
+  "runtime_canary": "PENDING",
+  "performance_claim": false
+}
