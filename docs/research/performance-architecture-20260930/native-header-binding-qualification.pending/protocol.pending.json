@@ -1,40 +1,133 @@
 {
   "schema": "borsuk-native-header-binding-qualification-preregistration-v1",
-  "status": "PENDING_EXECUTION_ROUTE_AND_LAUNCH_FREEZE",
+  "status": "REVIEW_CORRECTED_PENDING_RUNTIME_CANARY_AND_LAUNCH_FREEZE",
   "candidate_commit": "d077a54f456af30242753ed1e2e397a9416191f7",
   "parent_commit": "6f4b94609dca5f37bcf6cb07a01481a059c6390d",
-  "changed_paths": ["crates/borsuk/examples/compare_native_replay.rs"],
+  "changed_paths": [
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
   "candidate_source_sha256": "d31d454a8e5ec5ed6f7027ea2b6af79fb0dc6ad09346799243635f9d20c393d2",
   "source_archive": {
-    "path": "source.tar.gz", "bytes": 4215586,
+    "path": "../qualification-inputs-a0003/source.tar.gz",
+    "bytes": 4215586,
     "sha256": "a13670d429e7abe520370b07643f9d27f8509799e8aa318c6e073b694698dd01",
     "file_count": 462,
-    "manifest": {"path": "source-files.sha256", "bytes": 51374, "sha256": "2a7d9e8df35892b9dbf71fbb0c2e83ee40e029f8d542f553b54a289b7da64b1f"},
-    "native_map": {"path": "native-source.json", "bytes": 50665, "sha256": "694e16de78f32d6382298b4f9dd9ac1f12f3489cf1b26cc26e1d220b92df45f1", "file_count": 435},
+    "manifest": {
+      "path": "../qualification-inputs-a0003/source-files.sha256",
+      "bytes": 51374,
+      "sha256": "2a7d9e8df35892b9dbf71fbb0c2e83ee40e029f8d542f553b54a289b7da64b1f"
+    },
+    "native_map": {
+      "path": "../qualification-inputs-a0003/native-source.json",
+      "bytes": 50665,
+      "sha256": "694e16de78f32d6382298b4f9dd9ac1f12f3489cf1b26cc26e1d220b92df45f1",
+      "file_count": 435
+    },
     "scope": "All tracked Rust/Cargo files plus complete workspace crates, examples, tests, README, LICENSE and unchanged workspace test-build script. Historical native files remain immutable; no corpus or query artifacts."
   },
   "resources": {
-    "profile": "causality", "region": "eu-central-1", "availability_zone": "eu-central-1c",
-    "market": "spot", "instance_type": "c7i.2xlarge", "ebs_gib": 80,
-    "cpu_quota_percent": 200, "allowed_cpus": "0,1", "memory_max_bytes": 8589934592,
-    "memory_swap_max_bytes": 0, "tasks_max": 512, "cargo_jobs": 1,
-    "gate_seconds": 7200, "unit_seconds": 7440, "machine_seconds": 9000,
-    "basis": "Prior bounded compiler qualification envelope, separate from the pending replay envelope which explicitly excludes compilation."
+    "profile": "causality",
+    "region": "eu-central-1",
+    "availability_zone": "eu-central-1c",
+    "market": "spot",
+    "instance_type": "c7i.2xlarge",
+    "ebs_gib": 80,
+    "cpu_quota_percent": 200,
+    "allowed_cpus": "0,1",
+    "memory_max_bytes": 8589934592,
+    "memory_swap_max_bytes": 0,
+    "tasks_max": 512,
+    "cargo_jobs": 1,
+    "gate_seconds": 7200,
+    "unit_seconds": 7440,
+    "machine_seconds": 9000,
+    "basis": "Prior bounded compiler qualification envelope, separate from the pending replay envelope which explicitly excludes compilation.",
+    "native_unit_cleanup_margin_seconds": 120,
+    "publication_seconds_per_stage": 120,
+    "machine_margin_reserved_seconds": 240
   },
   "cost": {
-    "spot_quote_usd_per_hour": 0.203800,
+    "spot_quote_usd_per_hour": 0.2038,
     "provider_quote_timestamp": "2026-10-10T19:00:00+00:00",
-    "spot_quote_exit": 0, "maximum_spot_bid_usd_per_hour": 0.6,
-    "maximum_compute_reservation_usd": 1.5, "ancillary_reservation_usd": 0.15,
+    "spot_quote_exit": 0,
+    "maximum_spot_bid_usd_per_hour": 0.6,
+    "maximum_compute_reservation_usd": 1.5,
+    "ancillary_reservation_usd": 0.15,
     "total_reservation_usd": 1.65,
     "fresh_prelaunch_quote_required": true
   },
   "stages": [
-    {"name": "header-binding-tests", "argv": ["cargo", "test", "--locked", "-p", "borsuk", "--example", "compare_native_replay", "completed_header_binding_tests", "--", "--test-threads=1"], "expected_named_pass_count": 7},
-    {"name": "replay-regressions", "argv": ["cargo", "test", "--locked", "-p", "borsuk", "--example", "compare_native_replay", "--", "--test-threads=1"], "compiled_test_roster_required": true},
-    {"name": "release-reducer", "argv": ["cargo", "build", "--release", "--locked", "-p", "borsuk", "--example", "compare_native_replay"]},
-    {"name": "workspace-clippy", "argv": ["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--", "-D", "clippy::correctness", "-D", "clippy::suspicious"]},
-    {"name": "real-workspace-test-build", "argv": ["env", "-u", "BORSUK_TEST_BUILD_COMMAND", "BORSUK_TEST_BUILD_JOBS=1", "CARGO_BUILD_JOBS=1", "bash", "scripts/check_rust_test_build.sh"]}
+    {
+      "name": "header-binding-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay",
+        "completed_header_binding_tests",
+        "--",
+        "--test-threads=1"
+      ],
+      "expected_named_pass_count": 7
+    },
+    {
+      "name": "replay-regressions",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay",
+        "--",
+        "--test-threads=1"
+      ],
+      "compiled_test_roster_required": true
+    },
+    {
+      "name": "release-reducer",
+      "argv": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay"
+      ]
+    },
+    {
+      "name": "workspace-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "real-workspace-test-build",
+      "argv": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=1",
+        "CARGO_BUILD_JOBS=1",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
   ],
   "required_binding_test_names": [
     "completed_header_binding_tests::bind_completed_scale_independent_headers",
@@ -58,7 +151,61 @@
     "mock_controller_checks_are_native_evidence": false
   },
   "interruption": "Spot interruption invalidates the cell; retain partial terminal receipts, terminate and wait for the exact instance. No automatic retry or continuation; a new root-recorded attempt is required.",
-  "red_falsifier": {"path": "../descriptor-red.rs", "sha256": "13a419b07ea710550f4742f2d2c6227ae30c3a08d18c82a7f2cf32ef65a429a8", "status": "PRESERVED_UNRUN", "must_not_replace_candidate_for_green_or_release": true},
-  "claims": {"native_qualified": false, "real_corpus_replay": false, "quality": false, "performance": false, "vendor_win": false},
-  "launch_authorized_by_this_pending_document": false
+  "red_falsifier": {
+    "path": "../descriptor-red.rs",
+    "sha256": "13a419b07ea710550f4742f2d2c6227ae30c3a08d18c82a7f2cf32ef65a429a8",
+    "status": "PRESERVED_UNRUN",
+    "must_not_replace_candidate_for_green_or_release": true
+  },
+  "claims": {
+    "native_qualified": false,
+    "real_corpus_replay": false,
+    "quality": false,
+    "performance": false,
+    "vendor_win": false
+  },
+  "launch_authorized_by_this_pending_document": false,
+  "execution_route": "Direct AWS-RunShellScript SSM parameters; five serial native stages, no launcher/controller extension. SSM plugin output must be stored under the unique attempt S3 prefix.",
+  "ssm_execution_timeout_seconds": 7800,
+  "platform_canary": [
+    {
+      "name": "canary-success",
+      "actual_command": "/bin/true",
+      "expected_native_exit": 0,
+      "expected_manager_exit": 0
+    },
+    {
+      "name": "canary-nonzero",
+      "actual_command": "/bin/false",
+      "expected_native_exit": 1,
+      "expected_manager_exit": 1
+    },
+    {
+      "name": "canary-timeout",
+      "actual_command": "timeout -k 1 1 /bin/sleep 3",
+      "expected_native_exit": 124,
+      "expected_manager_exit": 124
+    }
+  ],
+  "platform_canary_scope": "Same compiler instance, before Cargo; original statuses, unload-safe publication, exact stage cgroup drain. No native ANN or performance evidence.",
+  "reviews": {
+    "group": "06b4c174db4b44fb",
+    "research": "2ee3a969a57f49fa",
+    "engineering": "d19ba8471e2d43ae",
+    "decision": "review-decision.md",
+    "original_payload_commit": "622008119fea4b8bbf697fe77eae0dce13b2e32f",
+    "rust_logic_review_not_repeated": true
+  },
+  "root_launch_requirements": [
+    "Fresh Spot quote",
+    "Exact request/client token plus create-exclusive local launch claim",
+    "RunInstances exactly once; no ambiguous-response repeat",
+    "Durable independent root termination watchdog bound to exact instance",
+    "SSM invocation IDs/output-S3 pins and original terminal results",
+    "Setup source/toolchain artifacts authenticated before any native gate",
+    "Same-instance platform canary before Cargo",
+    "All five stages accepted only from original complete receipts",
+    "Immediate termination and wait after terminal or failure; record all root volume deletion receipts"
+  ],
+  "setup_failure_policy": "Original failed SSM invocation and plugin output are root evidence; mark INVALID and terminate/wait. Never infer completed source/toolchain authentication from failed setup."
 }

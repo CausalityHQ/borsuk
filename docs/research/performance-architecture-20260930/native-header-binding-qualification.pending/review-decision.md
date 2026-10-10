@@ -1,0 +1,13 @@
+# Direct SSM prelaunch decision
+
+Candidate Rust source remains d077a54f456af30242753ed1e2e397a9416191f7. The prior Rust review7c231c3b is not repeated. This decision reconciles the distinct execution review06b4c174db4b44fb (research requested Opus, recorded fallback Sol; engineering Astra). Both full original results are retained here and their reviewed command data remains immutable at622008119fea4b8bbf697fe77eae0dce13b2e32f.
+
+Accepted fixes: preserve the original systemd-run output/status; capture the bounded diagnostic show stdout/stderr/status without aborting finalization; require the exact stage cgroup path; provide120 seconds of unit cleanup margin beyond the shared native deadline; retain create-only setup source/toolchain records before admitting the first stage; compare the exact sorted seven required test names; include the actual release ELF in the stage publication roster; explicitly set CPUQuotaPeriodSec100ms.
+
+Native compilation deadline is capped at7200 seconds and conservatively at boot+9000 minus240 seconds. SSM execution cap7800 seconds does not extend the machine stop; every stage publication has a120-second budget with per-operation remaining-time clamps. Machine shutdown and the independent root termination deadline remain mandatory.
+
+Setup failure is not qualification: root must record the original failed SSM invocation and authenticated SSM-plugin output (using frozen output-S3 bucket/prefix), mark the attempt INVALID, and terminate/wait. Success requires all create-only setup objects and manifest authenticated from S3 before any native stage. Early bootstrap failure may have no toolchain/source receipt because that operation did not complete; never manufacture one.
+
+One same-instance platform canary runs before Cargo: actual /bin/true, /bin/false and a one-second timeout of /bin/sleep3 under the corrected unit/publication shape. Require preserved original0/1/124 statuses and exact drained cgroups with complete published receipts, including the unload-safe diagnostic record. Canary carries native_ann_executed=false and proves platform mechanics only. It does not replace any Rust test or corpus admission.
+
+No runtime/mock/native/paid launch has occurred. Reviewed original payloads, failed static receipts and exact source archives are preserved. No new Python or shell controller/product feature is introduced; these are attempt-specific SSM command parameters invoking existing tools and the unchanged Rust test-build script. Actual EC2 execution, root launch claim/external watchdog, full receipt collection and terminate/wait remain pending. No compiler or vendor performance claim.
