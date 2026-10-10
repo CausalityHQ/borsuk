@@ -1,0 +1,10 @@
+{
+  "status": "TRANSPORT_METADATA_AND_BASELINE_LOCAL_BODY_ONLY",
+  "producer_head_count": 4,
+  "baseline_create_only_uploaded": true,
+  "shard_bodies_opened_locally": false,
+  "native_executed": false,
+  "launch_authority": false,
+  "transport_manifest_sha256": "29bdf201bca2fc02933583beddd152cbf607ec5854482f7b06dbd1d18ba08ee9",
+  "remaining": "Full body length/SHA authentication on EC2 before runtime validators or natives; exact campaign bootstrap and independent watcher pending."
+}
