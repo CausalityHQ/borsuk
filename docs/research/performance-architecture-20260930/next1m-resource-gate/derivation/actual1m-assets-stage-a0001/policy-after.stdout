@@ -1,0 +1,36 @@
+{
+    "RoleName": "borsuk-bench-role",
+    "PolicyName": "BorsukScaleInputsImmutable20261009",
+    "PolicyDocument": {
+        "Statement": [
+            {
+                "Action": [
+                    "s3:PutObject*",
+                    "s3:DeleteObject*",
+                    "s3:AbortMultipartUpload",
+                    "s3:ReplicateObject",
+                    "s3:ReplicateDelete"
+                ],
+                "Effect": "Deny",
+                "Resource": [
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0001/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-a0001/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261009/actual1m-scale-chain-canary-a0002/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0003/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0004/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0005/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0006/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0007/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0008/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0009/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0010/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0011/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-canary-a0012/inputs/*",
+                    "arn:aws:s3:::borsuk-bench-453182569524-euc1/research/semantic-router/20261010/actual1m-scale-chain-a0001/inputs/*"
+                ],
+                "Sid": "DenyInstanceMutationOfScaleCampaignInputs"
+            }
+        ],
+        "Version": "2012-10-17"
+    }
+}

@@ -1,0 +1,32 @@
+{
+  "ann_run": true,
+  "assets_stage_sha256": "fdc7d37a10aa7967b3be92b956440d1f20271f4a2d8a0d5df46a6dc32df85129",
+  "client_token": "borsuk-next1m-chain-a0001-1791600381",
+  "controller_commit": "aaaad29ef7c04f2e37cd67c10f037df728a8cd28",
+  "cost_is_upper_envelope_not_measured": true,
+  "external_cleanup_seconds": 120,
+  "external_deadline_epoch": 1791615381,
+  "interruption_outcome": "INVALID_preserve_no_automatic_retry",
+  "launch_count": 1,
+  "local_deadline_seconds_after_boot": 14400,
+  "native_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "next_after_pass": "full1000 truth and separate physical cold S3 gate",
+  "performance_claim": false,
+  "platform_disposition_sha256": "ab049a4dedb03f727dc1691753c2b172819f998dbfd170c0c68dd33c9aed1520",
+  "prior_real_input_admission_sha256": "696d1a71020824ccd713b51cc7e52a7b1a5b79b014ebc5c27bc3780d23cc78bf",
+  "root_authorizes_one_native_q32_screen": true,
+  "root_launcher_resource": {
+    "cpu": 1,
+    "finite_api_envelope_seconds": 205,
+    "memory_mib": 256,
+    "runtime_max_seconds": 240,
+    "swap": 0
+  },
+  "schema": "borsuk-next1m-chain-launch-admission-v1",
+  "started_epoch": 1791600381,
+  "support_sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0",
+  "total_reserved_usd": 2.65,
+  "user_data_bytes": 16381,
+  "user_data_sha256": "179aba0f7883ac421822b005a680af0f5c29d0b59272cd8ce5b7fdd483724fc1",
+  "watcher_sha256": "febd2dc8ee50a240715289a0aa60b4289e48b48113b89f6313b5717661c15b15"
+}

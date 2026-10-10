@@ -1,0 +1,71 @@
+{
+  "admission_order": [
+    "Authenticate exact qualified source/binaries and real input pins; existing real1M source admission is referenced, not repeated as a separate campaign.",
+    "Disposable staging composition canary: real transport/environment/CLI/exit/cleanup; synthetic phase bodies explicitly labelled, no ANN quality claim.",
+    "Freeze exact source/config/caps/asset roster and cost quote after canary passes.",
+    "Single Spot chain regenerates all five preparation seals and validates them before derive.",
+    "Run sequential native chain and independent closed replay; apply preregistered Q32 screen only after complete authenticated output."
+  ],
+  "closure": {
+    "automatic_retries": false,
+    "collect_after_terminated_and_waited": true,
+    "interrupted_measurement_cell": "INVALID_PRESERVE_THEN_ROOT_DECIDES_NEW_ATTEMPT",
+    "multi_gigabyte_corpus_retained_after_termination": false,
+    "no_idle_instance_retention": true,
+    "one_native_process_at_a_time": true,
+    "original_all_phase_exits_required": true,
+    "publish_small_terminal_evidence_before_termination": true,
+    "stop_first_failure": true
+  },
+  "compute": {
+    "actual_spend_measured": false,
+    "availability_zone": "eu-central-1c",
+    "fresh_quote_required": true,
+    "instance_type": "c7i.2xlarge",
+    "market": "spot",
+    "maximum_ancillary_usd": 0.15,
+    "maximum_compute_usd": 2.5,
+    "maximum_usd_per_hour": 0.59,
+    "region": "eu-central-1",
+    "total_reserved_usd": 2.65
+  },
+  "construction_limits": {
+    "allowed_cpus": "0-3",
+    "cpu_quota_percent": 400,
+    "memory_bytes": 8589934592,
+    "pids": 128,
+    "swap_bytes": 0
+  },
+  "external_hard_stop_seconds": 15000,
+  "machine_local_stop_seconds": 14400,
+  "performance_claim": false,
+  "phase_cleanup_total_reserve_seconds": 360,
+  "phase_deadlines_seconds": {
+    "baseline_q32": 900,
+    "build_generation": 2700,
+    "derive": 3600,
+    "publish_local": 1800,
+    "regenerate_preparation": 2400,
+    "stage_sq8": 300
+  },
+  "phase_sum_seconds": 11700,
+  "schema": "borsuk-next1m-build-envelope-proposal-v1",
+  "scratch": {
+    "delete_on_termination": true,
+    "encrypted": true,
+    "filesystem_identity_and_capacity_required": true,
+    "free_space_before_transport_required_bytes": 30064771072,
+    "optional_deletions": false,
+    "proposed_retained_data_and_reserves_bytes": 27581982055,
+    "root_volume_gib": 80,
+    "sampled_high_water_claim_complete": false,
+    "separate_scratch_volume_gib": 40,
+    "type": "gp3"
+  },
+  "serving_library_memory_bytes": 536870912,
+  "setup_deadline_seconds": 900,
+  "status": "FROZEN_AFTER_PLATFORM_AND_REAL_INPUT_ADMISSION",
+  "terminal_publication_reserve_seconds": 240,
+  "termination_grace_seconds": 120,
+  "transport_deadline_seconds": 900
+}

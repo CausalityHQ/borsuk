@@ -1,0 +1,65 @@
+{
+  "schema": "borsuk-actual1m-assets-source-check-v1",
+  "source_commit": "aaaad29ef7c04f2e37cd67c10f037df728a8cd28",
+  "assets": [
+    {
+      "name": "config-template.json",
+      "bytes": 3991,
+      "sha256": "2330dfcede45251c80bbeefb0134e9c3a44185c6160a5521d7081a2143411dba"
+    },
+    {
+      "name": "derivation-config.json",
+      "bytes": 1145,
+      "sha256": "2737d3e9e8b6c741bffd322e34b4ddf5aa8e318a8cfb4fafc00e262288b96a2d"
+    },
+    {
+      "name": "gate-config-template.json",
+      "bytes": 4332,
+      "sha256": "270e79c439915dda8183f89b539683a95a297b8c31d165ddea138615a9019082"
+    },
+    {
+      "name": "run_actual_cohort_admission.sh",
+      "bytes": 22040,
+      "sha256": "39309c2bb8953c4ec931eff2ad0c588ba4ecb7bb95a365d7f6dcfbee95308008"
+    },
+    {
+      "name": "run_native_scale_build_gate.sh",
+      "bytes": 41373,
+      "sha256": "c5f4c4b8be203d73347924447fcad461c676a09d1c925ed31187c11a64f5b422"
+    },
+    {
+      "name": "service-stop.sh",
+      "bytes": 1958,
+      "sha256": "6d7fdb12b7d7218c778a403ad8fcf3b55ef7b949f1d9c91402f05f870558da6e"
+    },
+    {
+      "name": "transport-pins.json",
+      "bytes": 6201,
+      "sha256": "93995d925d71b3242d135c38203806801ea0a1d3476c45da9d798ca286dfcc82"
+    },
+    {
+      "name": "transport.py",
+      "bytes": 3654,
+      "sha256": "f9f892387c8d357c2b4fb95c76025fabae8722f896ad387131f30af4e8284529"
+    },
+    {
+      "name": "validate-scratch-binding.sh",
+      "bytes": 2250,
+      "sha256": "595287e36995744e6306bc16811a4e9f06298228e25c3be5e5e2b8d317333297"
+    },
+    {
+      "name": "support.sha256",
+      "bytes": 803,
+      "sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0"
+    }
+  ],
+  "support_sha256": "274702e3891e4bd1b0d7927431d5227d23044c04391568ca11dbfb0627ccc8c0",
+  "qualified_native_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+  "native_cargo_bytes_unchanged": true,
+  "platform_receipt_sha256": "ab049a4dedb03f727dc1691753c2b172819f998dbfd170c0c68dd33c9aed1520",
+  "user_data_bytes": 16381,
+  "user_data_sha256": "179aba0f7883ac421822b005a680af0f5c29d0b59272cd8ce5b7fdd483724fc1",
+  "run_prefix": "research/semantic-router/20261010/actual1m-scale-chain-a0001",
+  "runtime": "UNRUN",
+  "launch_authorized": false
+}
