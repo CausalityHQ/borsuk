@@ -1,0 +1,16 @@
+{
+  "status": "SOURCE_BOUND_RUNTIME_UNVERIFIED",
+  "source_receipt_commit": "7ca15306079f250fee874570921815e9222fb6ce",
+  "native_source": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "parity_source": "afb70da60727ba80147a97e71fce738ab15e6456",
+  "retained_source_namespace": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+  "retained_source_objects": 13,
+  "remote_whole_body_authentication_pending": true,
+  "destination_is_create_only_disjoint": true,
+  "s3_backend_same_key_new_etag": true,
+  "historical_and_local_output_rows_unopened_locally": true,
+  "parity_expected_rows_pending": true,
+  "performance_claim": false,
+  "execution_location": "causality EC2 only",
+  "required": "Authenticate closed archives/manifests on EC2; native completed-scale reduction and retained S3 rebind; complete new S3 panel32; native three-arm parity; separate disposable canary before full1000 cold measurement"
+}
