@@ -16,7 +16,7 @@ export LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bi
 root=$1 bucket=$2 prefix=$3 instance=$4 boot=$5 stop=$6 frag_sha=$7
 [[ $root == /mnt/borsuk-scale1m && $bucket == borsuk-bench-453182569524-euc1 && $prefix =~ ^research/semantic-router/[0-9]{8}/[a-z0-9-]+$ && $instance =~ ^i-[0-9a-f]+$ && $boot =~ ^[0-9]+$ && $stop =~ ^[0-9]+$ && $frag_sha =~ ^[0-9a-f]{64}$ ]] || exit 90
 wc_sha=bf2cb012c3880c420bf9c3b80334e42a7d1469caa3c339042cde8607d3093a1f
-coord_sha=bff35749d957c1e76635b1170c2ef390fe97dadf5b3dc72712b65451397e6f35
+coord_sha=7c2db63dea0d935614066e44b5f67e652d2a8137a7a5d883262106a348d70392
 probe_sha=6111cbc9f504be3dc43c96dc450f2d30d319ab20ccdcf0acf94d65a518072fc9
 want_ci=26.1-0ubuntu1~24.04.1
 dropin=/run/systemd/system/cloud-final.service.d/borsuk-exit.conf
@@ -146,8 +146,11 @@ t3() {
  local rc=0 dr=0 pid full=$step_stop pidf=$ev/cgroup.stray.pid cg=/sys/fs/cgroup/system.slice/borsuk-canary-cgroup.service
  # reserve 8 s of THIS step (inside the shared 120 s) for the drain BEFORE the unit is launched
  step_stop=$((full - 8))
+ # the manager expands $ (and %) in command-line words (systemd-run(1); services since v254): the generated function text must never be a command-line word,
+ # so the exact generated script is written to a file and the unit runs `bash FILE PIDFILE` (two words without $ or %); the file is also the evidence of the generated source
+ { declare -f cg_inner; printf '%s\n' 'cg_inner "$1"'; } > "$ev/cg_inner.sh" || return 1
  ( ulimit -f 128; run 20 systemd-run --quiet --wait --pipe --collect --unit=borsuk-canary-cgroup -p CPUQuota=400% -p AllowedCPUs=0-3 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=8 -p TimeoutStopSec=4 -p KillMode=control-group \
-   bash -c "$(declare -f cg_inner); cg_inner \"\$1\"" _ "$pidf" > "$ev/cgroup.resources.jsonl" 2> "$ev/cgroup.err" ) || rc=$?
+   bash "$ev/cg_inner.sh" "$pidf" > "$ev/cgroup.resources.jsonl" 2> "$ev/cgroup.err" ) || rc=$?
  step_stop=$full
  # cleanup is proven on EVERY path (the original failure and its evidence are kept); unproven cleanup in the normal remainder halts the batch
  t3_clean || dr=$?
@@ -169,20 +172,28 @@ aws_t() { # aws_t NAME s3api-arguments...: stdout/stderr/exit recorded; stderr a
  ( ulimit -f 64; run 3 aws s3api "$@" > "$ev/iam.$n.out" 2> "$ev/iam.$n.err" ) || rc=$?
  printf '%s\n' "$rc" > "$ev/iam.$n.rc"
 }
-denied() { # denied NAME OPERATION
- local rc
+denied() { # denied NAME OPERATION KEY: rc exactly 254 and EXACTLY the AWS CLI v2 explicit-deny line (optional "aws: [ERROR]: " prefix, optional leading blank line); 412, timeouts, other errors, implicit denies and any extra line are refused
+ local rc msg acct pre mid
+ local -a lines
  rc=$(< "$ev/iam.$1.rc")
- [[ $rc != 0 && $rc != 124 && $rc != 125 && $rc != 137 ]] || return 1
- grep -qE "^An error occurred \(AccessDenied\) when calling the $2 operation: " "$ev/iam.$1.err" || return 1
+ [[ $rc == 254 ]] || return 1
+ mapfile -t lines < "$ev/iam.$1.err"
+ if (( ${#lines[@]} == 2 )) && [[ -z ${lines[0]} ]]; then msg=${lines[1]}; elif (( ${#lines[@]} == 1 )); then msg=${lines[0]}; else return 1; fi
+ msg=${msg#"aws: [ERROR]: "}
+ pre="An error occurred (AccessDenied) when calling the $2 operation: User: arn:aws:sts::"
+ mid=":assumed-role/borsuk-bench-role/$instance is not authorized to perform: s3:$2 on resource: \"arn:aws:s3:::$bucket/$3\" with an explicit deny in an identity-based policy"
+ [[ $msg == "$pre"* && $msg == *"$mid" ]] || return 1
+ acct=${msg#"$pre"}; acct=${acct%"$mid"}
+ [[ $acct =~ ^[0-9]{12}$ ]]
 }
 t4() {
  local key=$prefix/inputs/permission-probe.txt pos=$prefix/canary/iam-positive.txt bad=0 b=$ev/iam.probe.get1
  aws_t get1 get-object --bucket "$bucket" --key "$key" "$b"
  [[ $(< "$ev/iam.get1.rc") == 0 ]] && reg "$b" && [[ $(stat -c %s "$b") == 38 && $(sha "$b") == "$probe_sha" ]] || bad=1
  aws_t putdeny put-object --bucket "$bucket" --key "$key" --body "$b" --if-none-match '*'
- denied putdeny PutObject || bad=1
+ denied putdeny PutObject "$key" || bad=1
  aws_t deldeny delete-object --bucket "$bucket" --key "$key"
- denied deldeny DeleteObject || bad=1
+ denied deldeny DeleteObject "$key" || bad=1
  aws_t get2 get-object --bucket "$bucket" --key "$key" "$ev/iam.probe.get2"
  [[ $(< "$ev/iam.get2.rc") == 0 ]] && reg "$ev/iam.probe.get2" && [[ $(stat -c %s "$ev/iam.probe.get2") == 38 && $(sha "$ev/iam.probe.get2") == "$probe_sha" ]] || bad=1
  printf 'borsuk-canary-iam-positive-v1 %s\n' "$instance" > "$ev/iam.positive.body"

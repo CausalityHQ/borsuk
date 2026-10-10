@@ -1,0 +1,29 @@
+{
+  "source_base": "fea729c668d0846245ac42ebcb6da6bc64a7fed4",
+  "candidate": "7068ed9d81103fc92dd5d2de95427e1c2b8e1b93",
+  "source_parent": "b9e12f58803e9e6a1e7a34ac0d811357573c6218",
+  "owned_paths": [
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-tail.sh",
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-coordinator.sh"
+  ],
+  "hashes": {
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-tail.sh": "046316866e35788682c013337eba8118ec126ecfcfcd8e35aff61274842251c4",
+    "docs/research/performance-architecture-20260930/next1m-resource-gate/derivation/runtime-support.pending/canary-coordinator.sh": "7c2db63dea0d935614066e44b5f67e652d2a8137a7a5d883262106a348d70392"
+  },
+  "unchanged_functions": [
+    "cg_inner",
+    "t3_drain",
+    "t3_clean",
+    "aws_t"
+  ],
+  "source_checks": "PASS",
+  "bash_syntax": "PASS",
+  "fixture_compile": "PASS",
+  "fixture_sha256": "baf53192819a7d4f2b572d304a59ca9558f5e10e5113a28f31ad808efd73fa56",
+  "contract_sha256": "7f7574f81f8307c68333faae851a8beaebce93d698e0a092b29457fd16367829",
+  "fixture_runtime": "UNRUN",
+  "actual_platform_qualification": "UNRUN",
+  "production_native_changed": false,
+  "launch_authorized": false,
+  "performance_claim": false
+}
