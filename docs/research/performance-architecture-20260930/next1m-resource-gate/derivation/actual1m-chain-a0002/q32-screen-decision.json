@@ -1,0 +1,31 @@
+{
+  "status": "Q32_SCREEN_PASS",
+  "original_instance": "i-0df6baa2bf2b499ff",
+  "native_source_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "controller_source_commit": "603fd5f96b5880ebeaf6919ad4b77775742a0ee7",
+  "replay_instance": "i-07f5e719cd5c22d02",
+  "replay_exit": 0,
+  "rows": 1000000,
+  "dimensions": 1024,
+  "k": 10,
+  "queries": 32,
+  "hits": 314,
+  "denominator": 320,
+  "mean_recall10": 0.98125,
+  "underfilled_queries": 0,
+  "backend": "LocalFileSystem",
+  "cache_state": "UNCONTROLLED_LOCAL_CORRECTNESS_ONLY",
+  "native_summary_sha256": "e6d96dcdbb667b784255854cf321c561085eae724bd0f5c15cbd133965ecf074",
+  "replay_sha256": "256923a3cc7b13426fc3e216f0db461b548b7d0e8be590155095a113b03dd835",
+  "preregistration_sha256": "88483576acc2bde4b02058279db57096278a5696076e4626abc2ee0d97e9c304",
+  "claims": {
+    "competitor_win": false,
+    "maintenance_generation_swap": false,
+    "physical_s3_cold": false,
+    "population_recall": false,
+    "population_tail_latency": false,
+    "production_ready": false
+  },
+  "next": "Fresh full1000-query truth/receipt and authenticated S3 publication; matched cold resource/performance gate with an explicitly controlled cache protocol. No repeat of the already completed same100k S3 Vectors benchmark.",
+  "method": "root closed-receipt decision on native Rust summary; no local vector/truth/result reduction or validator execution"
+}

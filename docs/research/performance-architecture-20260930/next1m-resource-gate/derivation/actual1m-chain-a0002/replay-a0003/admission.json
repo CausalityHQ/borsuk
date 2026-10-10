@@ -1,0 +1,22 @@
+{
+  "scope": "exact closed a0002 mechanics replay only; no ANN rerun",
+  "original_instance": "i-0df6baa2bf2b499ff",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "spot": true,
+  "cpu": 1,
+  "memory_bytes": 268435456,
+  "swap_bytes": 0,
+  "tasks": 128,
+  "validator_timeout_seconds": 120,
+  "machine_stop_seconds": 600,
+  "root_terminate_seconds": 600,
+  "grace_seconds": 120,
+  "max_compute_usd": 0.118,
+  "max_ancillary_usd": 0.05,
+  "performance_claim": false,
+  "bundle_bytes": 545403,
+  "bundle_sha256": "06b5d7a84ce8b2fa01ad2b707bd2039b8aa4e1c9e6b63064d4e34a8f07d7370e",
+  "prior_replay_exit": 1,
+  "causal_change": "local closure syntax matches frozen bare-name producer; original ANN unchanged"
+}
