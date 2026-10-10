@@ -308,6 +308,8 @@ impl Destination {
             require(
                 m.dev() == *dev
                     && m.ino() == *ino
+                    && m.mode() & 0o777 == 0o700
+                    && m.uid() == unsafe { libc::geteuid() }
                     && stamp(&m) == stamp(&std::fs::symlink_metadata(&path)?),
                 "directory drift",
             )?;
@@ -342,6 +344,8 @@ impl Destination {
             require(
                 m.dev() == *dev
                     && m.ino() == *ino
+                    && m.mode() & 0o777 == 0o700
+                    && m.uid() == unsafe { libc::geteuid() }
                     && stamp(&m) == stamp(&std::fs::symlink_metadata(&path)?),
                 "final directory drift",
             )?;
@@ -499,7 +503,7 @@ fn scan_tar<R: Read>(
             })
             .sum();
         require(sum == checksum, "tar checksum")?;
-        let ustar = &h[257..265] == b"ustar\000";
+        let ustar = &h[257..265] == b"ustar\x0000";
         let gnu = &h[257..265] == b"ustar  \0";
         require(ustar || gnu, "tar format")?;
         require(h[157..257].iter().all(|b| *b == 0), "tar link name")?;
@@ -616,16 +620,30 @@ fn gzip_archive(
     consume: impl FnMut(&str, &mut dyn Read) -> Result<()>,
 ) -> Result<()> {
     archive.file.seek(SeekFrom::Start(0))?;
-    let buffered = BufReader::with_capacity(65536, &mut archive.file);
-    // bufread decoder leaves bytes following the first gzip member untouched.
-    let mut decoder = flate2::bufread::GzDecoder::new(buffered);
-    scan_tar(&mut decoder, manifest, consume)?;
-    let mut rest = decoder.into_inner();
-    require(
-        rest.fill_buf()?.is_empty(),
-        "gzip trailing/concatenated member",
-    )?;
-    drop(rest);
+    {
+        // One extra byte distinguishes growth from exact pinned EOF. The
+        // decoder can never read an unbounded compressed stream after admission.
+        let compressed = HashedBody {
+            inner: (&mut archive.file).take(archive.pin.bytes + 1),
+            hash: Sha256::new(),
+            bytes: 0,
+        };
+        let buffered = BufReader::with_capacity(65536, compressed);
+        // bufread decoder leaves bytes following the first gzip member untouched.
+        let mut decoder = flate2::bufread::GzDecoder::new(buffered);
+        scan_tar(&mut decoder, manifest, consume)?;
+        let mut rest = decoder.into_inner();
+        require(
+            rest.fill_buf()?.is_empty(),
+            "gzip trailing/concatenated member",
+        )?;
+        let compressed = rest.into_inner();
+        require(
+            compressed.bytes == archive.pin.bytes
+                && format!("{:x}", compressed.hash.finalize()) == archive.pin.sha256,
+            "decoded compressed stream digest/length",
+        )?;
+    }
     archive.check()?;
     // Authenticate the compressed stream again after decode; timestamps alone
     // are not a substitute for content authentication.
@@ -675,11 +693,13 @@ fn extract(authority_path: &str, authority_sha: &str, destination: &Path) -> Res
         Ok(())
     })?;
     require(out.files.keys().eq(chosen.iter()), "selected output roster")?;
-    out.finish()?;
     source.authenticate(false)?;
     manifest_input.authenticate(false)?;
     archive.check()?;
-    out.check_files()?;
+    out.finish()?;
+    source.check()?;
+    manifest_input.check()?;
+    archive.check()?;
     let pins: BTreeMap<_, _> = out
         .files
         .iter()
@@ -729,7 +749,7 @@ mod tests {
         h[136..148].copy_from_slice(b"00000000000\0");
         h[148..156].fill(b' ');
         h[156] = kind;
-        h[257..265].copy_from_slice(b"ustar\000");
+        h[257..265].copy_from_slice(b"ustar\x0000");
         let sum: u32 = h.iter().map(|b| u32::from(*b)).sum();
         h[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
         let mut out = h.to_vec();
@@ -889,6 +909,16 @@ mod tests {
             let mut input = Input::open(pin, MAX_RAW).unwrap();
             assert!(gzip_archive(&mut input, &manifest, |_, _| Ok(())).is_err());
         }
+        let pin = pin_file(&dir.join("growing"), &good);
+        let mut input = Input::open(pin, MAX_RAW).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&input.pin.path)
+            .unwrap()
+            .write_all(&vec![0u8; 131072])
+            .unwrap();
+        assert!(gzip_archive(&mut input, &manifest, |_, _| Ok(())).is_err());
+        assert!(input.file.stream_position().unwrap() <= input.pin.bytes + 1);
     }
 
     #[test]
@@ -925,10 +955,25 @@ mod tests {
         let refused = dir.join("refused");
         assert!(extract(&wrong_pin.path, &wrong_pin.sha256, &refused).is_err());
         assert!(!refused.exists());
-        let duplicate = format!("{{\"schema\":\"x\",\"schema\":\"y\"}}");
-        let dupe = pin_file(&dir.join("duplicate.json"), duplicate.as_bytes());
-        assert!(extract(&dupe.path, &dupe.sha256, &refused).is_err());
-        assert!(!refused.exists());
+        let text = std::str::from_utf8(&body).unwrap();
+        let duplicate = format!(
+            "{{\"schema\":\"borsuk-closed-native-replay-extraction-authority-v1\",{}",
+            &text[1..]
+        );
+        let nested = text.replacen("\"archive\":{", "\"archive\":{\"path\":\"/unused\",", 1);
+        for (i, duplicate) in [duplicate, nested].into_iter().enumerate() {
+            // Each document is otherwise a complete, typed authority. A parser
+            // without duplicate rejection would keep its valid last values.
+            let plain: Value = serde_json::from_str(&duplicate).unwrap();
+            assert!(serde_json::from_value::<Authority>(plain).is_ok());
+            assert!(serde_json::from_str::<UniqueJson>(&duplicate).is_err());
+            let dupe = pin_file(
+                &dir.join(format!("duplicate{i}.json")),
+                duplicate.as_bytes(),
+            );
+            assert!(extract(&dupe.path, &dupe.sha256, &refused).is_err());
+            assert!(!refused.exists());
+        }
     }
 
     #[test]
@@ -961,6 +1006,19 @@ mod tests {
             .unwrap();
         sync.parent = parent;
         assert!(sync.finish().is_err());
+        let mut privacy = Destination::new(&dir.join("privacy")).unwrap();
+        privacy.write("a", &mut &b"output"[..]).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&privacy.path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(privacy.finish().is_err());
+        let mut nested = Destination::new(&dir.join("nested-privacy")).unwrap();
+        nested.write("dir/a", &mut &b"output"[..]).unwrap();
+        std::fs::set_permissions(
+            nested.path.join("dir"),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        assert!(nested.finish().is_err());
     }
 }
 struct UniqueJson(Value);
