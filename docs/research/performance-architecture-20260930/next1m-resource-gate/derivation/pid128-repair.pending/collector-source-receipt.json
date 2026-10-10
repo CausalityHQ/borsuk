@@ -1,0 +1,7 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "accepted_sha256": "f6e123ee06474a10def135b9121444e09627334f9114942b0282dd3b9c882f79",
+  "candidate_sha256": "6ae828ae1c30447e72187758141cc120a43ecf1cffed80713e46194f2668c844",
+  "candidate_bytes": 10087,
+  "runtime_executed": false
+}

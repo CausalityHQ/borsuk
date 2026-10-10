@@ -19,7 +19,7 @@ finish() {
  if [[ $chain_closed == 1 && $original == "$chain_exit" ]]; then status=$original
  elif (( original >= 90 && original <= 98 )); then status=$original
  else status=99; fi
- for unit in borsuk-cohort-transport borsuk-cohort-parity borsuk-native-chain; do
+ for unit in borsuk-cohort-transport borsuk-cohort-parity; do
   for pass in stop check; do
    state=$(timeout -k 2 10 systemctl show "$unit.service" -p ActiveState --value) || bad
    if [[ $pass == stop && ( $state == active || $state == activating || $state == deactivating ) ]]; then timeout -k 2 30 systemctl stop "$unit.service" || bad; fi
@@ -28,7 +28,8 @@ finish() {
  done
  exec >/dev/null 2>&1
  if [[ -n ${log_pid:-} ]]; then wait "$log_pid" || status=96; fi
- for u in cohort-parity native-chain; do systemctl show "borsuk-$u.service" > "evidence-root/systemd-after-$u.txt" 2>&1; done
+ systemctl show borsuk-cohort-parity.service > evidence-root/systemd-after-cohort-parity.txt 2>&1
+ [[ ! -f evidence-root/chain-outer/manager.show ]] || cp evidence-root/chain-outer/manager.show evidence-root/systemd-after-native-chain.txt
  raw=$(stat -c %s run.log) || bad; P=prepared-parent
  for d in evidence-root evidence-local evidence-chain; do
   if [[ -d $d ]]; then
@@ -94,7 +95,7 @@ get() { (ulimit -f "$2"; timeout -k 5 30 aws s3api get-object --bucket "$bucket"
 printf '%s  support.sha256\n' "$support_sha" > expected-support.sha256
 get support.sha256 64
 sha256sum -c expected-support.sha256
-names='config-template.json derivation-config.json gate-config-template.json run_actual_cohort_admission.sh run_native_scale_build_gate.sh service-stop.sh transport-pins.json transport.py validate-scratch-binding.sh'
+names='config-template.json derivation-config.json gate-config-template.json run_actual_cohort_admission.sh run_native_scale_build_gate.sh observer-command.sh collect-native-chain-outer.sh run-native-chain-observer.sh service-stop.sh transport-pins.json transport.py validate-scratch-binding.sh'
 for n in $names; do get "$n" 64; done
 sha256sum --strict -c support.sha256
 awk '{print $2}' support.sha256 | LC_ALL=C sort > support.names
@@ -166,7 +167,7 @@ jq --arg assets "$root/assets" --arg parent "$root/prepared-parent" --argjson de
  '.shards |= map(.path=($assets+"/input/"+.publisher_path)) | .output_parent={path:$parent,device:$dev,inode:$ino}' config-template.json > finalized-config.json
 config_sha=$(sha256sum finalized-config.json); config_sha=${config_sha%% *}
 admit() { now=$(date +%s); (( now >= boot_epoch && now + $1 <= local_stop_epoch )) || exit 95; printf '%s %s %s %s %s\n' "$2" "$boot_epoch" "$now" "$1" "$local_stop_epoch" >> evidence-root/deadline-admission.txt; }
-admit $((2460 + 30 + 9660 + 30 + 360 + 240)) prep
+admit $((2460 + 30 + 10080 + 40 + 360 + 240)) prep
 phase=native-parity
 set +e
 systemd-run --unit=borsuk-cohort-parity --wait --pipe -p CPUQuota=400% -p AllowedCPUs=0-3 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=2460 -p TimeoutStopSec=30 -p KillMode=control-group -p "ExecStopPost=/bin/bash $root/service-stop.sh" \
@@ -195,20 +196,19 @@ jq -S 'del(.prepared.complete.bytes,.prepared.complete.sha256)' gate-config.json
 cmp template.stripped final.stripped
 gate_sha=$(sha256sum gate-config.json); gate_sha=${gate_sha%% *}
 jq -n --args '$ARGS.positional' -- bash "$root/run_native_scale_build_gate.sh" "$root/gate-config.json" "$gate_sha" "$root/evidence-chain" > chain-argv.json
-admit $((9660 + 30 + 360 + 240)) chain
+admit $((10080 + 40 + 360 + 240)) chain
 phase=native-chain
 set +e
-systemd-run --unit=borsuk-native-chain --wait --pipe -p CPUQuota=400% -p AllowedCPUs=0-3 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=9660 -p TimeoutStopSec=30 -p KillMode=control-group -p "ExecStopPost=/bin/bash $root/service-stop.sh chain" \
- bash "$root/run_native_scale_build_gate.sh" "$root/gate-config.json" "$gate_sha" "$root/evidence-chain"
+bash "$root/run-native-chain-observer.sh" "$root" "$gate_sha"
 rc=$?; set -e
 printf '%s\n' "$rc" > evidence-root/chain-unit.exit
 chain_exit=$rc
 phase=chain-validation
 [[ $rc == 0 || $rc == 2 || $rc == 3 ]] || exit 93
 E=evidence-chain
-jq -e --arg rc "$rc" '.schema=="borsuk-parity-service-exit-v1" and .exit_code=="exited" and .exit_status==$rc and .service_result==(if $rc=="0" then "success" else "exit-code" end)' evidence-root/chain-exit.json || exit 93
+jq -e --argjson rc "$rc" '.schema=="borsuk-native-scale-build-outer-closure-v2" and .status=="CLOSED" and .actual_outer_exit==$rc and .drained==true' evidence-root/chain-outer/outer-closure.json || exit 93
 [[ -f $E/wrapper.exit && $(< "$E/wrapper.exit") == "$rc" ]] || exit 93
-jq -e --argjson rc "$rc" '.schema=="borsuk-native-scale-build-gate-local-v1" and .intended_exit==$rc and .signal==null and .performance_claim==false and ((.status=="NATIVE_CHAIN_CLOSED" and $rc==0 and .baseline_native_exit==0) or (.status=="BASELINE_NONZERO_EXIT" and ($rc==2 or $rc==3) and .baseline_native_exit==$rc and .baseline_invoked==true))' $E/terminal.json || exit 93
+jq -e --argjson rc "$rc" '.schema=="borsuk-native-scale-build-gate-local-v2" and .intended_exit==$rc and .signal==null and .performance_claim==false and ((.status=="NATIVE_CHAIN_CLOSED" and $rc==0 and .baseline_native_exit==0) or (.status=="BASELINE_NONZERO_EXIT" and ($rc==2 or $rc==3) and .baseline_native_exit==$rc and .baseline_invoked==true))' $E/terminal.json || exit 93
 chain_disp=$(jq -er .status $E/terminal.json)
 phase=complete
 chain_closed=1

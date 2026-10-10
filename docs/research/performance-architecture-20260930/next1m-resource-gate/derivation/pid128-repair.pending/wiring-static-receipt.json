@@ -1,0 +1,52 @@
+{
+  "status": "SOURCE_ONLY_RUNTIME_UNVERIFIED",
+  "parent_source_checkpoint": "4271119ed86e27ce888cae5cf1fdc80e87c38a4c",
+  "static_check": {
+    "unit": "run-p3509518-i708030902.service",
+    "invocation_id": "6e7f4f1cecdf4a3e9d9daaa02ebf604d",
+    "exit": 0,
+    "cpu": 1,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "runtime_max_seconds": 120,
+    "peak_memory": "37M",
+    "commands": [
+      "shellcheck -x run-native-chain-observer.sh",
+      "shellcheck -x collect-native-chain-outer.sh",
+      "bash -n run-native-chain-observer.sh",
+      "bash -n user-data.sh"
+    ]
+  },
+  "source_files": {
+    "run_native_scale_build_gate.sh": {
+      "bytes": 61958,
+      "sha256": "f692d430d48cee28bc1e53cbc1c4fa865dacf23bf33db9f8238b426b4c660a6f"
+    },
+    "user-data.sh": {
+      "bytes": 16168,
+      "sha256": "dfebdc619b5826a4989e71a5fff59b60bc214539801aca0ef480174cb960a119"
+    },
+    "observer-command.sh": {
+      "bytes": 643,
+      "sha256": "894544d6348c9a69ac34f038e631eeabc7396ec4091626f695b33b2aa5c40685"
+    },
+    "collect-native-chain-outer.sh": {
+      "bytes": 10087,
+      "sha256": "6ae828ae1c30447e72187758141cc120a43ecf1cffed80713e46194f2668c844"
+    },
+    "run-native-chain-observer.sh": {
+      "bytes": 3908,
+      "sha256": "df23fba9a7e29586ddde8d14e7eeba6ae052621300485e8f95679a010be97728"
+    }
+  },
+  "runtime_executed": false,
+  "remaining": [
+    "verifier and canary source wiring",
+    "independent source review",
+    "causality EC2 disposable mechanics canary",
+    "real1M input admission",
+    "fresh recorded1M native run and exact closure replay"
+  ],
+  "performance_claim": false
+}

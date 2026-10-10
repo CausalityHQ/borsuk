@@ -84,12 +84,6 @@ finish() {
         > "$evidence/closure.txt" || { wf=1; rc=98; }
     printf '%s\n' "$cleanup" > "$evidence/cleanup.exit" || wf=1
     (( wf == 0 )) || { status=INVALID; rc=98; }
-    # Seal pre-status evidence; wrapper.exit and terminal.json record the later intent.
-    (cd -- "$evidence" && find . -type f ! -path ./closure.sha256 -print0 | sort -z | xargs -0 sha256sum --) \
-        > "$evidence/closure.sha256" || { wf=1; rc=98; }
-    sync -f "$evidence" || { wf=1; rc=98; }
-    printf '%s\n' "$rc" > "$evidence/wrapper.exit" || { wf=1; rc=98; }
-    (( wf == 0 )) || status=INVALID
     jq -n --arg status "$status" --arg stage "$stage" --argjson intended_exit "$rc" \
         --arg config_sha256 "$config_sha" --arg baseline_exit "$baseline_exit" --arg evidence "$evidence" \
         --argjson baseline_invoked "$baseline_invoked" --argjson original_exit "$original" --arg signal "$signal" \
@@ -103,6 +97,12 @@ finish() {
           baseline_invoked:($baseline_invoked == 1),actual_query_completion_requires_external_replay:true,
           instance_termination_verified:false,performance_claim:false}' \
         -- ${completed[@]+"${completed[@]}"} > "$evidence/terminal.json" || { wf=1; rc=98; }
+    # Seal pre-status evidence; wrapper.exit and terminal.json record the later intent.
+    (cd -- "$evidence" && find . -type f ! -path ./closure.sha256 ! -path ./wrapper.exit -print0 | sort -z | xargs -0 sha256sum --) \
+        > "$evidence/closure.sha256" || { wf=1; rc=98; }
+    sync -f "$evidence" || { wf=1; rc=98; }
+    printf '%s\n' "$rc" > "$evidence/wrapper.exit" || { wf=1; rc=98; }
+    (( wf == 0 )) || status=INVALID
     sync -f "$evidence" || { wf=1; rc=98; }
     (( wf == 0 )) || printf 'INVALID: evidence publication failed (original_exit=%s signal=%s)\n' "$original" "${signal:-none}" >&2
     # Root must require normal manager termination and the original outer wait exits, including write failures.
