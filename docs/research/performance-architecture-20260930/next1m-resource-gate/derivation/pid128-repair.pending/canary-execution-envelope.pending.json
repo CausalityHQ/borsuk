@@ -1,7 +1,7 @@
 {
   "schema": "borsuk-next1m-observer-mechanics-canary-envelope-v1",
-  "status": "PENDING_SOURCE_REVIEW_AND_ROOT_FREEZE",
-  "candidate_source_commit": "640f71a7ef2b757df5b41df73b733e46c3cf5358",
+  "status": "PENDING_EXECUTION_WIRING_AND_ROOT_FREEZE",
+  "candidate_source_commit": null,
   "aws_profile": "causality",
   "region": "eu-central-1",
   "capacity": "spot",
@@ -53,21 +53,23 @@
     "tasks_max": 128
   },
   "deadlines": {
+    "bootstrap_setup_seconds": 500,
     "canary_command_seconds": 1500,
     "kill_grace_seconds": 10,
-    "machine_shutdown_from_launch_seconds": 1700,
-    "root_external_termination_from_launch_seconds": 1800,
+    "collection_cleanup_budget_seconds": 180,
+    "machine_shutdown_from_launch_seconds": 2400,
+    "root_external_termination_from_launch_seconds": 2500,
     "root_cleanup_margin_seconds": 120
   },
   "cost": {
     "fresh_spot_quote_usd_per_hour": "0.215100",
-    "compute_cap_usd": "0.32",
+    "compute_cap_usd": "0.436667",
     "ancillary_cap_usd": 0.15,
-    "total_cap_usd": 0.5,
+    "total_cap_usd": 0.6,
     "quote_required_before_launch": true,
     "maximum_spot_bid_usd_per_hour": "0.60",
-    "modeled_at_quote_usd": "0.114720",
-    "total_at_bid_cap_usd": "0.47",
+    "modeled_at_quote_usd": "0.156545",
+    "total_at_bid_cap_usd": "0.586667",
     "quote_observed_at": "2026-10-10T12:28:05Z",
     "quote_artifact": {
       "path": "/tmp/borsuk-next1m-pid128-repair-draft/canary-quote-20261010/spot-price.json",
@@ -89,10 +91,20 @@
   "interruption": "INVALID interrupted cell; preserve original receipts; no automatic retry",
   "no_performance_claim": true,
   "remaining_before_launch": [
-    "dual source critique aadd94cc1afc4f22 reconciliation",
     "direct full-chain collector refusal coverage source",
     "source-bound asset roster and exact root execution/collection seam",
-    "fresh Spot quote and finite budget arithmetic",
-    "final source/config freeze and review corrections"
-  ]
+    "worker setup/remaining-time and owned sibling cleanup validation",
+    "fresh Spot quote and final source/config freeze"
+  ],
+  "reviewed_source_parent": "94df50a9e833d0b51431bf49b2008ef2b62ca9d4",
+  "budget_arithmetic": {
+    "success_path_seconds": 2190,
+    "machine_margin_seconds": 210,
+    "external_compute_accounting_seconds": 2620,
+    "setup_plus_canary_plus_grace_plus_collection": "500 + 1500 + 10 + 180 = 2190 < 2400",
+    "measurement_protocol_unchanged": true,
+    "local_runtime_allowed": false,
+    "setup_is_budget_not_hard_cap": true,
+    "launch_requires_worker_remaining_time_guard": true
+  }
 }
