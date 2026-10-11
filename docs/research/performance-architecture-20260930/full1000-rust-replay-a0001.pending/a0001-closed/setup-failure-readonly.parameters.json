@@ -1,0 +1,16 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -uo pipefail",
+    "printf 'PATH=%s\\n' \"$PATH\"",
+    "command -v aws",
+    "type -a aws",
+    "aws --version",
+    "/usr/local/bin/aws --version",
+    "systemctl is-active borsuk-rust-replay-shutdown.timer",
+    "test ! -d /sys/fs/cgroup/system.slice/borsuk-rust-replay-transport.service"
+  ],
+  "executionTimeout": [
+    "60"
+  ]
+}

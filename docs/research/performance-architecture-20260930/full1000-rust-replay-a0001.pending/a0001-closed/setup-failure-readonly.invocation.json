@@ -1,0 +1,22 @@
+{
+    "CommandId": "23bf34bf-3db5-4030-bf2f-2f99aeb1e0ca",
+    "InstanceId": "i-04a52c7a7e35ed92e",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T00:41:42.261Z",
+    "ExecutionElapsedTime": "PT0.815S",
+    "ExecutionEndDateTime": "2026-10-11T00:41:42.261Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin\n/usr/local/bin/aws\naws is /usr/local/bin/aws\naws-cli/2.36.11 Python/3.14.6 Linux/7.0.0-1013-aws exe/x86_64.ubuntu.24\naws-cli/2.36.11 Python/3.14.6 Linux/7.0.0-1013-aws exe/x86_64.ubuntu.24\nactive\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/full1000-rust-replay-a0001/ssm/setup-failure-readonly/23bf34bf-3db5-4030-bf2f-2f99aeb1e0ca/i-04a52c7a7e35ed92e/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/full1000-rust-replay-a0001/ssm/setup-failure-readonly/23bf34bf-3db5-4030-bf2f-2f99aeb1e0ca/i-04a52c7a7e35ed92e/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

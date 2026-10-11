@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-full1000-rust-replay-attempt-v1",
+  "status": "INVALID_SETUP_ENVIRONMENT",
+  "freeze_commit": "2191de210fcbd354ecb30382296d28d67a15fd28",
+  "instance_id": "i-04a52c7a7e35ed92e",
+  "root_volume_id": "vol-08c730190c64f97d1",
+  "original_setup": {
+    "command_id": "c51ceb2f-3f07-45b9-a154-b0b419aebace",
+    "status": "Failed",
+    "exit": 1
+  },
+  "diagnostic": {
+    "command_id": "23bf34bf-3db5-4030-bf2f-2f99aeb1e0ca",
+    "status": "Success",
+    "exit": 0,
+    "scope": "Read-only CLI resolution/version/timer; no transport/native input read"
+  },
+  "observed_failure_boundary": "After AWS installer, before transport stage",
+  "exact_cause_proven": false,
+  "native_stages_run": 0,
+  "original_algorithm_rejected": false,
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "external_timer_stopped_after_verified_termination": true,
+  "automatic_retry": false,
+  "performance_claim": false,
+  "remaining": "Preserve attempt; record CLI exit/version at admission before a separately frozen environment validation"
+}
