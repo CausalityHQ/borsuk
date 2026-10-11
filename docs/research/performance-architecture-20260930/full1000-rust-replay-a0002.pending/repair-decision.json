@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-replay-setup-repair-v1",
+  "prior_attempt": "full1000-rust-replay-a0001",
+  "prior_source": "2191de210fcbd354ecb30382296d28d67a15fd28",
+  "observed_setup_exit": 1,
+  "actual_transport_progress": "UNPROVEN: redirected transport log not retained before termination",
+  "native_stages_run": 0,
+  "demonstrated_source_defect": "Nested bash -c uses root under nounset but outer root is unexported and inner root undefined",
+  "repair": "Define root in nested transport shell; return original transport log before manager acceptance",
+  "failure_boundary": "After AWS installation; exact command unproven",
+  "original_scientific_algorithm_changed": false,
+  "inputs_and_binary_pins_changed": false,
+  "runtime_verified": false,
+  "new_paid_attempt_launched": false
+}
