@@ -729,7 +729,7 @@ fn allocation_phases(
 /// Authenticate the bounded root and charge its mode against the caller's remaining budget.
 /// The phase model includes router root/membership/payload/centroid buffers; callers
 /// separately reserve their other retained inputs before this pre-allocation check.
-pub(crate) fn admit_authenticated_root(
+pub fn admit_authenticated_root(
     body: &[u8],
     root_sha256: &str,
     input: &SourceIdentity<'_>,
@@ -2347,6 +2347,122 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn spatial_axis1023_top48_gains_and_displaced_losses() {
+        // Fixed assignments isolate partitioning; the separate public-build fixture tests training.
+        let vectors = (0..3200)
+            .map(|id| {
+                let mut row = vec![0.; 1024];
+                row[1023] = if id < 128 {
+                    if id % 2 == 0 { 1. } else { -1. }
+                } else {
+                    0.5
+                };
+                row
+            })
+            .collect::<Vec<_>>();
+        let blob = spatial_blob(3200 * 32, &vectors);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            profile: SemanticProfile::Scale1m,
+            dimensions: 1024,
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let groups = || {
+            let mut groups = vec![(0..128).map(|id| (1., id)).collect::<Vec<_>>()];
+            groups.extend((0..48).map(|g| {
+                (128 + g * 64..128 + (g + 1) * 64)
+                    .map(|id| (0.25, id))
+                    .collect()
+            }));
+            groups
+        };
+        let radial = build_assigned(
+            &blob,
+            &input,
+            input.profile.allocation_cap(),
+            LeafPartition::Radial64V1,
+            50,
+            groups(),
+            UnitCentroidPages::decode(&blob).unwrap(),
+        )
+        .unwrap();
+        let spatial = build_assigned(
+            &blob,
+            &input,
+            input.profile.allocation_cap(),
+            LeafPartition::WidestAxisQuotaV1,
+            50,
+            groups(),
+            UnitCentroidPages::decode(&blob).unwrap(),
+        )
+        .unwrap();
+        for a in [&radial, &spatial] {
+            validate_publication(&a.manifest, &a.membership, &a.leaves, &input, &blob).unwrap();
+        }
+        let r = open(&radial, &input);
+        let s = open(&spatial, &input);
+        for unit in 0..3200 {
+            assert_eq!(
+                r.manifest().leaves[r.unit_membership()[unit]].group_ordinal,
+                s.manifest().leaves[s.unit_membership()[unit]].group_ordinal
+            );
+        }
+        let mut query = vec![0.; 1024];
+        query[1023] = 1.;
+        let rank = |router: &SemanticUnitRouter| {
+            let ranked = router
+                .rank_leaves_by_metric(&query, &VectorMetric::SquaredEuclidean)
+                .unwrap();
+            router.nominate_selected(&ranked[..48]).unwrap()
+        };
+        let radial = rank(&r);
+        let spatial = rank(&s);
+        assert_eq!(radial.leaf_ids, (2..50).collect::<Vec<_>>());
+        assert_eq!(spatial.leaf_ids, (1..49).collect::<Vec<_>>());
+        assert_eq!(
+            spatial
+                .units
+                .difference(&radial.units)
+                .copied()
+                .collect::<Vec<_>>(),
+            (0..128).step_by(2).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            radial
+                .units
+                .difference(&spatial.units)
+                .copied()
+                .collect::<Vec<_>>(),
+            (3136..3200).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            spatial
+                .page_closure
+                .difference(&radial.page_closure)
+                .count(),
+            16
+        );
+        assert_eq!(
+            radial
+                .page_closure
+                .difference(&spatial.page_closure)
+                .count(),
+            8
+        );
+        let gain = 0;
+        let displaced = 3136 * 32;
+        assert!(
+            !radial.page_closure.contains(&(gain / 256))
+                && spatial.page_closure.contains(&(gain / 256))
+        );
+        assert!(
+            radial.page_closure.contains(&(displaced / 256))
+                && !spatial.page_closure.contains(&(displaced / 256))
+        );
     }
 
     #[test]

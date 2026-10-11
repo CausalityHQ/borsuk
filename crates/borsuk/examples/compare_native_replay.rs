@@ -29,6 +29,9 @@
 #[path = "compare_native_replay/partition_reconstruction.rs"]
 mod partition_reconstruction;
 
+#[path = "compare_native_replay/paired_partition_coverage.rs"]
+mod paired_partition_coverage;
+
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
 #[allow(dead_code)]
 #[path = "../src/budgeted_page_rank.rs"]
@@ -8007,6 +8010,38 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--prepare-spatial-publication")
+        {
+            require(
+                args.len() == 6,
+                "usage: compare_native_replay --prepare-spatial-publication CONFIG CONFIG_SHA AUTHORITY AUTHORITY_SHA",
+            )?;
+            return paired_partition_coverage::prepare(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("spatial config SHA encoding")?,
+                Path::new(&args[4]),
+                args[5].to_str().ok_or("spatial authority SHA encoding")?,
+            );
+        }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--paired-partition-source-coverage")
+        {
+            require(
+                args.len() == 8,
+                "usage: compare_native_replay --paired-partition-source-coverage CONFIG CONFIG_SHA AUTHORITY AUTHORITY_SHA NEW_SELECTION NEW_REPORT",
+            )?;
+            return paired_partition_coverage::execute(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("paired config SHA encoding")?,
+                Path::new(&args[4]),
+                args[5].to_str().ok_or("paired authority SHA encoding")?,
+                Path::new(&args[6]),
+                Path::new(&args[7]),
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--partition-reconstruction")
