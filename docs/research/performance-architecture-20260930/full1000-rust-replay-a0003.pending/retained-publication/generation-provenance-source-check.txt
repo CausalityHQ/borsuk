@@ -1,0 +1,1 @@
+Qualified generation builder and seven source components unchanged between bc3082a8 and c3e52c8b; producer source hashes match authenticated derivation receipt.

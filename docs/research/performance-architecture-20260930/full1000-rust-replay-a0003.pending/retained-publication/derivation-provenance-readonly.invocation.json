@@ -1,0 +1,22 @@
+{
+    "CommandId": "2a45a1b9-bf1c-4e10-9d9e-528e9f07bdac",
+    "InstanceId": "i-03e97ddd605145cb3",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 2,
+    "ExecutionStartDateTime": "2026-10-11T01:19:08.256Z",
+    "ExecutionElapsedTime": "PT0.002S",
+    "ExecutionEndDateTime": "2026-10-11T01:19:08.256Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "/var/lib/amazon/ssm/i-03e97ddd605145cb3/document/orchestration/2a45a1b9-bf1c-4e10-9d9e-528e9f07bdac/awsrunShellScript/0.awsrunShellScript/_script.sh: 1: set: Illegal option -o pipefail\nfailed to run commands: exit status 2",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

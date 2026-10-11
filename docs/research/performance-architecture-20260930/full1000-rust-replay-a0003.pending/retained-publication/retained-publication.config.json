@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-two-bit-retained-publication-config-v2",
+  "backend": {
+    "kind": "S3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "region": "eu-central-1",
+    "namespace": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+    "request_timeout_seconds": 120
+  },
+  "retained_prefix": "semantic/index",
+  "original_root_sha256": "8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885",
+  "original_generation": 1,
+  "original_control_epoch": 1,
+  "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+  "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+  "destination_prefix": "semantic/rebound-full1000-a0001",
+  "scratch_parent": "/mnt/borsuk-scale1m/prepared-parent/retained-work",
+  "max_scratch_bytes": 536870912,
+  "limits": {
+    "max_memory_bytes": 536870912,
+    "max_active_queries": 1,
+    "max_query_bytes": 16773120,
+    "max_query_gets": 32,
+    "max_parallel_gets": 16,
+    "max_source_bytes": 67108864,
+    "max_source_gets": 128,
+    "max_parallel_source_gets": 16,
+    "max_query_scratch_bytes": 594520,
+    "already_pinned_bytes": 0
+  }
+}

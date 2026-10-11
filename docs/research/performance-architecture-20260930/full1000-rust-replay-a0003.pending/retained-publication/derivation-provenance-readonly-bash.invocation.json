@@ -1,0 +1,22 @@
+{
+    "CommandId": "bcf71fae-e7de-40e7-969a-7f87ac97e1e2",
+    "InstanceId": "i-03e97ddd605145cb3",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T01:19:27.892Z",
+    "ExecutionElapsedTime": "PT0.006S",
+    "ExecutionEndDateTime": "2026-10-11T01:19:27.892Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-native-scale-derivation-receipt-v2\",\n  \"status\": \"COMPLETE\",\n  \"rows\": 1000000,\n  \"dimensions\": 1024,\n  \"recipe\": \"normalize_then_flat_fit_then_sq8\",\n  \"query_or_truth_used\": false,\n  \"producer_authority\": {\n    \"source_commit\": \"bc3082a8210c4370ebadae4ba093a7c211072b62\",\n    \"executable_sha256\": \"4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66\",\n    \"producer_source_sha256\": \"a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd\",\n    \"sq8_source_sha256\": \"16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795\",\n    \"source_order_source_sha256\": \"1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4\"\n  },\n  \"source_identity_qualification\": \"external_frozen_prerequisite_not_self_certified\",\n  \"outputs\": {\n    \"normalized\": {\n      \"bytes\": 4096000000,\n      \"sha256\": \"31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d\"\n    },\n    \"source_order\": {\n      \"bytes\": 8000000,\n      \"sha256\": \"1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413\"\n    },\n    \"sq8\": {\n      \"bytes\": 1036000000,\n      \"sha256\": \"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1\"\n    }\n  },\n  \"low_bits_count\": 1024,\n  \"step_bits_count\": 1024\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

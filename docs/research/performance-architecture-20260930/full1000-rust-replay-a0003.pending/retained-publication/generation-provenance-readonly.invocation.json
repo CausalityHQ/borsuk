@@ -1,0 +1,22 @@
+{
+    "CommandId": "95c8aa72-e0a0-4940-b43f-30b3f4563582",
+    "InstanceId": "i-03e97ddd605145cb3",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T01:18:33.647Z",
+    "ExecutionElapsedTime": "PT0.01S",
+    "ExecutionEndDateTime": "2026-10-11T01:18:33.647Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-two-bit-generation-v8\",\n  \"generation\": 1,\n  \"base_epoch\": 0,\n  \"plane_manifest_sha256\": \"e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6\",\n  \"page_manifest_sha256\": \"84e57ba2ed436c8f526ae87b749ed5f9ae117137b4100766218cebd623e370e6\",\n  \"discovery\": {\n    \"centroids_sha256\": \"720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8\",\n    \"input_root_sha256\": \"e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6\",\n    \"input_schema\": \"borsuk-two-bit-plane-v3\",\n    \"leaves_bytes\": 64125000,\n    \"leaves_sha256\": \"2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6\",\n    \"mean_sha256\": \"7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985\",\n    \"membership_bytes\": 125000,\n    \"membership_sha256\": \"9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463\",\n    \"mode\": \"semantic\",\n    \"profile\": \"scale1m\",\n    \"records_sha256\": \"e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90\",\n    \"root_bytes\": 3041472,\n    \"root_sha256\": \"8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492\",\n    \"source_order_sha256\": \"1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413\",\n    \"source_sha256\": \"31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d\",\n    \"sq8_sha256\": \"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1\"\n  },\n  \"sq8_object_sha256\": \"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1\",\n  \"sq8_object_key\": \"semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1\",\n  \"sq8_etag\": \"\\\"240004-65d820c930dc9-3dc01b00\\\"\",\n  \"canonical\": {\n    \"bytes\": 4104000000,\n    \"dimensions\": 1024,\n    \"object_key\": \"semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c\",\n    \"rows\": 1000000,\n    \"sha256\": \"72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c\"\n  },\n  \"low_length\": 1024,\n  \"step_length\": 1024\n}\n[\n  \"admission\",\n  \"corpus_intervals\",\n  \"dimensions\",\n  \"low_f32_bits\",\n  \"original_corpus\",\n  \"outputs\",\n  \"producer_authority\",\n  \"producer_config_sha256\",\n  \"query_or_truth_used\",\n  \"recipe\",\n  \"rows\",\n  \"schema\",\n  \"source_identity_qualification\",\n  \"status\",\n  \"step_f32_bits\"\n]\n{\n  \"schema\": \"borsuk-two-bit-local-publication-receipt-v1\",\n  \"root_sha256\": \"8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885\",\n  \"generation\": 1,\n  \"control_epoch\": 1,\n  \"metadata_prefix\": \"semantic/index/generations/8a9ac0a97e9bebad4c4bbfdcdc2b901e0582de3482b44a920709362785ca1885\"\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
