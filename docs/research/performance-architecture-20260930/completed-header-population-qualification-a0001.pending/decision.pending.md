@@ -1,0 +1,9 @@
+# Separate population-result boundary compiler qualification
+
+Frozen test-only source18f36c212f5590ed628dd5a7299ff467b074adaf. No production edit yet. Source archive6c804414845d5f24ee7b02a87a88d12587eff440f315bad94a23dd94a2de5a27, 4221925 bytes,463 files,436 Rust/Cargo files. All paths extracted from the exact Git revision. Archive includes the full existing workspace source/fixtures/test-build script, no corpus/query/truth/result input.
+
+Same previous compiler environment Rust1.98.0/clippy, AWS CLI2.36.11 body SHA/size pinned. Setup and no-run compile payloads attached and shell syntax checked; this is not native verification. New causality Spot c7i.2xlarge, encrypted80GiB delete-on-termination root, compilerCPU0-3/400%, jobs2,8GiB/noSwap/PID512; serial nativeCPU0/100%,1GiB/noSwap/PID128. Machine9000s, external8880s, postsetup gate7200s with cleanup reserve. Maximum compute1.50 USD at0.6/h for2.5h, ancillary0.15, total1.65. Fresh quote0.2038/h; no actual billing claim.
+
+First no-run compile; authenticate exact test executable; freeze and run exactly one boundary test expecting original admission refusal. Only then write/freeze the one cap alias fix and qualify exact green/full94/release/workspaceClippy/real unset test-build. Collect original terminal bodies and source-before/after, terminate SAME instance, wait and prove root gone before source integration. Original staging canary is closed and never repurposed. No automated repeat on interruption or failure.
+
+Existing four workers and opaque drafts remain untouched. Local tools package source and construct exact command data only. First generator decoder error was local prelaunch exit5; preserved draft and correction, no native failure or paid retry. Product cold measurement remains pending; no quality/performance/vendor result from this gate.

@@ -1,0 +1,1 @@
+First local command-data generator mistakenly piped raw jq output into a JSON decoder (exit5), before launch or execution. Empty draft preserved; direct raw output corrected. Native source unchanged. No paid launch.

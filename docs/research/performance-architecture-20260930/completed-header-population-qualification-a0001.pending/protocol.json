@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-population-boundary-qualification-v1",
+  "status": "FROZEN_ROOT_COMPILER_QUALIFICATION_ONLY",
+  "source_commit": "18f36c212f5590ed628dd5a7299ff467b074adaf",
+  "source_archive_sha256": "6c804414845d5f24ee7b02a87a88d12587eff440f315bad94a23dd94a2de5a27",
+  "source_file_count": 463,
+  "native_file_count": 430,
+  "compiler": {
+    "jobs": 2,
+    "cpu_percent": 400,
+    "allowed_cpus": "0-3",
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512
+  },
+  "native": {
+    "cpu_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "pids": 128
+  },
+  "gate_seconds": 7200,
+  "machine_stop_seconds": 9000,
+  "external_stop_seconds": 8880,
+  "spot_max_bid": 0.6,
+  "total_cost_reservation_usd": 1.65,
+  "expected_red": {
+    "test": "completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail",
+    "exit": 101,
+    "error": "bounded header artifact pin"
+  },
+  "production_edit_written": false,
+  "claims_quality": false,
+  "claims_performance": false,
+  "spot_quote_usd_per_hour": 0.203800,
+  "payloads": {
+    "setup": "8bee9856ce80afb34c2bd246d1f755bc0ab8a6bb88fab1824b3eb847ae8b1ff2",
+    "compile_test_only": "0c8944b8f729b4b479a9d7ba922e456af1db6b63e884eab67a69ec58d9a96e19",
+    "launch_request": "c0f8c8722d1d84f604eaae93943b6e3675c69b54a7a94bde33039bdeeb8fbdb0",
+    "user_data": "34cc995518766a569ce8263ccb4dfcbd055addcb3adce9a1c4416c382266e655"
+  },
+  "future_stages": [
+    "exact native red test after compiled ELF path authentication",
+    "only then one cap alias source freeze",
+    "exact native green",
+    "full94 example tests",
+    "locked release reducer",
+    "locked workspace/all-target Clippy correctness+suspicious",
+    "real environment-unset full workspace test-build"
+  ],
+  "interruption": "INVALID preserve no automatic retry",
+  "scope": "Source compilation and bounded correctness only. No scientific input, ANN run or vendor claim. Later sequential stages frozen before their submission on SAME host."
+}

@@ -1,0 +1,3 @@
+#!/bin/bash
+set -eu
+systemd-run --unit=borsuk-header-qualification-shutdown --on-active=9000s /usr/sbin/shutdown -h now
