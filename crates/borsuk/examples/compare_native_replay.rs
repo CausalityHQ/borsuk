@@ -1937,7 +1937,7 @@ fn read_config_file<T: DeserializeOwned>(
 
 const HEADER_AUTHORITY_SCHEMA: &str = "borsuk-completed-header-authority-v1";
 const HEADER_JSON_CAP: u64 = 65_536;
-const HEADER_RESULT_CAP: u64 = 32 * 1024 * 1024;
+const HEADER_RESULT_CAP: u64 = FILE_CAP;
 const BASELINE_BINARY_SHA: &str =
     "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3";
 const RESERVED_QUERIES_SHA: &str =
