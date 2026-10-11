@@ -1,0 +1,22 @@
+{
+    "CommandId": "2f47a300-7b26-433f-8319-23b40ace1249",
+    "InstanceId": "i-0201e0ae0f8d5d0ed",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:37:00.095Z",
+    "ExecutionElapsedTime": "PT6.698S",
+    "ExecutionEndDateTime": "2026-10-11T02:37:06.095Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "compare_native_replay.green.rs: OK\nsource-files.green.sha256: OK\nnative-source.green.json: OK\nGREEN_SOURCE_AUTHENTICATED\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/completed-header-population-qualification-a0001/ssm/green-source-admission/2f47a300-7b26-433f-8319-23b40ace1249/i-0201e0ae0f8d5d0ed/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/completed-header-population-qualification-a0001/ssm/green-source-admission/2f47a300-7b26-433f-8319-23b40ace1249/i-0201e0ae0f8d5d0ed/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
