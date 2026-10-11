@@ -1,0 +1,89 @@
+{
+  "schema": "borsuk-leaf-metric-transport-v1",
+  "status": "PENDING_NOT_LAUNCHED",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "region": "eu-central-1",
+  "inputs": [
+    {
+      "role": "producer",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/sealed-result.jsonl",
+        "bytes": 1220980,
+        "sha256": "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+      },
+      "key": "research/semantic-router/20261011/scale-closure-panels32-a0001/stages/independent32-r2/independent32-r2-result.jsonl"
+    },
+    {
+      "role": "generation",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json"
+    },
+    {
+      "role": "plane",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json"
+    },
+    {
+      "role": "router",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/router-root.bin",
+        "bytes": 3041472,
+        "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/root.bin"
+    },
+    {
+      "role": "membership",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/membership.bin"
+    },
+    {
+      "role": "requests",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/queries.f32",
+        "bytes": 4096000,
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      },
+      "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32"
+    },
+    {
+      "role": "truth",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/truth.u64",
+        "bytes": 80000,
+        "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+      },
+      "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64"
+    },
+    {
+      "role": "sq8",
+      "pin": {
+        "path": "/mnt/borsuk-leaf-metric-data/inputs/sq8",
+        "bytes": 1036000000,
+        "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+    }
+  ],
+  "binary": {
+    "pin": {
+      "role": "compare_native_replay",
+      "bytes": 6011808,
+      "sha256": "e6dede4dbb786a5d90bf7cecdf0959cba32e7ae30cf9812381603494da0f33d4",
+      "path": "/mnt/borsuk-leaf-metric-data/bin/compare_native_replay"
+    },
+    "key": "research/semantic-router/20261011/leaf-metric-native-qualification-a0001/stages/leaf-metric-release-r3/compare_native_replay"
+  }
+}

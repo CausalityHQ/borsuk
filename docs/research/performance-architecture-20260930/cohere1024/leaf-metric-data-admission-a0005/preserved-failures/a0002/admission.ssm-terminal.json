@@ -1,0 +1,22 @@
+{
+    "CommandId": "d82f2b29-9579-4ba9-b84d-f08f0acee3d4",
+    "InstanceId": "i-0b0386980f2322b60",
+    "Comment": "leaf-metric real-input admission; not scientific measurement",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-11T09:59:46.861Z",
+    "ExecutionElapsedTime": "PT12.003S",
+    "ExecutionEndDateTime": "2026-10-11T09:59:58.861Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/tmp/leaf-data-stage.sh: OK\n/tmp/leaf-data-inner.sh: OK\n{\n  \"schema\": \"borsuk-leaf-metric-data-stage-v1\",\n  \"stage\": \"admission\",\n  \"manager_exit\": 2,\n  \"native_exit\": 2,\n  \"owned_cgroup_drained\": true,\n  \"scientific_measurement\": false,\n  \"cold_s3_claim\": false,\n  \"vendor_win\": false\n}\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-data-gates-a0002/ssm-admission/d82f2b29-9579-4ba9-b84d-f08f0acee3d4/i-0b0386980f2322b60/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "failed to run commands: exit status 1",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-data-gates-a0002/ssm-admission/d82f2b29-9579-4ba9-b84d-f08f0acee3d4/i-0b0386980f2322b60/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

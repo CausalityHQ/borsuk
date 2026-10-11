@@ -1,0 +1,22 @@
+{
+    "CommandId": "87f20b88-2514-4a14-8733-701518b12278",
+    "InstanceId": "i-0b0386980f2322b60",
+    "Comment": "leaf-metric data a0002 setup transport 1GiB; native unchanged",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T09:58:19.036Z",
+    "ExecutionElapsedTime": "PT36.782S",
+    "ExecutionEndDateTime": "2026-10-11T09:58:55.036Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/tmp/leaf-data-setup.sh: OK\n/tmp/leaf-data-inner.sh: OK\n/tmp/leaf-data-stage.sh: OK\n/tmp/leaf-data-config.json: OK\n/tmp/leaf-data-transport.json: OK\n(Reading database ... \r(Reading database ... 5%\r(Reading database ... 10%\r(Reading database ... 15%\r(Reading database ... 20%\r(Reading database ... 25%\r(Reading database ... 30%\r(Reading database ... 35%\r(Reading database ... 40%\r(Reading database ... 45%\r(Reading database ... 50%\r(Reading database ... 55%\r(Reading database ... 60%\r(Reading database ... 65%\r(Reading database ... 70%\r(Reading database ... 75%\r(Reading database ... 80%\r(Reading database ... 85%\r(Reading database ... 90%\r(Reading database ... 95%\r(Reading database ... 100%\r(Reading database ... 79226 files and directories currently installed.)\r\nPreparing to unpack .../curl_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking curl (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nPreparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nPreparing to unpack .../libcurl3t64-gnutls_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nSelecting previously unselected package unzip.\r\nPreparing to unpack .../unzip_6.0-28ubuntu4.1_amd64.deb ...\r\nUnpacking unzip (6.0-28ubuntu4.1) ...\r\nSetting up libcurl4t64:amd64 (8.5.0-2ubuntu10.15) ...\r\nSetting up unzip (6.0-28ubuntu4.1) ...\r\nSetting up libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) ...\r\nSetting up curl (8.5.0-2ubuntu10.15) ...\r\nProcessing triggers for man-db (2.12.0-4build2) ...\r\nProcessing triggers for libc-bin (2.39-0ubuntu8.9) ...\r\nawscliv2.zip: OK\nYou can now run: /usr/local/bin/aws --version\ntrue\n/mnt/borsuk-leaf-metric-data/inputs/sealed-result.jsonl.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/generation.json.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/plane.json.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/router-root.bin.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/membership.bin.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/queries.f32.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/truth.u64.partial: OK\n/mnt/borsuk-leaf-metric-data/inputs/sq8.partial: OK\n/mnt/borsuk-leaf-metric-data/bin/compare_native_replay.partial: OK\nSETUP_DATA_AUTHENTICATED\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-data-gates-a0002/ssm-setup/87f20b88-2514-4a14-8733-701518b12278/i-0b0386980f2322b60/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "Running as unit: borsuk-leaf-data-setup.service\n\nRunning kernel seems to be up-to-date.\n\nRestarting services...\n systemctl restart packagekit.service\n\nNo containers need to be restarted.\n\nNo user sessions are running outdated binaries.\n\nNo VM guests are running outdated hypervisor (qemu) binaries on this host.\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 36.644s\nCPU time consumed: 23.045s\nMemory peak: 2.2M\nMemory swap peak: 0B\n",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-data-gates-a0002/ssm-setup/87f20b88-2514-4a14-8733-701518b12278/i-0b0386980f2322b60/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

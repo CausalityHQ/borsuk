@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-leaf-metric-data-gates-closed-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0528e0456ea246c2f",
+  "root_volume_id": "vol-0be9653ea49f07f3c",
+  "setup_command_id": "c12e193b-8c31-450d-8db3-946e7af0aeb0",
+  "setup_exit": 1,
+  "cause": "setup transport cgroup OOM at 512MiB; 526.4M manager peak",
+  "admission": "UNRUN",
+  "smoke": "UNRUN",
+  "native_ann_called": false,
+  "performance_claim": false,
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "next_repair": "setup transport 1GiB, native envelope unchanged"
+}

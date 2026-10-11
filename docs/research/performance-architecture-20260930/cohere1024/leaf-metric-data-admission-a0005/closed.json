@@ -1,0 +1,61 @@
+{
+  "schema": "borsuk-leaf-metric-data-gates-closed-v1",
+  "status": "ADMISSION_AND_SMOKE_CLOSED",
+  "instance_id": "i-000c5afdef27fec5a",
+  "root_volume_id": "vol-0364c406450ab23a3",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "zone": "eu-central-1b",
+  "market": "spot",
+  "instance_type": "c7i.large",
+  "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+  "delivery_commit": "da8341795c0f4104a1dd04946faa8ebaf7d0c08f",
+  "binary_sha256": "e6dede4dbb786a5d90bf7cecdf0959cba32e7ae30cf9812381603494da0f33d4",
+  "config_sha256": "fca117c22f6368d425026cbd3b9950223dd78ac44f32b708cd503746610496c9",
+  "setup_command": "d7ec62b0-1e46-4ead-9cc3-4f9d1a277f0d",
+  "setup_exit": 0,
+  "admission_command": "36b95f5f-377c-4aad-b338-38cc930728fe",
+  "smoke_command": "ebffe041-a81b-4502-8475-9f684f0db0f3",
+  "stages": [
+    {
+      "schema": "borsuk-leaf-metric-data-stage-v1",
+      "stage": "admission",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "scientific_measurement": false,
+      "cold_s3_claim": false,
+      "vendor_win": false
+    },
+    {
+      "schema": "borsuk-leaf-metric-data-stage-v1",
+      "stage": "smoke",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "scientific_measurement": false,
+      "cold_s3_claim": false,
+      "vendor_win": false
+    }
+  ],
+  "native": {
+    "cpu_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 128
+  },
+  "setup_memory_bytes": 1073741824,
+  "modeled_payload_bytes": 164435968,
+  "source_get_cap": 128,
+  "source_byte_cap": 67108864,
+  "original_control_verified": true,
+  "scientific_candidate_decision": false,
+  "native_ann_called": false,
+  "cold_s3_claim": false,
+  "vendor_win": false,
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "external_timer_active": false
+}

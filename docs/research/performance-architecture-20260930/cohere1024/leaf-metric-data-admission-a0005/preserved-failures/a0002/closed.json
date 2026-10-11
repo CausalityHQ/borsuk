@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-leaf-metric-data-gates-closed-v1",
+  "status": "EXECUTION_INVALID",
+  "instance_id": "i-0b0386980f2322b60",
+  "root_volume_id": "vol-011f85b61e077ab54",
+  "setup_command_id": "87f20b88-2514-4a14-8733-701518b12278",
+  "setup_exit": 0,
+  "admission_command_id": "d82f2b29-9579-4ba9-b84d-f08f0acee3d4",
+  "admission_exit": 2,
+  "cause": "coverage modeled payload admission; config64MiB below router.bytes*32+64MiB",
+  "modeled_payload_bytes": 164435968,
+  "smoke": "UNRUN",
+  "native_ann_called": false,
+  "performance_claim": false,
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "next_repair": "max_payload_bytes exact model164435968; SOURCE64MiB/128GET and native512MiB unchanged"
+}

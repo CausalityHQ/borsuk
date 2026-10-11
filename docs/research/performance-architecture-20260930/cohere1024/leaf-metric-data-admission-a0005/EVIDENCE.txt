@@ -1,0 +1,10 @@
+REAL-INPUT ADMISSION and disposable SMOKE; no scientific coverage or cold performance acceptance.
+Qualified Rust source240a570d; ELF6011808B/SHAe6dede4dbb786a5d90bf7cecdf0959cba32e7ae30cf9812381603494da0f33d4; delivered mainda834179.
+Original selection/report bodies remain create-only opaque objects under:
+s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-data-gates-a0005/{admission,smoke}/
+Retained SHA256SUMS bind the omitted selection.json/report.json. Candidate quality values from mechanics gates were not read or used for a decision.
+Rust performed real validation/paired selection/seal/truth+SQ8 reduction on EC2. Local inspection used only metadata/source/static/opaque copies+SHA and resource/terminal evidence.
+Full original SSM logs retained under ssm-setup, ssm-admission and ssm-smoke in the same campaign.
+Earlier failed attempts preserved: setup OOM; undersized diagnostic-allocation config; two no-capacity launch refusals. Execution INVALID, not scientific KILL.
+Config max_payload_bytes164435968 is exact qualified allocation model (router3041472*32 +64MiB), separate from unchanged SOURCE64MiB/128GET. Native512MiB/CPU0/zeroSwap/pids128.
+No native ANN query, SOURCE/canonical hydration, cold S3 measurement, population quality or vendor win claimed.

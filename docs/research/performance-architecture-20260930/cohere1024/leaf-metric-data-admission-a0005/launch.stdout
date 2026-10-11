@@ -1,0 +1,146 @@
+{
+    "ReservationId": "r-03ec8343002109f58",
+    "OwnerId": "453182569524",
+    "Groups": [],
+    "Instances": [
+        {
+            "Architecture": "x86_64",
+            "BlockDeviceMappings": [],
+            "ClientToken": "borsuk-leaf-metric-data-gates-a0005-da834179",
+            "EbsOptimized": false,
+            "EnaSupport": true,
+            "Hypervisor": "xen",
+            "IamInstanceProfile": {
+                "Arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+                "Id": "AIPAWTA6JHQ2J3ZONR2IU"
+            },
+            "InstanceLifecycle": "spot",
+            "NetworkInterfaces": [
+                {
+                    "Attachment": {
+                        "AttachTime": "2026-10-11T10:06:26+00:00",
+                        "AttachmentId": "eni-attach-0911a1214ac58714c",
+                        "DeleteOnTermination": true,
+                        "DeviceIndex": 0,
+                        "Status": "attaching",
+                        "NetworkCardIndex": 0
+                    },
+                    "Description": "",
+                    "Groups": [
+                        {
+                            "GroupId": "sg-0b1fd3e4fbde4af0d",
+                            "GroupName": "borsuk-bench-sg"
+                        }
+                    ],
+                    "Ipv6Addresses": [],
+                    "MacAddress": "06:ff:d7:42:57:59",
+                    "NetworkInterfaceId": "eni-061a04ae79a2c9a41",
+                    "OwnerId": "453182569524",
+                    "PrivateDnsName": "ip-172-31-46-52.eu-central-1.compute.internal",
+                    "PrivateIpAddress": "172.31.46.52",
+                    "PrivateIpAddresses": [
+                        {
+                            "Primary": true,
+                            "PrivateDnsName": "ip-172-31-46-52.eu-central-1.compute.internal",
+                            "PrivateIpAddress": "172.31.46.52"
+                        }
+                    ],
+                    "SourceDestCheck": true,
+                    "Status": "in-use",
+                    "SubnetId": "subnet-00243d923761c047c",
+                    "VpcId": "vpc-02bed5aadbc3c0a2d",
+                    "InterfaceType": "interface",
+                    "Operator": {
+                        "Managed": false
+                    }
+                }
+            ],
+            "RootDeviceName": "/dev/sda1",
+            "RootDeviceType": "ebs",
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-0b1fd3e4fbde4af0d",
+                    "GroupName": "borsuk-bench-sg"
+                }
+            ],
+            "SourceDestCheck": true,
+            "SpotInstanceRequestId": "sir-fngqmw3j",
+            "StateReason": {
+                "Code": "pending",
+                "Message": "pending"
+            },
+            "Tags": [
+                {
+                    "Key": "borsuk-source",
+                    "Value": "240a570dff26daa7ec556159c9f9ecd370ed0dce"
+                },
+                {
+                    "Key": "borsuk-goal",
+                    "Value": "leaf-metric-data-admission-smoke"
+                },
+                {
+                    "Key": "Name",
+                    "Value": "borsuk-leaf-metric-data-gates-a0005"
+                }
+            ],
+            "VirtualizationType": "hvm",
+            "CpuOptions": {
+                "CoreCount": 1,
+                "ThreadsPerCore": 2
+            },
+            "CapacityReservationSpecification": {
+                "CapacityReservationPreference": "open"
+            },
+            "MetadataOptions": {
+                "State": "pending",
+                "HttpTokens": "required",
+                "HttpPutResponseHopLimit": 2,
+                "HttpEndpoint": "enabled",
+                "HttpProtocolIpv6": "disabled",
+                "InstanceMetadataTags": "disabled"
+            },
+            "EnclaveOptions": {
+                "Enabled": false
+            },
+            "BootMode": "uefi-preferred",
+            "PrivateDnsNameOptions": {
+                "HostnameType": "ip-name",
+                "EnableResourceNameDnsARecord": false,
+                "EnableResourceNameDnsAAAARecord": false
+            },
+            "MaintenanceOptions": {
+                "AutoRecovery": "default",
+                "RebootMigration": "default"
+            },
+            "CurrentInstanceBootMode": "uefi",
+            "Operator": {
+                "Managed": false
+            },
+            "InstanceId": "i-000c5afdef27fec5a",
+            "ImageId": "ami-0b8a830d6339a9758",
+            "State": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PrivateDnsName": "ip-172-31-46-52.eu-central-1.compute.internal",
+            "PublicDnsName": "",
+            "StateTransitionReason": "",
+            "AmiLaunchIndex": 0,
+            "ProductCodes": [],
+            "InstanceType": "c7i.large",
+            "LaunchTime": "2026-10-11T10:06:26+00:00",
+            "Placement": {
+                "AvailabilityZoneId": "euc1-az3",
+                "GroupName": "",
+                "Tenancy": "default",
+                "AvailabilityZone": "eu-central-1b"
+            },
+            "Monitoring": {
+                "State": "disabled"
+            },
+            "SubnetId": "subnet-00243d923761c047c",
+            "VpcId": "vpc-02bed5aadbc3c0a2d",
+            "PrivateIpAddress": "172.31.46.52"
+        }
+    ]
+}

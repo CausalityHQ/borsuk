@@ -1,0 +1,59 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.large",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 16,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.10"
+    }
+  },
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "ClientToken": "borsuk-leaf-metric-data-gates-a0001-da834179",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-leaf-metric-data-gates-a0001"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "240a570dff26daa7ec556159c9f9ecd370ed0dce"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "leaf-metric-data-admission-smoke"
+        }
+      ]
+    }
+  ]
+}

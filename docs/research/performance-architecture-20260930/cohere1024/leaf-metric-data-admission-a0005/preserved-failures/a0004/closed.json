@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-leaf-metric-data-gates-closed-v1",
+  "status": "LAUNCH_INVALID",
+  "cause": "No matching Spot capacity c7i.large eu-central-1a",
+  "instance_created": false,
+  "client_token_instances": 0,
+  "setup": "UNRUN",
+  "admission": "UNRUN",
+  "smoke": "UNRUN",
+  "performance_claim": false
+}
