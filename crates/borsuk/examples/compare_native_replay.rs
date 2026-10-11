@@ -21,7 +21,13 @@
 //! Source geometry: --source-neighborhood CONFIG CONFIG_SHA256. Strict source-only
 //! v1 config owns new anchor_seal/report paths. An original successful native
 //! terminal receipt is required; surviving report bytes never establish acceptance.
+//! Query-free construction: --partition-reconstruction CONFIG CONFIG_SHA APPROVAL
+//! APPROVAL_SHA. Independent approval pins original metadata; optional historical
+//! radial parity requires actual regeneration and two literal root exceptions.
 #![recursion_limit = "256"]
+
+#[path = "compare_native_replay/partition_reconstruction.rs"]
+mod partition_reconstruction;
 
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
 #[allow(dead_code)]
@@ -8001,6 +8007,25 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--partition-reconstruction")
+        {
+            require(
+                args.len() == 6,
+                "usage: compare_native_replay --partition-reconstruction CONFIG CONFIG_SHA APPROVAL APPROVAL_SHA",
+            )?;
+            return partition_reconstruction::execute(
+                Path::new(&args[2]),
+                args[3]
+                    .to_str()
+                    .ok_or("reconstruction config SHA encoding")?,
+                Path::new(&args[4]),
+                args[5]
+                    .to_str()
+                    .ok_or("reconstruction approval SHA encoding")?,
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--source-neighborhood")
