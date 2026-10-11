@@ -1,0 +1,524 @@
+{
+  "status": "SOURCE_ONLY_UNVERIFIED_HOLD_SAME_WORKER",
+  "worker": "borsuk/partition-centroid-reconstruction-native",
+  "parent_agent": "borsuk/prod-ready-v9",
+  "commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "parent": "2da0b6cd263fc01760002197f4f56ff2c0d93002",
+  "initial_head": "37c4adcfe8eb2cd3d464f7beb81c42bb9bfbfff5",
+  "initial_ref": "devbox/partition-centroid-reconstruction-native",
+  "initial_ref_preserved": true,
+  "detached": true,
+  "clean": true,
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "committer": "Roman Bartusiak <riomus@gmail.com>",
+  "no_attribution_trailers": true,
+  "source_sha256": {
+    "crates/borsuk/examples/compare_native_replay.rs": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+    "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5"
+  },
+  "changed_paths": [
+    "crates/borsuk/examples/compare_native_replay.rs",
+    "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs"
+  ],
+  "private_api": [
+    "execute(config_path: &Path, config_sha: &str, approval_path: &Path, approval_sha: &str) -> Result<bool> [pub(super) only]",
+    "authenticate_construction(config_path, config_sha, approval_path, approval_sha) -> Result<(ReconstructionConfig, ConstructionAuthority)>",
+    "reconstruct_centroids(authority: &ConstructionAuthority, leaves: &CompletedInput) -> Result<ReconstructedCentroids>",
+    "verify_historical_radial(authority, reconstructed, historical: &HistoricalPins, leaves: &CompletedInput) -> Result<HistoricalParity>",
+    "publish_with_sync(output_directory, authority, reconstructed, Option<&HistoricalParity>, binary_snapshot, sync) -> Result<bool>"
+  ],
+  "cli": "compare_native_replay --partition-reconstruction CONFIG CONFIG_SHA APPROVAL APPROVAL_SHA",
+  "approval_authority": "APPROVAL_SHA is an independently approved original pin, never read from CONFIG. A self-approved/current-only document establishes no original publication authority.",
+  "schemas": {
+    "config": {
+      "schema": "borsuk-partition-reconstruction-config-v1",
+      "exact_fields": [
+        "schema",
+        "generation_manifest",
+        "plane_manifest",
+        "leaves",
+        "historical",
+        "caller_pinned_bytes",
+        "max_payload_bytes",
+        "output_directory"
+      ],
+      "pin_fields": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "historical": "required key: null for Stage1; {root: pin, membership: pin} for Stage2",
+      "paths": "absolute bounded UTF-8, no-symlink traversal, regular single-link descriptors; output_directory must be NEW",
+      "max_payload_bytes": "positive <=536870912; cumulative source model, not RSS"
+    },
+    "approval": {
+      "schema": "borsuk-partition-reconstruction-approval-v1",
+      "exact_fields": [
+        "schema",
+        "generation_sha256",
+        "generation",
+        "base_epoch",
+        "plane_sha256",
+        "discovery_sha256",
+        "input_schema",
+        "input_root_sha256",
+        "centroids_sha256",
+        "profile",
+        "rows",
+        "dimensions"
+      ],
+      "discovery_sha256": "SHA256 of serde_json::to_vec of recursively duplicate-free Discovery Value; default serde_json sorted object keys; not a SHA of an arbitrary original text span",
+      "profiles": [
+        "native100k",
+        "fresh1m",
+        "scale1m"
+      ],
+      "types": "integer generation/base_epoch/rows/dimensions; strict string digests/schema/profile; generation>0; unchanged library geometry ceilings"
+    },
+    "receipt": {
+      "schema": "borsuk-partition-reconstruction-receipt-v1",
+      "stage1_status": "RECONSTRUCTED",
+      "stage2_status": "HISTORICAL_RADIAL_PARITY",
+      "acceptance": "complete:true + exact authenticated artifacts/pins + original successful terminal exit required; a surviving receipt alone is insufficient",
+      "stage1_artifacts": [
+        "centroids.bin",
+        "receipt.json"
+      ],
+      "stage2_artifacts": [
+        "centroids.bin",
+        "radial-root.bin",
+        "radial-membership.bin",
+        "radial-leaves.bin",
+        "receipt.json"
+      ],
+      "bindings": [
+        "config/approval/generation/plane/leaf/binary paths-lengths-SHAs",
+        "generation/epoch/profile/source/Discovery/construction identity",
+        "implementation component hashes",
+        "geometry, phases, old allocation identity, cumulative experiment admission",
+        "fixed root exceptions",
+        "file+directory sync required",
+        "requests_opened=false",
+        "truth_opened=false"
+      ]
+    }
+  },
+  "reconstruction_contract": "Authenticate original generation/epoch/plane/Discovery/construction/source-only calibration and bounded descriptors without opening old root/membership. Read exactly U fixed LE-u32 + FP16 records, SHA every leaf byte, exact EOF/length, finite halves, complete unique in-range IDs; scatter unchanged original bits in unit-ID order into literal BORSUCP1 header, zero reserved word; require whole approved construction SHA.",
+  "parity_contract": "Authenticate whole old root/member/leaves by original authority before reading old limit80..88. Public admit + actual current radial build at unchanged old limit, separate cumulative experiment admission. Fully validate/open only generated BORSUSR3. Stream exact membership/payload and equal root length/every byte except fixed literal BORSUSR2->BORSUSR3 at0..8 and LE0->LE1 at88..92. Any other delta/unsupported limit INVALID. No patched proof or old serving decoder.",
+  "publication_contract": "NEW directory via anchored mkdirat; CREATE|EXCL|NOFOLLOW files; descriptor/content readback, input/output/directory identity rechecks through all syncs. Seal receipt last through existing owned-descriptor INVALID cleanup on sync/recheck failure. Partial raw outputs may remain after refusal; never consumable success without successful original terminal receipt. File and receipt sync success additionally requires full post-write/pre-sync FileIdentity to remain unchanged after callback, including mtime/ctime; byte-identical unsynced rewrites refuse publication.",
+  "resource_formulas": {
+    "U": "ceil(rows/32)",
+    "I": "4+2*D",
+    "P": "U*I",
+    "B": "32+U*2*D",
+    "S": "ceil(U/8)",
+    "bootstrap": "64*(2*CONFIG_CAP)+1048576+2*16384 = 5275648; checked against fixed536870912 before config/approval parse; both inputs bounded<=32768",
+    "M": "caller_pinned_bytes + 5275648 + 64*(generation_manifest.bytes+plane_manifest.bytes); generation/plane individually <=65536; checked before generation/plane parse",
+    "reconstruction": "M+B+S+I before blob/bitmap/record allocation; scratch dropped before builder",
+    "build_validate_open_publish": "M+public admit(Geometry, unchanged authenticated old limit, original profile); public radial model already includes B; no old payload hydration or doubled centroid charge",
+    "library_radial_model": "C=ceil(U/64); L=2*C-1; F=U*D*4+U*4; V=U*D*4+U*(24+64); J=C*(D*4+128); H=ceil((C-1)/31); R=H*(32*D*16+U*64+4096); W=512+L*(64+D*4); Q=3*L*(D*4+256). training=131072+B+F+2V+R+2J+8388608; emit=131072+B+F+V+J+64U+P+4U+Q+4194304+8388608; validate=131072+B+F+2P+16U+3W+Q+8388608; peak=max(phases).",
+    "static_geometry_models": [
+      {
+        "rows": 4097,
+        "dimensions": 1024,
+        "units": 129,
+        "leaves_bytes": 264708,
+        "centroid_bytes": 264224,
+        "seen_bytes": 17,
+        "record_bytes": 2052,
+        "radial_phases_bytes": [
+          10954260,
+          14398276,
+          9973500
+        ],
+        "radial_peak_bytes": 14398276
+      },
+      {
+        "rows": 1000000,
+        "dimensions": 1024,
+        "units": 31250,
+        "leaves_bytes": 64125000,
+        "centroid_bytes": 64000032,
+        "seen_bytes": 3907,
+        "record_bytes": 2052,
+        "radial_phases_bytes": [
+          506729928,
+          416660264,
+          354344920
+        ],
+        "radial_peak_bytes": 506729928
+      }
+    ],
+    "measurement_limit": "These are static source formulas, not native model execution or measured RSS. Host/cache/runtime/scratch-disk envelope remains root-qualified separately."
+  },
+  "frozen_fixture": {
+    "rows": 4097,
+    "dimensions": 1024,
+    "units": 129,
+    "final_unit_rows": 1,
+    "old_source_commit": "2e2a789ad0e11c5d79348b93e21fdc8066425eac",
+    "old_full_source_sha256": "f8a3bfbaa216e3be87ad8a515193138a6f25a5995d116a85c63f05c32f49effc",
+    "emission_token_sha256": "1369f5960ea480411a110b74c28ba2e86b6c50eed26296966debc67a68ad4424",
+    "dependencies": {
+      "crates/borsuk/src/unit_centroid_pages.rs": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+      "crates/borsuk/src/logical_cell_catalog.rs": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225",
+      "crates/borsuk/src/metric.rs": "43a9c3a3fbc9a1f017a7ad7ce131aac7f253a77cb418f451587bd1043a1cdabe",
+      "Cargo.lock": "81d59b7f67df2a2269974028eeaaffbec29b482abb1a0e8f9e10be63263f055e",
+      "crates/borsuk/Cargo.toml": "3e50fe4f48fd78fff53e288c4bb9544395f76ef4331416de706fce50ebfd1bd4",
+      "crates/borsuk/src/simd_control.rs": "82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56",
+      "crates/borsuk/src/lib.rs": "40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8"
+    },
+    "method": "Test-only independently copied old preflight/admit/training/assignment/emission/encoder/type dependency closure; unused profile/serving helpers and final old validate call omitted; current gate validates/open regenerated outputs. rustfmt::skip preserves frozen emission text; static tokens match old source modulo comments/whitespace/optional trailing commas. No old decoder. No marker relabeling. Actual original historical publication parity remains a separate acceptance dependency.",
+    "build_contract": {
+      "features": {
+        "package_manifest_default": [],
+        "requested_fixture_build": "default features only, no --features overrides",
+        "scalar_control": false,
+        "basis": "Identical old/current crates/borsuk/Cargo.toml defines default=[] and scalar-control=[]; ordinary affected-target/release recipes supply no feature overrides",
+        "actual_cargo_unified_features": null,
+        "fingerprint_owner": "Root must retain the actual compiler-artifact feature list; source declaration is not proof of effective Cargo feature resolution"
+      },
+      "target": {
+        "recipe_target_override": null,
+        "target_selection": "Authorized causality EC2 native build target; worker recipes pass no --target",
+        "actual_target_triple": null,
+        "actual_target_arch": null,
+        "fingerprint_status": "ROOT_OWNED_PENDING; no guessed host/target"
+      },
+      "toolchain": {
+        "repository_edition": "2024",
+        "repository_minimum_rust_version": "1.91",
+        "committed_rust_toolchain_file": null,
+        "actual_rustc_verbose_fingerprint": null,
+        "actual_cargo_version": null,
+        "actual_toolchain": null,
+        "fingerprint_status": "ROOT_OWNED_PENDING; installed local formatter path is not a compiler fingerprint"
+      },
+      "native_cpu_flags": {
+        "worker_recipe_RUSTFLAGS_override": null,
+        "effective_RUSTFLAGS": null,
+        "effective_CARGO_ENCODED_RUSTFLAGS": null,
+        "effective_target_cpu": null,
+        "effective_target_feature_flags": null,
+        "native_CPU_model_and_features": null,
+        "fingerprint_owner": "Root records actual native CPU flags/target cfg on its exact compile/native roster; inherited flags are neither assumed absent nor guessed as target-cpu=native"
+      },
+      "acceptance": "Source pin equality does not establish arithmetic parity under unknown features/target/toolchain. Root binds actual feature/target/compiler/native CPU fingerprints to the same affected ELF, release executable and source. Real immutable old-publication whole-body parity remains a later gate; no old-output hashes guessed and no exporter added."
+    }
+  },
+  "native_test_names": [
+    "partition_reconstruction_frozen_old_4097_d1024_radial_parity",
+    "partition_reconstruction_absent_centroid_root_membership_and_permuted_records",
+    "partition_reconstruction_strict_approval_metadata_and_caps",
+    "partition_reconstruction_rejects_duplicate_keys_unknowns_and_wrong_types",
+    "partition_reconstruction_rejects_ids_nonfinite_sha_length_header",
+    "partition_reconstruction_every_forbidden_root_byte_and_literal",
+    "partition_reconstruction_historical_corruption_limit_and_retained_budget",
+    "partition_reconstruction_refuses_alias_replacement_and_mutation",
+    "partition_reconstruction_create_only_and_all_sync_failures_never_success",
+    "partition_reconstruction_sync_time_mutation_and_directory_replacement"
+  ],
+  "falsifier_cases": [
+    "actual4097/D1024/129 partial tail; signed zero, positive/negative finite subnormal and maximum finite half extrema",
+    "missing original centroid and old root/member; Stage1 unopened proofs",
+    "wrong independent generation/epoch/plane/Discovery/construction pins; recursive duplicate/unknown/missing keys/type/schema",
+    "source-only provenance, calibration, canonical/source/descriptor geometry, integer types, overflow/caps",
+    "duplicate/missing/out-of-range IDs, NaN/Inf, SHA, truncation/growth, wrong header/reserved digest",
+    "all current root bytes individually mutated; invalid old/new literal regions; unequal lengths",
+    "old root/member/payload corruption, unsupported limit, retained-lifetime admission",
+    "reauthenticated flat record permutation reconstructs same blob but refuses immutable-original authority/parity",
+    "symlink/hardlink/path aliases, replacements; both stages input/output/directory mutations during receipt-directory sync, including historical membership and generated radial leaves",
+    "occupied file/directory; asserted successful descriptor sync rosters 7/13 then each index failure on new directories, original error and no complete receipt",
+    "every generated artifact and receipt in both modes: actual file sync followed by identical-byte unsynced truncate/rewrite and distinct mtime; full stamp changes, callback succeeds, publication must refuse with no consumable complete receipt"
+  ],
+  "static_receipt": "/tmp/borsuk-partition-centroid-reconstruction-native-static.json",
+  "local_static_checks": {
+    "limits": {
+      "AllowedCPUs": "0",
+      "CPUQuota": "100%",
+      "MemoryMax": "256M",
+      "MemorySwapMax": 0,
+      "TasksMax": 128,
+      "RuntimeMaxSec": 120
+    },
+    "final_audit": {
+      "unit": "partition-reconstruction-static-audit-final",
+      "invocation_id": "a4c81e6d96534cbca875d95ad2e37905",
+      "exit": 0,
+      "runtime_ms": 154,
+      "memory_peak": "19.7M",
+      "swap": 0
+    },
+    "final_rustfmt_check": {
+      "unit": "partition-reconstruction-final-fmt-check",
+      "exit": 0,
+      "runtime_ms": 3899,
+      "memory_peak": "230.6M",
+      "swap": 0,
+      "command": "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt --edition 2024 --check --config skip_children=true crates/borsuk/examples/compare_native_replay.rs crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs"
+    },
+    "post_commit_identity_scope_sha_diffcheck": 0,
+    "preliminary_attempts": "Initial service lacked cwd (128), fixed checkout0. Bare rustfmt service lacked default rustup toolchain(1); installed formatter used without download. Static checker syntax typo(1) corrected; format-added optional match-arm braces caused provenance token diagnostic(1), resolved by preserving copied frozen text via rustfmt::skip; removed-helper blank-line trailing whitespace(2) trimmed. Final source checks0; no Rust compiler/native/test execution occurred.",
+    "commit_hooks": "Command-local core.hooksPath=/dev/null prevents unintended local native hooks under source-only prohibition; no persisted Git configuration/identity changes.",
+    "repair_source_audit": {
+      "unit": "partition-reconstruction-sync-repair-audit",
+      "invocation_id": "9d84b02676fa4cd8a5b4521ddca821b4",
+      "exit": 0,
+      "runtime_ms": 164,
+      "memory_peak": "21.7M",
+      "swap": 0
+    },
+    "repair_format": {
+      "unit": "partition-reconstruction-sync-repair-format",
+      "invocation_id": "ee26196868c447be8dd1c43fe81e178c",
+      "exit": 0,
+      "runtime_ms": 7719,
+      "memory_peak": "236.1M",
+      "swap": 0
+    },
+    "repair_rustfmt_check": {
+      "unit": "partition-reconstruction-sync-repair-fmt-check",
+      "exit": 0,
+      "runtime_ms": 189,
+      "memory_peak": "21.2M",
+      "swap": 0,
+      "command": "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt --edition 2024 --check --config skip_children=true crates/borsuk/examples/compare_native_replay.rs crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs"
+    },
+    "repair_post_commit_identity_scope_sha_diffcheck": 0,
+    "durable_message_acknowledgments": "Both exact instructions were read. agent_ack_consumed rejected each because it was no longer in this recipient mailbox; no retry or unseen acknowledgment.",
+    "failure_record_manifest": "/tmp/borsuk-partition-centroid-reconstruction-native-failure-records/manifest.json",
+    "failure_record_manifest_sha256": "03bb0f83a4c775b2cd1252c584419237486517c6d4cf7a3279775618020470b3",
+    "failure_record_instruction": "1791747218229234193-3833761; original command paths, combined stdout/stderr, diagnoses, and final direct exit0 receipts preserved. No duplicate native/source checks.",
+    "authoritative_native_bodies": "/tmp/borsuk-partition-centroid-reconstruction-native-failure-records/authoritative-native-bodies.json",
+    "prior_contract_before_addendum": "/tmp/borsuk-partition-centroid-reconstruction-native-failure-records/contract-before-failure-addendum.json",
+    "simd_pin_source_binding": {
+      "unit": "partition-reconstruction-simd-pin-static",
+      "invocation_id": "3bb049822b3f49d584946cf8adb83098",
+      "exit": 0,
+      "runtime_ms": 881,
+      "memory_peak": "21.6M",
+      "swap": 0,
+      "scope": "Single exact four-line source diff, historical/current/worktree full-file SHA equality, staged diff check; no native arithmetic evaluation or duplicate whole audit."
+    },
+    "simd_pin_post_commit_identity_scope": 0,
+    "sync_stamp_source_audit": {
+      "unit": "partition-reconstruction-sync-stamp-static",
+      "invocation_id": "9ce6c8c524564809a7ad478a461acb6f",
+      "exit": 0,
+      "runtime_ms": 100,
+      "memory_peak": "21.5M",
+      "swap": 0,
+      "scope": "Only two private production publication functions and one existing durability test differ; main/shared writer/frozen builder/ten names unchanged; source pre/post stamp order and exact byte rewrite case authored."
+    },
+    "sync_stamp_format": {
+      "unit": "partition-reconstruction-sync-stamp-format",
+      "invocation_id": "8ed4600e34b44cfbb8ec9c617143b26d",
+      "exit": 0,
+      "runtime_ms": 9358,
+      "memory_peak": "169.3M",
+      "swap": 0
+    },
+    "sync_stamp_rustfmt_check": {
+      "unit": "partition-reconstruction-sync-stamp-fmt-check",
+      "invocation_id": "d3f51c021b2943e287dfc4bafd9817e5",
+      "exit": 0,
+      "runtime_ms": 3612,
+      "memory_peak": "46.6M",
+      "swap": 0,
+      "command": "/data/cache/rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustfmt --edition 2024 --check --config skip_children=true crates/borsuk/examples/compare_native_replay.rs crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs"
+    },
+    "sync_stamp_post_commit_identity_scope": 0,
+    "library_pin_source_binding": {
+      "unit": "partition-reconstruction-lib-pin-static",
+      "invocation_id": "f38615fb4bb24d699ad84a8375ef28ee",
+      "exit": 0,
+      "runtime_ms": 72,
+      "memory_peak": "14.6M",
+      "swap": 0,
+      "scope": "Exact four-line source diff, old/current/worktree full lib.rs equality and SHA, staged diff check; no Rust/native evaluation."
+    },
+    "library_pin_post_commit_identity_scope": 0
+  },
+  "root_only_remote_commands": {
+    "checkout_identity": "git rev-parse HEAD # must equal 91107713f6f7bd700b5b6d92a83e438febac8069",
+    "affected_test_compile": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_CPU_THREADS=1 RAYON_NUM_THREADS=1 cargo test --locked -p borsuk --example compare_native_replay --no-run --message-format=json > partition-reconstruction-test-build.jsonl",
+    "collect_same_test_elf": "AFFECTED_TEST_ELF=\"$(python3 -c 'import json; rows=(json.loads(s) for s in open(\"partition-reconstruction-test-build.jsonl\") if s.lstrip().startswith(\"{\")); xs=[r[\"executable\"] for r in rows if r.get(\"reason\")==\"compiler-artifact\" and r.get(\"target\",{}).get(\"name\")==\"compare_native_replay\" and r.get(\"profile\",{}).get(\"test\") and r.get(\"executable\")]; assert len(xs)==1, xs; print(xs[0])')\"",
+    "bounded_native_falsifiers": "systemd-run --wait --pipe --unit=borsuk-reconstruction-native-91107713 --working-directory=\"$PWD\" --property=AllowedCPUs=0 --property=CPUQuota=100% --property=MemoryMax=256M --property=MemorySwapMax=0 --property=TasksMax=128 --property=RuntimeMaxSec=120 --setenv=BORSUK_CPU_THREADS=1 --setenv=RAYON_NUM_THREADS=1 \"$AFFECTED_TEST_ELF\" partition_reconstruction::tests:: --test-threads=1 --nocapture",
+    "release": "CARGO_BUILD_JOBS=1 cargo build --locked --release -p borsuk --example compare_native_replay",
+    "workspace_clippy": "CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env_unset_full_test_compile": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+    "original_input_stage1": "target/release/examples/compare_native_replay --partition-reconstruction \"$STAGE1_CONFIG\" \"$STAGE1_CONFIG_SHA256\" \"$ORIGINAL_APPROVAL\" \"$ORIGINAL_APPROVAL_SHA256\"",
+    "original_input_stage2": "target/release/examples/compare_native_replay --partition-reconstruction \"$STAGE2_CONFIG\" \"$STAGE2_CONFIG_SHA256\" \"$ORIGINAL_APPROVAL\" \"$ORIGINAL_APPROVAL_SHA256\""
+  },
+  "remote_rules": "Commands are literal recommendations, NOT executed by this worker. Run from a full checkout/source archive on existing authorized causality EC2, exact delivered source, jobs1 and root-approved compiler/host gates. Compile before running the same ELF under one bounded native fixture process. Never run cargo/compiler inside the256MiB native fixture wrapper. Real original-input Stage1/Stage2 require independent original pins and root-preregistered runtime envelope; no paid launch is authorized by this contract.",
+  "archive_rule": "Include new nested Rust source in native source/archive/test rosters and all include_bytes dependencies. Inherited430/463 source counts are invalid for this slice. Explicit transitive frozen-fixture dependency includes crates/borsuk/src/simd_control.rs at pinned historical SHA. Explicit export dependency includes crates/borsuk/src/lib.rs at pinned historical SHA.",
+  "not_performed": [
+    "Cargo",
+    "rustc",
+    "native/tests/mocks/data-body evaluation locally",
+    "AWS/network/paid jobs",
+    "children/consultations/reviews",
+    "push/merge",
+    "paired-quality or cold benchmark"
+  ],
+  "remaining": [
+    "Root dual/source review and exact affected native test compile/execution",
+    "release/workspace Clippy correctness+suspicious/env-unset full test build",
+    "actual immutable original-publication reconstruction/radial parity",
+    "root integration/qualification; same worker HOLD until disposition"
+  ],
+  "base": "483b7f69b2cb59f600f9cf6a7028fb4a91d5dbad",
+  "commits": [
+    "a645ca402d25f5fe0dfdfb0509d6929b1e811755",
+    "a9805ad4cd48f564c0d29ca9ddf6e11ecf2e81d7",
+    "be406b6e261a6024e83bf725fb4acf9a3675aeea",
+    "2da0b6cd263fc01760002197f4f56ff2c0d93002",
+    "91107713f6f7bd700b5b6d92a83e438febac8069"
+  ],
+  "repair": {
+    "instruction_id": "1791746560144676496-3833761",
+    "scope": "Only two existing private native test functions; production and frozen builder byte-identical to checkpoint a645ca4",
+    "changed_paths": [
+      "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs"
+    ],
+    "changed_test_names": [
+      "partition_reconstruction_create_only_and_all_sync_failures_never_success",
+      "partition_reconstruction_sync_time_mutation_and_directory_replacement"
+    ],
+    "successful_sync_rosters": {
+      "stage1": [
+        "output directory",
+        "parent directory",
+        "centroids.bin",
+        "output directory",
+        "receipt.json",
+        "output directory",
+        "parent directory"
+      ],
+      "stage2": [
+        "output directory",
+        "parent directory",
+        "centroids.bin",
+        "output directory",
+        "radial-root.bin",
+        "output directory",
+        "radial-membership.bin",
+        "output directory",
+        "radial-leaves.bin",
+        "output directory",
+        "receipt.json",
+        "output directory",
+        "parent directory"
+      ]
+    },
+    "successful_roster_oracle": "Actual callback descriptor device/inode/file-vs-directory order equals independent artifact-path metadata roster; exact counts 7 and 13 asserted before each-call failures",
+    "failures": "Each observed successful sync index injected on distinct NEW directory; original stage/index error preserved; absent or owned complete:false receipt required; occupied file/directory assertions retained",
+    "sync_time_mutations": "Both modes inject on receipt-directory sync (6/12): input, output, directory replacement. Stage2 mutates authenticated old membership and generated radial leaves; owned receipt must be complete:false.",
+    "native_result": "UNVERIFIED; source assertions authored only",
+    "checkpoint_contract": "/tmp/borsuk-partition-centroid-reconstruction-native-contract-a645ca40.json",
+    "checkpoint_static": "/tmp/borsuk-partition-centroid-reconstruction-native-static-a645ca40.json",
+    "commit": "a9805ad4cd48f564c0d29ca9ddf6e11ecf2e81d7"
+  },
+  "simd_repair": {
+    "instruction_id": "1791747804594327448-3833761",
+    "engineering_review_id": "e6feed89b2e64df2",
+    "commit": "be406b6e261a6024e83bf725fb4acf9a3675aeea",
+    "parent": "a9805ad4cd48f564c0d29ca9ddf6e11ecf2e81d7",
+    "changed_path": "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs",
+    "existing_test_name": "partition_reconstruction_frozen_old_4097_d1024_radial_parity",
+    "assertion": "digest(include_bytes!(\"../../src/simd_control.rs\")) == 82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56",
+    "historical_source": "2e2a789ad0e11c5d79348b93e21fdc8066425eac",
+    "scope": "Exactly four added test lines; all other source bytes unchanged from a9805ad4",
+    "production_arithmetic_change": false,
+    "new_test_name_or_framework": false,
+    "native_runtime": "UNVERIFIED",
+    "prior_contract": "/tmp/borsuk-partition-centroid-reconstruction-native-contract-a9805ad4.json",
+    "prior_static": "/tmp/borsuk-partition-centroid-reconstruction-native-static-a9805ad4.json"
+  },
+  "root_gate_authority": "Per exact root instruction1791747529251721226-3833761, root six-stage roster and jq Cargo-JSON extraction supersede worker Python extraction recommendation; no gate started here.",
+  "sync_stamp_repair": {
+    "instruction_id": "1791748029417631191-3833761",
+    "commit": "2da0b6cd263fc01760002197f4f56ff2c0d93002",
+    "parent": "be406b6e261a6024e83bf725fb4acf9a3675aeea",
+    "changed_path": "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs",
+    "changed_functions": [
+      "publish_blob",
+      "publish_with_sync",
+      "partition_reconstruction_create_only_and_all_sync_failures_never_success"
+    ],
+    "artifact_guard": "Capture full FileIdentity immediately after write and before successful file sync; reject any dev/ino/len/mtime/ctime change afterward, retain byte readback and later rechecks.",
+    "receipt_guard": "Private file-sync callback captures full stamp before sync and compares full equality after sync; error flows through existing owned-descriptor INVALID cleanup. Shared writer unchanged.",
+    "existing_test_name": "partition_reconstruction_create_only_and_all_sync_failures_never_success",
+    "real_rewrite_cases": {
+      "stage1": [
+        "centroids.bin",
+        "receipt.json"
+      ],
+      "stage2": [
+        "centroids.bin",
+        "radial-root.bin",
+        "radial-membership.bin",
+        "radial-leaves.bin",
+        "receipt.json"
+      ]
+    },
+    "oracle": "Callback actually syncs, then truncates and rewrites identical bytes without another sync; set distinct mtime to avoid coarse clock masking; assert identical bytes and changed full stamp; callback returns success; publication must immediately refuse with no receipt or owned complete:false receipt.",
+    "api_resource_science_change": false,
+    "shared_writer_frozen_builder_test_names_changed": false,
+    "native_red_green_observed": false,
+    "native_result": "UNRUN/UNVERIFIED; no local compile/runtime authorized",
+    "static_receipt": "/tmp/borsuk-partition-centroid-reconstruction-native-sync-stamp-static.json",
+    "prior_contract": "/tmp/borsuk-partition-centroid-reconstruction-native-contract-be406b6e.json",
+    "prior_static": "/tmp/borsuk-partition-centroid-reconstruction-native-static-be406b6e.json"
+  },
+  "library_pin_repair": {
+    "instruction_id": "1791748073533472282-3833761",
+    "commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+    "parent": "2da0b6cd263fc01760002197f4f56ff2c0d93002",
+    "changed_path": "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs",
+    "existing_test_name": "partition_reconstruction_frozen_old_4097_d1024_radial_parity",
+    "assertion": "digest(include_bytes!(\"../../src/lib.rs\")) == 40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8",
+    "scope": "Exactly four added test lines; all other bytes equal to 2da0b6cd; exact SIMD assertion retained",
+    "native_result": "UNRUN/UNVERIFIED",
+    "prior_contract": "/tmp/borsuk-partition-centroid-reconstruction-native-contract-2da0b6cd.json",
+    "prior_static": "/tmp/borsuk-partition-centroid-reconstruction-native-static-2da0b6cd.json"
+  },
+  "original_completed_reviews": {
+    "engineering": {
+      "path": "/data/target/borsuk-spatial-group-split-design.pending/reconstruction-engineering.e6feed89.md",
+      "sha256": "2be34c1cc8de7713455d6b3f540bb8681b3dd67d00b3dc5697d38e93c88740d6",
+      "full_body_read": true,
+      "reviewed_source": "a645ca402d25f5fe0dfdfb0509d6929b1e811755",
+      "status": "COMPLETED HOLD; source-only UNVERIFIED"
+    },
+    "research": {
+      "path": "/data/target/borsuk-spatial-group-split-design.pending/reconstruction-research.58ac410f.md",
+      "sha256": "59aede5a062d720ad17f8e210365b62152d66342be2da0851e3e3ab21309dc27",
+      "full_body_read": true,
+      "reviewed_source": "a645ca402d25f5fe0dfdfb0509d6929b1e811755",
+      "status": "COMPLETED HOLD; source-only UNVERIFIED"
+    }
+  },
+  "root_finding_names": {
+    "F1": {
+      "meaning": "Successful sync roster/count and parity sync-time mutation",
+      "source_repair_commit": "a9805ad4cd48f564c0d29ca9ddf6e11ecf2e81d7",
+      "acceptance": "PENDING ROOT EXACT-SOURCE GATES"
+    },
+    "F2": {
+      "meaning": "Transitive shared historical fixture source pins and build fingerprint",
+      "source_repair_commits": [
+        "be406b6e261a6024e83bf725fb4acf9a3675aeea",
+        "91107713f6f7bd700b5b6d92a83e438febac8069"
+      ],
+      "effective_build_fingerprint": "ROOT-OWNED PENDING",
+      "acceptance": "PENDING ROOT EXACT-SOURCE GATES"
+    },
+    "F3": {
+      "meaning": "Reject post-sync identical-byte unsynced rewrites by full pre/post stamp equality",
+      "source_repair_commit": "2da0b6cd263fc01760002197f4f56ff2c0d93002",
+      "native_falsifiers": "UNRUN",
+      "acceptance": "PENDING ROOT EXACT-SOURCE GATES"
+    }
+  }
+}

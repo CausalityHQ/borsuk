@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --example compare_native_replay partition_reconstruction_ -- --test-threads=1

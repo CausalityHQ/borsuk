@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-sealed-loss-native-stage-v1",
+  "stage": "reconstruction-test-build",
+  "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}
+	Command being timed: "timeout --kill-after=30 7805 env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+	User time (seconds): 453.61
+	System time (seconds): 60.36
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 8:36.19
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5588112
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 27470
+	Minor (reclaiming a frame) page faults: 32924801
+	Voluntary context switches: 354685
+	Involuntary context switches: 6403
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 21853896
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+ACTUAL_WORKSPACE_TEST_COMPILE_CONFIG_RESOURCES_AUTHENTICATED

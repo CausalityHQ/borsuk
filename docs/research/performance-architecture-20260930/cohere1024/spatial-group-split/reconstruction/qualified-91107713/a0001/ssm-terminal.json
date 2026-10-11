@@ -1,0 +1,22 @@
+{
+    "CommandId": "8ff109ef-4471-4846-b22f-664b5438383e",
+    "InstanceId": "i-0995be499aee87583",
+    "Comment": "borsuk reconstruction exact91107713 six native gates a0001 retainedELF r2",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 42,
+    "ExecutionStartDateTime": "2026-10-11T20:10:41.309Z",
+    "ExecutionElapsedTime": "PT30M46.816S",
+    "ExecutionEndDateTime": "2026-10-11T20:41:27.309Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-reconstruction-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-debug.sh: OK\n/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-release-tests.sh: OK\n/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-example-tests.sh: OK\n{\n  \"schema\": \"borsuk-reconstruction-native-batch-v1\",\n  \"source_commit\": \"91107713f6f7bd700b5b6d92a83e438febac8069\",\n  \"batch_exit\": 42,\n  \"completed_stages\": 2,\n  \"required_stages\": 6,\n  \"failed_stage\": \"reconstruction-example-tests\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 42",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

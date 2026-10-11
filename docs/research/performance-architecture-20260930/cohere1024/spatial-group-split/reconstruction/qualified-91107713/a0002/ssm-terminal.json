@@ -1,0 +1,22 @@
+{
+    "CommandId": "193ba1f1-76ba-422b-852f-0c6b32f38b8d",
+    "InstanceId": "i-0f39a8206f61e13eb",
+    "Comment": "borsuk reconstruction exact91107713 remaining3 gates a0002",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T20:49:02.696Z",
+    "ExecutionElapsedTime": "PT27M10.784S",
+    "ExecutionEndDateTime": "2026-10-11T21:16:12.696Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-release.sh: OK\n/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-clippy.sh: OK\n/mnt/borsuk-reconstruction-qualification/stage-assets/reconstruction-test-build.sh: OK\n{\n  \"schema\": \"borsuk-reconstruction-native-continuation-v1\",\n  \"source_commit\": \"91107713f6f7bd700b5b6d92a83e438febac8069\",\n  \"batch_exit\": 0,\n  \"completed_stages\": 3,\n  \"required_stages\": 3,\n  \"failed_stage\": \"\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

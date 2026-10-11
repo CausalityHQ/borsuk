@@ -1,0 +1,130 @@
+{
+  "schema": "borsuk-reconstruction-native-qualified-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "source_file_count": 464,
+  "native_file_count": 431,
+  "native_source_identity_sha256": "bef40caf201f947718554128b544cb77feedf907b897faa59d32e8d36bf62772",
+  "full_source_before_after_root_match": true,
+  "stages": [
+    {
+      "name": "reconstruction-debug",
+      "attempt": "a0001",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay partition_reconstruction_ -- --test-threads=1",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "d8e8a0258326270b5ad1c9c700b4c95f4895d186331ada8dc0d00b915556f417",
+      "terminal_sha256": "f84a48e23fc902d7b59e4215c2ffb9503d527586bd176fb563d9b44be7844dda",
+      "body_manifest_sha256": "8c616c2ca3da8e5d7dc0e5461a3a3fcebb2f1468e63058e3d429e6190451e1a4"
+    },
+    {
+      "name": "reconstruction-release-tests",
+      "attempt": "a0001",
+      "command": "cargo test --release --locked -p borsuk --example compare_native_replay partition_reconstruction_ -- --test-threads=1",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "b8d2d490977623a961432a6d2d404b759220da8ae45dafec0dd13531500d7989",
+      "terminal_sha256": "07cc7f89e1691cf43968343d8db91880c7e8c5ff8729914101e7ca5a3aea437d",
+      "body_manifest_sha256": "523b8ca0e196129a08774ce2891b38c7fe994ba8fe3ad586e5ba477314db9a8e"
+    },
+    {
+      "name": "reconstruction-example-tests",
+      "attempt": "a0001",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "b687e614f0e523dfd758369d21ff3f232386e8e487f2cd1370d10d1e39e9930c",
+      "terminal_sha256": "0909d07cb0de134c1fbbafa54752a87a689a4c6c277ce5dd911113c986a684ab",
+      "body_manifest_sha256": "7d995e15d915801474d24bfef6c2829aefba0878cac55d2db33f93473e0f95d8"
+    },
+    {
+      "name": "reconstruction-release",
+      "attempt": "a0002",
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "4c4cbd62109fdf3c8e17b826175adaa213c6848e9b598edfb23c7fa099fde20b",
+      "terminal_sha256": "32924a550c3f44cd6cba4a5c73450663d447dcc0c2f3740b1e5ddc25653bfa01",
+      "body_manifest_sha256": "636cca969e8f36d4c318f1329a6db63fe67e2429da3b90815a3c15e2d8d85446"
+    },
+    {
+      "name": "reconstruction-clippy",
+      "attempt": "a0002",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "66db1b2e8f622bbb532988a48525dde18026fe12640be493eca348b4756d04a7",
+      "terminal_sha256": "fe0e788e9123f2749e7b9bee71afb35dc4df1d54b80d27c8ed829bf1a05d0ed2",
+      "body_manifest_sha256": "9393fe6b9e7c6e566762ba4d2c5178da8ec792b0f10525e4eadee72afd86b31c"
+    },
+    {
+      "name": "reconstruction-test-build",
+      "attempt": "a0002",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "full_source_before_after_root_match": true,
+      "native_log_sha256": "60ab692a4605c31934f247782e5bb94ce930f9af50481b09241983c2f09969ad",
+      "terminal_sha256": "7c679934e9052538d8e3c54df534633b802fc0c307e92f5737fabed627c7b0c5",
+      "body_manifest_sha256": "cd211164fb394d37c0863fed566db4c51e097545bf3fb57e9d54575657b64310"
+    }
+  ],
+  "required_test_counts": {
+    "debug": 10,
+    "release": 10,
+    "complete_example": 137
+  },
+  "original_batch": {
+    "attempt": "a0001",
+    "exit": 42,
+    "disposition": "INVALID_SETUP_ROSTER",
+    "original_required_count": 124,
+    "omitted_async_tests": 13,
+    "original_disposition_preserved": true
+  },
+  "continuation_batch": {
+    "attempt": "a0002",
+    "exit": 0,
+    "required_stages": 3
+  },
+  "source_archive": {
+    "bytes": 4303661,
+    "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+  },
+  "release_elf": {
+    "bytes": 8387384,
+    "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261011/reconstruction-native-qualification-a0002/stages/reconstruction-release/compare_native_replay"
+  },
+  "closure": [
+    {
+      "instance_id": "i-0995be499aee87583",
+      "terminated": true,
+      "volume_id": "vol-0efa299ba5c74a400",
+      "volume_deleted": true
+    },
+    {
+      "instance_id": "i-0f39a8206f61e13eb",
+      "terminated": true,
+      "volume_id": "vol-069ec2afb05dfd45a",
+      "volume_deleted": true
+    }
+  ],
+  "qualification_scope": "compiler_and_synthetic_correctness",
+  "real_1m_reconstruction_qualified": false,
+  "real_historical_publication_parity_qualified": false,
+  "performance_claim": false,
+  "product_ready": false
+}

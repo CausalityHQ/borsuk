@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-reconstruction-native-batch-v1",
+  "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "batch_exit": 42,
+  "completed_stages": 2,
+  "required_stages": 6,
+  "failed_stage": "reconstruction-example-tests",
+  "native_qualified": false,
+  "performance_claim": false
+}
