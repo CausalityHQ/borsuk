@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-native-header-binding-stage-v1",
+  "stage": "full94-example-tests",
+  "source_commit": "2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

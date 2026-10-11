@@ -1,0 +1,22 @@
+{
+    "CommandId": "724716bf-5cbf-4817-a3f5-eb9b8aaaf496",
+    "InstanceId": "i-0201e0ae0f8d5d0ed",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:39:55.408Z",
+    "ExecutionElapsedTime": "PT5M4.863S",
+    "ExecutionEndDateTime": "2026-10-11T02:44:59.408Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-native-header-binding-stage-v1\",\n  \"stage\": \"full94-example-tests\",\n  \"source_commit\": \"2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/completed-header-population-qualification-a0001/ssm/full94-example-tests/724716bf-5cbf-4817-a3f5-eb9b8aaaf496/i-0201e0ae0f8d5d0ed/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/completed-header-population-qualification-a0001/ssm/full94-example-tests/724716bf-5cbf-4817-a3f5-eb9b8aaaf496/i-0201e0ae0f8d5d0ed/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
