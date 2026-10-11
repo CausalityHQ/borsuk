@@ -618,12 +618,29 @@ pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result
     admit_with_partition(geometry, cap, profile, LeafPartition::Radial64V1)
 }
 
-fn admit_with_partition(
+/// Mode-aware payload admission for construction and enclosing publication adapters.
+pub(crate) fn admit_with_partition(
     geometry: Geometry,
     cap: usize,
     profile: SemanticProfile,
     partition: LeafPartition,
 ) -> Result<usize> {
+    let estimate = allocation_phases(geometry, profile, partition)?
+        .into_iter()
+        .max()
+        .unwrap();
+    require(
+        estimate <= cap,
+        &format!("modeled allocation admission: {estimate} bytes exceeds {cap}"),
+    )?;
+    Ok(estimate)
+}
+
+fn allocation_phases(
+    geometry: Geometry,
+    profile: SemanticProfile,
+    partition: LeafPartition,
+) -> Result<[usize; 3]> {
     let Geometry {
         rows,
         dimensions: d,
@@ -706,12 +723,42 @@ fn admit_with_partition(
         partition_stack,
         8 * 1024 * 1024,
     ])?;
-    let estimate = training.max(emit).max(validate);
+    Ok([training, emit, validate])
+}
+
+/// Authenticate the bounded root and charge its mode against the caller's remaining budget.
+/// The phase model includes router root/membership/payload/centroid buffers; callers
+/// separately reserve their other retained inputs before this pre-allocation check.
+pub(crate) fn admit_authenticated_root(
+    body: &[u8],
+    root_sha256: &str,
+    input: &SourceIdentity<'_>,
+    available: usize,
+) -> Result<(LeafPartition, usize)> {
     require(
-        estimate <= cap,
-        &format!("modeled allocation admission: {estimate} bytes exceeds {cap}"),
+        (BINARY_HEADER..=input.profile.root_cap()).contains(&body.len())
+            && valid_sha(root_sha256)
+            && hash(body) == root_sha256
+            && &body[..8] == b"BORSUSR3"
+            && input.profile.valid_geometry(input.rows, input.dimensions),
+        "publication router root identity/geometry",
     )?;
-    Ok(estimate)
+    let partition = LeafPartition::from_code(word32(body, 88))?;
+    let units = input.rows.div_ceil(32);
+    let estimate = admit_with_partition(
+        Geometry {
+            rows: input.rows,
+            dimensions: input.dimensions,
+            units,
+            blob_bytes: sum(&[HEADER_BYTES, product(&[units, input.dimensions, 2])?])?,
+        },
+        available.min(input.profile.allocation_cap()),
+        input.profile,
+        partition,
+    )?;
+    // Full header/directory/source checks allocate only after caller-budget admission.
+    decode_root(body, input)?;
+    Ok((partition, estimate))
 }
 
 fn squared_distance(left: &[f32], right: &[f32]) -> f64 {
@@ -2339,10 +2386,17 @@ mod tests {
         bad.partition = LeafPartition::Radial64V1;
         assert!(bad.encode().is_err());
         bad.algorithm = fixed_algorithm(3, 1, bad.partition);
+        bad.modeled_peak_allocation_bytes = admit(
+            preflight(&blob, input.rows, input.dimensions, input.profile).unwrap(),
+            bad.modeled_allocation_limit_bytes,
+            input.profile,
+        )
+        .unwrap();
         let body = bad.encode().unwrap();
-        assert!(
-            SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20).is_err()
-        );
+        let error = SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("binary leaf geometry/reserved"));
         for field in 0..11 {
             let mut bad = manifest.clone();
             match field {
@@ -2447,6 +2501,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spatial, radial + 3 * 128);
+        let radial_phases =
+            allocation_phases(geometry, profile, LeafPartition::Radial64V1).unwrap();
+        let spatial_phases =
+            allocation_phases(geometry, profile, LeafPartition::WidestAxisQuotaV1).unwrap();
+        assert_eq!(spatial_phases[0], radial_phases[0]);
+        assert_eq!(spatial_phases[1] - radial_phases[1], 3 * 128);
+        assert_eq!(
+            spatial_phases[2] - radial_phases[2],
+            129 * size_of::<(f64, usize)>() + 3 * 128
+        );
         assert!(
             admit_with_partition(
                 geometry,
@@ -2461,6 +2525,37 @@ mod tests {
                 .unwrap(),
             spatial
         );
+        let blob = blob(geometry.rows);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            profile,
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let artifacts = build_with_partition(
+            &blob,
+            &input,
+            profile.allocation_cap(),
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let root_sha = hash(&artifacts.manifest);
+        assert!(
+            admit_authenticated_root(
+                &artifacts.manifest,
+                &root_sha,
+                &input,
+                radial + (spatial - radial) / 2
+            )
+            .is_err()
+        );
+        assert_eq!(
+            admit_authenticated_root(&artifacts.manifest, &root_sha, &input, spatial).unwrap(),
+            (LeafPartition::WidestAxisQuotaV1, spatial)
+        );
+        let mut tampered = artifacts.manifest.clone();
+        tampered[88..92].copy_from_slice(&1_u32.to_le_bytes());
+        assert!(admit_authenticated_root(&tampered, &root_sha, &input, spatial).is_err());
     }
 
     #[test]

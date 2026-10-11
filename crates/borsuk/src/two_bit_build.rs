@@ -1,5 +1,5 @@
 //! Assemble a generation and canonical source from immutable source/SQ8 snapshots.
-use crate::semantic_unit_router::SemanticProfile;
+use crate::semantic_unit_router::{LeafPartition, SemanticProfile};
 use crate::{
     canonical_source::write_canonical_source,
     object_native_generation::valid_object_key,
@@ -19,6 +19,8 @@ use std::{
     path::Path,
 };
 type Result<T> = std::result::Result<T, TwoBitGenerationError>;
+// Three bounded receipts and parsed metadata coexist with the publication proof.
+const REPACKAGE_METADATA_BYTES: usize = 3 * 65536 * 8 + 65536;
 /// Approved source-only preparation. No query/truth input or layout refitting.
 pub struct TwoBitGenerationBuilder<'a> {
     /// Raw ordinal source and physically ordered SQ8 identities/geometry.
@@ -48,6 +50,19 @@ pub struct SemanticRouterImport<'a> {
     pub original_plane: &'a [u8],
 }
 impl SemanticRouterImport<'_> {
+    fn retained_bytes(&self) -> Result<usize> {
+        self.artifacts
+            .manifest
+            .capacity()
+            .checked_add(self.artifacts.membership.capacity())
+            .and_then(|n| n.checked_add(self.artifacts.leaves.capacity()))
+            .and_then(|n| n.checked_add(self.original_root.len()))
+            .and_then(|n| n.checked_add(self.original_plane.len()))
+            .ok_or(TwoBitGenerationError::Invalid(
+                "router import retained memory",
+            ))
+    }
+
     fn validate(
         &self,
         current: &crate::two_bit_source::SourcePlaneReceipt,
@@ -206,21 +221,23 @@ pub fn repackage_semantic_router(
     if output.exists() || import.artifacts.manifest.len() > import.input.profile.root_cap() {
         return Err(bad("repackage output/router cap"));
     }
-    let imported_bytes = import
-        .artifacts
-        .manifest
-        .capacity()
-        .checked_add(import.artifacts.membership.capacity())
-        .and_then(|n| n.checked_add(import.artifacts.leaves.capacity()))
-        .ok_or(bad("repackage input memory"))? as u64;
+    let imported_bytes = import.retained_bytes()? as u64;
     let available = limits
         .max_memory_bytes
         .checked_sub(limits.already_pinned_bytes)
         .and_then(|n| n.checked_sub(imported_bytes))
+        .and_then(|n| n.checked_sub(REPACKAGE_METADATA_BYTES as u64))
         .ok_or(bad("repackage memory"))?;
     if available < 131072 {
         return Err(bad("repackage metadata admission"));
     }
+    crate::semantic_unit_router::admit_authenticated_root(
+        &import.artifacts.manifest,
+        &hash(&import.artifacts.manifest),
+        &import.input,
+        usize::try_from(available).map_err(|_| bad("repackage memory"))?,
+    )
+    .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
     let read = |name: &str, digest: &str| -> Result<Vec<u8>> {
         let length = fs::metadata(current.join(name))
             .map_err(TwoBitGenerationError::Io)?
@@ -245,18 +262,6 @@ pub fn repackage_semantic_router(
     }
     let rows = root.canonical.rows;
     let dimensions = root.canonical.dimensions;
-    let geometry = crate::semantic_unit_router::Geometry {
-        rows,
-        dimensions,
-        units: rows.div_ceil(32),
-        blob_bytes: 32 + rows.div_ceil(32) * dimensions * 2,
-    };
-    crate::semantic_unit_router::admit(
-        geometry,
-        usize::try_from(available).map_err(|_| bad("repackage memory"))?,
-        import.input.profile,
-    )
-    .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
     // Authenticate the full current source/graph under its ordinary admission,
     // then release it before constructing the publication proof.
     drop(TwoBitGeneration::open(
@@ -266,6 +271,7 @@ pub fn repackage_semantic_router(
             already_pinned_bytes: limits
                 .already_pinned_bytes
                 .checked_add(imported_bytes)
+                .and_then(|n| n.checked_add(REPACKAGE_METADATA_BYTES as u64))
                 .ok_or(bad("repackage memory"))?,
             ..limits
         },
@@ -379,6 +385,26 @@ pub(crate) fn admit_build_payload(
     profile: SemanticProfile,
     max_build_payload_bytes: usize,
 ) -> Result<usize> {
+    admit_build_payload_with_partition(
+        rows,
+        dimensions,
+        ordered,
+        mode,
+        profile,
+        max_build_payload_bytes,
+        LeafPartition::Radial64V1,
+    )
+}
+
+fn admit_build_payload_with_partition(
+    rows: usize,
+    dimensions: usize,
+    ordered: bool,
+    mode: DiscoveryMode,
+    profile: SemanticProfile,
+    max_build_payload_bytes: usize,
+    partition: LeafPartition,
+) -> Result<usize> {
     let bad = TwoBitGenerationError::Invalid;
     if rows == 0
         || dimensions == 0
@@ -425,10 +451,11 @@ pub(crate) fn admit_build_payload(
                 .and_then(|n| n.checked_add(32))
                 .ok_or(bad("centroid geometry"))?,
         };
-        crate::semantic_unit_router::admit(
+        crate::semantic_unit_router::admit_with_partition(
             geometry,
             max_build_payload_bytes.min(profile.allocation_cap()),
             profile,
+            partition,
         )
         .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?
     } else {
@@ -571,13 +598,34 @@ impl TwoBitGenerationBuilder<'_> {
         {
             return Err(bad("build inputs"));
         }
-        let semantic_memory = admit_build_payload(
+        let max_build_payload_bytes = max_build_payload_bytes
+            .checked_sub(
+                import
+                    .map(SemanticRouterImport::retained_bytes)
+                    .transpose()?
+                    .unwrap_or(0),
+            )
+            .ok_or(bad("router import memory"))?;
+        let partition = if let Some(import) = import {
+            crate::semantic_unit_router::admit_authenticated_root(
+                &import.artifacts.manifest,
+                &hash(&import.artifacts.manifest),
+                &import.input,
+                max_build_payload_bytes,
+            )
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?
+            .0
+        } else {
+            LeafPartition::Radial64V1
+        };
+        let semantic_memory = admit_build_payload_with_partition(
             rows,
             dimensions,
             order.is_some(),
             mode,
             profile,
             max_build_payload_bytes,
+            partition,
         )?;
         let pages = rows.div_ceil(256);
         let page_bytes = dimensions
@@ -730,6 +778,150 @@ impl TwoBitGenerationBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spatial_import_and_repackage_charge_authenticated_mode_and_retained_buffers() {
+        let temp = tempfile::tempdir().unwrap();
+        let rows = 129_usize * 32;
+        let raw = (0..rows)
+            .flat_map(|_| [0.5_f32, 0.25].into_iter().flat_map(f32::to_le_bytes))
+            .collect::<Vec<_>>();
+        let sq8 = (0..rows as i64)
+            .flat_map(|id| {
+                let mut row = id.to_le_bytes().to_vec();
+                row.extend(0.3125_f32.to_le_bytes());
+                row.extend([128, 64]);
+                row
+            })
+            .collect::<Vec<_>>();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let raw_sha = hash(&raw);
+        let sq8_sha = hash(&sq8);
+        let key = format!("test/objects/{sq8_sha}");
+        let low = [0.; 2];
+        let step = [1. / 255.; 2];
+        let builder = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &raw_sha,
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions: 2,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &low,
+            step: &step,
+            sq8_object_key: &key,
+            sq8_etag: "etag",
+        };
+        let current = temp.path().join("graph");
+        let current_sha = builder.build(&current, 64_000_000).unwrap();
+        let original_plane = fs::read(current.join("plane/manifest.json")).unwrap();
+        let centroid = fs::read(current.join("centroids.bin")).unwrap();
+        let centroid_sha = hash(&centroid);
+        let original_root = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-two-bit-generation-v4", "centroids_sha256":centroid_sha,
+            "plane_manifest_sha256":hash(&original_plane), "sq8_object_sha256":sq8_sha,
+            "low":low, "step":step,
+        }))
+        .unwrap();
+        let original_sha = hash(&original_root);
+        let input = crate::semantic_unit_router::SourceIdentity {
+            profile: SemanticProfile::Native100k,
+            schema: "borsuk-two-bit-generation-v4",
+            root_sha256: &original_sha,
+            centroids_sha256: &centroid_sha,
+            rows,
+            dimensions: 2,
+        };
+        let artifacts = crate::semantic_unit_router::build_with_partition(
+            &centroid,
+            &input,
+            64_000_000,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let import = SemanticRouterImport {
+            artifacts: &artifacts,
+            input,
+            original_root: &original_root,
+            original_plane: &original_plane,
+        };
+        let geometry =
+            crate::semantic_unit_router::preflight(&centroid, rows, 2, import.input.profile)
+                .unwrap();
+        let radial =
+            crate::semantic_unit_router::admit(geometry, 64_000_000, import.input.profile).unwrap();
+        let spatial = crate::semantic_unit_router::admit_with_partition(
+            geometry,
+            64_000_000,
+            import.input.profile,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        assert!(spatial > radial);
+        let gap = (spatial - radial) / 2;
+        let pinned = 262144;
+        let charge =
+            pinned + import.retained_bytes().unwrap() as u64 + REPACKAGE_METADATA_BYTES as u64;
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: charge + spatial as u64,
+            already_pinned_bytes: pinned,
+            max_active_queries: 1,
+            max_query_bytes: 16384,
+            max_query_gets: 2,
+            max_parallel_gets: 2,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 16,
+            max_query_scratch_bytes: 8192,
+        };
+        let rejected = temp.path().join("repackage-between");
+        let error = repackage_semantic_router(
+            &current,
+            &current_sha,
+            &sq8_path,
+            &import,
+            &rejected,
+            TwoBitGenerationLimits {
+                max_memory_bytes: charge + (radial + gap) as u64,
+                ..limits
+            },
+        )
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("modeled allocation admission"));
+        assert!(!rejected.exists());
+        let exact = temp.path().join("repackage-exact");
+        repackage_semantic_router(&current, &current_sha, &sq8_path, &import, &exact, limits)
+            .unwrap();
+        assert_eq!(
+            fs::read(exact.join("router/root.bin")).unwrap(),
+            artifacts.manifest
+        );
+        let modeled = 2 * 128 + rows.div_ceil(256) * 32 + 256 * (2 + 12) + 262144;
+        let retained = import.retained_bytes().unwrap();
+        let rejected = temp.path().join("import-between");
+        let error = builder
+            .build_with_semantic_router(None, &import, &rejected, retained + modeled + radial + gap)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("build memory budget"));
+        assert!(!rejected.exists());
+        let exact = temp.path().join("import-exact");
+        builder
+            .build_with_semantic_router(None, &import, &exact, retained + modeled + spatial)
+            .unwrap();
+        assert_eq!(
+            fs::read(exact.join("router/root.bin")).unwrap(),
+            artifacts.manifest
+        );
+    }
+
     #[test]
     fn imported_router_requires_original_source_authority() {
         let centroid_sha = "1".repeat(64);

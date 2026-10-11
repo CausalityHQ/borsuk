@@ -1289,13 +1289,22 @@ pub async fn publish_two_bit_generation(
                 units: plane.rows.div_ceil(32),
                 blob_bytes: 32 + plane.rows.div_ceil(32) * plane.dimensions * 2,
             };
-            crate::semantic_unit_router::admit(geometry, budget, *profile)
-                .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+            if *root_bytes > profile.root_cap() || *root_bytes > budget {
+                return Err(TwoBitStoreError::Invalid("publication router root cap"));
+            }
             let read = |name: &str, size, sha: &str| {
                 read_authenticated(&local.join(name), size, sha)
                     .map_err(TwoBitGenerationError::Plane)
             };
             let root = read("router/root.bin", *root_bytes, root_sha256)?;
+            let input = manifest.discovery.input(&plane)?;
+            crate::semantic_unit_router::admit_authenticated_root(
+                &root,
+                root_sha256,
+                &input,
+                budget,
+            )
+            .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
             let membership = read(
                 "router/membership.bin",
                 *membership_bytes,
@@ -1307,7 +1316,7 @@ pub async fn publish_two_bit_generation(
                 &root,
                 &membership,
                 &leaves,
-                &manifest.discovery.input(&plane)?,
+                &input,
                 &centroids,
             )
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
