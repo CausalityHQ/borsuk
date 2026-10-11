@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-source-neighborhood-native-batch-v1",
+  "source_commit": "d72fd7a6365acf02b75b068de1844c045baf8904",
+  "batch_exit": 0,
+  "completed_stages": 8,
+  "required_stages": 8,
+  "failed_stage": "",
+  "native_qualified": false,
+  "performance_claim": false
+}

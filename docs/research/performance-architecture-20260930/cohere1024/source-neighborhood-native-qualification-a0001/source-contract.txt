@@ -1,0 +1,277 @@
+SOURCE-ONLY IMPLEMENTATION / UNVERIFIED / HOLD SAME WORKER
+
+Base: 9f4a92d98558efafab3f076771b4430871e335b2
+Checkpoint / direct parent: 1f5d07f8cc6241387118b017be40a2a9a0e2ed5f
+Commit: d72fd7a6365acf02b75b068de1844c045baf8904
+Owned file: crates/borsuk/examples/compare_native_replay.rs
+Source SHA256: 239c80dbe7d0a978a88791d98b9cf0827b10d91105367103d312c89987eca29f
+Baseline source SHA256: 2f15d561880be70cbfcbcfbead9344644eaf57fccdcc1d84dc2aed67f929598b
+Opening brief SHA256: c0a78eeed9d8a24ef6de29ef66db037bcaac8bd29cccad1f4131bd4ae47b7038
+Early contract: /data/target/borsuk-source-neighborhood-native-contract/early-contract.txt
+Early contract SHA256: 7ec46c394959427de2950b1d1d225d40540a2ef157fe1638541e9a6fbcb9945f
+Backing directory is /data/target/borsuk-source-neighborhood-native-contract;
+no /tmp artifacts, data staging, native execution, or control-file edits.
+The checkpoint is preserved. This two-commit chain reconciles parent messages
+1791725859650097093-3160204 (generation-only calibration authority),
+1791726886177913271-3160204 (ordinary bounded SIGKILL crash falsifier),
+1791727273196342182-3160204 (post-publication scalar-only human summary), and
+1791727373099601019-3160204 (explicit ID permutation/order-specific refusal).
+The immutable early contract's calibration pin and the prior final contract's
+ignored abort test are superseded by the exact source/contract here.
+
+CLI AND EXACT CONFIG SHAPE
+compare_native_replay --source-neighborhood CONFIG CONFIG_SHA256
+Config schema: borsuk-source-neighborhood-config-v1
+Report schema: borsuk-source-neighborhood-v1
+Anchor seal schema: borsuk-source-neighborhood-anchor-seal-v1
+Config fields, all required, no unknown or duplicate fields:
+  schema: string above
+  scope: scientific | small_fixture
+  rows: integer 1..1000000, greater than neighbor_count
+  dimensions: integer 1..1024
+  anchor_count: integer 1..32, no greater than ceil(rows/32)
+  neighbor_count: integer 1..32
+  generation_manifest: {path, bytes, sha256}
+  plane_manifest: {path, bytes, sha256}
+  router_root: {path, bytes, sha256}
+  membership: {path, bytes, sha256}
+  leaves: {path, bytes, sha256}
+  canonical: {path, bytes, sha256}
+  canonical_object_key: string matching the generation descriptor exactly;
+    bounded valid path segments, penultimate segment objects, last segment SHA
+  max_payload_bytes: checked phase-peak admission cap (integer bytes)
+  anchor_seal: fresh absolute UTF-8 output path
+  report: fresh absolute UTF-8 output path
+All pin paths absolute UTF-8 <=4096 bytes; SHA lowercase 64 hex. Each input
+is a retained nofollow regular single-link descriptor with lifetime stamps.
+Scientific scope requires exactly 32 anchors, 32 neighbors, >=48 leaves.
+Only explicit small_fixture permits fewer counts/leaves. Generation uses
+semantic discovery / scale1m. Config <=32768 bytes; generation and plane
+metadata each <=65536 bytes. Root <=4194304 bytes. Output paths are distinct.
+No requests, truth, completed producer, raw FP32, SQ8 body, centroids.bin,
+source-order file, or adjacency input. No library/API/default/format changes.
+Root must create/hash the actual scientific config from authenticated pins;
+this source-only worker did not stage or inspect real input bodies.
+
+AUTHORITY AND ARITHMETIC
+The generation descriptor matches canonical key/length/SHA/shape before body
+open; discovery matches root/membership/leaves pins and plane identities.
+The authenticated generation SHA binds exact low/step. Validate dimension
+lengths, finite low, finite positive step, existing plane/router provenance,
+and retain generation FD/path stamps through final publication rechecks.
+No caller calibration_sha256 field or independent calibration reduction/pin.
+The report records this generation-bound authority in calibration_authority.
+Unpinned calibration edits fail generation SHA authentication; newly pinned
+malformed calibration still fails shape/finite/positive validation. A valid
+new authenticated generation supplies its own calibration identity.
+Raw source and canonical SHA are distinct, separately labelled authorities.
+Canonical scan: exact LE i64 + D f32 records, finite, ascending f64 norm2,
+abs(norm2-1)<=1e-6, exactly-once original ordinal IDs 0<=ID<N. SHA original ID
+bytes in physical order against plane.source_order_sha256. This ID admission
+is fixture-specific, never a production-ID restriction. Exact EOF and full
+SHA/stamps both passes. No full resident canonical body.
+Canonical ID-order refusal has a distinct error after body SHA/EOF checks;
+its falsifier swaps two existing IDs, retaining the unique complete ID set.
+Leaves: stream authenticated descriptor order, one <=64-unit leaf buffer;
+per-leaf/full SHA/EOF, membership, row counts, exactly-once global roster,
+finite decoded FP16, bitwise f64 persisted-order UNWEIGHTED mean-to-f32
+prototype parity. Retain selected centers only. Zero centers valid.
+Unit hash input: ASCII borsuk-source-neighborhood-unit-v1, NUL, 32 binary
+generation-SHA bytes, u64LE unit. Lowest lexicographic digest then unit ID.
+Row domain: borsuk-source-neighborhood-row-v1, same NUL/generation/u64LE;
+first 8 digest bytes u64LE modulo actual unit row count (partial tail included).
+Seal complete config/source identity, domains/method, arithmetic version,
+physical unit/position, ID, digests and actual norm BEFORE neighbor scan.
+Arithmetic version: ascending-f64-actual-norm-cosine-clamp-id-ties-v1
+Similarity = ascending f64 dot / (sqrt(actual anchor norm2)*sqrt(row norm2));
+clamp [-1,1], distance=1-similarity, +0 canonicalization, ascending total_cmp
+distance then logical ID; self excluded by ID only. Bounded max heaps.
+Routing uses existing production query normalization and frozen squared-L2
+leaf ranking with leaf-ID ties, exactly top48 (or all explicit small leaves).
+Joint own-unit/page/leaf, selected-leaf and physical-page-closure buckets;
+report cross-leaf AND outside-top48 AND outside-page-closure interaction.
+Unselected leaves can share selected physical pages. Gap bridges unmeasured.
+Per-anchor destination-unit frequencies/concentration and distinct units/leaves.
+Fresh selected-unit canonical mean and direct within-unit dispersion use
+ascending row/dimension f64 sums and actual row count, including zero means.
+Canonical-anchor -> stored SQ8/FP16 mean and stored mean -> unweighted leaf
+prototype residuals are separately named unchanged-space squared L2 values.
+No second calibration transform, normalized center, or quantization attribution.
+Always exploratory/inconclusive; anchors are in-sample sampling units, their
+neighbor slots correlated. Unit indivisibility/conflicting affinities unresolved.
+No graph-cut GO, rare-query, held-out, recall/QPS/cold/vendor/100M claim.
+
+HUMAN SUMMARY (NO ROOT-LOCAL VECTOR/REPORT REDUCTION)
+Native stdout contains at most 16384 bytes, emitted and flushed only after
+successful full report publication, file+directory sync and final rechecks.
+It uses already-computed scalar anchor counts, own-leaf rank, outside-top48,
+outside-page-closure and joint cross-leaf counts, distinct destination unit/
+leaf counts, maximum unit count, concentration, canonical dispersion and
+separately labelled SQ8/FP16 residuals. No mean/coordinate/neighbor arrays.
+The full report remains immutable and authoritative. Stdout restates all
+exploratory limits, required external terminal acceptance and both KILLs.
+Invalid reduction/publication emits no human success summary. Summary write/
+flush errors propagate to a failing original exit even if the report survived
+complete; report alone is never accepted. Stdout is charged within the root's
+existing 2MiB terminal/stdout/stderr staging allowance.
+
+REUSED PRIVATE/PUBLIC SEAMS (NO NEW LIBRARY PUBLIC API)
+UniqueJson, read_config_file, header_json, header_pin/header_file,
+HeaderSnapshot/recheck, loss_binary for bounded root/membership only,
+publish_selection_seal_with_sync, execute_leaf_coverage_as,
+finish_selection_publication and its file+directory sync/final-check seam.
+SemanticUnitRouter::{open,manifest,unit_membership,validate_leaf,
+rank_leaves_by_metric,nominate_selected}; normalize_two_bit_diagnostic_query.
+New private example routines are NeighborhoodConfig/NeighborhoodAllocation,
+neighborhood_allocation/router/anchors/leaves/scan/anchor_report,
+reduce_source_neighborhood, neighborhood_summary and execute_source_neighborhood
+with a private execute_source_neighborhood_with sync/output test seam and small
+arithmetic helpers. No CoverageConfig reuse or new publication/snapshot framework.
+
+CHECKED CAPACITY TABLE (BYTES, CONSERVATIVE CAPACITIES)
+N=rows, D=dimensions, A=anchors, K=neighbors, U=ceil(N/32).
+R=encoded root pin bytes; L=(R-512)/(64+4D), with exact alignment/leaf bounds.
+G/P=generation/plane pin bytes; C=actual config bytes. I=65536.
+All variable products and phase/staging sums use checked u64 arithmetic.
+CW=8+4D; LW=4+2D; canonical=N*CW; membership=4U; leaves=U*LW.
+M = 64*(32768+G+P): config/metadata byte buffers, UniqueJson trees, conversions,
+    calibration arrays, copies and bounded strings (64x conservative reserve).
+Rlive = 4R+32U+128L: encoded/decoded root copies, membership bytes/usize labels,
+    leaf directory capacities, decode construction scratch, per-leaf metadata.
+S = 16*(4096+512): snapshots, paths, publication parent descriptors/bookkeeping.
+Astore = A*(D*(32*4+4+4+8)+512): selected canonical unit rows, anchor coordinates,
+    stored FP16-decoded center, canonical mean, per-anchor structs/digests.
+H = A*(K*sizeof(NeighborhoodNeighbor)+64): bounded heaps and Vec headers;
+    sizeof neighbor=24 on 64-bit native target, evaluated by Rust size_of.
+Scan = I+CW+4D+ceil(N/8): streaming I/O, encoded row, decoded row, ID bitset.
+LeafScan = I+64*LW+12D+ceil(U/8)+16384: one leaf buffer, decode/sums, global
+    roster bitset and per-leaf validate_leaf directory/set scratch.
+Rank = 128U+128L+65536: one live nomination, BTree capacities, page sets,
+    ranking scores/IDs, inverse ranks, destination frequencies and return copies.
+SealPub = 68*4194304: bounded JSON Value tree plus growing serialized Vec and
+    readback copies (64x tree allowance +4x publication buffers).
+ReportPub = 68*2097152: report Values, serialization, readback copies.
+HumanSummary = 4*16384 = 65536: bounded String capacity/growth/formatting and
+    stdout allowance, retained across report publication until output flush.
+Allocator = 33554432: allocator fragmentation/reserve separate from runtime.
+Common = M+Rlive+S+Allocator; Retained = Common+Astore+H.
+Phases:
+  metadata_authentication = Common
+  leaf_authentication = Retained+LeafScan
+  canonical_authentication = Retained+Scan
+  anchor_seal_publication = Retained+SealPub
+  scalar_neighborhood_scan = Retained+Scan
+  residuals_and_report = Retained+Rank+ReportPub+HumanSummary
+  report_publication = Retained+Rank+ReportPub+HumanSummary
+Peak=max(phases) <= max_payload_bytes before any pinned input body open.
+Leaf buffer and row/bitset scratch drop between phases; seal Value drops before
+the second scan; only one ranking/nomination exists while reports accumulate.
+Metadata/anchor/heaps conservatively charged even where already dropped.
+Runtime allowance=67108864; charged file-cache allowance=268435456 separately.
+Proposed charged total=Peak+335544320, NOT an enforced or measured RSS claim.
+Root must verify actual cgroup charged memory/cache, zero swap and allocator
+behavior. Arithmetic success cannot qualify the 1GiB/1200s proposal.
+
+STAGING ALLOWLIST AND BOUNDS
+Config file C + generation G + plane P + router root R + membership 4U +
+leaves U*(4+2D) + exactly ONE canonical N*(8+4D) file. Config stores exact paths.
+Seal <=4194304; report <=2097152; root terminal/stdout/stderr combined <=2097152.
+Maximum diagnostic evidence=8388608. Staged peak = staged inputs +8388608.
+Download .part becomes that same final artifact by rename, never a second copy.
+No raw corpus, SQ8, full plane records, centroid body, requests/truth, or other
+diagnostic run can coexist. Root enforces the staging allowlist and transport.
+ELF/source archives/compiler targets/qualification logs belong to the separately
+admitted immutable build surface, not this diagnostic scratch allowlist. If the
+root places any on the same 8GiB quota, add their exact bytes/lifetimes before
+freezing that quota. Do not hide them behind the diagnostic staged_peak field.
+The root's 1GiB RAM/8GiB scratch/1200s envelope remains UNPROVEN, not frozen.
+
+SOURCE TEST ROSTER (17 ORDINARY; NO IGNORED CRASH HELPER)
+Module prefix: source_neighborhood_tests::
+source_neighborhood_strict_source_only_config_and_json
+source_neighborhood_authority_refuses_before_canonical_open
+source_neighborhood_full_canonical_body_order_bijection_and_norm_refusals
+source_neighborhood_canonical_authentication_precedes_anchor_seal
+source_neighborhood_lifetime_stamp_growth_and_path_refusals
+source_neighborhood_checked_phase_and_staging_cap_before_body_open
+source_neighborhood_leaf_roster_hash_finite_and_prototype_refusals
+source_neighborhood_zero_centers_and_unweighted_partial_units
+source_neighborhood_full_pipeline_coherent31_is_inconclusive
+source_neighborhood_joint_top48_shared_page_and_independent_l2_rank
+source_neighborhood_seal_failure_stops_before_neighbors
+source_neighborhood_report_sync_and_final_recheck_failures
+source_neighborhood_publication_write_refusal
+source_neighborhood_literal_hash_domains_and_partial_unit
+source_neighborhood_scalar_actual_norm_ties_and_self
+source_neighborhood_canonical_dispersion_zero_mean
+source_neighborhood_native_crash_window_root_only (ordinary parent + same-test child)
+Fixed SHA golden messages were statically authored with independent hashlib;
+no Rust test, fixture executable, vector mock or diagnostic was run locally.
+All other expected scalar IDs/distances/order/tail arithmetic are in source.
+Calibration falsifiers cover unchanged-pin body tampering, low/step shape,
+f32 nonfinite conversion, zero step and generation lifetime recheck. The
+strict config test rejects a syntactically valid deprecated calibration pin.
+Summary source checks cover scalar-only bounded success text, no summary on
+reduction/sync/recheck failure and fatal stdout write failure after publication.
+
+ROOT-ONLY NATIVE GATES (LITERAL COMMANDS, NOT EXECUTED HERE)
+Run on the exact committed source, causality EC2, sequentially, single original
+job per gate, retaining command/ELF/source/config hashes and exit status:
+
+env -u BORSUK_SOURCE_NEIGHBORHOOD_CRASH_DIR CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1
+env -u BORSUK_SOURCE_NEIGHBORHOOD_CRASH_DIR CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test --locked -p borsuk --release --example compare_native_replay -- --test-threads=1
+env CARGO_BUILD_JOBS=1 cargo build --locked -p borsuk --release --example compare_native_replay
+env CARGO_BUILD_JOBS=1 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=1 BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
+
+The last command executes the repository's ACTUAL locked workspace/all-targets
+test build; no true/false test shim. No new gate script/controller was added.
+For a failing layer only, the narrow ordinary test selector is
+source_neighborhood_tests:: (17 ordinary tests, including the crash parent).
+
+Disposable crash-window falsifier runs as an ordinary test in both affected
+native stages. It launches its own exact test ELF/current_exe with the same
+--exact source_neighborhood_tests::source_neighborhood_native_crash_window_root_only
+selector; the private child environment prevents recursion. Do NOT supply
+BORSUK_SOURCE_NEIGHBORHOOD_CRASH_DIR to the parent test process.
+Child writes a marker only after observing MEASURED/complete report bytes in
+the reused sync callback, before report sync/directory sync/final rechecks.
+Parent startup/marker wait <=20s; Child::kill sends real SIGKILL on the target;
+bounded try_wait then wait collects the original status within <=5s. Child
+hold self-expires after <=30s if parent never kills it. A Drop guard kills and
+attempts bounded drain on every parent failure/panic path; no piped output
+can block draining (stdin/stdout/stderr are null). No ignored helper, abort,
+new controller or production hook. A child failing before the marker or
+exiting other than SIGKILL fails the parent test. Parent verifies surviving
+report bytes unchanged, complete:true, report_alone_accepted:false,
+external_gate_required:true, required original exit0, actual failed SIGKILL
+status and matching surviving anchor-seal SHA. Disposable fixture artifacts
+remain live through these assertions; normal test TempDir cleanup follows.
+Only the native parent test passing qualifies this falsifier; complete-looking
+child report cannot qualify its failed original run. Worker did not execute it.
+
+After correctness qualification: source-bound real-input metadata/capacity and
+staging admission; separate disposable CPU0/100%,1GiB,zeroSwap,pids128/1200s
+smoke; only then one scientific source diagnostic after root freezes the actual
+capacity table/envelope. Cap/time/OOM/Spot/abrupt-death failure is INVALID for
+that envelope. No widening, overlapping copies or automatic paid retries.
+
+ACCEPTANCE AND HANDOFF
+Report alone NEVER accepted. Require original native exit0 and successful
+drained terminal receipt bound to exact instance, source/config/ELF/seal/report
+hashes plus resource/OOM status. Surviving complete:true is insufficient.
+Both historical 312/320 KILLs preserved; no ANN arm selected, full product goal
+incomplete. Worker ran only source/static/rustfmt/diff and static hash authoring;
+no Cargo/rustc/native/tests/data/cloud/network/consultation/review/children.
+Formatting/static checks run with CPUQuota100%,AllowedCPUs0,MemoryMax256M,
+MemorySwapMax0,TasksMax128,timeout120s. These are not native correctness proof.
+Static result: rustfmt --check exit0; git diff --check exit0. Two-commit chain
+contains only OWN1 (2125 added lines relative to exact base); repair diff is
+301 insertions / 71 deletions. Both direct parents verified; clean detached
+worktree. No compilation, test execution or resource qualification claim.
+Author/committer remains Roman Bartusiak <riomus@gmail.com>; no trailers.
+Commit hooks disabled for both commits to respect the local native-test ban.
+Stale devbox/source-neighborhood-native remains at
+37c4adcfe8eb2cd3d464f7beb81c42bb9bfbfff5; no branch merge/push performed.
+Root owns verification, integration and push. Same worker HOLD; do not complete
+or archive until explicit root disposition. Existing stale refs preserved.

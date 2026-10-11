@@ -1,0 +1,62 @@
+{
+  "neighborhood-debug": [
+    "source_neighborhood_tests::source_neighborhood_strict_source_only_config_and_json",
+    "source_neighborhood_tests::source_neighborhood_authority_refuses_before_canonical_open",
+    "source_neighborhood_tests::source_neighborhood_full_canonical_body_order_bijection_and_norm_refusals",
+    "source_neighborhood_tests::source_neighborhood_canonical_authentication_precedes_anchor_seal",
+    "source_neighborhood_tests::source_neighborhood_lifetime_stamp_growth_and_path_refusals",
+    "source_neighborhood_tests::source_neighborhood_checked_phase_and_staging_cap_before_body_open",
+    "source_neighborhood_tests::source_neighborhood_leaf_roster_hash_finite_and_prototype_refusals",
+    "source_neighborhood_tests::source_neighborhood_zero_centers_and_unweighted_partial_units",
+    "source_neighborhood_tests::source_neighborhood_full_pipeline_coherent31_is_inconclusive",
+    "source_neighborhood_tests::source_neighborhood_joint_top48_shared_page_and_independent_l2_rank",
+    "source_neighborhood_tests::source_neighborhood_seal_failure_stops_before_neighbors",
+    "source_neighborhood_tests::source_neighborhood_report_sync_and_final_recheck_failures",
+    "source_neighborhood_tests::source_neighborhood_publication_write_refusal",
+    "source_neighborhood_tests::source_neighborhood_native_crash_window_root_only",
+    "source_neighborhood_tests::source_neighborhood_literal_hash_domains_and_partial_unit",
+    "source_neighborhood_tests::source_neighborhood_scalar_actual_norm_ties_and_self",
+    "source_neighborhood_tests::source_neighborhood_canonical_dispersion_zero_mean"
+  ],
+  "neighborhood-release": [
+    "source_neighborhood_tests::source_neighborhood_strict_source_only_config_and_json",
+    "source_neighborhood_tests::source_neighborhood_authority_refuses_before_canonical_open",
+    "source_neighborhood_tests::source_neighborhood_full_canonical_body_order_bijection_and_norm_refusals",
+    "source_neighborhood_tests::source_neighborhood_canonical_authentication_precedes_anchor_seal",
+    "source_neighborhood_tests::source_neighborhood_lifetime_stamp_growth_and_path_refusals",
+    "source_neighborhood_tests::source_neighborhood_checked_phase_and_staging_cap_before_body_open",
+    "source_neighborhood_tests::source_neighborhood_leaf_roster_hash_finite_and_prototype_refusals",
+    "source_neighborhood_tests::source_neighborhood_zero_centers_and_unweighted_partial_units",
+    "source_neighborhood_tests::source_neighborhood_full_pipeline_coherent31_is_inconclusive",
+    "source_neighborhood_tests::source_neighborhood_joint_top48_shared_page_and_independent_l2_rank",
+    "source_neighborhood_tests::source_neighborhood_seal_failure_stops_before_neighbors",
+    "source_neighborhood_tests::source_neighborhood_report_sync_and_final_recheck_failures",
+    "source_neighborhood_tests::source_neighborhood_publication_write_refusal",
+    "source_neighborhood_tests::source_neighborhood_native_crash_window_root_only",
+    "source_neighborhood_tests::source_neighborhood_literal_hash_domains_and_partial_unit",
+    "source_neighborhood_tests::source_neighborhood_scalar_actual_norm_ties_and_self",
+    "source_neighborhood_tests::source_neighborhood_canonical_dispersion_zero_mean"
+  ],
+  "neighborhood-boundary-legacy": [
+    "tests::sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit",
+    "tests::sampled_boundary_metadata_substitutions_refuse_before_source_construction",
+    "tests::sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels",
+    "tests::sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth"
+  ],
+  "neighborhood-coverage-legacy": [
+    "tests::leaf_coverage_real_source_plan_excludes_fetched_bridge_and_keeps_tail",
+    "tests::leaf_coverage_authenticated_metadata_and_fixed48_metric_boundary",
+    "tests::leaf_coverage_actual_orchestration_refuses_terminal_and_sync_before_truth",
+    "tests::leaf_coverage_actual_reducer_rejects_rehashed_nontruth_return_outside_sq8",
+    "tests::leaf_coverage_seal_sync_mutation_and_occupied_path_refuse_before_truth",
+    "tests::leaf_coverage_actual_report_publication_invalidates_success_on_sync_or_sq8_mutation",
+    "tests::leaf_coverage_requests_and_whole_sq8_mapping_refuse_rehashed_corruption",
+    "tests::leaf_coverage_exact_control_and_gain_loss_gate_refuse_mutations"
+  ],
+  "neighborhood-seal-legacy": [
+    "tests::sealed_loss_bridge_source_completion_and_disjoint_buckets",
+    "tests::sealed_loss_refuses_incomplete_duplicate_out_of_cover_and_charge_evidence",
+    "tests::sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity",
+    "tests::sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth"
+  ]
+}

@@ -18,6 +18,9 @@
 //! NEW_ADJACENCY NEW_SELECTION NEW_REPORT. Uses the strict CoverageConfig shape,
 //! schema borsuk-leaf-boundary-coverage-config-v1, max_payload_bytes <=512 MiB.
 //! Adjacency is durable before requests; both nominations are durable before truth.
+//! Source geometry: --source-neighborhood CONFIG CONFIG_SHA256. Strict source-only
+//! v1 config owns new anchor_seal/report paths. An original successful native
+//! terminal receipt is required; surviving report bytes never establish acceptance.
 #![recursion_limit = "256"]
 
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
@@ -5883,12 +5886,2134 @@ fn execute_leaf_coverage_as(
     Ok(report["status"] == "MEASURED")
 }
 
+const NEIGHBORHOOD_SCHEMA: &str = "borsuk-source-neighborhood-v1";
+const NEIGHBORHOOD_CONFIG_SCHEMA: &str = "borsuk-source-neighborhood-config-v1";
+const NEIGHBORHOOD_UNIT_DOMAIN: &[u8] = b"borsuk-source-neighborhood-unit-v1\0";
+const NEIGHBORHOOD_ROW_DOMAIN: &[u8] = b"borsuk-source-neighborhood-row-v1\0";
+const NEIGHBORHOOD_ARITHMETIC: &str = "ascending-f64-actual-norm-cosine-clamp-id-ties-v1";
+const NEIGHBORHOOD_IO: usize = 65_536;
+const NEIGHBORHOOD_SUMMARY_CAP: usize = 16 * 1024;
+
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum NeighborhoodScope {
+    Scientific,
+    SmallFixture,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NeighborhoodConfig {
+    schema: String,
+    scope: NeighborhoodScope,
+    rows: usize,
+    dimensions: usize,
+    anchor_count: usize,
+    neighbor_count: usize,
+    generation_manifest: CompletedInput,
+    plane_manifest: CompletedInput,
+    router_root: CompletedInput,
+    membership: CompletedInput,
+    leaves: CompletedInput,
+    canonical: CompletedInput,
+    canonical_object_key: String,
+    max_payload_bytes: u64,
+    anchor_seal: PathBuf,
+    report: PathBuf,
+}
+
+fn neighborhood_product(values: &[u64]) -> Result<u64> {
+    values.iter().try_fold(1_u64, |n, &v| {
+        n.checked_mul(v)
+            .ok_or_else(|| "neighborhood allocation overflow".into())
+    })
+}
+
+fn neighborhood_sum(values: &[u64]) -> Result<u64> {
+    values.iter().try_fold(0, |n, &v| plus(n, v))
+}
+
+#[derive(Serialize)]
+struct NeighborhoodAllocation {
+    components: std::collections::BTreeMap<&'static str, u64>,
+    phases: std::collections::BTreeMap<&'static str, u64>,
+    peak_payload_bytes: u64,
+    runtime_allowance_bytes: u64,
+    charged_file_cache_allowance_bytes: u64,
+    proposed_charged_bytes: u64,
+    staged_input_bytes: u64,
+    maximum_evidence_bytes: u64,
+    staged_peak_bytes: u64,
+}
+
+// This model is specific to the lifetimes below. Cache/runtime allowances still
+// require the root's charged-memory smoke; arithmetic admission is not RSS proof.
+fn neighborhood_allocation(
+    c: &NeighborhoodConfig,
+    config_bytes: u64,
+) -> Result<NeighborhoodAllocation> {
+    use std::collections::BTreeMap;
+    let n = u64::try_from(c.rows)?;
+    let d = u64::try_from(c.dimensions)?;
+    let a = u64::try_from(c.anchor_count)?;
+    let k = u64::try_from(c.neighbor_count)?;
+    let canonical_width = plus(8, neighborhood_product(&[4, d])?)?;
+    let leaf_width = plus(4, neighborhood_product(&[2, d])?)?;
+    let canonical_bytes = neighborhood_product(&[n, canonical_width])?;
+    let units = n.div_ceil(32);
+    let leaf_slot = plus(64, neighborhood_product(&[4, d])?)?;
+    let leaf_bytes = c
+        .router_root
+        .bytes
+        .checked_sub(512)
+        .ok_or("neighborhood root header")?;
+    let leaves = leaf_bytes / leaf_slot;
+    require(
+        c.schema == NEIGHBORHOOD_CONFIG_SCHEMA
+            && (1..=1_000_000).contains(&c.rows)
+            && (1..=1024).contains(&c.dimensions)
+            && (1..=32).contains(&c.anchor_count)
+            && (1..=32).contains(&c.neighbor_count)
+            && c.rows > c.neighbor_count
+            && a <= units
+            && config_bytes > 0
+            && config_bytes <= CONFIG_CAP
+            && c.router_root.bytes <= 4 * 1024 * 1024
+            && leaf_bytes % leaf_slot == 0
+            && (1..=2 * units.div_ceil(64) - 1).contains(&leaves)
+            && c.membership.bytes == neighborhood_product(&[units, 4])?
+            && c.leaves.bytes == neighborhood_product(&[units, leaf_width])?
+            && c.canonical.bytes == canonical_bytes
+            && (c.scope == NeighborhoodScope::SmallFixture || (a == 32 && k == 32 && leaves >= 48)),
+        "neighborhood schema/counts/geometry",
+    )?;
+    for pin in [&c.generation_manifest, &c.plane_manifest] {
+        header_pin(pin, HEADER_JSON_CAP)?;
+    }
+    for pin in [&c.router_root, &c.membership, &c.leaves, &c.canonical] {
+        header_pin(pin, pin.bytes)?;
+    }
+    let paths = [
+        &c.generation_manifest.path,
+        &c.plane_manifest.path,
+        &c.router_root.path,
+        &c.membership.path,
+        &c.leaves.path,
+        &c.canonical.path,
+        &c.anchor_seal,
+        &c.report,
+    ];
+    let mut distinct = BTreeSet::new();
+    for path in paths {
+        header_path(path)?;
+        require(
+            distinct.insert(path),
+            "neighborhood distinct input/output paths",
+        )?;
+    }
+    // Capacities, not just logical elements: 64x JSON covers UniqueJson trees,
+    // conversion/clones and bounded strings; 4x root covers encoded/decoded copies.
+    let metadata = neighborhood_product(&[
+        64,
+        neighborhood_sum(&[
+            CONFIG_CAP,
+            c.generation_manifest.bytes,
+            c.plane_manifest.bytes,
+        ])?,
+    ])?;
+    let router = neighborhood_sum(&[
+        neighborhood_product(&[4, c.router_root.bytes])?,
+        neighborhood_product(&[32, units])?,
+        neighborhood_product(&[128, leaves])?,
+    ])?;
+    let snapshots = 16 * (4096 + 512);
+    let selected = neighborhood_product(&[
+        a,
+        plus(neighborhood_product(&[d, 32 * 4 + 4 + 4 + 8])?, 512)?,
+    ])?;
+    let heaps = neighborhood_product(&[
+        a,
+        plus(
+            neighborhood_product(&[k, std::mem::size_of::<NeighborhoodNeighbor>() as u64])?,
+            64,
+        )?,
+    ])?;
+    let scan = neighborhood_sum(&[
+        NEIGHBORHOOD_IO as u64,
+        canonical_width,
+        neighborhood_product(&[d, 4])?,
+        n.div_ceil(8),
+    ])?;
+    let leaf_scan = neighborhood_sum(&[
+        NEIGHBORHOOD_IO as u64,
+        neighborhood_product(&[64, leaf_width])?,
+        neighborhood_product(&[d, 12])?,
+        units.div_ceil(8),
+        16 * 1024,
+    ])?;
+    // One ranking/nomination at a time: BTree capacities, walk units, ranks,
+    // destination maps, leaf IDs and selected page sets, including return copies.
+    let ranking = neighborhood_sum(&[
+        neighborhood_product(&[units, 128])?,
+        neighborhood_product(&[leaves, 128])?,
+        64 * 1024,
+    ])?;
+    // Value trees + growing encoded Vec + readback coexist in the reused writer.
+    let seal_publication = neighborhood_product(&[68, SELECTION_CAP])?;
+    let report_publication = neighborhood_product(&[68, REPORT_CAP])?;
+    let human_summary = neighborhood_product(&[4, NEIGHBORHOOD_SUMMARY_CAP as u64])?;
+    let allocator = 32 * 1024 * 1024;
+    let common = neighborhood_sum(&[metadata, router, snapshots, allocator])?;
+    let retained = neighborhood_sum(&[common, selected, heaps])?;
+    let phases = BTreeMap::from([
+        ("metadata_authentication", common),
+        (
+            "leaf_authentication",
+            neighborhood_sum(&[retained, leaf_scan])?,
+        ),
+        ("canonical_authentication", plus(retained, scan)?),
+        ("anchor_seal_publication", plus(retained, seal_publication)?),
+        ("scalar_neighborhood_scan", plus(retained, scan)?),
+        (
+            "residuals_and_report",
+            neighborhood_sum(&[retained, ranking, report_publication, human_summary])?,
+        ),
+        (
+            "report_publication",
+            neighborhood_sum(&[retained, ranking, report_publication, human_summary])?,
+        ),
+    ]);
+    let peak_payload_bytes = *phases.values().max().ok_or("neighborhood phase table")?;
+    require(
+        peak_payload_bytes <= c.max_payload_bytes,
+        "neighborhood phase payload cap before body open",
+    )?;
+    let runtime_allowance_bytes = 64 * 1024 * 1024;
+    let charged_file_cache_allowance_bytes = 256 * 1024 * 1024;
+    let staged_input_bytes = neighborhood_sum(&[
+        config_bytes,
+        c.generation_manifest.bytes,
+        c.plane_manifest.bytes,
+        c.router_root.bytes,
+        c.membership.bytes,
+        c.leaves.bytes,
+        c.canonical.bytes,
+    ])?;
+    // Root owns the bounded terminal/stdout/stderr allowance and transport rename.
+    let maximum_evidence_bytes = neighborhood_sum(&[SELECTION_CAP, REPORT_CAP, 2 * 1024 * 1024])?;
+    Ok(NeighborhoodAllocation {
+        components: BTreeMap::from([
+            ("metadata_json_and_config", metadata),
+            ("router_copies_and_directories", router),
+            ("snapshots_and_paths", snapshots),
+            ("selected_unit_rows_and_centers", selected),
+            ("bounded_neighbor_heaps", heaps),
+            ("canonical_row_io_and_id_bitset", scan),
+            ("leaf_io_decode_and_roster", leaf_scan),
+            ("one_ranking_and_nomination", ranking),
+            ("seal_value_serialization_readback", seal_publication),
+            ("report_value_serialization_readback", report_publication),
+            ("human_summary_capacity_and_formatting", human_summary),
+            ("allocator_reserve", allocator),
+        ]),
+        phases,
+        peak_payload_bytes,
+        runtime_allowance_bytes,
+        charged_file_cache_allowance_bytes,
+        proposed_charged_bytes: neighborhood_sum(&[
+            peak_payload_bytes,
+            runtime_allowance_bytes,
+            charged_file_cache_allowance_bytes,
+        ])?,
+        staged_input_bytes,
+        maximum_evidence_bytes,
+        staged_peak_bytes: plus(staged_input_bytes, maximum_evidence_bytes)?,
+    })
+}
+
+fn neighborhood_object_key(key: &str, sha: &str) -> bool {
+    let mut parts = key.rsplit('/');
+    valid_sha(sha)
+        && key.len() <= 512
+        && parts.next() == Some(sha)
+        && parts.next() == Some("objects")
+        && key.split('/').all(|p| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        })
+}
+
+fn neighborhood_router(
+    c: &NeighborhoodConfig,
+) -> Result<(
+    borsuk::semantic_unit_router::SemanticUnitRouter,
+    borsuk::two_bit_source::SourcePlaneReceipt,
+    Vec<HeaderSnapshot>,
+)> {
+    use borsuk::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
+    let (g, gs) = header_json(&c.generation_manifest)?;
+    fields(
+        &g,
+        "schema generation base_epoch plane_manifest_sha256 page_manifest_sha256 discovery sq8_object_sha256 sq8_object_key sq8_etag canonical low step",
+    )?;
+    fields(&g["canonical"], "object_key sha256 bytes rows dimensions")?;
+    let canonical = &g["canonical"];
+    require(
+        g["schema"] == "borsuk-two-bit-generation-v8"
+            && g["generation"].as_u64().is_some_and(|v| v > 0)
+            && g["base_epoch"].as_u64().is_some()
+            && g["page_manifest_sha256"].as_str().is_some_and(valid_sha)
+            && g["plane_manifest_sha256"] == c.plane_manifest.sha256
+            && canonical["rows"] == c.rows
+            && canonical["dimensions"] == c.dimensions
+            && canonical["bytes"] == c.canonical.bytes
+            && canonical["sha256"] == c.canonical.sha256
+            && canonical["object_key"] == c.canonical_object_key
+            && neighborhood_object_key(&c.canonical_object_key, &c.canonical.sha256),
+        "neighborhood generation/canonical descriptor authority before body open",
+    )?;
+    let d = &g["discovery"];
+    fields(
+        d,
+        "mode profile root_sha256 root_bytes membership_sha256 membership_bytes leaves_sha256 leaves_bytes input_schema input_root_sha256 centroids_sha256 source_sha256 source_order_sha256 mean_sha256 records_sha256 sq8_sha256",
+    )?;
+    require(
+        d["mode"] == "semantic"
+            && d["profile"] == "scale1m"
+            && d["root_sha256"] == c.router_root.sha256
+            && d["root_bytes"] == c.router_root.bytes
+            && d["membership_sha256"] == c.membership.sha256
+            && d["membership_bytes"] == c.membership.bytes
+            && d["leaves_sha256"] == c.leaves.sha256
+            && d["leaves_bytes"] == c.leaves.bytes,
+        "neighborhood discovery descriptors",
+    )?;
+    let (p, ps) = header_json(&c.plane_manifest)?;
+    let plane: borsuk::two_bit_source::SourcePlaneReceipt = serde_json::from_value(p)?;
+    require(
+        plane.schema == "borsuk-two-bit-plane-v3"
+            && plane.rows == c.rows
+            && plane.dimensions == c.dimensions
+            && plane.seed == 20260923
+            && plane.page_rows == 32
+            && !plane.query_or_truth_used
+            && plane.record_bytes == source_record_bytes(c.dimensions)?
+            && valid_sha(&plane.page_digest_sha256)
+            && g["sq8_object_sha256"] == plane.sq8_sha256
+            && g["sq8_object_key"]
+                .as_str()
+                .is_some_and(|key| neighborhood_object_key(key, &plane.sq8_sha256))
+            && g["sq8_etag"].as_str().is_some_and(|v| {
+                !v.is_empty() && !v.starts_with("W/") && !v.chars().any(char::is_control)
+            }),
+        "neighborhood plane geometry/SQ8 descriptor",
+    )?;
+    for (name, sha) in [
+        ("source_sha256", &plane.source_sha256),
+        ("source_order_sha256", &plane.source_order_sha256),
+        ("mean_sha256", &plane.mean_sha256),
+        ("records_sha256", &plane.records_sha256),
+        ("sq8_sha256", &plane.sq8_sha256),
+    ] {
+        require(
+            valid_sha(sha) && d[name] == *sha,
+            "neighborhood discovery/plane identity",
+        )?;
+    }
+    let low: Vec<f32> = serde_json::from_value(g["low"].clone())?;
+    let step: Vec<f32> = serde_json::from_value(g["step"].clone())?;
+    require(
+        low.len() == c.dimensions
+            && step.len() == c.dimensions
+            && low.iter().all(|v| v.is_finite())
+            && step.iter().all(|v| v.is_finite() && *v > 0.),
+        "neighborhood calibration geometry/finite",
+    )?;
+    let identity = SourceIdentity {
+        profile: SemanticProfile::Scale1m,
+        schema: d["input_schema"]
+            .as_str()
+            .ok_or("neighborhood construction schema")?,
+        root_sha256: d["input_root_sha256"]
+            .as_str()
+            .ok_or("neighborhood construction root")?,
+        centroids_sha256: d["centroids_sha256"]
+            .as_str()
+            .ok_or("neighborhood centroid identity")?,
+        rows: c.rows,
+        dimensions: c.dimensions,
+    };
+    let (root, rs) = loss_binary(&c.router_root, c.router_root.bytes)?;
+    let (membership, ms) = loss_binary(&c.membership, c.membership.bytes)?;
+    let router = SemanticUnitRouter::open(
+        &root,
+        &membership,
+        &c.router_root.sha256,
+        &identity,
+        SemanticProfile::Scale1m.root_cap(),
+    )?;
+    require(
+        router.manifest().leaf_payload.bytes as u64 == c.leaves.bytes
+            && router.manifest().leaf_payload.sha256 == c.leaves.sha256,
+        "neighborhood root leaf payload identity",
+    )?;
+    Ok((router, plane, vec![gs, ps, rs, ms]))
+}
+
+struct NeighborhoodAnchor {
+    unit: usize,
+    physical: usize,
+    unit_digest: [u8; 32],
+    row_digest: [u8; 32],
+    id: Option<i64>,
+    coordinates: Vec<f32>,
+    norm2: f64,
+    canonical_unit_rows: Vec<f32>,
+    stored_sq8_fp16_unit_mean: Vec<f32>,
+}
+
+fn neighborhood_digest(domain: &[u8], generation: &[u8; 32], unit: usize) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(generation);
+    hash.update((unit as u64).to_le_bytes());
+    hash.finalize().into()
+}
+
+fn neighborhood_anchors(
+    generation: &str,
+    rows: usize,
+    count: usize,
+    dimensions: usize,
+) -> Result<Vec<NeighborhoodAnchor>> {
+    require(
+        valid_sha(generation)
+            && rows > 0
+            && (1..=32).contains(&count)
+            && count <= rows.div_ceil(32),
+        "neighborhood anchor geometry",
+    )?;
+    let mut generation_bytes = [0; 32];
+    for (slot, byte) in generation_bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&generation[2 * slot..2 * slot + 2], 16)?;
+    }
+    let mut selected = std::collections::BinaryHeap::with_capacity(count);
+    for unit in 0..rows.div_ceil(32) {
+        let candidate = (
+            neighborhood_digest(NEIGHBORHOOD_UNIT_DOMAIN, &generation_bytes, unit),
+            unit,
+        );
+        if selected.len() < count {
+            selected.push(candidate);
+        } else if selected.peek().is_some_and(|worst| candidate < *worst) {
+            *selected.peek_mut().ok_or("neighborhood unit heap")? = candidate;
+        }
+    }
+    selected
+        .into_sorted_vec()
+        .into_iter()
+        .map(|(unit_digest, unit)| {
+            let row_digest = neighborhood_digest(NEIGHBORHOOD_ROW_DOMAIN, &generation_bytes, unit);
+            let actual_rows = (rows - unit * 32).min(32);
+            let offset =
+                (u64::from_le_bytes(row_digest[..8].try_into()?) % actual_rows as u64) as usize;
+            Ok(NeighborhoodAnchor {
+                unit,
+                physical: unit * 32 + offset,
+                unit_digest,
+                row_digest,
+                id: None,
+                coordinates: Vec::with_capacity(dimensions),
+                norm2: 0.,
+                canonical_unit_rows: Vec::with_capacity(actual_rows * dimensions),
+                stored_sq8_fp16_unit_mean: Vec::with_capacity(dimensions),
+            })
+        })
+        .collect()
+}
+
+fn neighborhood_body(pin: &CompletedInput) -> Result<HeaderSnapshot> {
+    let file = header_file(&pin.path)?;
+    let identity = file_identity(&file)?;
+    require(identity.len == pin.bytes, "neighborhood body exact length")?;
+    Ok(HeaderSnapshot {
+        file,
+        path: pin.path.clone(),
+        identity,
+    })
+}
+
+fn neighborhood_mark(seen: &mut [u8], position: usize) -> Result<()> {
+    let word = seen
+        .get_mut(position / 8)
+        .ok_or("neighborhood roster range")?;
+    let bit = 1 << (position % 8);
+    require(*word & bit == 0, "neighborhood duplicate roster ID")?;
+    *word |= bit;
+    Ok(())
+}
+
+fn neighborhood_leaves(
+    c: &NeighborhoodConfig,
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    anchors: &mut [NeighborhoodAnchor],
+) -> Result<HeaderSnapshot> {
+    let snapshot = neighborhood_body(&c.leaves)?;
+    let mut input = BufReader::with_capacity(NEIGHBORHOOD_IO, &snapshot.file);
+    let width = 4 + 2 * c.dimensions;
+    let mut buffer = vec![0; 64 * width];
+    let mut seen = vec![0; c.rows.div_ceil(32).div_ceil(8)];
+    let mut digest = Sha256::new();
+    let mut count = 0;
+    for leaf in &router.manifest().leaves {
+        require(
+            leaf.bytes <= buffer.len() && leaf.bytes % width == 0,
+            "neighborhood leaf alignment",
+        )?;
+        let body = &mut buffer[..leaf.bytes];
+        input.read_exact(body)?;
+        digest.update(&*body);
+        let units = router.validate_leaf(leaf.leaf_id, body)?;
+        let mut sums = vec![0.0_f64; c.dimensions];
+        for (unit, record) in units.into_iter().zip(body.chunks_exact(width)) {
+            neighborhood_mark(&mut seen, unit)?;
+            count += 1;
+            let selected = anchors.iter_mut().find(|a| a.unit == unit);
+            let mut selected = selected.map(|a| &mut a.stored_sq8_fp16_unit_mean);
+            for (word, sum) in record[4..].chunks_exact(2).zip(&mut sums) {
+                let value = half::f16::from_bits(u16::from_le_bytes(word.try_into()?)).to_f32();
+                require(value.is_finite(), "neighborhood finite FP16 unit center")?;
+                *sum += f64::from(value);
+                if let Some(center) = &mut selected {
+                    center.push(value);
+                }
+            }
+        }
+        require(
+            sums.iter().zip(&leaf.prototype).all(|(sum, expected)| {
+                ((*sum / leaf.unit_count as f64) as f32).to_bits() == expected.to_bits()
+            }),
+            "neighborhood unweighted persisted-order prototype parity",
+        )?;
+    }
+    require(
+        input.read(&mut [0])? == 0
+            && count == c.rows.div_ceil(32)
+            && format!("{:x}", digest.finalize()) == c.leaves.sha256,
+        "neighborhood complete leaf SHA/EOF/roster",
+    )?;
+    require(
+        anchors
+            .iter()
+            .all(|a| a.stored_sq8_fp16_unit_mean.len() == c.dimensions),
+        "neighborhood selected center roster",
+    )?;
+    drop(input);
+    snapshot.recheck()?;
+    Ok(snapshot)
+}
+
+fn neighborhood_norm(row: &[f32]) -> Result<f64> {
+    let mut norm = 0.0_f64;
+    for &value in row {
+        require(
+            value.is_finite(),
+            "neighborhood finite canonical coordinate",
+        )?;
+        norm += f64::from(value) * f64::from(value);
+    }
+    require(
+        norm.is_finite() && (norm - 1.).abs() <= 1e-6,
+        "neighborhood canonical squared norm tolerance",
+    )?;
+    Ok(norm)
+}
+
+// Fixture-specific ordinal IDs: hashing the original signed-ID bytes is also
+// the authenticated u64 ordinal order after range admission. No SQ8 body needed.
+fn neighborhood_scan(
+    c: &NeighborhoodConfig,
+    snapshot: &mut HeaderSnapshot,
+    order_sha: &str,
+    mut observe: impl FnMut(usize, i64, &[f32], f64) -> Result<()>,
+) -> Result<()> {
+    snapshot.recheck()?;
+    snapshot.file.seek(io::SeekFrom::Start(0))?;
+    let mut input = BufReader::with_capacity(NEIGHBORHOOD_IO, &snapshot.file);
+    let mut record = vec![0; 8 + 4 * c.dimensions];
+    let mut row = vec![0.; c.dimensions];
+    let mut seen = vec![0; c.rows.div_ceil(8)];
+    let mut body_sha = Sha256::new();
+    let mut order = Sha256::new();
+    for position in 0..c.rows {
+        input.read_exact(&mut record)?;
+        body_sha.update(&record);
+        order.update(&record[..8]);
+        let id = i64::from_le_bytes(record[..8].try_into()?);
+        require(
+            id >= 0 && (id as u64) < c.rows as u64,
+            "neighborhood fixture ordinal ID range",
+        )?;
+        neighborhood_mark(&mut seen, id as usize)?;
+        for (value, bytes) in row.iter_mut().zip(record[8..].chunks_exact(4)) {
+            *value = f32::from_le_bytes(bytes.try_into()?);
+        }
+        let norm = neighborhood_norm(&row)?;
+        observe(position, id, &row, norm)?;
+    }
+    require(
+        input.read(&mut [0])? == 0 && format!("{:x}", body_sha.finalize()) == c.canonical.sha256,
+        "neighborhood canonical body SHA/EOF",
+    )?;
+    require(
+        format!("{:x}", order.finalize()) == order_sha,
+        "neighborhood canonical ID order",
+    )?;
+    drop(input);
+    snapshot.recheck()
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct NeighborhoodNeighbor {
+    distance: f64,
+    id: i64,
+    physical: usize,
+}
+
+impl PartialEq for NeighborhoodNeighbor {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+impl Eq for NeighborhoodNeighbor {}
+impl PartialOrd for NeighborhoodNeighbor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for NeighborhoodNeighbor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then(self.id.cmp(&other.id))
+    }
+}
+
+fn neighborhood_cosine(anchor: &[f32], anchor_norm: f64, row: &[f32], row_norm: f64) -> f64 {
+    let mut dot = 0.0_f64;
+    for (&a, &b) in anchor.iter().zip(row) {
+        dot += f64::from(a) * f64::from(b);
+    }
+    let distance = 1. - (dot / (anchor_norm.sqrt() * row_norm.sqrt())).clamp(-1., 1.);
+    if distance == 0. { 0. } else { distance }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn neighborhood_offer(
+    heap: &mut std::collections::BinaryHeap<NeighborhoodNeighbor>,
+    count: usize,
+    anchor_id: i64,
+    anchor: &[f32],
+    anchor_norm: f64,
+    physical: usize,
+    id: i64,
+    row: &[f32],
+    row_norm: f64,
+) {
+    if id == anchor_id {
+        return;
+    }
+    let neighbor = NeighborhoodNeighbor {
+        id,
+        physical,
+        distance: neighborhood_cosine(anchor, anchor_norm, row, row_norm),
+    };
+    if heap.len() < count {
+        heap.push(neighbor);
+    } else if heap.peek().is_some_and(|worst| neighbor < *worst) {
+        if let Some(mut worst) = heap.peek_mut() {
+            *worst = neighbor;
+        }
+    }
+}
+
+fn neighborhood_canonical_statistics(rows: &[f32], dimensions: usize) -> (Vec<f64>, f64) {
+    let count = rows.len() / dimensions;
+    let mut mean = vec![0.0; dimensions];
+    for row in rows.chunks_exact(dimensions) {
+        for (sum, &value) in mean.iter_mut().zip(row) {
+            *sum += f64::from(value);
+        }
+    }
+    for sum in &mut mean {
+        *sum /= count as f64;
+    }
+    let mut dispersion = 0.0;
+    for row in rows.chunks_exact(dimensions) {
+        for (&value, &center) in row.iter().zip(&mean) {
+            let delta = f64::from(value) - center;
+            dispersion += delta * delta;
+        }
+    }
+    (mean, dispersion / count as f64)
+}
+
+fn neighborhood_residual(row: &[f32], center: &[f32]) -> f64 {
+    let mut result = 0.0;
+    for (&value, &mean) in row.iter().zip(center) {
+        let delta = f64::from(value) - f64::from(mean);
+        result += delta * delta;
+    }
+    result
+}
+
+fn neighborhood_anchor_report(
+    c: &NeighborhoodConfig,
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    anchor: &NeighborhoodAnchor,
+    neighbors: &[NeighborhoodNeighbor],
+) -> Result<Value> {
+    require(
+        neighbors.len() == c.neighbor_count,
+        "neighborhood exact neighbor count",
+    )?;
+    let query =
+        borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&anchor.coordinates)?;
+    let ranked = router.rank_leaves_by_metric(&query, &borsuk::VectorMetric::SquaredEuclidean)?;
+    let selected_count = ranked.len().min(48);
+    require(
+        c.scope == NeighborhoodScope::SmallFixture || selected_count == 48,
+        "neighborhood frozen top48",
+    )?;
+    let nomination = router.nominate_selected(&ranked[..selected_count])?;
+    let mut ranks = vec![0; ranked.len()];
+    for (rank, &leaf) in ranked.iter().enumerate() {
+        ranks[leaf] = rank + 1;
+    }
+    let own_leaf = router.unit_membership()[anchor.unit];
+    let mut frequencies = std::collections::BTreeMap::<usize, usize>::new();
+    let mut leaves = BTreeSet::new();
+    let mut joint = [0_usize; 32];
+    let mut evidence = Vec::with_capacity(neighbors.len());
+    let mut outside_leaves = 0;
+    let mut outside_pages = 0;
+    let mut interaction = 0;
+    for neighbor in neighbors {
+        let unit = neighbor.physical / 32;
+        let page = neighbor.physical / 256;
+        let leaf = router.unit_membership()[unit];
+        let own_unit = unit == anchor.unit;
+        let own_page = page == anchor.physical / 256;
+        let same_leaf = leaf == own_leaf;
+        let selected_leaf = ranks[leaf] <= selected_count;
+        let page_covered = nomination.page_closure.contains(&page);
+        let bucket = usize::from(own_unit)
+            | (usize::from(own_page) << 1)
+            | (usize::from(same_leaf) << 2)
+            | (usize::from(selected_leaf) << 3)
+            | (usize::from(page_covered) << 4);
+        joint[bucket] += 1;
+        outside_leaves += usize::from(!selected_leaf);
+        outside_pages += usize::from(!page_covered);
+        interaction += usize::from(!same_leaf && !selected_leaf && !page_covered);
+        *frequencies.entry(unit).or_default() += 1;
+        leaves.insert(leaf);
+        evidence.push(json!({"id":neighbor.id,"physical_row":neighbor.physical,
+            "cosine_distance":neighbor.distance,"destination_unit":unit,"destination_page":page,
+            "destination_leaf":leaf,"destination_leaf_l2_rank":ranks[leaf],
+            "own_unit":own_unit,"own_page":own_page,"own_leaf":same_leaf,
+            "inside_selected_leaf_union":selected_leaf,"inside_physical_page_closure":page_covered}));
+    }
+    let joint_counts = joint
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| **n > 0)
+        .map(|(bits, count)| {
+            json!({"own_unit":bits&1!=0,"own_page":bits&2!=0,"own_leaf":bits&4!=0,
+            "inside_selected_leaf_union":bits&8!=0,"inside_physical_page_closure":bits&16!=0,
+            "count":count})
+        })
+        .collect::<Vec<_>>();
+    let (mean, dispersion) =
+        neighborhood_canonical_statistics(&anchor.canonical_unit_rows, c.dimensions);
+    let squared_frequency_sum: usize = frequencies.values().map(|n| n * n).sum();
+    Ok(
+        json!({"unit":anchor.unit,"physical_row":anchor.physical,"id":anchor.id,
+        "own_leaf":own_leaf,"own_leaf_l2_rank":ranks[own_leaf],"neighbors":evidence,
+        "joint_counts":joint_counts,"outside_selected_leaf_union":outside_leaves,
+        "outside_physical_page_closure":outside_pages,
+        "cross_leaf_and_outside_top48_and_outside_page_closure":interaction,
+        "distinct_destination_units":frequencies.len(),"distinct_destination_leaves":leaves.len(),
+        "destination_unit_frequencies":frequencies.iter().map(|(unit,count)|json!({"unit":unit,"count":count})).collect::<Vec<_>>(),
+        "maximum_destination_unit_count":frequencies.values().max(),
+        "destination_unit_concentration":squared_frequency_sum as f64 / (neighbors.len()*neighbors.len()) as f64,
+        "selected_leaf_ids":nomination.leaf_ids,"physical_page_closure":nomination.page_closure,
+        "canonical_selected_unit_mean":mean,"canonical_selected_unit_dispersion":dispersion,
+        "canonical_selected_unit_rows":anchor.canonical_unit_rows.len()/c.dimensions,
+        "canonical_anchor_to_stored_sq8_fp16_unit_mean_squared_l2":neighborhood_residual(&anchor.coordinates, &anchor.stored_sq8_fp16_unit_mean),
+        "stored_sq8_fp16_unit_mean_to_persisted_unweighted_leaf_prototype_squared_l2":neighborhood_residual(&anchor.stored_sq8_fp16_unit_mean, &router.manifest().leaves[own_leaf].prototype),
+        "unit_indivisibility":"UNRESOLVED","interpretation":"INCONCLUSIVE"}),
+    )
+}
+
+fn reduce_source_neighborhood(
+    c: &NeighborhoodConfig,
+    config_sha: &str,
+    config_snapshot: HeaderSnapshot,
+    allocation: &NeighborhoodAllocation,
+    seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<(Value, Vec<HeaderSnapshot>)> {
+    let (router, plane, mut snapshots) = neighborhood_router(c)?;
+    snapshots.push(config_snapshot);
+    let mut anchors = neighborhood_anchors(
+        &c.generation_manifest.sha256,
+        c.rows,
+        c.anchor_count,
+        c.dimensions,
+    )?;
+    snapshots.push(neighborhood_leaves(c, &router, &mut anchors)?);
+    let mut canonical = neighborhood_body(&c.canonical)?;
+    neighborhood_scan(
+        c,
+        &mut canonical,
+        &plane.source_order_sha256,
+        |position, id, row, norm| {
+            for anchor in &mut anchors {
+                if position / 32 == anchor.unit {
+                    anchor.canonical_unit_rows.extend_from_slice(row);
+                    if position == anchor.physical {
+                        anchor.id = Some(id);
+                        anchor.coordinates.extend_from_slice(row);
+                        anchor.norm2 = norm;
+                    }
+                }
+            }
+            Ok(())
+        },
+    )?;
+    require(
+        anchors.iter().all(|a| {
+            a.id.is_some()
+                && a.coordinates.len() == c.dimensions
+                && a.canonical_unit_rows.len() == (c.rows - a.unit * 32).min(32) * c.dimensions
+        }),
+        "neighborhood authenticated complete anchors",
+    )?;
+    let source_sha = format!(
+        "{:x}",
+        Sha256::digest(include_bytes!("compare_native_replay.rs"))
+    );
+    let seal = json!({"schema":"borsuk-source-neighborhood-anchor-seal-v1","status":"SEALED",
+        "config_sha256":config_sha,"implementation_sha256":source_sha,"config":c,
+        "raw_source_sha256":plane.source_sha256,"canonical_sha256":c.canonical.sha256,
+        "source_order_sha256":plane.source_order_sha256,"sq8_identity_only_sha256":plane.sq8_sha256,
+        "router_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/semantic_unit_router.rs"))),
+        "normalization_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/sq8_source.rs"))),
+        "generation_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/two_bit_generation.rs"))),
+        "unit_domain":"borsuk-source-neighborhood-unit-v1","row_domain":"borsuk-source-neighborhood-row-v1",
+        "domain_encoding":"ASCII then one NUL then 32 binary generation-SHA bytes then u64LE unit",
+        "unit_selection":"lowest digest bytes lexicographically; tie physical unit ID",
+        "row_selection":"first eight digest bytes as u64LE modulo actual unit row count",
+        "method_version":1,"arithmetic_version":NEIGHBORHOOD_ARITHMETIC,
+        "id_contract":"fixture-specific original ordinals; not a production-ID restriction",
+        "anchors":anchors.iter().map(|a|json!({"unit":a.unit,"physical_row":a.physical,"id":a.id,
+            "unit_sha256":a.unit_digest.iter().map(|b|format!("{b:02x}")).collect::<String>(),
+            "row_sha256":a.row_digest.iter().map(|b|format!("{b:02x}")).collect::<String>(),
+            "row_offset":a.physical%32,"actual_unit_rows":(c.rows-a.unit*32).min(32),
+            "canonical_norm2":a.norm2})).collect::<Vec<_>>()});
+    let mut references = snapshots.iter().collect::<Vec<_>>();
+    references.push(&canonical);
+    let (sealed, seal_sha) =
+        publish_selection_seal_with_sync(&c.anchor_seal, &seal, &references, seal_sync)?;
+    drop(references);
+    drop(seal);
+    snapshots.push(sealed);
+    // The first neighbor operation is after successful file AND directory sync.
+    let mut heaps = (0..c.anchor_count)
+        .map(|_| std::collections::BinaryHeap::with_capacity(c.neighbor_count))
+        .collect::<Vec<_>>();
+    neighborhood_scan(
+        c,
+        &mut canonical,
+        &plane.source_order_sha256,
+        |position, id, row, norm| {
+            for (anchor, heap) in anchors.iter().zip(&mut heaps) {
+                neighborhood_offer(
+                    heap,
+                    c.neighbor_count,
+                    anchor.id.ok_or("neighborhood sealed ID")?,
+                    &anchor.coordinates,
+                    anchor.norm2,
+                    position,
+                    id,
+                    row,
+                    norm,
+                );
+            }
+            Ok(())
+        },
+    )?;
+    snapshots.push(canonical);
+    let results = anchors
+        .iter()
+        .zip(heaps)
+        .map(|(anchor, heap)| {
+            neighborhood_anchor_report(c, &router, anchor, &heap.into_sorted_vec())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for snapshot in &snapshots {
+        snapshot.recheck()?;
+    }
+    let report = json!({"schema":NEIGHBORHOOD_SCHEMA,"status":"MEASURED","complete":true,
+        "interpretation":"EXPLORATORY_INCONCLUSIVE","qualified":false,
+        "implementation_sha256":source_sha,"config_sha256":config_sha,
+        "generation_sha256":c.generation_manifest.sha256,"canonical_sha256":c.canonical.sha256,
+        "calibration_authority":"generation_sha256 binds validated low/step and plane/router provenance",
+        "raw_source_sha256":plane.source_sha256,"source_order_sha256":plane.source_order_sha256,
+        "anchor_seal_sha256":seal_sha,"anchor_seal_path":c.anchor_seal,
+        "arithmetic_version":NEIGHBORHOOD_ARITHMETIC,"rows":c.rows,"dimensions":c.dimensions,
+        "anchor_count":c.anchor_count,"neighbor_count":c.neighbor_count,"scope":c.scope,
+        "sampling_units":"anchors; neighbor slots are correlated","in_sample_partition_anchors":true,
+        "anchor_seal_durable_before_neighbor_scan":true,"canonical_full_authenticated_passes":2,
+        "anchors":results,"allocation":allocation,
+        "staging":"one canonical; config/generation/plane/root/membership/leaves; transport temp renamed, never copied; seal<=4MiB, report<=2MiB, root terminal/logs<=2MiB",
+        "resource_envelope_qualified":false,"runtime_and_cache_allowances_require_native_admission":true,
+        "report_alone_accepted":false,"external_gate_required":true,
+        "acceptance_requires":"original exit0 and successful drained terminal receipt with exact instance, source/config/ELF/seal/report hashes and resource/OOM status; abrupt death INVALID",
+        "unit_indivisibility":"UNRESOLVED","intra_unit_conflicting_neighborhoods":"UNRESOLVED",
+        "destination_unit_limit_is_tautological":true,"graph_cut_go":false,
+        "gap_bridge_fetches":"UNMEASURED; excluded from physical-page closure",
+        "quantization_cause":"NOT_INFERRED","rare_query_generalization":false,
+        "held_out_routing_claim":false,"recall_qps_cold_vendor_or_100m_claim":false,
+        "source_only":true,"ann_arm_selected":false});
+    require(
+        serde_json::to_vec(&report)?.len() as u64 + 1 <= REPORT_CAP,
+        "neighborhood report cap",
+    )?;
+    Ok((report, snapshots))
+}
+
+fn neighborhood_summary(report: &Value) -> Result<String> {
+    use std::fmt::Write as _;
+    let anchors = report["anchors"]
+        .as_array()
+        .ok_or("neighborhood summary anchors")?;
+    require(
+        (1..=32).contains(&anchors.len()),
+        "neighborhood summary anchor bound",
+    )?;
+    let mut summary = String::with_capacity(NEIGHBORHOOD_SUMMARY_CAP);
+    writeln!(summary, "Source neighborhood: EXPLORATORY / INCONCLUSIVE")?;
+    writeln!(
+        summary,
+        "Rows {}; dimensions {}; anchors {}; neighbors per anchor {}.",
+        report["rows"], report["dimensions"], report["anchor_count"], report["neighbor_count"]
+    )?;
+    writeln!(
+        summary,
+        "Per anchor: unit; own-leaf rank; outside top48/page closure/joint cross-leaf; distinct destination units/leaves; max unit count; concentration; canonical dispersion; anchor-to-SQ8-FP16 / SQ8-FP16-to-leaf squared L2. Small fixtures select all leaves if fewer than 48."
+    )?;
+    for anchor in anchors {
+        writeln!(
+            summary,
+            "{}; {}; {}/{}/{}; {}/{}; {}; {}; {}; {}/{}",
+            anchor["unit"],
+            anchor["own_leaf_l2_rank"],
+            anchor["outside_selected_leaf_union"],
+            anchor["outside_physical_page_closure"],
+            anchor["cross_leaf_and_outside_top48_and_outside_page_closure"],
+            anchor["distinct_destination_units"],
+            anchor["distinct_destination_leaves"],
+            anchor["maximum_destination_unit_count"],
+            anchor["destination_unit_concentration"],
+            anchor["canonical_selected_unit_dispersion"],
+            anchor["canonical_anchor_to_stored_sq8_fp16_unit_mean_squared_l2"],
+            anchor["stored_sq8_fp16_unit_mean_to_persisted_unweighted_leaf_prototype_squared_l2"]
+        )?;
+    }
+    writeln!(
+        summary,
+        "Published report remains authoritative; original exit0, drained terminal receipt, exact hashes and resource/OOM status still required. Report alone never accepted."
+    )?;
+    writeln!(
+        summary,
+        "In-sample anchors; neighbor slots correlated. Unit indivisibility and conflicting affinities unresolved; unselected leaves may share selected pages; gap bridges unmeasured. No quantization-cause, graph-cut, rare-query, held-out, recall/QPS/cold/vendor/100M claim. Both historical 312/320 KILLs preserved; no ANN arm selected."
+    )?;
+    require(
+        summary.len() <= NEIGHBORHOOD_SUMMARY_CAP,
+        "neighborhood summary cap",
+    )?;
+    Ok(summary)
+}
+
+fn execute_source_neighborhood(config_path: &Path, config_sha: &str) -> Result<bool> {
+    execute_source_neighborhood_with(
+        config_path,
+        config_sha,
+        |file, _| file.sync_all(),
+        |file, _| file.sync_all(),
+        &mut io::stdout().lock(),
+    )
+}
+
+fn execute_source_neighborhood_with(
+    config_path: &Path,
+    config_sha: &str,
+    seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
+    report_sync: impl FnMut(&File, bool) -> io::Result<()>,
+    output: &mut impl Write,
+) -> Result<bool> {
+    let file = header_file(config_path)?;
+    let snapshot = HeaderSnapshot {
+        identity: file_identity(&file)?,
+        file,
+        path: config_path.to_owned(),
+    };
+    let (c, bytes): (NeighborhoodConfig, _) =
+        read_config_file(&snapshot.file, config_path, config_sha, CONFIG_CAP)?;
+    snapshot.recheck()?;
+    // The entire coexistence model is admitted before any pinned input is opened.
+    let allocation = neighborhood_allocation(&c, bytes)?;
+    require(
+        config_path != c.anchor_seal && config_path != c.report,
+        "neighborhood config/output paths",
+    )?;
+    let mut summary = String::new();
+    let measured = execute_leaf_coverage_as(
+        &c.report,
+        NEIGHBORHOOD_SCHEMA,
+        || {
+            let (report, retained) =
+                reduce_source_neighborhood(&c, config_sha, snapshot, &allocation, seal_sync)?;
+            summary = neighborhood_summary(&report)?;
+            Ok((report, retained))
+        },
+        report_sync,
+    )?;
+    if measured {
+        output.write_all(summary.as_bytes())?;
+        output.flush()?;
+    }
+    Ok(measured)
+}
+
+#[cfg(test)]
+mod source_neighborhood_tests {
+    use super::*;
+
+    fn digest(bytes: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn put(path: &Path, body: &[u8]) -> CompletedInput {
+        std::fs::write(path, body).unwrap();
+        CompletedInput {
+            path: path.to_owned(),
+            bytes: body.len() as u64,
+            sha256: digest(body),
+        }
+    }
+
+    fn repin_json(pin: &mut CompletedInput, change: impl FnOnce(&mut Value)) {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&pin.path).unwrap()).unwrap();
+        change(&mut value);
+        *pin = put(&pin.path, &serde_json::to_vec(&value).unwrap());
+    }
+
+    fn rebind_descriptors(c: &mut NeighborhoodConfig) {
+        let plane: Value =
+            serde_json::from_slice(&std::fs::read(&c.plane_manifest.path).unwrap()).unwrap();
+        repin_json(&mut c.generation_manifest, |g| {
+            g["plane_manifest_sha256"] = json!(c.plane_manifest.sha256);
+            g["discovery"]["source_order_sha256"] = plane["source_order_sha256"].clone();
+            for (name, pin) in [
+                ("root", &c.router_root),
+                ("membership", &c.membership),
+                ("leaves", &c.leaves),
+            ] {
+                g["discovery"][format!("{name}_sha256")] = json!(pin.sha256);
+                g["discovery"][format!("{name}_bytes")] = json!(pin.bytes);
+            }
+            g["canonical"]["sha256"] = json!(c.canonical.sha256);
+            g["canonical"]["bytes"] = json!(c.canonical.bytes);
+            g["canonical"]["object_key"] = json!(c.canonical_object_key);
+        });
+    }
+
+    fn fixture(dir: &Path, rows: usize, centers: &[[f32; 2]]) -> NeighborhoodConfig {
+        use borsuk::semantic_unit_router::{SemanticProfile, SourceIdentity, build};
+        let mut blob = b"BORSUCP1".to_vec();
+        blob.extend_from_slice(&(rows as u64).to_le_bytes());
+        for word in [2_u32, 32, 256, 0] {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        for unit in 0..rows.div_ceil(32) {
+            for value in centers[unit % centers.len()] {
+                blob.extend_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+            }
+        }
+        let source = SourceIdentity {
+            profile: SemanticProfile::Scale1m,
+            schema: "source-neighborhood-fixture",
+            root_sha256: &"1".repeat(64),
+            centroids_sha256: &digest(&blob),
+            rows,
+            dimensions: 2,
+        };
+        let artifacts = build(&blob, &source, 64 * 1024 * 1024).unwrap();
+        let root = put(&dir.join("root"), &artifacts.manifest);
+        let membership = put(&dir.join("membership"), &artifacts.membership);
+        let leaves = put(&dir.join("leaves"), &artifacts.leaves);
+        let mut canonical = Vec::new();
+        let mut order = Vec::new();
+        for position in 0..rows {
+            let id = ((position + 1) % rows) as i64;
+            canonical.extend_from_slice(&id.to_le_bytes());
+            order.extend_from_slice(&id.to_le_bytes());
+            for value in [1.0_f32, 0.0] {
+                canonical.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let canonical = put(&dir.join("canonical"), &canonical);
+        let key = format!("semantic/objects/{}", canonical.sha256);
+        let plane = json!({"schema":"borsuk-two-bit-plane-v3","rows":rows,"dimensions":2,
+            "seed":20260923,"record_bytes":9,"source_sha256":"2".repeat(64),
+            "sq8_sha256":"3".repeat(64),"source_order_sha256":digest(&order),
+            "mean_sha256":"4".repeat(64),"records_sha256":"5".repeat(64),
+            "page_rows":32,"page_digest_sha256":"6".repeat(64),"query_or_truth_used":false});
+        let plane_pin = put(&dir.join("plane"), &serde_json::to_vec(&plane).unwrap());
+        let generation = json!({"schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "plane_manifest_sha256":plane_pin.sha256,"page_manifest_sha256":"7".repeat(64),
+            "discovery":{"mode":"semantic","profile":"scale1m","root_sha256":root.sha256,"root_bytes":root.bytes,
+                "membership_sha256":membership.sha256,"membership_bytes":membership.bytes,
+                "leaves_sha256":leaves.sha256,"leaves_bytes":leaves.bytes,"input_schema":source.schema,
+                "input_root_sha256":source.root_sha256,"centroids_sha256":source.centroids_sha256,
+                "source_sha256":plane["source_sha256"],"source_order_sha256":plane["source_order_sha256"],
+                "mean_sha256":plane["mean_sha256"],"records_sha256":plane["records_sha256"],"sq8_sha256":plane["sq8_sha256"]},
+            "sq8_object_sha256":plane["sq8_sha256"],"sq8_object_key":format!("semantic/objects/{}","3".repeat(64)),
+            "sq8_etag":"fixture","canonical":{"object_key":key,"sha256":canonical.sha256,"bytes":canonical.bytes,"rows":rows,"dimensions":2},
+            "low":[-1.,-1.],"step":[0.125,0.125]});
+        NeighborhoodConfig {
+            schema: NEIGHBORHOOD_CONFIG_SCHEMA.into(),
+            scope: NeighborhoodScope::SmallFixture,
+            rows,
+            dimensions: 2,
+            anchor_count: rows.div_ceil(32).min(3),
+            neighbor_count: (rows - 1).min(32),
+            generation_manifest: put(
+                &dir.join("generation"),
+                &serde_json::to_vec(&generation).unwrap(),
+            ),
+            plane_manifest: plane_pin,
+            router_root: root,
+            membership,
+            leaves,
+            canonical,
+            canonical_object_key: key,
+            max_payload_bytes: 1 << 30,
+            anchor_seal: dir.join("anchor-seal.json"),
+            report: dir.join("report.json"),
+        }
+    }
+
+    fn config_pin(c: &NeighborhoodConfig) -> CompletedInput {
+        put(
+            &c.report.parent().unwrap().join("config.json"),
+            &serde_json::to_vec(c).unwrap(),
+        )
+    }
+
+    fn run_with(
+        c: &NeighborhoodConfig,
+        seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
+        report_sync: impl FnMut(&File, bool) -> io::Result<()>,
+    ) -> Result<bool> {
+        let pin = config_pin(c);
+        let mut summary = Vec::new();
+        let result = execute_source_neighborhood_with(
+            &pin.path,
+            &pin.sha256,
+            seal_sync,
+            report_sync,
+            &mut summary,
+        );
+        if !matches!(&result, Ok(true)) {
+            assert!(
+                summary.is_empty(),
+                "no summary before successful publication"
+            );
+        }
+        result
+    }
+
+    fn json_file(path: &Path) -> Value {
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn source_neighborhood_strict_source_only_config_and_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let value = serde_json::to_value(&c).unwrap();
+        for field in [
+            "requests",
+            "truth",
+            "completed",
+            "sq8",
+            "raw",
+            "centroids",
+            "adjacency",
+        ] {
+            let mut bad = value.clone();
+            bad[field] = json!({});
+            assert!(serde_json::from_value::<NeighborhoodConfig>(bad).is_err());
+        }
+        let mut bad = value.clone();
+        bad["calibration_sha256"] = json!("0".repeat(64));
+        assert!(serde_json::from_value::<NeighborhoodConfig>(bad).is_err());
+        let mut bad = value.clone();
+        bad["canonical"]["requests"] = json!("forbidden");
+        assert!(serde_json::from_value::<NeighborhoodConfig>(bad).is_err());
+        let mut bad = value;
+        bad["scope"] = json!("scientific");
+        let bad: NeighborhoodConfig = serde_json::from_value(bad).unwrap();
+        assert!(neighborhood_allocation(&bad, 4096).is_err());
+        for body in [b"{\"x\":{\"sha256\":1,\"sha256\":2}}".as_slice(), b"{}\n{}"] {
+            let pin = put(&dir.path().join("bad.json"), body);
+            assert!(header_json(&pin).is_err());
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_authority_refuses_before_canonical_open() {
+        for fault in [
+            "wrong_generation_canonical",
+            "canonical_key",
+            "descriptor",
+            "calibration",
+            "calibration_zero_step",
+            "calibration_low_shape",
+            "calibration_step_shape",
+            "calibration_nonfinite",
+            "order_binding",
+            "raw_binding",
+            "plane_shape",
+            "extra_field",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+            match fault {
+                "wrong_generation_canonical" => {
+                    // Independently valid normalized body with the same IDs/length.
+                    let mut body = std::fs::read(&c.canonical.path).unwrap();
+                    for row in body.chunks_exact_mut(16) {
+                        row[8..12].copy_from_slice(&0_f32.to_le_bytes());
+                        row[12..16].copy_from_slice(&1_f32.to_le_bytes());
+                    }
+                    c.canonical = put(&c.canonical.path, &body);
+                    c.canonical_object_key = format!("semantic/objects/{}", c.canonical.sha256);
+                }
+                "canonical_key" => {
+                    c.canonical_object_key = "other/objects/invalid".into();
+                }
+                "descriptor" => repin_json(&mut c.generation_manifest, |g| {
+                    g["discovery"]["leaves_sha256"] = json!("0".repeat(64))
+                }),
+                "calibration" => {
+                    let mut g = json_file(&c.generation_manifest.path);
+                    g["low"][0] = json!(-2.0);
+                    // Keep the authenticated generation pin unchanged.
+                    std::fs::write(&c.generation_manifest.path, serde_json::to_vec(&g).unwrap())
+                        .unwrap();
+                }
+                "calibration_zero_step" => {
+                    repin_json(&mut c.generation_manifest, |g| g["step"][0] = json!(0.))
+                }
+                "calibration_low_shape" => {
+                    repin_json(&mut c.generation_manifest, |g| g["low"] = json!([-1.]))
+                }
+                "calibration_step_shape" => {
+                    repin_json(&mut c.generation_manifest, |g| g["step"] = json!([0.125]))
+                }
+                "calibration_nonfinite" => {
+                    repin_json(&mut c.generation_manifest, |g| g["low"][0] = json!(1e300))
+                }
+                "order_binding" => repin_json(&mut c.generation_manifest, |g| {
+                    g["discovery"]["source_order_sha256"] = json!("0".repeat(64))
+                }),
+                "raw_binding" => repin_json(&mut c.generation_manifest, |g| {
+                    g["discovery"]["source_sha256"] = json!("0".repeat(64))
+                }),
+                "plane_shape" => {
+                    repin_json(&mut c.plane_manifest, |p| p["rows"] = json!(66));
+                    rebind_descriptors(&mut c);
+                }
+                "extra_field" => repin_json(&mut c.generation_manifest, |g| {
+                    g["canonical"]["truth"] = json!(1)
+                }),
+                _ => unreachable!(),
+            }
+            std::fs::remove_file(&c.canonical.path).unwrap();
+            // The error is metadata authority, not the now-missing large body.
+            let error = neighborhood_router(&c).err().unwrap().to_string();
+            assert!(!error.contains("No such file"), "{fault}: {error}");
+            if fault == "calibration" {
+                assert_eq!(error, "config SHA/length/identity");
+            }
+            assert!(!c.anchor_seal.exists());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let previous = c.generation_manifest.sha256.clone();
+        repin_json(&mut c.generation_manifest, |g| g["low"][0] = json!(-2.0));
+        assert_ne!(c.generation_manifest.sha256, previous);
+        // A newly authenticated generation owns valid calibration without another pin.
+        assert!(neighborhood_router(&c).is_ok());
+    }
+
+    #[test]
+    fn source_neighborhood_full_canonical_body_order_bijection_and_norm_refusals() {
+        for fault in [
+            "body_sha",
+            "wrong_order",
+            "duplicate",
+            "out_of_range",
+            "negative",
+            "nan",
+            "infinity",
+            "zero",
+            "rescaled",
+            "truncated",
+            "trailing",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+            let order = json_file(&c.plane_manifest.path)["source_order_sha256"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let mut body = std::fs::read(&c.canonical.path).unwrap();
+            match fault {
+                "body_sha" => body[8..12].copy_from_slice(&(-1_f32).to_le_bytes()),
+                "wrong_order" => {
+                    for byte in 0..8 {
+                        body.swap(byte, 16 + byte);
+                    }
+                }
+                "duplicate" => body[..8].copy_from_slice(&2_i64.to_le_bytes()),
+                "out_of_range" => body[..8].copy_from_slice(&65_i64.to_le_bytes()),
+                "negative" => body[..8].copy_from_slice(&(-1_i64).to_le_bytes()),
+                "nan" => body[8..12].copy_from_slice(&f32::NAN.to_le_bytes()),
+                "infinity" => body[8..12].copy_from_slice(&f32::INFINITY.to_le_bytes()),
+                "zero" => body[8..12].copy_from_slice(&0_f32.to_le_bytes()),
+                "rescaled" => body[8..12].copy_from_slice(&2_f32.to_le_bytes()),
+                "truncated" => {
+                    body.pop();
+                }
+                "trailing" => body.push(0),
+                _ => unreachable!(),
+            }
+            std::fs::write(&c.canonical.path, &body).unwrap();
+            if fault != "body_sha" {
+                c.canonical.sha256 = digest(&body);
+            }
+            if matches!(fault, "trailing" | "truncated") {
+                c.canonical.bytes = body.len() as u64;
+            }
+            let mut snapshot = neighborhood_body(&c.canonical).unwrap();
+            let error = neighborhood_scan(&c, &mut snapshot, &order, |_, _, _, _| Ok(()))
+                .unwrap_err()
+                .to_string();
+            if fault == "wrong_order" {
+                assert_eq!(error, "neighborhood canonical ID order");
+            }
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_canonical_authentication_precedes_anchor_seal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let mut body = std::fs::read(&c.canonical.path).unwrap();
+        for byte in 0..8 {
+            body.swap(byte, 16 + byte);
+        }
+        c.canonical = put(&c.canonical.path, &body);
+        c.canonical_object_key = format!("semantic/objects/{}", c.canonical.sha256);
+        rebind_descriptors(&mut c);
+        assert!(!run_with(&c, |file, _| file.sync_all(), |file, _| file.sync_all()).unwrap());
+        assert!(!c.anchor_seal.exists());
+        let report = json_file(&c.report);
+        assert_eq!(report["status"], "INVALID");
+        assert!(
+            report["error"]
+                .as_str()
+                .unwrap()
+                .contains("canonical ID order")
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_lifetime_stamp_growth_and_path_refusals() {
+        for fault in ["same_bytes", "growth", "replace", "symlink"] {
+            let dir = tempfile::tempdir().unwrap();
+            let c = fixture(dir.path(), 65, &[[0., 0.]]);
+            let order = json_file(&c.plane_manifest.path)["source_order_sha256"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let mut snapshot = neighborhood_body(&c.canonical).unwrap();
+            let result = neighborhood_scan(&c, &mut snapshot, &order, |position, _, _, _| {
+                if position == 0 {
+                    let body = std::fs::read(&c.canonical.path)?;
+                    match fault {
+                        "same_bytes" => std::fs::write(&c.canonical.path, body)?,
+                        "growth" => {
+                            std::fs::OpenOptions::new()
+                                .append(true)
+                                .open(&c.canonical.path)?
+                                .write_all(&[0])?;
+                        }
+                        "replace" | "symlink" => {
+                            let original = dir.path().join("original");
+                            std::fs::rename(&c.canonical.path, &original)?;
+                            if fault == "symlink" {
+                                std::os::unix::fs::symlink(original, &c.canonical.path)?;
+                            } else {
+                                std::fs::write(&c.canonical.path, body)?;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Ok(())
+            });
+            assert!(result.is_err(), "{fault}");
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_checked_phase_and_staging_cap_before_body_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let allocation = neighborhood_allocation(&c, 4096).unwrap();
+        assert_eq!(
+            allocation.peak_payload_bytes,
+            *allocation.phases.values().max().unwrap()
+        );
+        assert_eq!(
+            allocation.staged_peak_bytes,
+            allocation.staged_input_bytes + 8 * 1024 * 1024
+        );
+        assert_eq!(
+            allocation.proposed_charged_bytes,
+            allocation.peak_payload_bytes + 320 * 1024 * 1024
+        );
+        assert_eq!(
+            allocation.components["human_summary_capacity_and_formatting"],
+            65536
+        );
+        c.max_payload_bytes = allocation.peak_payload_bytes;
+        assert!(neighborhood_allocation(&c, 4096).is_ok());
+        c.max_payload_bytes -= 1;
+        for pin in [
+            &c.generation_manifest,
+            &c.plane_manifest,
+            &c.router_root,
+            &c.membership,
+            &c.leaves,
+            &c.canonical,
+        ] {
+            std::fs::remove_file(&pin.path).unwrap();
+        }
+        let pin = config_pin(&c);
+        let error = execute_source_neighborhood(&pin.path, &pin.sha256)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("phase payload cap before body open"),
+            "{error}"
+        );
+        assert!(!c.report.exists() && !c.anchor_seal.exists());
+        assert!(neighborhood_product(&[u64::MAX, 2]).is_err());
+        assert!(neighborhood_sum(&[u64::MAX, 1]).is_err());
+        c.dimensions = usize::MAX;
+        assert!(
+            neighborhood_allocation(&c, 4096)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("overflow")
+        );
+    }
+
+    fn edit_leaf_payload(
+        c: &mut NeighborhoodConfig,
+        edit: impl FnOnce(&mut borsuk::semantic_unit_router::Manifest, &mut Vec<u8>, &mut Vec<u8>),
+    ) {
+        let (router, _, _) = neighborhood_router(c).unwrap();
+        let mut manifest = router.manifest().clone();
+        let mut body = std::fs::read(&c.leaves.path).unwrap();
+        let mut membership = std::fs::read(&c.membership.path).unwrap();
+        edit(&mut manifest, &mut body, &mut membership);
+        for leaf in &mut manifest.leaves {
+            leaf.sha256 = digest(&body[leaf.offset..leaf.offset + leaf.bytes]);
+        }
+        c.leaves = put(&c.leaves.path, &body);
+        c.membership = put(&c.membership.path, &membership);
+        manifest.leaf_payload.sha256 = c.leaves.sha256.clone();
+        manifest.membership.sha256 = c.membership.sha256.clone();
+        c.router_root = put(&c.router_root.path, &manifest.encode().unwrap());
+        rebind_descriptors(c);
+    }
+
+    #[test]
+    fn source_neighborhood_leaf_roster_hash_finite_and_prototype_refusals() {
+        for fault in [
+            "duplicate",
+            "out_of_range",
+            "membership",
+            "nan",
+            "infinity",
+            "prototype",
+            "full_sha",
+            "leaf_sha",
+            "truncated",
+            "trailing",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut c = fixture(dir.path(), 2049, &[[0., 0.]]);
+            if matches!(fault, "full_sha" | "leaf_sha") {
+                let (router, _, _) = neighborhood_router(&c).unwrap();
+                let mut manifest = router.manifest().clone();
+                if fault == "full_sha" {
+                    c.leaves.sha256 = "0".repeat(64);
+                    manifest.leaf_payload.sha256 = c.leaves.sha256.clone();
+                } else {
+                    manifest.leaves[0].sha256 = "0".repeat(64);
+                }
+                c.router_root = put(&c.router_root.path, &manifest.encode().unwrap());
+                rebind_descriptors(&mut c);
+            } else if matches!(fault, "truncated" | "trailing") {
+                let mut body = std::fs::read(&c.leaves.path).unwrap();
+                if fault == "truncated" {
+                    body.pop();
+                } else {
+                    body.push(0);
+                }
+                std::fs::write(&c.leaves.path, body).unwrap();
+            } else {
+                edit_leaf_payload(&mut c, |manifest, body, _| match fault {
+                    "duplicate" => {
+                        let id = body[8..12].to_vec();
+                        body[..4].copy_from_slice(&id);
+                    }
+                    "out_of_range" => body[..4].copy_from_slice(&999_u32.to_le_bytes()),
+                    "membership" => body[..4].copy_from_slice(&64_u32.to_le_bytes()),
+                    "nan" => body[4..6].copy_from_slice(&0x7e00_u16.to_le_bytes()),
+                    "infinity" => body[4..6].copy_from_slice(&0x7c00_u16.to_le_bytes()),
+                    "prototype" => manifest.leaves[0].prototype[0] = 0.25,
+                    _ => unreachable!(),
+                });
+            }
+            let (router, _, _) = neighborhood_router(&c).unwrap();
+            let mut anchors = neighborhood_anchors(
+                &c.generation_manifest.sha256,
+                c.rows,
+                c.anchor_count,
+                c.dimensions,
+            )
+            .unwrap();
+            assert!(
+                neighborhood_leaves(&c, &router, &mut anchors).is_err(),
+                "{fault}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_zero_centers_and_unweighted_partial_units() {
+        for centers in [&[[0.0_f32, 0.], [0., 0.]][..], &[[1., 0.], [0., 0.]][..]] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut c = fixture(dir.path(), 33, centers);
+            let (router, _, _) = neighborhood_router(&c).unwrap();
+            let mut anchors =
+                neighborhood_anchors(&c.generation_manifest.sha256, 33, 2, 2).unwrap();
+            neighborhood_leaves(&c, &router, &mut anchors).unwrap();
+            assert_eq!(
+                router.manifest().leaves[0].prototype,
+                [centers[0][0] / 2., 0.]
+            );
+            let tail = anchors.iter().find(|a| a.unit == 1).unwrap();
+            assert_eq!(tail.physical, 32);
+            assert_eq!(tail.stored_sq8_fp16_unit_mean, [0., 0.]);
+            if centers[0][0] != 0. {
+                edit_leaf_payload(&mut c, |manifest, _, _| {
+                    manifest.leaves[0].prototype[0] = 32. / 33.
+                });
+                let (router, _, _) = neighborhood_router(&c).unwrap();
+                let mut anchors =
+                    neighborhood_anchors(&c.generation_manifest.sha256, 33, 2, 2).unwrap();
+                assert!(neighborhood_leaves(&c, &router, &mut anchors).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_full_pipeline_coherent31_is_inconclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let mut body = std::fs::read(&c.canonical.path).unwrap();
+        for row in body.chunks_exact_mut(16).skip(32) {
+            row[8..12].copy_from_slice(&(-1_f32).to_le_bytes());
+        }
+        c.canonical = put(&c.canonical.path, &body);
+        c.canonical_object_key = format!("semantic/objects/{}", c.canonical.sha256);
+        rebind_descriptors(&mut c);
+        let pin = config_pin(&c);
+        let mut summary = Vec::new();
+        assert!(
+            execute_source_neighborhood_with(
+                &pin.path,
+                &pin.sha256,
+                |file, _| file.sync_all(),
+                |file, _| file.sync_all(),
+                &mut summary,
+            )
+            .unwrap()
+        );
+        let seal = json_file(&c.anchor_seal);
+        let report = json_file(&c.report);
+        assert_eq!(summary, neighborhood_summary(&report).unwrap().as_bytes());
+        assert!(summary.len() <= NEIGHBORHOOD_SUMMARY_CAP);
+        let summary = String::from_utf8(summary).unwrap();
+        assert!(summary.contains("EXPLORATORY / INCONCLUSIVE"));
+        assert!(summary.contains("anchors 3; neighbors per anchor 32"));
+        assert!(summary.contains("Both historical 312/320 KILLs preserved"));
+        for absent in ["canonical_selected_unit_mean", "coordinates", "[", "]"] {
+            assert!(!summary.contains(absent), "{absent}");
+        }
+        assert_eq!(
+            report["anchor_seal_sha256"],
+            digest(&std::fs::read(&c.anchor_seal).unwrap())
+        );
+        assert_eq!(seal["config_sha256"], pin.sha256);
+        assert_eq!(seal["anchors"].as_array().unwrap().len(), 3);
+        assert_ne!(report["canonical_sha256"], report["raw_source_sha256"]);
+        assert_eq!(report["canonical_full_authenticated_passes"], 2);
+        assert_eq!(report["report_alone_accepted"], false);
+        assert_eq!(report["qualified"], false);
+        assert_eq!(report["interpretation"], "EXPLORATORY_INCONCLUSIVE");
+        let anchor = report["anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["unit"] == 0)
+            .unwrap();
+        let neighbors = anchor["neighbors"].as_array().unwrap();
+        assert_eq!(
+            neighbors.iter().filter(|n| n["own_unit"] == true).count(),
+            31
+        );
+        assert_eq!(neighbors.len(), 32);
+        assert_eq!(anchor["canonical_selected_unit_dispersion"], 0.);
+        assert_eq!(anchor["unit_indivisibility"], "UNRESOLVED");
+        assert_eq!(anchor["interpretation"], "INCONCLUSIVE");
+        let self_id = anchor["id"].as_i64().unwrap();
+        let ids = neighbors
+            .iter()
+            .map(|n| n["id"].as_i64().unwrap())
+            .collect::<Vec<_>>();
+        // Literal geometry: physical rows 0..31 have IDs 1..32; all others oppose.
+        let expected = (1_i64..=32)
+            .filter(|id| *id != self_id)
+            .chain([0])
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+        assert!(neighbors[..31].iter().all(|n| n["cosine_distance"] == 0.));
+        assert_eq!(neighbors[31]["cosine_distance"], 2.);
+    }
+
+    #[test]
+    fn source_neighborhood_joint_top48_shared_page_and_independent_l2_rank() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture(dir.path(), 100352, &[[0., 0.]]);
+        // Leaves contain 64 units. Swap two units so leaf48 has one unit on
+        // leaf0's page without changing unweighted zero prototypes or counts.
+        edit_leaf_payload(&mut c, |_, body, membership| {
+            body[..4].copy_from_slice(&3072_u32.to_le_bytes());
+            body[3072 * 8..3072 * 8 + 4].copy_from_slice(&0_u32.to_le_bytes());
+            membership[..4].copy_from_slice(&48_u32.to_le_bytes());
+            membership[3072 * 4..3072 * 4 + 4].copy_from_slice(&0_u32.to_le_bytes());
+        });
+        let (router, _, _) = neighborhood_router(&c).unwrap();
+        let mut selected =
+            neighborhood_anchors(&c.generation_manifest.sha256, c.rows, 3, 2).unwrap();
+        neighborhood_leaves(&c, &router, &mut selected).unwrap();
+        let mut independent = router
+            .manifest()
+            .leaves
+            .iter()
+            .map(|leaf| {
+                let x = 1.0_f64 - f64::from(leaf.prototype[0]);
+                let y = f64::from(leaf.prototype[1]);
+                (x * x + y * y, leaf.leaf_id)
+            })
+            .collect::<Vec<_>>();
+        independent.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let expected = independent.iter().map(|p| p.1).collect::<Vec<_>>();
+        assert_eq!(expected, (0..49).collect::<Vec<_>>());
+        let normalized =
+            borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&[1., 0.]).unwrap();
+        assert_eq!(
+            router
+                .rank_leaves_by_metric(&normalized, &borsuk::VectorMetric::SquaredEuclidean)
+                .unwrap(),
+            expected
+        );
+        let mut anchor = NeighborhoodAnchor {
+            unit: 1,
+            physical: 32,
+            unit_digest: [0; 32],
+            row_digest: [0; 32],
+            id: Some(33),
+            coordinates: vec![1., 0.],
+            norm2: 1.,
+            canonical_unit_rows: vec![1., 0.],
+            stored_sq8_fp16_unit_mean: vec![0., 0.],
+        };
+        c.neighbor_count = 3;
+        let neighbors = [0, 3080 * 32, 2 * 32].map(|physical| NeighborhoodNeighbor {
+            id: physical as i64 + 1,
+            physical,
+            distance: 0.,
+        });
+        let report = neighborhood_anchor_report(&c, &router, &anchor, &neighbors).unwrap();
+        assert_eq!(report["outside_selected_leaf_union"], 2);
+        assert_eq!(report["outside_physical_page_closure"], 1);
+        assert_eq!(
+            report["cross_leaf_and_outside_top48_and_outside_page_closure"],
+            1
+        );
+        assert_eq!(report["neighbors"][0]["destination_leaf_l2_rank"], 49);
+        assert_eq!(report["neighbors"][0]["inside_selected_leaf_union"], false);
+        assert_eq!(report["neighbors"][0]["inside_physical_page_closure"], true);
+        // A same-leaf outside48 miss must not combine with an unrelated inside48
+        // cross-leaf neighbor to manufacture the three-way interaction.
+        anchor.unit = 3074;
+        anchor.physical = 3074 * 32;
+        let report = neighborhood_anchor_report(&c, &router, &anchor, &neighbors).unwrap();
+        assert_eq!(report["outside_physical_page_closure"], 1);
+        assert_eq!(
+            report["cross_leaf_and_outside_top48_and_outside_page_closure"],
+            0
+        );
+        // Nonzero prototypes independently distinguish squared L2 from cosine.
+        edit_leaf_payload(&mut c, |manifest, body, _| {
+            for leaf in &mut manifest.leaves {
+                let center = if leaf.leaf_id == 0 {
+                    [0.25_f32, 0.25]
+                } else {
+                    [2., 0.]
+                };
+                leaf.prototype = center.to_vec();
+                for record in body[leaf.offset..leaf.offset + leaf.bytes].chunks_exact_mut(8) {
+                    for (word, value) in record[4..].chunks_exact_mut(2).zip(center) {
+                        word.copy_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+                    }
+                }
+            }
+        });
+        let (router, _, _) = neighborhood_router(&c).unwrap();
+        let mut selected =
+            neighborhood_anchors(&c.generation_manifest.sha256, c.rows, 3, 2).unwrap();
+        neighborhood_leaves(&c, &router, &mut selected).unwrap();
+        let ranked = router
+            .rank_leaves_by_metric(&normalized, &borsuk::VectorMetric::SquaredEuclidean)
+            .unwrap();
+        // d(leaf0)=0.75^2+0.25^2=0.625; all others d=1. Cosine reverses these.
+        assert_eq!(ranked, (0..49).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn source_neighborhood_seal_failure_stops_before_neighbors() {
+        for directory in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let c = fixture(dir.path(), 65, &[[0., 0.]]);
+            assert!(
+                !run_with(
+                    &c,
+                    |file, is_directory| {
+                        if is_directory == directory {
+                            Err(io::Error::other("anchor seal injected sync failure"))
+                        } else {
+                            file.sync_all()
+                        }
+                    },
+                    |file, _| file.sync_all()
+                )
+                .unwrap()
+            );
+            let report = json_file(&c.report);
+            assert_eq!(report["status"], "INVALID");
+            assert!(
+                report["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("anchor seal injected sync failure")
+            );
+            assert!(report.get("anchors").is_none());
+            assert_eq!(json_file(&c.anchor_seal)["status"], "INVALID");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let c = fixture(dir.path(), 65, &[[0., 0.]]);
+        std::fs::write(&c.anchor_seal, b"existing").unwrap();
+        assert!(!run_with(&c, |file, _| file.sync_all(), |file, _| file.sync_all()).unwrap());
+        assert_eq!(std::fs::read(&c.anchor_seal).unwrap(), b"existing");
+        assert_eq!(json_file(&c.report)["status"], "INVALID");
+    }
+
+    #[test]
+    fn source_neighborhood_report_sync_and_final_recheck_failures() {
+        for fault in [
+            "file_sync",
+            "directory_sync",
+            "canonical_recheck",
+            "generation_recheck",
+            "seal_recheck",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let c = fixture(dir.path(), 65, &[[0., 0.]]);
+            let result = run_with(
+                &c,
+                |file, _| file.sync_all(),
+                |file, directory| {
+                    if (fault == "file_sync" && !directory)
+                        || (fault == "directory_sync" && directory)
+                    {
+                        return Err(io::Error::other("report injected sync failure"));
+                    }
+                    if !directory && fault.ends_with("_recheck") {
+                        let path = match fault {
+                            "canonical_recheck" => &c.canonical.path,
+                            "generation_recheck" => &c.generation_manifest.path,
+                            _ => &c.anchor_seal,
+                        };
+                        std::fs::write(path, std::fs::read(path)?)?;
+                    }
+                    file.sync_all()
+                },
+            );
+            assert!(result.is_err(), "{fault}");
+            assert_eq!(json_file(&c.report)["status"], "INVALID");
+        }
+    }
+
+    #[test]
+    fn source_neighborhood_publication_write_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("read-only-descriptor");
+        std::fs::write(&output, b"").unwrap();
+        let file = File::open(&output).unwrap();
+        assert!(
+            finish_selection_publication(
+                &output,
+                &json!({"status":"MEASURED"}),
+                &[],
+                parent(&output).unwrap(),
+                file,
+                |file, _| file.sync_all()
+            )
+            .is_err()
+        );
+        assert_ne!(
+            std::fs::read(&output).unwrap(),
+            b"{\"status\":\"MEASURED\"}\n"
+        );
+        struct BrokenSummary;
+        impl Write for BrokenSummary {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("summary output refused"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let c = fixture(dir.path(), 65, &[[0., 0.]]);
+        let pin = config_pin(&c);
+        let error = execute_source_neighborhood_with(
+            &pin.path,
+            &pin.sha256,
+            |file, _| file.sync_all(),
+            |file, _| file.sync_all(),
+            &mut BrokenSummary,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("summary output refused"));
+        let published = json_file(&c.report);
+        assert_eq!(published["status"], "MEASURED");
+        assert_eq!(published["report_alone_accepted"], false);
+    }
+
+    #[test]
+    fn source_neighborhood_native_crash_window_root_only() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Child, Command, ExitStatus, Stdio};
+        use std::time::{Duration, Instant};
+        const ENV: &str = "BORSUK_SOURCE_NEIGHBORHOOD_CRASH_DIR";
+        if let Some(dir) = std::env::var_os(ENV) {
+            let dir = PathBuf::from(dir);
+            let c = fixture(&dir, 65, &[[0., 0.]]);
+            let _ = run_with(
+                &c,
+                |file, _| file.sync_all(),
+                |_, directory| {
+                    assert!(!directory);
+                    let surviving = json_file(&c.report);
+                    assert_eq!(surviving["status"], "MEASURED");
+                    assert_eq!(surviving["complete"], true);
+                    // Report bytes exist, but no report sync/rechecks have run.
+                    std::fs::write(dir.join("at-report-sync"), b"ready")?;
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(io::Error::other("parent did not kill crash-window child"))
+                },
+            );
+            panic!("crash-window child survived; not a successful crash falsifier");
+        }
+        struct OwnedChild(Child);
+        impl OwnedChild {
+            fn drain(&mut self) -> io::Result<ExitStatus> {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while self.0.try_wait()?.is_none() {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "child drain timeout",
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                // try_wait observed termination; wait collects that original status.
+                self.0.wait()
+            }
+        }
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.drain();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = OwnedChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "source_neighborhood_tests::source_neighborhood_native_crash_window_root_only",
+                    "--test-threads=1",
+                ])
+                .env(ENV, dir.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !dir.path().join("at-report-sync").exists() {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "child exited before crash window"
+            );
+            assert!(Instant::now() < deadline, "crash-window startup timeout");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let report_path = dir.path().join("report.json");
+        let before = std::fs::read(&report_path).unwrap();
+        child.0.kill().unwrap();
+        let status = child.drain().unwrap();
+        assert_eq!(status.signal(), Some(9));
+        assert!(
+            !status.success(),
+            "external exit receipt must reject this run"
+        );
+        let surviving = std::fs::read(&report_path).unwrap();
+        assert_eq!(surviving, before);
+        let report: Value = serde_json::from_slice(&surviving).unwrap();
+        assert_eq!(report["status"], "MEASURED");
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["report_alone_accepted"], false);
+        assert_eq!(report["external_gate_required"], true);
+        assert!(
+            report["acceptance_requires"]
+                .as_str()
+                .unwrap()
+                .contains("original exit0")
+        );
+        assert_eq!(
+            report["anchor_seal_sha256"],
+            digest(&std::fs::read(dir.path().join("anchor-seal.json")).unwrap())
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_literal_hash_domains_and_partial_unit() {
+        // Independent literal messages: no production domain or packing helper.
+        let unit_message = [
+            b"borsuk-source-neighborhood-unit-v1\0".as_slice(),
+            &[0; 32],
+            &[1, 0, 0, 0, 0, 0, 0, 0],
+        ]
+        .concat();
+        let row_message = [
+            b"borsuk-source-neighborhood-row-v1\0".as_slice(),
+            &[0; 32],
+            &[1, 0, 0, 0, 0, 0, 0, 0],
+        ]
+        .concat();
+        // Independently authored fixed-message SHA256 goldens (Python hashlib),
+        // not values emitted by the implementation under test.
+        assert_eq!(
+            digest(&unit_message),
+            "2eab700a2d49ae2703249f0ee4d4a4522ed9b125453c17d7889467180e75fe9b"
+        );
+        assert_eq!(
+            digest(&row_message),
+            "b925589eedc215826bcaeb73603e70873f69d4f6ac8ac0f6ec5b978464a9adf6"
+        );
+        let unit_golden: [u8; 32] = Sha256::digest(unit_message).into();
+        let row_golden: [u8; 32] = Sha256::digest(row_message).into();
+        assert_eq!(
+            neighborhood_digest(NEIGHBORHOOD_UNIT_DOMAIN, &[0; 32], 1),
+            unit_golden
+        );
+        assert_eq!(
+            neighborhood_digest(NEIGHBORHOOD_ROW_DOMAIN, &[0; 32], 1),
+            row_golden
+        );
+        let anchors = neighborhood_anchors(&"0".repeat(64), 39, 2, 2).unwrap();
+        let tail = anchors.iter().find(|a| a.unit == 1).unwrap();
+        // LE 0x8215c2ed9e5825b9 mod 7 = 3 (big endian would give 2).
+        assert_eq!(tail.physical, 35);
+        assert!(tail.physical < 39);
+        let mut expected = (0..9)
+            .map(|unit| {
+                let literal = [
+                    b"borsuk-source-neighborhood-unit-v1\0".as_slice(),
+                    &[0; 32],
+                    &(unit as u64).to_le_bytes(),
+                ]
+                .concat();
+                (<[u8; 32]>::from(Sha256::digest(literal)), unit)
+            })
+            .collect::<Vec<_>>();
+        expected.sort();
+        let selected = neighborhood_anchors(&"0".repeat(64), 257, 3, 2).unwrap();
+        assert_eq!(
+            selected.iter().map(|a| a.unit).collect::<Vec<_>>(),
+            expected[..3].iter().map(|p| p.1).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_scalar_actual_norm_ties_and_self() {
+        let anchor = [1.0_f32, 0.0];
+        // Physical order deliberately differs from logical IDs; duplicate coordinates stay.
+        let rows = [
+            (4, [1., 0.]),
+            (1, [0.6, 0.8]),
+            (3, [1., 0.]),
+            (0, [0., 1.]),
+            (2, [-1., 0.]),
+        ];
+        let mut heap = std::collections::BinaryHeap::with_capacity(4);
+        for (position, (id, row)) in rows.iter().enumerate() {
+            neighborhood_offer(
+                &mut heap,
+                4,
+                4,
+                &anchor,
+                1.0,
+                position,
+                *id,
+                row,
+                neighborhood_norm(row).unwrap(),
+            );
+        }
+        let neighbors = heap.into_sorted_vec();
+        assert_eq!(
+            neighbors.iter().map(|n| n.id).collect::<Vec<_>>(),
+            [3, 1, 0, 2]
+        );
+        assert_eq!(neighbors[0].distance.to_bits(), 0.0_f64.to_bits());
+        let x = f64::from(0.6_f32);
+        let y = f64::from(0.8_f32);
+        assert_eq!(neighbors[1].distance, 1.0 - x / (x * x + y * y).sqrt());
+        assert_eq!(neighbors[2].distance, 1.0);
+        assert_eq!(neighbors[3].distance, 2.0);
+        let near = [f32::from_bits(1.0_f32.to_bits() + 1), 0.0];
+        let norm = neighborhood_norm(&near).unwrap();
+        assert_eq!(neighborhood_cosine(&anchor, 1.0, &near, norm), 0.0);
+        let over_tolerance = [f32::from_bits(1.0_f32.to_bits() + 5), 0.0];
+        assert!(neighborhood_norm(&over_tolerance).is_err());
+        // Four 2^-54 terms round away individually after 1; summing them first
+        // changes f64 bits. This independently freezes ascending accumulation.
+        let tiny = f32::from_bits(100 << 23); // 2^-27
+        let rounding = [1., tiny, tiny, tiny, tiny];
+        let opposing = [-1., tiny, tiny, tiny, tiny];
+        assert_eq!(neighborhood_norm(&rounding).unwrap(), 1.);
+        assert_eq!(neighborhood_cosine(&rounding, 1., &opposing, 1.), 2.);
+        for row in [[0., 0.], [2., 0.], [f32::NAN, 0.], [f32::INFINITY, 0.]] {
+            assert!(neighborhood_norm(&row).is_err());
+        }
+        let mut tied = std::collections::BinaryHeap::with_capacity(2);
+        for id in [9, 7, 3, 5] {
+            neighborhood_offer(&mut tied, 2, 99, &anchor, 1., id, id as i64, &anchor, 1.);
+        }
+        assert_eq!(
+            tied.into_sorted_vec()
+                .iter()
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            [3, 5]
+        );
+    }
+
+    #[test]
+    fn source_neighborhood_canonical_dispersion_zero_mean() {
+        let (mean, dispersion) = neighborhood_canonical_statistics(&[1., 0., 1., 0.], 2);
+        assert_eq!(mean, [1., 0.]);
+        assert_eq!(dispersion, 0.);
+        let (mean, dispersion) = neighborhood_canonical_statistics(&[1., 0., -1., 0.], 2);
+        assert_eq!(mean, [0., 0.]);
+        assert_eq!(dispersion, 1.);
+    }
+}
+
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let binding = args
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--source-neighborhood")
+        {
+            require(
+                args.len() == 4,
+                "usage: compare_native_replay --source-neighborhood CONFIG CONFIG_SHA256",
+            )?;
+            return execute_source_neighborhood(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("neighborhood config SHA encoding")?,
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--leaf-boundary-coverage")
