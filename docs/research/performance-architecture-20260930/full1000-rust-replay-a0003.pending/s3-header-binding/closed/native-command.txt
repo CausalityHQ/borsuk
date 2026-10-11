@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/compare_native_replay --bind-completed-scale /mnt/borsuk-scale1m/closed/s3/header-authority.json 05888c1bd93bdf628f6cabb56c5ba50eb434f41b4fa2d30d93133209c9f556f2 /mnt/borsuk-scale1m/closed/s3/completed-config.json

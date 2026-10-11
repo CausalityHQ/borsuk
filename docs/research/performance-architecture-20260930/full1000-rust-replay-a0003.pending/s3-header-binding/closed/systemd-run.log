@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-s3-header-binding.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 28ms
+CPU time consumed: 23ms
+Memory peak: 3.4M
+Memory swap peak: 0B
