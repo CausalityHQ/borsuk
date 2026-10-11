@@ -1,0 +1,13 @@
+# Independent32 then unchanged32 control
+
+One causal production change only: the already-qualified Scale closure/page-completion correction. Exact candidate ELF and original corpus, all1000 request/truth bytes, retained source/ETag/generation and resource limits remain unchanged. The independent32 selection was frozen before ordinal527's9/10 result; the control remains0..31. No selection may be changed after reading results.
+
+Each panel requires integer recall numerator>=314 of denominator320 and zero underfill. Run independent32 first. Only its sealed, Rust-reduced result may authorize the original control. Native execution INVALID is not a quality FAIL. A source cover refusal stops the intervention; no automatic cap increase. No full population benchmark is authorized by either panel.
+
+Reuse fresh closed same-source whole1000 request authentication and new-ELF S3 ordinal0 staging from47700156; do not duplicate the original scientific run. New transport authenticates pinned assets on the same AMI and a disposable causality Spot host. The qualified Rust archive extractor runs before a panel; each query authenticates pages it reads. This does not claim a new exhaustive1M source-body scan. Output sealing precedes truth, and Rust reduction on EC2 checks expected headers, ordered selected rows, seals and cumulative charges. The root reads only Rust-reduced summaries locally; real result JSONL is preserved opaquely.
+
+A fresh process has no BORSUK payload cache. Provider caching is uncontrolled, including between panels on the host; these are selected correctness/quality diagnostics, not a cold percentile comparison. Each panel has a300s execution deadline because it executes32 queries; per-query bytes/GETs/RAM/concurrency are unchanged. Compilation/test execution is unnecessary here: source/ELF/dependencies are unchanged and their native qualification is retained.
+
+Historical transport filename aliases are minimal reuse of immutable experiment glue, not production schemas or alternate readers. The two templates independently bind the new source hashes and frozen execution arrays; result size and whole-file SHA are filled from sealed bytes on EC2 without inspecting headers in glue. The qualified Rust reducer performs validation. Preserve original commands/results, terminate compute after terminal, and keep the external shutdown timer until termination is verified.
+
+Even if both panels pass, truth-free all1000 routing/cover preflight remains required before a population rerun. Matched1M S3 Vectors numbers and total lifecycle-dollar comparison remain pending. The production Rust product is not complete.
