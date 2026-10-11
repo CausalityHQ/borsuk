@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/compare_native_replay --completed-scale /mnt/borsuk-scale1m/closed/s3/completed-config.json "$configsha" /mnt/borsuk-scale1m/closed/s3/independent32-r2-reduction.json

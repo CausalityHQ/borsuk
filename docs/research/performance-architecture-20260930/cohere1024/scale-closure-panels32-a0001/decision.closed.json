@@ -1,0 +1,47 @@
+{
+  "schema": "borsuk-scale-closure-independent32-closed-v1",
+  "status": "QUALITY_FAIL",
+  "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+  "instance_id": "i-046ec78ba4d73c540",
+  "recall_numerator": 313,
+  "recall_denominator": 320,
+  "required_numerator": 314,
+  "underfilled": 0,
+  "selected_membership_unchanged": true,
+  "original_invalid_config_preserved": true,
+  "original_invalid_completed_queries": 0,
+  "original_invalid_truth_opened": false,
+  "corrected_native_execution_complete": true,
+  "charges": {
+    "router": {
+      "failed_gets": 0,
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "source": {
+      "failed_gets": 0,
+      "submitted_gets": 3641,
+      "verified_bytes": 937795584
+    },
+    "sq8": {
+      "failed_gets": 0,
+      "submitted_gets": 953,
+      "verified_bytes": 534675456
+    }
+  },
+  "query_wall_sum_ns": 11998229706,
+  "stage_wall_sums": {
+    "discovery_ns": 49329895,
+    "max_leaf_peak_inflight": 0,
+    "planning_ns": 693290900,
+    "source_ns": 7310416102,
+    "sq8_ns": 3943083507
+  },
+  "control32": "UNRUN",
+  "population": "UNRUN",
+  "terminated": true,
+  "root_volume_deleted": true,
+  "external_timer_inactive": true,
+  "vendor_win": false,
+  "product_complete": false
+}

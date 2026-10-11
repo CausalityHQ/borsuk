@@ -1,0 +1,22 @@
+{
+    "CommandId": "dce0b6b6-4ef8-486d-b3fa-75730e934c4f",
+    "InstanceId": "i-046ec78ba4d73c540",
+    "Comment": "borsuk-independent32-r2-sealed-native-rust-reduction",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T05:27:15.168Z",
+    "ExecutionElapsedTime": "PT15.296S",
+    "ExecutionEndDateTime": "2026-10-11T05:27:30.168Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-scale1m/closed/s3/independent32-r2-completed-template.json: OK\n{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"independent32-r2-reduction\",\n  \"source_commit\": \"2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

@@ -1,0 +1,6 @@
+Result=success
+ExecMainCode=0
+ExecMainStatus=0
+ControlGroup=
+ActiveState=inactive
+SubState=dead

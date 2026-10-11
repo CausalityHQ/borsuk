@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/check_cohere_native_baseline /mnt/borsuk-scale1m/closed/s3/independent32-config.json 33ec6ad37af8468138fad3a0bad73e2cfee16a68252de7b2f60eaaccc744db4e /mnt/borsuk-scale1m/closed/s3/independent32-result.jsonl

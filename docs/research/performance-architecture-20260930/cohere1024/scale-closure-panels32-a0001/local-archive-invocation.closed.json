@@ -1,0 +1,22 @@
+{
+    "CommandId": "9f583605-95f8-40eb-8ad3-b8fcfb96317c",
+    "InstanceId": "i-046ec78ba4d73c540",
+    "Comment": "borsuk-panels32-original-rust-input-admission",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T05:19:37.713Z",
+    "ExecutionElapsedTime": "PT14.282S",
+    "ExecutionEndDateTime": "2026-10-11T05:19:51.713Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"local-archive-admission\",\n  \"source_commit\": \"5660b97d7c153e265cd96688113217717d61bd61\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
