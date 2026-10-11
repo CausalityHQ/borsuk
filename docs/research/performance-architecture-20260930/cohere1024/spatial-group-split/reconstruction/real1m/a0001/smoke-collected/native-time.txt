@@ -1,0 +1,23 @@
+	Command being timed: "timeout -k 15 600 /mnt/borsuk-reconstruction-real1m/bin/compare_native_replay --partition-reconstruction /mnt/borsuk-reconstruction-real1m/smoke.config.json 003989243172e81625b9cdd52a451eb3a4f24dd8735f3e1b26b42e3b41f7f442 /mnt/borsuk-reconstruction-real1m/approval.json 8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+	User time (seconds): 0.20
+	System time (seconds): 0.08
+	Percent of CPU this job got: 77%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.37
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 68924
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 15900
+	Voluntary context switches: 14
+	Involuntary context switches: 1
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 125016
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

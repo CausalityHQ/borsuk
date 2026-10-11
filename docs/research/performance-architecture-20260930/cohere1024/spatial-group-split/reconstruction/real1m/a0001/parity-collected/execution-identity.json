@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-reconstruction-real1m-execution-v1",
+  "attempt": "reconstruction-real1m-a0001",
+  "instance_id": "i-0e7ec79ad22db80d1",
+  "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "published_commit": "319f8c4bbac69f522fc25a0ecd93f2e9232e9b84",
+  "native_source_identity_sha256": "bef40caf201f947718554128b544cb77feedf907b897faa59d32e8d36bf62772",
+  "request_sha256": "6d1a8a901bf03d3fe7fbf728b314611c2ff8923803f661ec227e7fae5ec2536d",
+  "package_manifest_sha256": "a170186260bd411bc95392b929495b8fe3e637c8a1168246f4ae1ccb23760ca3",
+  "guest_deadline_seconds": 7200,
+  "external_deadline_seconds": 7320,
+  "total_cost_ceiling_usd": 0.50
+}

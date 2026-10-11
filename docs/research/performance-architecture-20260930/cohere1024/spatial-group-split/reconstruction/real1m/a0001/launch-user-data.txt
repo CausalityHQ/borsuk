@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+read -r uptime ignored < /proc/uptime
+now=$(date +%s)
+stop=$(( now-${uptime%%.*}+7200 ))
+printf '%s\n' "$stop" > /run/borsuk-reconstruction-machine-stop.epoch
+left=$(( stop-now ))
+(( left > 0 ))
+systemd-run --unit=borsuk-reconstruction-data-shutdown --on-active="${left}s" --timer-property=AccuracySec=1us --timer-property=RandomizedDelaySec=0 /usr/sbin/shutdown -h now
+systemctl is-active --quiet borsuk-reconstruction-data-shutdown.timer

@@ -1,0 +1,59 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.xlarge",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 32,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.15"
+    }
+  },
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "ClientToken": "borsuk-reconstruction-real1m-a0001-91107713",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-reconstruction-real1m-a0001"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "91107713f6f7bd700b5b6d92a83e438febac8069"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "partition-reconstruction-real1m"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+Running as unit: borsuk-reconstruction-smoke.service
+REAL_NATIVE_RECONSTRUCTION_OUTPUTS_AUTHENTICATED
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 485ms
+CPU time consumed: 401ms
+Memory peak: 1.2M
+Memory swap peak: 0B
+IO bytes read: 0B
+IO bytes written: 0B

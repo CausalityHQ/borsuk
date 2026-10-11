@@ -1,0 +1,208 @@
+{
+    "IsTruncated": false,
+    "Contents": [
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/centroids.bin",
+            "LastModified": "2026-10-11T21:51:27+00:00",
+            "ETag": "\"df747c0fc1ade382904b2b49de7bffaf\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 64000032,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/native-receipt.json",
+            "LastModified": "2026-10-11T21:51:31+00:00",
+            "ETag": "\"83f1540639fd6cdf05154e01ce423512\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4895,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-leaves.bin",
+            "LastModified": "2026-10-11T21:51:30+00:00",
+            "ETag": "\"e0b9a5da796acd6db72b4627ea125390\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 64125000,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-membership.bin",
+            "LastModified": "2026-10-11T21:51:29+00:00",
+            "ETag": "\"8835dbf3274467637fb86f24fe2aaabb\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 125000,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-root.bin",
+            "LastModified": "2026-10-11T21:51:29+00:00",
+            "ETag": "\"e3c99a248e7e4353aa6ad358a3cdb8c9\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 3041472,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-SHA256SUMS",
+            "LastModified": "2026-10-11T21:51:32+00:00",
+            "ETag": "\"f62f35a0b1bbb0c0d24ca759a5fd2e1f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1079,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-authority-check.log",
+            "LastModified": "2026-10-11T21:51:32+00:00",
+            "ETag": "\"62045aa939ff7d658f65ba4d674242e8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 186,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-centroids.bin.put.json",
+            "LastModified": "2026-10-11T21:52:46+00:00",
+            "ETag": "\"383da9a5f4115e404acbb448d8be3997\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-native-receipt.json",
+            "LastModified": "2026-10-11T21:51:33+00:00",
+            "ETag": "\"83f1540639fd6cdf05154e01ce423512\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4895,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-native-receipt.json.put.json",
+            "LastModified": "2026-10-11T21:52:46+00:00",
+            "ETag": "\"12dc1a0160555678b5d142998c7f091a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-output-authentication.log",
+            "LastModified": "2026-10-11T21:51:34+00:00",
+            "ETag": "\"0425a04473f379e2f18401172fb7125b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 326,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-output-pins.tsv",
+            "LastModified": "2026-10-11T21:51:35+00:00",
+            "ETag": "\"5069fb590ed2e8ce9af60ce2c7d5d9d4\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 603,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-package-check.log",
+            "LastModified": "2026-10-11T21:51:35+00:00",
+            "ETag": "\"8478705ea0676e4c31e8d29b4b9e77b5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 375,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-radial-leaves.bin.put.json",
+            "LastModified": "2026-10-11T21:52:47+00:00",
+            "ETag": "\"a8946d61f0e740cd2f35e4b637019245\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-radial-membership.bin.put.json",
+            "LastModified": "2026-10-11T21:52:48+00:00",
+            "ETag": "\"96de68b48e5e59fbe767b5b9a2a17325\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-radial-root.bin.put.json",
+            "LastModified": "2026-10-11T21:52:48+00:00",
+            "ETag": "\"78abc12925953109e0e5f56845cc276e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-terminal.json",
+            "LastModified": "2026-10-11T21:51:37+00:00",
+            "ETag": "\"0120d5b8588ab88a235d0e74c3ef3975\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 623,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/recovery-validator.log",
+            "LastModified": "2026-10-11T21:51:36+00:00",
+            "ETag": "\"74d9a83219cabaab06a69fd318873f33\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 5,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "Name": "borsuk-bench-453182569524-euc1",
+    "Prefix": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/",
+    "MaxKeys": 1000,
+    "EncodingType": "url",
+    "KeyCount": 18
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+  "stage": "smoke",
+  "instance_id": "i-0e7ec79ad22db80d1",
+  "original_ssm_command_id": "b9be10c6-a52c-4fca-9d82-0133f6caf537",
+  "terminal_sha256": "b60aebdacd8467f483d598ec59e6d1ff5b36c6a1c41c223c3e950b6664f861df",
+  "native_receipt_sha256": "3de8275b2334c967b5d11f7424fa3eabfcaa25774c16161ef0b5fa241b3e91e3",
+  "all_closed_body_hashes_verified": true,
+  "original_ssm_success": true,
+  "performance_claim": false
+}

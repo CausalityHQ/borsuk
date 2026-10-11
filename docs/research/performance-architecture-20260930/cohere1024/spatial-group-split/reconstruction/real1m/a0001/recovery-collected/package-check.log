@@ -1,0 +1,15 @@
+native-reconstruction-inner.sh: OK
+run-reconstruction-stage.sh: OK
+setup-data.sh: OK
+setup-reconstruction-host.sh: OK
+admission.config.json: OK
+approval.json: OK
+execution-identity.json: OK
+parity.config.json: OK
+smoke.config.json: OK
+transport.json: OK
+admission.config.sha256: OK
+smoke.config.sha256: OK
+parity.config.sha256: OK
+approval.sha256: OK
+campaign-prefix.txt: OK

@@ -1,0 +1,22 @@
+{
+    "CommandId": "9a6a5cb0-fa7c-4e12-8b54-508c61db3324",
+    "InstanceId": "i-0e7ec79ad22db80d1",
+    "Comment": "borsuk complete original recovery SDK metadata roster only; no native",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T21:52:44.713Z",
+    "ExecutionElapsedTime": "PT3.084S",
+    "ExecutionEndDateTime": "2026-10-11T21:52:47.713Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/opt/borsuk-reconstruction-gate/parity-closed-recovery/centroids.bin.put.json: OK\n/opt/borsuk-reconstruction-gate/parity-closed-recovery/native-receipt.json.put.json: OK\n/opt/borsuk-reconstruction-gate/parity-closed-recovery/radial-leaves.bin.put.json: OK\n/opt/borsuk-reconstruction-gate/parity-closed-recovery/radial-membership.bin.put.json: OK\n/opt/borsuk-reconstruction-gate/parity-closed-recovery/radial-root.bin.put.json: OK\nORIGINAL_SDK_RECEIPT_ROSTER_COMPLETED_NO_NATIVE\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

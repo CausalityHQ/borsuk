@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "0213fc5c-25fd-4e76-8bd4-f10c5ca8af70",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "borsuk real1m reconstruction a0001 admission",
+        "ExpiresAfter": "2026-10-11T22:08:00.030000+00:00",
+        "Parameters": {
+            "commands": [
+                "#!/bin/bash\nset -euo pipefail\nsupport=/opt/borsuk-reconstruction-gate\n(cd \"$support\" && sha256sum -c support.sha256)\ntimeout -k 5 750 /bin/bash \"$support/run-reconstruction-stage.sh\" admission\n"
+            ],
+            "executionTimeout": [
+                "780"
+            ]
+        },
+        "InstanceIds": [
+            "i-0e7ec79ad22db80d1"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T21:42:00.030000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 780,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}

@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-partition-reconstruction-approval-v1",
+  "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+  "generation": 1,
+  "base_epoch": 0,
+  "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+  "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+  "input_schema": "borsuk-two-bit-plane-v3",
+  "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+  "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+  "profile": "scale1m",
+  "rows": 1000000,
+  "dimensions": 1024
+}

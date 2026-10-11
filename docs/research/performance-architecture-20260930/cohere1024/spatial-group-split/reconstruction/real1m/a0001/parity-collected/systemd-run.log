@@ -1,0 +1,9 @@
+Running as unit: borsuk-reconstruction-parity.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 17.322s
+CPU time consumed: 17.154s
+Memory peak: 1.3M
+Memory swap peak: 0B
+IO bytes read: 0B
+IO bytes written: 0B

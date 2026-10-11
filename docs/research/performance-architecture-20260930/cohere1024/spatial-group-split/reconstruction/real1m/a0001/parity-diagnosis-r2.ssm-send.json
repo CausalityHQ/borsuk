@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "0810d55c-ad1c-482a-a3cc-629b92910c79",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "borsuk original closed parity receipt read-only diagnosis",
+        "ExpiresAfter": "2026-10-11T21:50:33.495000+00:00",
+        "Parameters": {
+            "commands": [
+                "#!/bin/bash\nset -euo pipefail; p=/mnt/borsuk-reconstruction-real1m/evidence/parity/published/receipt.json; test -f \"$p\"; test ! -L \"$p\"; test $(stat -c %s \"$p\") -le 65536; sha256sum \"$p\"; cat \"$p\"; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/receipt-validator.log; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/native.log; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/native-time.txt"
+            ],
+            "executionTimeout": [
+                "60"
+            ]
+        },
+        "InstanceIds": [
+            "i-0e7ec79ad22db80d1"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T21:48:33.495000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 60,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}

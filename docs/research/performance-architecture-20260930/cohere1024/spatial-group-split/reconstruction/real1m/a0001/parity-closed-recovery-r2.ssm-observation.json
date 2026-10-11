@@ -1,0 +1,22 @@
+{
+    "CommandId": "c1f36a29-65a7-4927-980b-2fc0bef87922",
+    "InstanceId": "i-0e7ec79ad22db80d1",
+    "Comment": "borsuk validate sealed original parity; no native rerun",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T21:51:26.275Z",
+    "ExecutionElapsedTime": "PT9.915S",
+    "ExecutionEndDateTime": "2026-10-11T21:51:35.275Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-reconstruction-closed-parity-recovery-v1\",\n  \"status\": \"CLOSED_NATIVE_PARITY_VALIDATED\",\n  \"original_native_exit\": 0,\n  \"original_manager_exit\": 1,\n  \"original_stage_disposition\": \"INVALID_RECEIPT_VALIDATOR\",\n  \"original_disposition_preserved\": true,\n  \"native_reexecuted\": false,\n  \"original_receipt_sha256\": \"a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771\",\n  \"descriptor_validation\": \"exact bytes and SHA; descriptor deliberately has no local path\",\n  \"derived_outputs_full_body_hash_verified\": true,\n  \"derived_outputs_retained_create_only\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-reconstruction-closed-recovery.service\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 9.898s\nCPU time consumed: 8.324s\nMemory peak: 1.7M\nMemory swap peak: 0B\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

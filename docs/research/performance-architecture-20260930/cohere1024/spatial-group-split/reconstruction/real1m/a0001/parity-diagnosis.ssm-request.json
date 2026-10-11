@@ -1,0 +1,16 @@
+{
+  "InstanceIds": [
+    "i-0e7ec79ad22db80d1"
+  ],
+  "DocumentName": "AWS-RunShellScript",
+  "Comment": "borsuk original closed parity receipt read-only diagnosis",
+  "TimeoutSeconds": 60,
+  "Parameters": {
+    "executionTimeout": [
+      "60"
+    ],
+    "commands": [
+      "set -euo pipefail; p=/mnt/borsuk-reconstruction-real1m/evidence/parity/published/receipt.json; test -f \"$p\"; test ! -L \"$p\"; test $(stat -c %s \"$p\") -le 65536; sha256sum \"$p\"; cat \"$p\"; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/receipt-validator.log; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/native.log; cat /mnt/borsuk-reconstruction-real1m/evidence/parity/native-time.txt"
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "dd1c3fb4-157c-479e-a2ca-11feb3e758cd",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "borsuk real1m reconstruction a0001 parity",
+        "ExpiresAfter": "2026-10-12T00:32:28.226000+00:00",
+        "Parameters": {
+            "commands": [
+                "#!/bin/bash\nset -euo pipefail\nsupport=/opt/borsuk-reconstruction-gate\n(cd \"$support\" && sha256sum -c support.sha256)\nprintf '%s  %s\\n' 2ed5e95abd8005904219ebe8e2058292b46111c1d14ec6a47942a15a6e77049a \"$support/admission.root-accepted.json\" | sha256sum -c -\ntest ! -e \"$support/smoke.root-accepted.json\"\ncat > \"$support/smoke.root-accepted.json\" <<'BORSUK_ROOT_ACCEPTED_END'\n{\n  \"schema\": \"borsuk-reconstruction-root-phase-acceptance-v1\",\n  \"stage\": \"smoke\",\n  \"instance_id\": \"i-0e7ec79ad22db80d1\",\n  \"original_ssm_command_id\": \"b9be10c6-a52c-4fca-9d82-0133f6caf537\",\n  \"terminal_sha256\": \"b60aebdacd8467f483d598ec59e6d1ff5b36c6a1c41c223c3e950b6664f861df\",\n  \"native_receipt_sha256\": \"3de8275b2334c967b5d11f7424fa3eabfcaa25774c16161ef0b5fa241b3e91e3\",\n  \"all_closed_body_hashes_verified\": true,\n  \"original_ssm_success\": true,\n  \"performance_claim\": false\n}\nBORSUK_ROOT_ACCEPTED_END\ntimeout -k 5 4950 /bin/bash \"$support/run-reconstruction-stage.sh\" parity\n"
+            ],
+            "executionTimeout": [
+                "4980"
+            ]
+        },
+        "InstanceIds": [
+            "i-0e7ec79ad22db80d1"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T21:46:28.226000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 4980,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}

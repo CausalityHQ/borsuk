@@ -1,0 +1,22 @@
+{
+    "CommandId": "180a9e4e-eac3-4875-bae8-c42cb2baa865",
+    "InstanceId": "i-0e7ec79ad22db80d1",
+    "Comment": "borsuk original closed parity receipt read-only diagnosis",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 2,
+    "ExecutionStartDateTime": "2026-10-11T21:47:59.759Z",
+    "ExecutionElapsedTime": "PT0.002S",
+    "ExecutionEndDateTime": "2026-10-11T21:47:59.759Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "/var/lib/amazon/ssm/i-0e7ec79ad22db80d1/document/orchestration/180a9e4e-eac3-4875-bae8-c42cb2baa865/awsrunShellScript/0.awsrunShellScript/_script.sh: 1: set: Illegal option -o pipefail\nfailed to run commands: exit status 2",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

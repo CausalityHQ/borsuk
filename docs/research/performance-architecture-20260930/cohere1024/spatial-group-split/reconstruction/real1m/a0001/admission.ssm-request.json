@@ -1,0 +1,16 @@
+{
+  "InstanceIds": [
+    "i-0e7ec79ad22db80d1"
+  ],
+  "DocumentName": "AWS-RunShellScript",
+  "Comment": "borsuk real1m reconstruction a0001 admission",
+  "TimeoutSeconds": 780,
+  "Parameters": {
+    "executionTimeout": [
+      "780"
+    ],
+    "commands": [
+      "#!/bin/bash\nset -euo pipefail\nsupport=/opt/borsuk-reconstruction-gate\n(cd \"$support\" && sha256sum -c support.sha256)\ntimeout -k 5 750 /bin/bash \"$support/run-reconstruction-stage.sh\" admission\n"
+    ]
+  }
+}

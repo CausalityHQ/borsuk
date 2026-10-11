@@ -1,0 +1,22 @@
+{
+    "CommandId": "17c5df2c-0196-49a9-918b-666447bdfa3f",
+    "InstanceId": "i-0e7ec79ad22db80d1",
+    "Comment": "borsuk real1m reconstruction a0001 opaque transport only",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T21:40:16.732Z",
+    "ExecutionElapsedTime": "PT23.317S",
+    "ExecutionEndDateTime": "2026-10-11T21:40:39.732Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "native-reconstruction-inner.sh: OK\nrun-reconstruction-stage.sh: OK\nsetup-data.sh: OK\nsetup-reconstruction-host.sh: OK\nadmission.config.json: OK\napproval.json: OK\nexecution-identity.json: OK\nparity.config.json: OK\nsmoke.config.json: OK\ntransport.json: OK\nadmission.config.sha256: OK\nsmoke.config.sha256: OK\nparity.config.sha256: OK\napproval.sha256: OK\ncampaign-prefix.txt: OK\n{\n  \"schema\": \"borsuk-reconstruction-host-setup-v1\",\n  \"status\": \"ASSETS_READY\",\n  \"execution\": {\n    \"schema\": \"borsuk-reconstruction-real1m-execution-v1\",\n    \"attempt\": \"reconstruction-real1m-a0001\",\n    \"instance_id\": \"i-0e7ec79ad22db80d1\",\n    \"source_commit\": \"91107713f6f7bd700b5b6d92a83e438febac8069\",\n    \"published_commit\": \"319f8c4bbac69f522fc25a0ecd93f2e9232e9b84\",\n    \"native_source_identity_sha256\": \"bef40caf201f947718554128b544cb77feedf907b897faa59d32e8d36bf62772\",\n    \"request_sha256\": \"6d1a8a901bf03d3fe7fbf728b314611c2ff8923803f661ec227e7fae5ec2536d\",\n    \"package_manifest_sha256\": \"a170186260bd411bc95392b929495b8fe3e637c8a1168246f4ae1ccb23760ca3\",\n    \"guest_deadline_seconds\": 7200,\n    \"external_deadline_seconds\": 7320,\n    \"total_cost_ceiling_usd\": 0.50\n  },\n  \"native_executed\": false,\n  \"owned_units_drained\": true\n}\nSETUP_PHASE=complete ORIGINAL_EXIT=0\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-reconstruction-setup-driver.service\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 23.276s\nCPU time consumed: 35ms\nMemory peak: 1.7M\nMemory swap peak: 0B\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

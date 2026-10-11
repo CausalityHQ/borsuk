@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "9a6a5cb0-fa7c-4e12-8b54-508c61db3324",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "borsuk complete original recovery SDK metadata roster only; no native",
+        "ExpiresAfter": "2026-10-11T21:54:44.520000+00:00",
+        "Parameters": {
+            "commands": [
+                "#!/bin/bash\nset -euo pipefail\nr=/opt/borsuk-reconstruction-gate/parity-closed-recovery\nprefix=research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived\nexport AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 AWS_PAGER=\nwhile read -r sha name; do\n [[ $name == ./*.put.json ]] || continue\n [[ $sha =~ ^[0-9a-f]{64}$ && $name =~ ^\\./[a-zA-Z0-9._-]+$ ]]\n f=$r/${name#./}\n printf '%s  %s\\n' \"$sha\" \"$f\" | sha256sum -c -\n checksum=$(printf %s \"$sha\" | xxd -r -p | base64 -w0)\n timeout -k 2 10 aws s3api put-object --bucket borsuk-bench-453182569524-euc1 --key \"$prefix/recovery-${name#./}\" --body \"$f\" --if-none-match '*' --checksum-algorithm SHA256 --checksum-sha256 \"$checksum\" > /opt/borsuk-reconstruction-gate/sdk-completion-${name#./}.json\n jq -e --arg checksum \"$checksum\" '.ChecksumSHA256==$checksum' /opt/borsuk-reconstruction-gate/sdk-completion-${name#./}.json > /dev/null\ndone < \"$r/SHA256SUMS\"\nprintf 'ORIGINAL_SDK_RECEIPT_ROSTER_COMPLETED_NO_NATIVE\\n'"
+            ],
+            "executionTimeout": [
+                "60"
+            ]
+        },
+        "InstanceIds": [
+            "i-0e7ec79ad22db80d1"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T21:52:44.520000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 60,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}
