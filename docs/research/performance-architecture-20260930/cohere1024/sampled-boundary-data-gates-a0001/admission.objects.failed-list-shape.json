@@ -1,0 +1,259 @@
+{
+    "Contents": [
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/SHA256SUMS",
+            "LastModified": "2026-10-11T12:47:45+00:00",
+            "ETag": "\"87f26c3c8c027c5caae34086761db096\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1876,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/adjacency.json",
+            "LastModified": "2026-10-11T12:47:45+00:00",
+            "ETag": "\"c1347b01d991aed55efd47eda7a680b1\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 278622,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/cgroup-path.txt",
+            "LastModified": "2026-10-11T12:47:46+00:00",
+            "ETag": "\"f2cac00bb1e3415bd7c1662dcdaeb3e2\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 53,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/cpu.max.before",
+            "LastModified": "2026-10-11T12:47:47+00:00",
+            "ETag": "\"4c53c5c32ba8164f2822c28719e12654\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/cpu.stat.after",
+            "LastModified": "2026-10-11T12:47:47+00:00",
+            "ETag": "\"c4e88650370349f2af274eefb8bdc1e7\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 175,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/cpuset.cpus.effective.before",
+            "LastModified": "2026-10-11T12:47:48+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/manager-exit.txt",
+            "LastModified": "2026-10-11T12:47:48+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/memory.events.after",
+            "LastModified": "2026-10-11T12:47:49+00:00",
+            "ETag": "\"8cf9c4033a416c2f57bb114110d0c5f5\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 70,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/memory.max.before",
+            "LastModified": "2026-10-11T12:47:49+00:00",
+            "ETag": "\"67ee4ab3639de3925e9d6f21dfdcbaf1\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/memory.peak.after",
+            "LastModified": "2026-10-11T12:47:50+00:00",
+            "ETag": "\"3b9edb02b8c4243daa1500e421fc169e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/memory.swap.max.before",
+            "LastModified": "2026-10-11T12:47:50+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/memory.swap.peak.after",
+            "LastModified": "2026-10-11T12:47:51+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/native-exit.txt",
+            "LastModified": "2026-10-11T12:47:51+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/native-time.txt",
+            "LastModified": "2026-10-11T12:47:52+00:00",
+            "ETag": "\"e02e60e1967a002a710a753c7ba7895a\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1098,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/native.log",
+            "LastModified": "2026-10-11T12:47:53+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/pids.max.before",
+            "LastModified": "2026-10-11T12:47:53+00:00",
+            "ETag": "\"650a1c9c9baa20730b4fcfdbe4cdc135\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/pids.peak.after",
+            "LastModified": "2026-10-11T12:47:54+00:00",
+            "ETag": "\"48a24b70a0b376535542b996af517398\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/report.json",
+            "LastModified": "2026-10-11T12:47:54+00:00",
+            "ETag": "\"cfed694c2fd5a77ef743efed5f97ae93\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 67316,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/selection.json",
+            "LastModified": "2026-10-11T12:47:55+00:00",
+            "ETag": "\"1cb7b5ccf72245606920bd94d59e2d05\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1999343,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/systemd-after.stderr",
+            "LastModified": "2026-10-11T12:47:55+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/systemd-after.txt",
+            "LastModified": "2026-10-11T12:47:56+00:00",
+            "ETag": "\"2d5ae8838bb496126c9dcab04e1355a3\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 96,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/systemd-run.log",
+            "LastModified": "2026-10-11T12:47:56+00:00",
+            "ETag": "\"ed0e04bedb889ff9c7be6448b1a0ab78\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 371,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/terminal.json",
+            "LastModified": "2026-10-11T12:47:57+00:00",
+            "ETag": "\"11db29c8b4f563f8b2f9155a11b1a425\"",
+            "ChecksumAlgorithm": [
+                "CRC64NVME"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 229,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "research/semantic-router/20261011/sampled-boundary-data-gates-a0001/admission/"
+}

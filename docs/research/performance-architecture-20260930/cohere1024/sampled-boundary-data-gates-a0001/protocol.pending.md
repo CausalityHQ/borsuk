@@ -1,0 +1,17 @@
+# Sampled boundary real-input admission and separate disposable smoke
+
+PENDING: no launch or scientific result. Rust source 9c40e0a5, compiler/synthetic qualification delivered on main 904c324a. Qualified ELF 6380056 bytes, SHA256 299ee9c2c7b73fe37f37f91f772ea527d1451b27067e5a4859ea773d7168fd07. Reuse the existing Bash/systemd/SSM experiment wrapper with exact new pins and CLI; no controller or Python feature.
+
+All eight frozen input body pins and S3 keys are identical to the closed leaf-metric a0005 gate. Only local staging paths change. Original completed producer identity remains unchanged. New configuration schema is borsuk-leaf-boundary-coverage-config-v1 and max_payload_bytes is 536870912, the reviewed phase allocation cap. Admission must use the actual runtime validator and real data on causality EC2. No local native execution or raw vector/query/truth/producer parsing.
+
+Serial phases: opaque setup/transport, one source-bound native admission, then a separate fresh-output native CLI/publication/exit/cleanup smoke. Both invoke the qualified Rust --leaf-boundary-coverage entrypoint with exclusive adjacency, paired-selection and report paths. Verify complete MEASURED state, historical L2 closure314/320 and returned313/320, durable adjacency before requests, durable paired seal before truth, exact ELF/config/data/source bindings, original native status, no OOM/swap and owned cgroup drained. Keep candidate coverage and per-query quality opaque during admission/smoke; no tuning or acceptance based on candidate values. These gates establish input/environment validity only. Scientific coverage is a separate frozen attempt after both pass.
+
+Real: executable, all runtime inputs, kernel/systemd resources, publication and cleanup. Mocked: none. This diagnostic calls neither ANN search nor cold S3 query. No new scientific/performance/vendor win claim.
+
+Provisional envelope: causality Spot c7i.large, eu-central-1b; native CPU0/100%, 512MiB RAM, zero swap, pids128, each native call900s plus30s drain. Setup CPU0-1/200%, 2GiB RAM, zero swap, pids128,600s. Machine shutdown3000s; external termination3120s; 16GiB encrypted root DeleteOnTermination. Staging limit2GiB includes authenticated inputs, ELF and outputs (no duplicate input hydration). Native adjacency serialized body has its own Rust4MiB bound. No construction sample/graph survives into replay by library design; actual peaks remain unmeasured until this gate.
+
+Quote c7i.large0.046800 USD/hour, eu-central-1b, timestamp2026-10-11T11:00Z. Maximum bid0.10/hour. At3120s bid-based compute cap0.086667 plus ancillary0.15 <= attempt ceiling0.25. This is a preregistered maximum, not measured lifecycle cost. Preserve Spot interruptions as INVALID, terminate, never auto retry. First phase failure stops subsequent phases; collect original receipts and terminate/wait/delete root volume. No scientific cap widening or algorithm rejection from an environment failure.
+
+Before launch: bind the closed9-stage qualification receipt; freeze config/transport/minimal glue; metadata-check all S3 object sizes and exact release artifact; retain one launch claim and client token plus external timer. This draft does not yet satisfy those launch conditions.
+
+Following these gates, ONE consumed32 coverage screen uses unchanged control314, candidate floor315 and gains>losses. No zero-loss constraint, parameter sweep, returned-recall claim or serving adoption. Follow the committed sampled-boundary planning decision.

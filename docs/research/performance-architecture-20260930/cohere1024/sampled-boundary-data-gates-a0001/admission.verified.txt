@@ -1,0 +1,1 @@
+admission authenticated; full manifest, native0/manager0/drained, CPU0/512MiB/zeroSwap/OOM0; marker in supervisor log; candidate quality opaque

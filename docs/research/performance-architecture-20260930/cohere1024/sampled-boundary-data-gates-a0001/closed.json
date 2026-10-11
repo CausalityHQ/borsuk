@@ -1,0 +1,65 @@
+{
+  "schema": "borsuk-sampled-boundary-data-gates-closed-v1",
+  "status": "REAL_INPUT_ADMISSION_AND_SMOKE_PASSED",
+  "candidate_source_commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "qualified_source_delivery": "904c324a07d34273bde31326ae6b948301bcf316",
+  "binary_sha256": "299ee9c2c7b73fe37f37f91f772ea527d1451b27067e5a4859ea773d7168fd07",
+  "config_sha256": "91855a93e057a815ca3d3ebb849abb0bd8d388ff0ffe5ecbb0475884a489088f",
+  "instance_id": "i-0941ab2a5eabaca3e",
+  "root_volume_id": "vol-0ec038049143edacd",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "external_timer_inactive": true,
+  "stages": [
+    {
+      "schema": "borsuk-boundary-data-stage-v1",
+      "stage": "admission",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "scientific_measurement": false,
+      "cold_s3_claim": false,
+      "vendor_win": false
+    },
+    {
+      "schema": "borsuk-boundary-data-stage-v1",
+      "stage": "smoke",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "scientific_measurement": false,
+      "cold_s3_claim": false,
+      "vendor_win": false
+    }
+  ],
+  "commands": {
+    "setup": "335c6004-aa3d-4394-b921-341186246e2d",
+    "admission": "158456dd-f05e-45ea-ad90-31f490b9072e",
+    "smoke": "81855576-5385-41ea-8c57-45fccdff7d07"
+  },
+  "native_elapsed_seconds": [
+    17.79,
+    17.79
+  ],
+  "native_process_rss_kib": [
+    151048,
+    151400
+  ],
+  "native_cgroup_peaks": [
+    151408640,
+    151470080
+  ],
+  "native_memory_max_bytes": 536870912,
+  "native_allowed_cpus": "0",
+  "native_cpu_quota_percent": 100,
+  "swap_peak_bytes": 0,
+  "oom_kills": 0,
+  "input_body_pins_unchanged": true,
+  "original_producer_identity_preserved": true,
+  "quality_outputs_unread": true,
+  "scientific_measurement": false,
+  "cold_s3_claim": false,
+  "vendor_win": false,
+  "next_gate": "Freeze ONE consumed32 sampled-boundary SOURCE page-closure screen; floor315 and gains>losses; no adoption or returned-recall qualification yet"
+}

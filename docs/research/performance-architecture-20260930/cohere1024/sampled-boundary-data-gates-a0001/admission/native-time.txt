@@ -1,0 +1,23 @@
+	Command being timed: "timeout -k 15 900 /mnt/borsuk-boundary-data/bin/compare_native_replay --leaf-boundary-coverage /mnt/borsuk-boundary-data/config.json 91855a93e057a815ca3d3ebb849abb0bd8d388ff0ffe5ecbb0475884a489088f /mnt/borsuk-boundary-data/evidence/admission/adjacency.json /mnt/borsuk-boundary-data/evidence/admission/selection.json /mnt/borsuk-boundary-data/evidence/admission/report.json"
+	User time (seconds): 17.46
+	System time (seconds): 0.30
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:17.79
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 151048
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 37551
+	Voluntary context switches: 12
+	Involuntary context switches: 132
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 4600
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

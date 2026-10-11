@@ -1,0 +1,247 @@
+{
+  "schema": "borsuk-sampled-boundary-data-admission-freeze-v1",
+  "status": "READY_SOURCE_BOUND_ADMISSION_AND_SEPARATE_SMOKE",
+  "candidate_source": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "delivered_revision": "904c324a07d34273bde31326ae6b948301bcf316",
+  "native_qualification": {
+    "schema": "borsuk-sampled-boundary-native-qualification-closed-v1",
+    "status": "NATIVE_QUALIFIED",
+    "source_commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+    "source_parent": "7916288a8c04736e118dd5037e52c2239f179c71",
+    "source_file_count": 463,
+    "native_source_count": 430,
+    "native_source_identity_sha256": "244a7a2e25917820ac6ac0ec11e075e9797530ff6b7cc7b8f26804f966b93164",
+    "source_file_sha256": {
+      "crates/borsuk/src/semantic_unit_router.rs": "f8a3bfbaa216e3be87ad8a515193138a6f25a5995d116a85c63f05c32f49effc",
+      "crates/borsuk/examples/compare_native_replay.rs": "2f15d561880be70cbfcbcfbead9344644eaf57fccdcc1d84dc2aed67f929598b"
+    },
+    "full_source_before_after_root_match": true,
+    "aws_profile": "causality",
+    "region": "eu-central-1",
+    "instance_id": "i-02f1480305f20e32a",
+    "ssm_command_id": "88b4f1db-4cf6-4008-b892-172e2c0f7252",
+    "terminated": true,
+    "root_volume_id": "vol-05d188531a3d55435",
+    "root_volume_deleted": true,
+    "external_timer_inactive": true,
+    "compiler_jobs": 2,
+    "memory_max_bytes": 17179869184,
+    "swap_max_bytes": 0,
+    "allowed_cpus": "0-3",
+    "cpu_quota_percent": 400,
+    "pids_max": 512,
+    "stages": [
+      {
+        "name": "boundary-library-debug",
+        "command": "cargo test --locked -p borsuk --lib sampled_boundary_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 5,
+        "artifact_manifest_sha256": "59036991814ff5520005cdb419da2c4032e386b3e52fe31a26abc5b68483b719",
+        "memory_peak_bytes": 7174221824,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-example-debug",
+        "command": "cargo test --locked -p borsuk --example compare_native_replay sampled_boundary_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 4,
+        "artifact_manifest_sha256": "ce144b0f5c3d1b1b57fc71668c75e686024243a7689ac72e2c2357afdcb68dde",
+        "memory_peak_bytes": 4192071680,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-library-release",
+        "command": "cargo test --release --locked -p borsuk --lib sampled_boundary_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 5,
+        "artifact_manifest_sha256": "1d9fc718d91425d325d7bb9d5ac323892f8285524651d8b0927bbbd4c359631e",
+        "memory_peak_bytes": 7199838208,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-example-release",
+        "command": "cargo test --release --locked -p borsuk --example compare_native_replay sampled_boundary_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 4,
+        "artifact_manifest_sha256": "a387119e170b7cc4d9f1b28992bd2585c88d25bd0cd979a7e37b73bc79035584",
+        "memory_peak_bytes": 4440334336,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-coverage-legacy",
+        "command": "cargo test --locked -p borsuk --example compare_native_replay leaf_coverage_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 8,
+        "artifact_manifest_sha256": "861017c4e5362bf556fc23035fb90e8ce77e6399cd1b7c59fbb105c76fcdbb4a",
+        "memory_peak_bytes": 205922304,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-seal-legacy",
+        "command": "cargo test --locked -p borsuk --example compare_native_replay sealed_loss_ -- --test-threads=1",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 4,
+        "artifact_manifest_sha256": "28a7894d32af00c3758638000faf1b4ca37afe968b44dcf45011816a2a5b27b8",
+        "memory_peak_bytes": 97497088,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-release",
+        "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 0,
+        "artifact_manifest_sha256": "6d7b554a6a9df4f58aa8168c00930f61e42052ce45370ee9124a701ee3b2f7f8",
+        "memory_peak_bytes": 436518912,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-clippy",
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 0,
+        "artifact_manifest_sha256": "74224c14cf70e0290eb0cf6ae9c806ba464787cf0f4e063b37d0d1ebda8c798f",
+        "memory_peak_bytes": 6256025600,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      },
+      {
+        "name": "boundary-test-build",
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+        "exit": 0,
+        "manager_exit": 0,
+        "owned_cgroup_drained": true,
+        "named_tests_passed": 0,
+        "artifact_manifest_sha256": "95fea71ececd888559a58e2fec83ce01b7f83ed4e14c2da0c8dec1773bc9b4d6",
+        "memory_peak_bytes": 9675264000,
+        "swap_peak_bytes": 0,
+        "oom_kills": 0
+      }
+    ],
+    "named_test_passes": 30,
+    "release_binary": {
+      "s3_key": "research/semantic-router/20261011/sampled-boundary-native-qualification-a0001/stages/boundary-release/compare_native_replay",
+      "bytes": 6380056,
+      "sha256": "299ee9c2c7b73fe37f37f91f772ea527d1451b27067e5a4859ea773d7168fd07"
+    },
+    "scope": "Compiler and synthetic correctness qualification only; complete workspace tests compiled, not all executed",
+    "real_data_admission": false,
+    "coverage_screen": false,
+    "performance_claim": false,
+    "serving_adoption": false,
+    "vendor_win": false
+  },
+  "config_schema": "borsuk-leaf-boundary-coverage-config-v1",
+  "binary": {
+    "pin": {
+      "role": "compare_native_replay",
+      "bytes": 6380056,
+      "sha256": "299ee9c2c7b73fe37f37f91f772ea527d1451b27067e5a4859ea773d7168fd07",
+      "path": "/mnt/borsuk-boundary-data/bin/compare_native_replay"
+    },
+    "key": "research/semantic-router/20261011/sampled-boundary-native-qualification-a0001/stages/boundary-release/compare_native_replay"
+  },
+  "input_objects": [
+    {
+      "role": "producer",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/sealed-result.jsonl",
+        "bytes": 1220980,
+        "sha256": "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+      },
+      "key": "research/semantic-router/20261011/scale-closure-panels32-a0001/stages/independent32-r2/independent32-r2-result.jsonl"
+    },
+    {
+      "role": "generation",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json"
+    },
+    {
+      "role": "plane",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json"
+    },
+    {
+      "role": "router",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/router-root.bin",
+        "bytes": 3041472,
+        "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/root.bin"
+    },
+    {
+      "role": "membership",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/membership.bin"
+    },
+    {
+      "role": "requests",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/queries.f32",
+        "bytes": 4096000,
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      },
+      "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32"
+    },
+    {
+      "role": "truth",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/truth.u64",
+        "bytes": 80000,
+        "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+      },
+      "key": "research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64"
+    },
+    {
+      "role": "sq8",
+      "pin": {
+        "path": "/mnt/borsuk-boundary-data/inputs/sq8",
+        "bytes": 1036000000,
+        "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+      },
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+    }
+  ],
+  "scientific_measurement": false,
+  "quality_outputs_opaque": true,
+  "freeze_before_run": true,
+  "machine_shutdown_seconds": 3000,
+  "external_termination_seconds": 3120,
+  "max_total_usd": 0.25,
+  "interruption": "INVALID; preserve and terminate; no automatic retry"
+}

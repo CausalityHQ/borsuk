@@ -1,0 +1,59 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.large",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-00243d923761c047c",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 16,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "SpotInstanceType": "one-time",
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.10"
+    }
+  },
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "ClientToken": "borsuk-boundary-data-a0001-20261011",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-sampled-boundary-data-gates-a0001"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "9c40e0a5d5b84e6dbe7662d331601780facd066a"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "sampled-boundary-data-admission-smoke"
+        }
+      ]
+    }
+  ]
+}
