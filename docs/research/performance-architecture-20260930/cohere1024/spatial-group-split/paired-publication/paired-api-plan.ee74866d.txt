@@ -1,0 +1,106 @@
+The smallest slice is a **new experiment-private paired-publication importer and reducer**. Keep the accepted reconstruction module unchanged, and freeze the spatial publication’s pins before running the screen.
+
+All findings below refer to `4cbe4babb329a515f48847e0daf316f373e34eba`.
+
+The original producer schema is sufficient for this diagnostic: it exposes ordered `semantic_leaves`, sorted `semantic_units`, exact `semantic_seed_additions`, SOURCE scoring/closure traces, and ordered returned `(id, score_bits)` pairs. Semantic seed page and walk units are derivable from those fields. `primary_page` is a later SOURCE-scoring result, so it must not be compared with the semantic seed page.
+
+The missing provenance field is the **original result-producing source archive SHA**, independently bound to its full result, runtime configuration and ELF identities. `CoverageConfig` currently has no archive pin or original configuration-body descriptor. The supplied construction proof also does not identify that archived returned-ID producer. `91107713` and its qualified ELF identify reconstruction/parity; they cannot substitute for the original query producer. Availability of the required archived pins remains a root-owned prerequisite.
+
+1. **Make one new OWN file and two narrow integration changes.**
+
+   | File | Exact responsibility |
+   |---|---|
+   | New `crates/borsuk/examples/compare_native_replay/paired_partition_coverage.rs` | Separate original-authority authentication, derived-publication import, paired selections, durable seal and diagnostic reduction; colocated tests. |
+   | [compare_native_replay.rs](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/examples/compare_native_replay.rs:5014) | Module declaration and one CLI dispatch. Reuse existing helpers without changing the metric/boundary coverage modes. |
+   | [semantic_unit_router.rs](/home/rb/worktrees/borsuk-prod-ready-v9/crates/borsuk/src/semantic_unit_router.rs:733) | Change existing `admit_authenticated_root` from `pub(crate)` to `pub`; preserve its implementation and signature. Extend existing relevant fixtures. |
+
+   Proposed entry point:
+
+   ```rust
+   pub(super) fn execute(
+       config: &Path,
+       config_sha: &str,
+       approval: &Path,
+       approval_sha: &str,
+       selection: &Path,
+       report: &Path,
+   ) -> Result<bool>;
+   ```
+
+   Use a new strict config schema and a separately SHA-approved authority document. Bind:
+
+   - Original producer full result, configuration, source archive, ELF and exact expected identity/input rows.
+   - Original approval, generation/epoch, plane, Discovery digest and construction `SourceIdentity`.
+   - Whole reconstruction and native radial-parity receipts, their qualified source/ELF identities, and the closed qualification receipt.
+   - Exact centroid bytes; radial and spatial root/membership/leaves pins; expected partition for each arm.
+   - Original requests, truth, SQ8, source/order identities and nomination/fetch policy.
+
+   Preserve the original wrapper INVALID disposition and corrected closure evidence. Receipt statuses alone cannot authenticate an import.
+
+   Spatial preparation uses existing `build_with_partition(..., WidestAxisQuotaV1)` in a separate source-only step owned by the root. Freeze its outputs before the coverage invocation; add no spatial branch to reconstruction’s accepted mode.
+
+2. **Authenticate original and derived authority separately.**
+
+   Original generation Discovery continues to name its historical publication. Never replace those digests with derived BORSUSR3 digests.
+
+   Import the approved original metadata and actual native receipts with bounded whole-body authentication and retained `HeaderSnapshot`s. Stream large provenance files for hashing rather than retaining them.
+
+   For each derived arm, use the same approved `SourceIdentity` and exact reconstructed centroid blob, then call:
+
+   ```rust
+   admit_authenticated_root(...)
+   validate_publication(root, membership, leaves, identity, centroids)
+   SemanticUnitRouter::open(...)
+   ```
+
+   Require the declared partition to match the authenticated root.
+
+   Add one necessary cross-arm invariant: **every physical unit must have the same `group_ordinal` in both arms**. Existing publication validation checks spatial partitioning within recorded groups; it does not reproduce training assignments. Comparing per-unit group labels prevents a changed group assignment from masquerading as a within-group partition intervention.
+
+3. **Give each phase explicit ownership and admission.**
+
+   Sequentially validate radial and spatial publications. Retain one centroid blob and one arm’s artifact buffers at a time. Between arms, retain only authenticated descriptors/stamps and a compact unit-to-group map. Drop routers, artifact buffers, centroids and that map before selection replay.
+
+   During replay, open one router at a time, produce all 32 selections, then drop it before opening the other. Charge retained nominations, producer parsing, requests, seal serialization/readback and reduction scratch separately.
+
+   The historical numbers remain evidence for that arm:
+
+   - Radial builder model: **506,729,928 B**.
+   - Actual radial peak: **449,300 KiB RSS**.
+   - Historical experiment charge: **513,807,432 B**.
+   - Current profile construction cap: **512 MiB**.
+
+   At real1M/D1024, the current formulas add **1,280 B** to spatial emission and **501,280 B** to spatial validation. Training still determines the modeled maximum of 506,729,928 B. That equal maximum does not authorize reusing radial admission: authenticate the mode and recalculate the enclosing charge. The old experiment charge is not the new paired charge.
+
+4. **Preserve exact control and seal-before-truth ordering.**
+
+   Reuse `normalize_two_bit_diagnostic_query`, squared-Euclidean top48 ranking, existing leaf-ID ties, `coverage_selected_arm`, `coverage_control` and `plan_two_bit_source_cover` with **128 GET / 64 MiB** limits.
+
+   The production CLI accepts exactly the existing consumed32 ordinal sequence and original population/request pins. Before sealing, authenticate the complete producer result and require per-query radial leaf/unit/seed equality, SOURCE closure/scoring validity and observed SOURCE-charge parity.
+
+   Seal both complete arm selections together, including authority pins, query order, nominations, physical closure pages, cover intervals/GETs/bytes, producer trace fingerprints and exact returned-ID/score arrays. Reuse the existing create-only writer, file sync, exact readback, directory sync, identity rechecks and failure invalidation.
+
+   **Only successful paired sealing permits the first truth descriptor open.** Earlier validation may inspect the truth pin’s values, but must not open or stat its path.
+
+   Afterward, reuse authenticated SQ8/order scanning and truth reduction to establish:
+
+   - Original returned-ID control **313/320** and radial SOURCE control **314/320**.
+   - Spatial SOURCE coverage **≥315/320**, with **gains > losses**.
+   - Per-slot gains and displaced losses, plus both arms’ physical closures and bridge-only fetches.
+
+   Candidate GETs/bytes are planned fetch work; radial charges are checked against the recorded execution. Fetched-only bridge records never count as SOURCE coverage. Authority, ordering or control mismatches produce execution **INVALID**; a valid screen below its threshold produces diagnostic **FAIL**.
+
+5. **Use these minimal falsifying fixtures before real screening.**
+
+   - **Different arms:** extend the existing post-assignment top48 falsifier to D1024, putting its informative coordinate at index 1023. Require changed selections/closures and identical per-unit groups. Keep its existing label as a partition test rather than trainer qualification.
+   - **Actual publication and tail:** a public-builder fixture with 100,353 rows, D1024 and identical finite centroids gives 3,137 units, 50 leaves and a one-row tail. Validate/open both actual publications; require distinct partitions, complete FP16 identity and deterministic ties. Avoid the existing metadata fixtures that replace prototypes.
+   - **Corrupt authority:** independently mutate original approval, Discovery, producer archive/config/ELF binding, native receipt, centroid identity and derived artifact pins. Rehash mutable envelopes; rejection must occur before truth opens.
+   - **Exact-control mismatch:** change a leaf ordering, unit or seed addition while preserving aggregate counts. Require INVALID before truth.
+   - **Publication failures:** fail each selection/report sync boundary and inject file/path replacement. No successful seal or report may survive; selection failure must leave the truth opener untouched.
+   - **Budget boundary:** reuse the small geometry where spatial admission exceeds radial. Reject a budget between the two estimates; test cumulative retained-input charges separately.
+
+**Shortest falsifier:** run the D1024 tail publication/selection fixture with a truth-opener counter and a forced paired-directory-sync failure. Both arms must validate and differ, while truth opens remain zero. Repeat with an unchanged-count radial trace mutation. Either premature truth opening or acceptance of the mismatch rejects the implementation.
+
+The screen consumes and rechecks original returned IDs; it does not compute candidate returned results. Its outcome grants no held-out quality, cold-performance win or default promotion.
+
+No files changed. No compiler, native execution, tests, data-body parsing, network work or children were used.
