@@ -1,0 +1,69 @@
+{
+  "schema": "borsuk-source-neighborhood-transport-v1",
+  "source_commit": "fc60c18e780063804c625a72f722d3e697fb4b61",
+  "authority_pending": false,
+  "inputs": [
+    {
+      "role": "generation_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      }
+    },
+    {
+      "role": "plane_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      }
+    },
+    {
+      "role": "router_root",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/root.bin",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/router-root.bin",
+        "bytes": 3041472,
+        "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+      }
+    },
+    {
+      "role": "membership",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/membership.bin",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      }
+    },
+    {
+      "role": "leaves",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/leaves.bin",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/leaves.bin",
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+      }
+    },
+    {
+      "role": "canonical",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+      "pin": {
+        "path": "/mnt/borsuk-neighborhood-data/inputs/canonical.bin",
+        "bytes": 4104000000,
+        "sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c"
+      }
+    }
+  ],
+  "binary": {
+    "key": "research/semantic-router/20261011/source-neighborhood-native-qualification-a0001/stages/neighborhood-build/compare_native_replay",
+    "pin": {
+      "path": "/mnt/borsuk-neighborhood-data/bin/compare_native_replay",
+      "bytes": 6705648,
+      "sha256": "77a8e582e426f1d8500f26b66741ddb978ce7f0d1ef5250b5111c7a3e1da1010"
+    }
+  }
+}

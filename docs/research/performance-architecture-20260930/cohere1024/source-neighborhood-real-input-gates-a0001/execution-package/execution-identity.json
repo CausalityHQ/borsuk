@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-source-neighborhood-execution-v1",
+  "attempt": "source-neighborhood-data-gates-a0001",
+  "instance_id": "i-0a424b7ede571a137",
+  "image_id": "ami-0b8a830d6339a9758",
+  "source_commit": "fc60c18e780063804c625a72f722d3e697fb4b61",
+  "request_sha256": "7ec4499f61032e776cc75261e9423e1840c9542650beb723be804e2cb90582c3",
+  "package_manifest_sha256": "d66468bdbfe7f82fd406d91848fb7d77c99685b2c9262d7462a8bbdfbb1a45e9",
+  "root_launch_started_epoch": 1791734524,
+  "guest_deadline_seconds": 4500,
+  "external_deadline_seconds": 4620,
+  "total_cost_ceiling_usd": 0.25
+}

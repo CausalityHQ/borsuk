@@ -1,0 +1,16 @@
+Running as unit: borsuk-neighborhood-hydrate.service; invocation ID: 35031ee6ef5c4f5c8b884aa4bc3a46b3
+/mnt/borsuk-neighborhood-data/inputs/generation.json.part: OK
+/mnt/borsuk-neighborhood-data/inputs/plane.json.part: OK
+/mnt/borsuk-neighborhood-data/inputs/router-root.bin.part: OK
+/mnt/borsuk-neighborhood-data/inputs/membership.bin.part: OK
+/mnt/borsuk-neighborhood-data/inputs/leaves.bin.part: OK
+/mnt/borsuk-neighborhood-data/inputs/canonical.bin.part: OK
+/mnt/borsuk-neighborhood-data/bin/compare_native_replay.part: OK
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 1min 2.927s
+CPU time consumed: 22.882s
+Memory peak: 508.0K
+Memory swap peak: 0B
+IO bytes read: 0B
+IO bytes written: 0B
