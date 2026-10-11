@@ -4942,8 +4942,13 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
         }
         require(query_hits == sample.hits10, "loss original recall parity")?;
         hits = plus(hits, query_hits)?;
+        let returned = sample
+            .returned
+            .iter()
+            .map(|hit| json!({"id":hit.id,"score_bits":hit.score_bits}))
+            .collect::<Vec<_>>();
         queries.push(json!({"ordinal":cov.ordinal,"hits10":query_hits,"truth_entries":entries,
-            "returned":sample.returned,"original_trace_sha256":sample.trace_sha256.iter().map(|b|format!("{b:02x}")).collect::<Vec<_>>().concat(),
+            "returned":returned,"original_trace_sha256":sample.trace_sha256.iter().map(|b|format!("{b:02x}")).collect::<Vec<_>>().concat(),
             "source_scored_units":cov.scored_units.len(),"sq8_ranked_rows":cov.sq8_rows}));
     }
     require(
