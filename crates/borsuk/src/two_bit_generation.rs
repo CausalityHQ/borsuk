@@ -198,7 +198,7 @@ pub struct DirectClosureMemory {
     /// Existing model: metadata copies, baseline query/source budgets and
     /// `already_pinned_bytes`.
     pub resident_bytes: u64,
-    /// Planner term inside `direct_query_bytes`, per active query: 1 MiB
+    /// Planner term inside `direct_query_bytes`, per active query: profile-dependent
     /// discovery/closure working set, full trace capacity, normalized query and
     /// 512 bytes per page of closure/cover roster.
     pub direct_planner_bytes: u64,
@@ -686,9 +686,10 @@ impl TwoBitPlanTrace {
 // Conservative simultaneous planner payload, excluding separately admitted
 // codec scratch, trace, directory ranking and fetched response buffers. At
 // Scale's maxima: eight walk vectors (3079*8), four score vectors (24576*16),
-// eight page vectors (3072*16), two BTreeSets (3072*64), plus 64KiB controls
-// total 2,621,888B < 3MiB. The reservations include temporary sorts/clones;
-// actual native RSS remains an independent host gate.
+// eight page vectors (3072*16), two BTreeSets (3079*64), plus 64KiB controls
+// total 2,622,784B < 3MiB. The reservations include temporary sorts/clones;
+// the 64B/set-entry allowance is modeled payload, not an allocator guarantee.
+// Actual native RSS remains an independent host gate.
 const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
     match profile {
         Some(SemanticProfile::Scale1m) => 3 * 1024 * 1024,
@@ -700,6 +701,9 @@ const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
 /// discovery, source-read charges and retained trace memory remain caller-owned.
 /// The explicit profile admits semantic walk/completion bounds; `None` retains
 /// graph limits. Semantic discovery supplies its entire admitted page closure.
+/// Standalone callers must also reserve 3MiB planner working payload for Scale1m
+/// (1MiB for other profiles), plus prepared-query and optional retained-trace
+/// memory. Generation methods enforce their modeled admission separately.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
     rows: usize,
@@ -6805,6 +6809,110 @@ mod source_walk_tests {
         assert_eq!(seen, (0..4097).collect());
         assert_eq!(ranked[0], (512, 4096.0));
         assert_eq!(ranked.len(), 513);
+    }
+
+    #[test]
+    fn scale_scattered_codec_walk_covers_rows_and_partial_tail() {
+        let pages = 513;
+        let rows = (pages - 1) * 256 + 1;
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 2], 17).unwrap();
+        let prepared = codec.prepare_query(&[3., 1.], 400_000).unwrap();
+        let records = [[1., 0.], [0., 1.], [-1., 0.], [0., -1.]]
+            .iter()
+            .map(|vector| codec.encode(vector).unwrap())
+            .collect::<Vec<_>>();
+        let scores = records
+            .iter()
+            .map(|record| prepared.score(record).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scores
+                .iter()
+                .map(|score| score.to_bits())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            4
+        );
+        let record_id = |row: usize| ((row / 256 % 3) * 2 + (row / 32 % 2)) % 4;
+        let mut walk = (0..8).collect::<Vec<_>>();
+        walk.extend((1..pages).map(|page| page * 8 + usize::from(page + 1 != pages)));
+        let walks = [(0, walk)];
+        let mut expected = (0..pages)
+            .map(|page| {
+                let maximum = (page * 256..((page + 1) * 256).min(rows))
+                    .map(|row| scores[record_id(row)])
+                    .fold(f64::NEG_INFINITY, f64::max);
+                (page, maximum)
+            })
+            .collect::<Vec<_>>();
+        expected.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
+        assert!(
+            expected
+                .windows(2)
+                .any(|pair| pair[0].1.to_bits() == pair[1].1.to_bits())
+        );
+        let mut reads = vec![0_u8; rows];
+        let mut trace = TwoBitPlanTrace::default();
+        plan_two_bit_source_walks(
+            rows,
+            2,
+            pages,
+            Some(SemanticProfile::Scale1m),
+            &walks,
+            &prepared,
+            |row| {
+                reads[row] += 1;
+                Some(records[record_id(row)].as_slice())
+            },
+            32,
+            rows * 14,
+            Some(&mut trace),
+        )
+        .unwrap();
+        assert!(reads.iter().all(|&count| count == 1));
+        assert_eq!(
+            trace.ranked_candidate_pages,
+            expected.iter().map(|&(page, _)| page).collect::<Vec<_>>()
+        );
+        assert_eq!(trace.nomination_evaluated_units.len(), rows.div_ceil(32));
+        let retained = std::mem::size_of::<TwoBitPlanTrace>()
+            + (trace.nomination_evaluated_units.capacity()
+                + trace.ranked_candidate_pages.capacity()
+                + trace.semantic_leaves.capacity()
+                + trace.semantic_units.capacity()
+                + trace.semantic_seed_additions.capacity())
+                * std::mem::size_of::<usize>();
+        assert!(retained <= TwoBitPlanTrace::scratch_bytes(rows));
+        for missing in [false, true] {
+            assert!(
+                plan_two_bit_source_walks(
+                    rows,
+                    2,
+                    pages,
+                    Some(SemanticProfile::Scale1m),
+                    &walks,
+                    &prepared,
+                    |row| if row == 511 {
+                        if missing { None } else { Some(&[]) }
+                    } else {
+                        Some(records[record_id(row)].as_slice())
+                    },
+                    32,
+                    rows * 14,
+                    None,
+                )
+                .is_err()
+            );
+        }
+        let closure = (0..pages).collect::<BTreeSet<_>>();
+        let bytes = rows * 264;
+        assert_eq!(
+            plan_two_bit_source_cover(&closure, rows, 264, 128, bytes)
+                .unwrap()
+                .1,
+            bytes
+        );
+        assert!(plan_two_bit_source_cover(&closure, rows, 264, 128, bytes - 1).is_err());
     }
 
     #[test]
