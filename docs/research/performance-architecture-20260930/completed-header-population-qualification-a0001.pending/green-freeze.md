@@ -1,0 +1,7 @@
+# Native red demonstrated; one-line green candidate frozen
+
+Exactly one native test failed at the intended32MiB header-pin limit (`bounded header artifact pin`),native101/manager101,1.12s,0passed/1failed/93filtered. Whole original terminal bodies/source before-after/cgroup drain/OOM0/swap0 collected and SHA checked. Expected-red wrapper0 is not a product correctness PASS.
+
+Private UNVERIFIED source2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf changes exactly one production line atop preserved test-only18f36c21: HEADER_RESULT_CAP=FILE_CAP (64MiB). The38-line native boundary regression remains. Example source87a4e54aeed45c003153259a25e72201dc8b5b016133453ef934b576cd7c7eac. No ANN/API/schema/controller change; native production code not integrated yet.
+
+SAME compiler host applies the three authenticated green source/manifest/map bodies after proving unchanged red full source. Sequential gates only: no-run compilegreen; authenticate resulting ELF; exactgreen native test; full94 example native suite; lockedrelease reducer (retain ELF+SHA); lockedworkspace/all-target Clippycorrectness+suspicious; REAL env-unset test-build withjobs2. Compile stagesCPU0-3/400%/8GiB/noSwap/PID512; direct native test stagesCPU0/100%/1GiB/noSwap/PID128. Same original whole gate deadline and host/external shutdown timers. Any failure: preserve original bodies, repair only that layer, no overlapping suite/automatic paid retry. Full cold measurement remains unlaunched.

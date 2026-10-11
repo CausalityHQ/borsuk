@@ -1,0 +1,7 @@
+Running as unit: borsuk-header-population-boundary-red.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=101
+Service runtime: 1.218s
+CPU time consumed: 1.155s
+Memory peak: 2.6M
+Memory swap peak: 0B

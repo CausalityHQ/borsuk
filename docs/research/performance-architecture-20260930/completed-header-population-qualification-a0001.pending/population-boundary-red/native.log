@@ -1,0 +1,18 @@
+
+running 1 test
+test completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail ... FAILED
+
+failures:
+
+---- completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail stdout ----
+
+thread 'completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail' (9192) panicked at crates/borsuk/examples/compare_native_replay.rs:2458:63:
+called `Result::unwrap()` on an `Err` value: "bounded header artifact pin"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 1.12s
+
