@@ -6715,6 +6715,43 @@ mod source_walk_tests {
     }
 
     #[test]
+    fn scale_scattered_source_walk_scores_complete_pages_once() {
+        for pages in [513, 48 * 64] {
+            let mut walk = (0..8).collect::<Vec<_>>();
+            walk.extend((1..pages).map(|page| page * 8 + 1));
+            let walks = [(0, walk)];
+            let mut seen = BTreeSet::new();
+            let ranked = rank_walked_source_with_limit(
+                1_000_000,
+                &walks,
+                pages,
+                Some(SemanticProfile::Scale1m),
+                |unit| {
+                    assert!(seen.insert(unit), "source unit scored twice");
+                    Ok(unit as f64)
+                },
+            )
+            .unwrap();
+            assert_eq!(seen, (0..pages * 8).collect());
+            assert_eq!(ranked.len(), pages);
+            for (rank, &(page, score)) in ranked.iter().enumerate() {
+                assert_eq!(page, pages - rank - 1);
+                assert_eq!(score, (page * 8 + 7) as f64);
+            }
+            assert!(
+                rank_walked_source_with_limit(
+                    1_000_000,
+                    &walks,
+                    pages,
+                    Some(SemanticProfile::Fresh1m),
+                    |_| panic!("historical closure bound relaxed"),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io() {
         let original = std::iter::once(1)
             .chain((1..512).flat_map(|page| (0..6).map(move |offset| page * 8 + offset)))
