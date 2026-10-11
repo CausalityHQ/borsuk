@@ -1,0 +1,5 @@
+# Exact native red gate
+
+Original setup and no-run compiler stages terminal0,463-source before/after manifests identical, cgroup drained, no OOM/Swap. ELF path uniquely from the authenticated cargo compile log; separate SAME-instance metadata command SHA442ac3156fcac371be65e986f4fbad0f0c2d3218f76f153b6a04e4bc0adf5604,52367272 bytes,ELF magic. The native unit checks that SHA and size before invoking the exact one named test. CPU0/100%,1GiB/noSwap/PID128, fixed whole gate deadline. Expected native101 and manager101 with exact test failure `bounded header artifact pin`; wrapper0 only labels the expected negative execution, not product PASS. Root independently requires exact failed-test name/count/error and resource/source/closure bodies.
+
+No production cap change yet. Count correction: native map430 follows current Rust/Cargo-only filter; historical435 map also included six non-Rust support/config files. All six remain in the463 full source manifest. No source omission, modification or repeated native job occurred. Older notices mentioning436 for this map were inaccurate; frozen protocol.json has430.

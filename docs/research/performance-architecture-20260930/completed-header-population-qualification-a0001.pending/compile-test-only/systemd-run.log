@@ -1,0 +1,7 @@
+Running as unit: borsuk-header-compile-test-only.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 2min 18.468s
+CPU time consumed: 3min 22.578s
+Memory peak: 1.2G
+Memory swap peak: 0B
