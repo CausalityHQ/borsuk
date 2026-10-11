@@ -1,0 +1,9 @@
+# Existing Rust summary: exploratory observations
+
+Original evidence-only SSM e02f6556-a92e-4b90-bc90-6a989ae6892b on Spot i-0e9c587514d4c9c55 completed Success/0. It displayed the existing native.log after exact length3981 and SHA8fb76270c863306c43b843646fd16e4d9851aeb5daecaf79252a5528a03941b1 verification. No native re-execution, corpus download, query/truth read, new reducer or geometry recomputation occurred. Raw returned stdout is preserved in invocation.json.
+
+Direct reported examples: source anchor unit4515 has 32 distinct destination units/15 leaves and 2 neighbors outside top48 and physical-page closure; unit17136 has32 destination units/13 leaves and1 outside both. Unit25463 has7 outside both. Unit24017 has5 outside selected leaves but3 outside page closure; unit22301 has1 outside leaves but0 outside page closure. Page closure recovers some selected-leaf misses, so leaf-only loss is not fetch loss. Every displayed own-leaf rank is within48; this does not imply all nearby destination leaves are selected.
+
+The evidence supports investigating neighborhood fragmentation and leaf nomination, not asserting an ANN improvement. In-sample anchors and correlated neighbor slots cannot establish held-out query recall. Distinct destination counts do not prove unit indivisibility or graph-cut feasibility. Residual squared-L2 values do not identify quantization cause. Do not rerun known cosine48/boundary40+8 KILLs or select a production arm from this summary alone.
+
+Next causal decision: reconcile original source audit d000c314e884488b with these observations and historical nomination-loss evidence. Scope a generic partition/router intervention only if it explains recovered destination coverage at disclosed router RAM/fetch costs, then use a fast held-out native recall falsifier before cold-serving scale. Do not optimize SIMD absent compute-stage evidence.

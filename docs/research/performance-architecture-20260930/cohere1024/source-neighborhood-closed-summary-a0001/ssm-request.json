@@ -1,0 +1,16 @@
+{
+  "InstanceIds": [
+    "i-0e9c587514d4c9c55"
+  ],
+  "DocumentName": "AWS-RunShellScript",
+  "Comment": "display authenticated closed Rust summary only",
+  "TimeoutSeconds": 480,
+  "Parameters": {
+    "executionTimeout": [
+      "480"
+    ],
+    "commands": [
+      "#!/bin/bash\nset -euo pipefail\nset -- research/semantic-router/20261011/source-neighborhood-data-gates-a0002/smoke/native.log 8fb76270c863306c43b843646fd16e4d9851aeb5daecaf79252a5528a03941b1 3981\nexport DEBIAN_FRONTEND=noninteractive AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 AWS_PAGER=''\nwork=$(mktemp -d /tmp/borsuk-summary-client.XXXXXX)\ncd \"$work\"\ntimeout -k 2 60 apt-get -qq -o DPkg::Lock::Timeout=20 update\ntimeout -k 2 90 apt-get -qq -y -o DPkg::Lock::Timeout=20 install curl unzip\ntimeout -k 2 90 curl -fsSL --connect-timeout 10 --max-time 85 -o aws.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.36.11.zip\nprintf '%s  aws.zip\\n' 50fbb7a2f44a78eab4a210088040e8f0bc4b9937cac8043c2354269d58614df6 | sha256sum -c -\ntimeout -k 2 45 unzip -q aws.zip\ntimeout -k 2 45 ./aws/install\n#!/bin/bash\n# Evidence-only EC2 operation. No native execution, corpus/query/truth download or reduction.\nset -euo pipefail\n[[ $# == 3 ]] || exit 125\nkey=$1 expected=$2 bytes=$3\n[[ $key == research/semantic-router/20261011/source-neighborhood-data-gates-a0002/smoke/native.log ]]\n[[ $expected =~ ^[0-9a-f]{64}$ && $bytes =~ ^[0-9]+$ ]]\n(( bytes <= 1048576 ))\nexport AWS_MAX_ATTEMPTS=1 AWS_PAGER='' AWS_DEFAULT_REGION=eu-central-1\nwork=$(mktemp -d /tmp/borsuk-closed-summary.XXXXXX)\ntimeout -k 2 30 aws s3api get-object --bucket borsuk-bench-453182569524-euc1 --key \"$key\" --checksum-mode ENABLED \"$work/native.log\" > \"$work/get.json\"\n[[ $(stat -c %s \"$work/native.log\") == \"$bytes\" ]]\nprintf '%s  %s\\n' \"$expected\" \"$work/native.log\" | sha256sum -c - > \"$work/auth.txt\"\nprintf 'BEGIN_AUTHENTICATED_EXISTING_RUST_SUMMARY\\n'\ncat \"$work/native.log\"\nprintf 'END_AUTHENTICATED_EXISTING_RUST_SUMMARY\\n'\n\n"
+    ]
+  }
+}
