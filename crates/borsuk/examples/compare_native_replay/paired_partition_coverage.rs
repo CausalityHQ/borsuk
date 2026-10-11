@@ -110,12 +110,63 @@ struct Publication {
 struct Producer {
     result: CompletedInput,
     config: CompletedInput,
-    archive: CompletedInput,
+    source_bundle: ProducerSourceBundle,
     binary: CompletedInput,
     expected_config: Value,
     expected_identity: Value,
     expected_bound_inputs: Value,
 }
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SourceOverlay {
+    repository_path: String,
+    body: CompletedInput,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProducerSourceBundle {
+    schema: String,
+    source_commit: String,
+    base_archive: CompletedInput,
+    overlays: [SourceOverlay; 2],
+    final_source_map: CompletedInput,
+    final_native_map: CompletedInput,
+    qualification: CompletedInput,
+    expected_qualification: Value,
+}
+
+const PRODUCER_COMPONENTS: [(&str, &str); 7] = [
+    (
+        "runner_source_sha256",
+        "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    ),
+    (
+        "generation_source_sha256",
+        "crates/borsuk/src/two_bit_generation.rs",
+    ),
+    (
+        "router_source_sha256",
+        "crates/borsuk/src/semantic_unit_router.rs",
+    ),
+    (
+        "codec_source_sha256",
+        "crates/borsuk/src/rotated_two_bit.rs",
+    ),
+    (
+        "source_plane_source_sha256",
+        "crates/borsuk/src/two_bit_source.rs",
+    ),
+    (
+        "sq8_range_source_sha256",
+        "crates/borsuk/src/sq8_s3_range.rs",
+    ),
+    (
+        "returned_source_sha256",
+        "crates/borsuk/src/returned_sq8.rs",
+    ),
+];
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1156,6 +1207,185 @@ fn admission_error(error: Box<dyn Error + Send + Sync>) -> Box<dyn Error + Send 
     }
 }
 
+fn source_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 512
+        && !path.starts_with('/')
+        && path.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+        })
+}
+
+fn source_map(body: &[u8]) -> Result<std::collections::BTreeMap<String, String>> {
+    let text = std::str::from_utf8(body)?;
+    require(
+        text.ends_with('\n'),
+        "whole source manifest terminal newline",
+    )?;
+    let mut map = std::collections::BTreeMap::new();
+    let mut previous = "";
+    for line in text.lines() {
+        let (sha, path) = line
+            .split_once("  ")
+            .ok_or("source manifest sha256sum row")?;
+        require(
+            valid_sha(sha) && source_path(path) && path > previous,
+            "source manifest exact sorted paths/hash",
+        )?;
+        map.insert(path.to_owned(), sha.to_owned());
+        previous = path;
+    }
+    require(
+        !map.is_empty() && map.len() <= 1024,
+        "bounded source manifest count",
+    )?;
+    Ok(map)
+}
+
+fn authenticate_producer_bundle(p: &Producer, stamps: &mut Vec<HeaderSnapshot>) -> Result<()> {
+    let b = &p.source_bundle;
+    require(
+        b.schema == "borsuk-original-query-producer-source-bundle-v1"
+            && b.source_commit.len() == 40
+            && b.source_commit
+                .bytes()
+                .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v)),
+        "original query producer bundle schema/commit",
+    )?;
+    stamps.push(stream(&b.base_archive, OWNED_CAP)?);
+    for (overlay, path) in b.overlays.iter().zip([
+        "crates/borsuk/src/semantic_unit_router.rs",
+        "crates/borsuk/src/two_bit_generation.rs",
+    ]) {
+        require(
+            overlay.repository_path == path,
+            "exact qualified overlay repository path/order",
+        )?;
+        stamps.push(stream(&overlay.body, 1024 * 1024)?);
+    }
+    header_pin(&b.final_source_map, HEADER_JSON_CAP)?;
+    let (body, ss) = binary(&b.final_source_map, b.final_source_map.bytes)?;
+    let sources = source_map(&body)?;
+    let (native, ns) = header_json(&b.final_native_map)?;
+    let native = native.as_object().ok_or("native source map object")?;
+    require(
+        !native.is_empty() && native.len() <= 1024,
+        "bounded native source map",
+    )?;
+    for (path, sha) in native {
+        require(
+            source_path(path)
+                && sha.as_str().is_some_and(valid_sha)
+                && sources.get(path).map(String::as_str) == sha.as_str(),
+            "full native/final source map consistency",
+        )?;
+    }
+    for overlay in &b.overlays {
+        require(
+            sources.get(&overlay.repository_path) == Some(&overlay.body.sha256),
+            "qualified overlay/final source map identity",
+        )?;
+    }
+    for (field, path) in PRODUCER_COMPONENTS {
+        require(
+            native
+                .get(path)
+                .is_some_and(|sha| sha == &p.expected_identity[field]),
+            "original query identity/final compiled component map",
+        )?;
+    }
+    stamps.extend([ss, ns]);
+    let q = approved_json(&b.qualification, &b.expected_qualification, stamps)?;
+    require(
+        q["schema"] == "borsuk-scale-closure-native-qualification-v1-completed"
+            && q["status"] == "NATIVE_QUALIFIED"
+            && q["candidate_source_commit"] == b.source_commit
+            && q["source_file_count"].as_u64() == Some(sources.len() as u64)
+            && q["native_file_count"].as_u64() == Some(native.len() as u64)
+            && q["source_file_map_sha256"] == b.final_source_map.sha256
+            && q["native_source_map_sha256"] == b.final_native_map.sha256
+            && q["all_candidate_stage_source_before_after_match"] == true
+            && q["release_binary"]["bytes"].as_u64() == Some(p.binary.bytes)
+            && q["release_binary"]["sha256"] == p.binary.sha256
+            && q["performance_claim"] == false
+            && q["population_quality_claim"] == false,
+        "whole qualification/final source maps/original query ELF binding",
+    )?;
+    let stages = q["stages"].as_array().ok_or("qualified native stages")?;
+    require(
+        !stages.is_empty() && stages.len() <= 32,
+        "bounded qualified native stages",
+    )?;
+    let mut names = BTreeSet::new();
+    for stage in stages {
+        require(
+            stage["schema"] == "borsuk-scale-closure-native-stage-v1"
+                && stage["source_commit"] == b.source_commit
+                && stage["exit"] == 0
+                && stage["native_exit"] == 0
+                && stage["manager_exit"] == 0
+                && stage["source_before_after_match"] == true
+                && stage["owned_cgroup_drained"] == true
+                && stage["source_file_count"].as_u64() == Some(sources.len() as u64)
+                && stage["performance_claim"] == false
+                && names.insert(stage["stage"].as_str().ok_or("qualified stage name")?),
+            "qualified stage source/exit evidence",
+        )?;
+    }
+    require(stages.iter().filter(|s| s["stage"] == "release-baseline"
+        && s["command"] == "cargo build --release --locked -p borsuk --bin check_cohere_native_baseline").count() == 1,
+        "unique qualified release-baseline0")?;
+    distinct(stamps)
+}
+
+// Only the real CLI uses this frozen bundle. Synthetic binding fixtures exercise the same authenticator.
+fn frozen_producer(p: &Producer) -> Result<()> {
+    let b = &p.source_bundle;
+    require(
+        b.source_commit == "6e78d393b4d7dadf19befeeabe3dc20a77319a26"
+            && p.result.bytes == 1220980
+            && p.result.sha256
+                == "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+            && p.config.sha256
+                == "e597b90c6566d13488aede8d304982b6b22f9ccaba8c2412075a62e88e91fdff"
+            && p.binary.bytes == 17047872
+            && p.binary.sha256
+                == "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0"
+            && b.base_archive.bytes == 4226312
+            && b.base_archive.sha256
+                == "992c5f0f37df782b153de66f3d18880b92ab0f15db67521804a486533c0e2ea4"
+            && b.overlays[0].repository_path == "crates/borsuk/src/semantic_unit_router.rs"
+            && b.overlays[0].body.bytes == 81578
+            && b.overlays[0].body.sha256
+                == "4a580f2bb3afe2c0c30c5a11b6491b28d4165788d69bb39432b748e67fc68718"
+            && b.overlays[1].repository_path == "crates/borsuk/src/two_bit_generation.rs"
+            && b.overlays[1].body.bytes == 395012
+            && b.overlays[1].body.sha256
+                == "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9"
+            && b.final_source_map.bytes == 50571
+            && b.final_source_map.sha256
+                == "ab5ceffcc3b1dc99d8af75fb4bc86a7b2c5035c59ac9a163e40fc9316fafd2ea"
+            && b.final_native_map.bytes == 50078
+            && b.final_native_map.sha256
+                == "ce4671b10f92214be94f03a7ea24f7c46f713a19ed0685bfed7242bcae2418e5"
+            && b.qualification.sha256
+                == "4c4819e2ea76da6d75bd2158dec314eac995f21753ceb8178a7afc490c3863d3",
+        "frozen original query producer6e source bundle/result/config/ELF",
+    )
+}
+
+fn bundle_value(b: &ProducerSourceBundle) -> Value {
+    json!({"schema":b.schema,"source_commit":b.source_commit,"base_archive":pin_value(&b.base_archive),
+        "overlays":b.overlays.iter().map(|o| json!({"repository_path":o.repository_path,"body":pin_value(&o.body)})).collect::<Vec<_>>(),
+        "final_source_map":pin_value(&b.final_source_map),"final_native_map":pin_value(&b.final_native_map),
+        "qualification":pin_value(&b.qualification)})
+}
+
 fn authenticate_producer(
     a: &ScreenApproval,
     c: &ScreenConfig,
@@ -1251,7 +1481,7 @@ fn authenticate_producer(
         )?;
     }
     stamps.push(config_stamp);
-    stamps.push(stream(&p.archive, OWNED_CAP)?);
+    authenticate_producer_bundle(p, stamps)?;
     stamps.push(stream(&p.binary, 256 * 1024 * 1024)?);
     // Full producer body is authenticated BEFORE trace parsing/control callbacks.
     stamps.push(stream(&p.result, FILE_CAP)?);
@@ -1494,7 +1724,12 @@ fn output_roles(
         &c.truth.path,
         &a.producer.result.path,
         &a.producer.config.path,
-        &a.producer.archive.path,
+        &a.producer.source_bundle.base_archive.path,
+        &a.producer.source_bundle.overlays[0].body.path,
+        &a.producer.source_bundle.overlays[1].body.path,
+        &a.producer.source_bundle.final_source_map.path,
+        &a.producer.source_bundle.final_native_map.path,
+        &a.producer.source_bundle.qualification.path,
         &a.producer.binary.path,
     ];
     paths.extend([
@@ -1694,6 +1929,14 @@ fn reduce_with(
     )?;
     output_roles(&c, &a, selection, report)?;
     let mut extra = plus(a.producer.config.bytes, c.spatial_receipt.bytes)?;
+    for p in [
+        &a.producer.source_bundle.final_source_map,
+        &a.producer.source_bundle.final_native_map,
+        &a.producer.source_bundle.qualification,
+    ] {
+        header_pin(p, HEADER_JSON_CAP)?;
+        extra = plus(extra, p.bytes)?;
+    }
     header_pin(&a.producer.config, HEADER_JSON_CAP)?;
     header_pin(&c.spatial_receipt, HEADER_JSON_CAP)?;
     for p in [&c.requests, &c.truth] {
@@ -1773,7 +2016,7 @@ fn reduce_with(
     let seal = json!({"schema":"borsuk-paired-partition-selection-seal-v1","status":"SEALED","complete":true,
         "config_sha256":sha,"authority_sha256":approval_sha,"original":a.construction.original,
         "producer_result":pin_value(&a.producer.result),"producer_config":pin_value(&a.producer.config),
-        "producer_archive":pin_value(&a.producer.archive),"producer_binary":pin_value(&a.producer.binary),
+        "producer_source_bundle":bundle_value(&a.producer.source_bundle),"producer_binary":pin_value(&a.producer.binary),
         "generation":pin_value(&c.inputs.generation_manifest),"plane":pin_value(&c.inputs.plane_manifest),
         "centroids":pin_value(&c.inputs.centroids),"radial":publication_value(&c.radial),"spatial":publication_value(&c.spatial),
         "spatial_receipt":pin_value(&c.spatial_receipt),"requests":pin_value(&c.requests),"truth":pin_value(&c.truth),
@@ -1819,6 +2062,7 @@ pub(super) fn execute(
     // Validate lexical output roles before reserving any output (including an absent truth path).
     let (c, _): (ScreenConfig, _) = small(config, sha)?;
     let (a, _): (ScreenApproval, _) = small(approval, approval_sha)?;
+    frozen_producer(&a.producer)?;
     output_roles(&c, &a, selection, report)?;
     require(
         config != selection && config != report && approval != selection && approval != report,
@@ -2874,6 +3118,72 @@ mod tests {
         assert_eq!(coverage_slot(&a, 768, 9), (false, false));
     }
 
+    fn source_bundle_fixture(
+        dir: &Path,
+        base_archive: CompletedInput,
+        elf: &CompletedInput,
+        identity: &mut Value,
+    ) -> ProducerSourceBundle {
+        let overlays = [
+            SourceOverlay {
+                repository_path: "crates/borsuk/src/semantic_unit_router.rs".into(),
+                body: put(
+                    &dir.join("original-producer-router-overlay"),
+                    b"qualified router overlay fixture",
+                ),
+            },
+            SourceOverlay {
+                repository_path: "crates/borsuk/src/two_bit_generation.rs".into(),
+                body: put(
+                    &dir.join("original-producer-generation-overlay"),
+                    b"qualified generation overlay fixture",
+                ),
+            },
+        ];
+        identity["router_source_sha256"] = json!(overlays[0].body.sha256);
+        identity["generation_source_sha256"] = json!(overlays[1].body.sha256);
+        let mut native = json!({});
+        for (field, path) in PRODUCER_COMPONENTS {
+            native[path] = identity[field].clone();
+        }
+        let sorted = native
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(path, sha)| (path.as_str(), sha.as_str().unwrap()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let manifest = sorted
+            .iter()
+            .map(|(path, sha)| format!("{sha}  {path}\n"))
+            .collect::<String>();
+        let final_source_map = put(
+            &dir.join("original-producer-final-source-map"),
+            manifest.as_bytes(),
+        );
+        let final_native_map = put_json(&dir.join("original-producer-final-native-map"), &native);
+        let source_commit = "6e78d393b4d7dadf19befeeabe3dc20a77319a26".to_owned();
+        let q = json!({"schema":"borsuk-scale-closure-native-qualification-v1-completed","status":"NATIVE_QUALIFIED",
+            "candidate_source_commit":source_commit,"source_file_count":7,"native_file_count":7,
+            "source_file_map_sha256":final_source_map.sha256,"native_source_map_sha256":final_native_map.sha256,
+            "all_candidate_stage_source_before_after_match":true,"release_binary":{"bytes":elf.bytes,"sha256":elf.sha256},
+            "performance_claim":false,"population_quality_claim":false,"stages":[{
+                "schema":"borsuk-scale-closure-native-stage-v1","source_commit":source_commit,"stage":"release-baseline",
+                "command":"cargo build --release --locked -p borsuk --bin check_cohere_native_baseline",
+                "exit":0,"native_exit":0,"manager_exit":0,"source_before_after_match":true,"owned_cgroup_drained":true,
+                "source_file_count":7,"performance_claim":false}]});
+        let qualification = put_json(&dir.join("original-producer-source-qualification"), &q);
+        ProducerSourceBundle {
+            schema: "borsuk-original-query-producer-source-bundle-v1".into(),
+            source_commit,
+            base_archive,
+            overlays,
+            final_source_map,
+            final_native_map,
+            qualification,
+            expected_qualification: q,
+        }
+    }
+
     fn source_authority(f: &Fixture, c: &mut ScreenConfig) -> ScreenApproval {
         f.prepare(|file, _| file.sync_all()).unwrap();
         c.spatial_receipt = put(
@@ -2883,8 +3193,8 @@ mod tests {
         let expected_spatial_receipt =
             serde_json::from_slice(&std::fs::read(&c.spatial_receipt.path).unwrap()).unwrap();
         let archive = put(
-            &f.dir.path().join("producer-archive"),
-            b"independently approved ORIGINAL query producer archive fixture",
+            &f.dir.path().join("producer-base-archive"),
+            b"approved RED base archive fixture; final compiled source also needs qualified overlays",
         );
         let elf = put(
             &f.dir.path().join("producer-elf"),
@@ -2936,13 +3246,14 @@ mod tests {
         for key in "runner_source_sha256 generation_source_sha256 router_source_sha256 codec_source_sha256 source_plane_source_sha256 sq8_range_source_sha256 returned_source_sha256".split_whitespace() {
             identity[key]=json!("9".repeat(64));
         }
+        let source_bundle = source_bundle_fixture(f.dir.path(), archive, &elf, &mut identity);
         ScreenApproval {
             schema: SCREEN_APPROVAL.into(),
             construction: serde_json::from_value(serde_json::to_value(&f.a).unwrap()).unwrap(),
             producer: Producer {
                 result,
                 config: config_pin,
-                archive,
+                source_bundle,
                 binary: elf,
                 expected_config: config,
                 expected_identity: identity,
@@ -2969,7 +3280,12 @@ mod tests {
         };
         authenticate_producer(&a, &c, &scope, &mut Vec::new()).unwrap();
         for pin in [
-            &a.producer.archive,
+            &a.producer.source_bundle.base_archive,
+            &a.producer.source_bundle.overlays[0].body,
+            &a.producer.source_bundle.overlays[1].body,
+            &a.producer.source_bundle.final_source_map,
+            &a.producer.source_bundle.final_native_map,
+            &a.producer.source_bundle.qualification,
             &a.producer.config,
             &a.producer.binary,
             &a.producer.result,
@@ -3066,5 +3382,72 @@ mod tests {
         assert_eq!(value["resource_gate_failed"], true);
         assert_eq!(value["truth_opened"], false);
         assert!(!f.c.output_directory.join("spatial-root.bin").exists());
+    }
+
+    #[test]
+    fn paired_source_bundle_rehashed_overlays_maps_qualification_and_roles() {
+        let f = Fixture::new(4097, 1024);
+        let mut c = screen_config(&f);
+        let a = source_authority(&f, &mut c);
+        authenticate_producer_bundle(&a.producer, &mut Vec::new()).unwrap();
+        assert_ne!(
+            a.producer.source_bundle.source_commit,
+            a.producer.expected_bound_inputs["producer_authority"]["source_commit"]
+                .as_str()
+                .unwrap()
+        );
+        assert_ne!(
+            a.producer.binary.sha256,
+            a.producer.expected_bound_inputs["producer_authority"]["executable_sha256"]
+                .as_str()
+                .unwrap()
+        );
+        assert_ne!(a.producer.binary.sha256, f.a.constructor.binary.sha256);
+        // Binding stand-ins can never be accepted by the real frozen CLI.
+        assert!(frozen_producer(&a.producer).is_err());
+        let mut old = serde_json::to_value(&a.producer).unwrap();
+        old.as_object_mut().unwrap().remove("source_bundle");
+        old["archive"] = serde_json::to_value(&a.producer.source_bundle.base_archive).unwrap();
+        assert!(serde_json::from_value::<Producer>(old).is_err());
+        for mutation in 0..5 {
+            let mut p: Producer =
+                serde_json::from_value(serde_json::to_value(&a.producer).unwrap()).unwrap();
+            match mutation {
+                0 => {
+                    p.source_bundle.overlays[0].repository_path =
+                        "crates/borsuk/src/two_bit_generation.rs".into();
+                }
+                1 => {
+                    p.source_bundle.overlays[1].body =
+                        put(&f.dir.path().join("rehashed-overlay"), b"changed overlay");
+                }
+                2 => {
+                    let mut map: Value = serde_json::from_slice(
+                        &std::fs::read(&p.source_bundle.final_native_map.path).unwrap(),
+                    )
+                    .unwrap();
+                    map["crates/borsuk/src/returned_sq8.rs"] = json!("f".repeat(64));
+                    p.source_bundle.final_native_map =
+                        put_json(&f.dir.path().join("rehashed-native-map"), &map);
+                }
+                3 => {
+                    p.source_bundle.expected_qualification["stages"][0]["native_exit"] = json!(101);
+                    p.source_bundle.qualification = put_json(
+                        &f.dir.path().join("rehashed-native-qualification"),
+                        &p.source_bundle.expected_qualification,
+                    );
+                }
+                _ => {
+                    p.expected_identity["router_source_sha256"] = json!("f".repeat(64));
+                }
+            }
+            let error = authenticate_producer_bundle(&p, &mut Vec::new()).unwrap_err();
+            assert_eq!(failure(error.as_ref())["status"], "INVALID");
+        }
+        let duplicate = format!("{}  a.rs\n{}  a.rs\n", "1".repeat(64), "2".repeat(64));
+        assert!(source_map(duplicate.as_bytes()).is_err());
+        assert!(source_map(format!("{}  ../outside.rs\n", "1".repeat(64)).as_bytes()).is_err());
+        assert!(source_map(format!("{}  a.rs", "1".repeat(64)).as_bytes()).is_err());
+        assert!(!c.truth.path.exists());
     }
 }
