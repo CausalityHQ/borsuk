@@ -1,0 +1,159 @@
+{
+  "status": "SOURCE_COMMITTED_NATIVE_UNVERIFIED_HOLD",
+  "worker": "borsuk/sampled-boundary-native",
+  "instance": "dd57a4c6-9a5e-4598-b290-554a4d349f9f",
+  "original_brief": "/data/orchestration/borsuk%sampled-boundary-native.brief.json",
+  "original_brief_sha256": "31e5203306f9e95c97d8171fb7b8cac47bdb7ce2ba0fa1e01cefc83d20f3140f",
+  "original_brief_read_in_full": true,
+  "base": "7916288a8c04736e118dd5037e52c2239f179c71",
+  "initial_head": "37c4adcfe8eb2cd3d464f7beb81c42bb9bfbfff5",
+  "preserved_stale_ref": "refs/heads/devbox/sampled-boundary-native",
+  "owned_files": [
+    "crates/borsuk/src/semantic_unit_router.rs",
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "decision_and_three_reviews_read_in_full": true,
+  "api_plan": [
+    "checked construction/replay phase admission",
+    "generic SQ8 sample geometry/normalization",
+    "retained directed base graph projection/top16",
+    "40 L2 seeds + eight checked vote replacements",
+    "versioned authenticated adjacency digest in paired seal",
+    "reuse coverage/control/closure reducer, preserve cosine"
+  ],
+  "local_forbidden": [
+    "Cargo",
+    "rustc",
+    "native/tests/mocks",
+    "data/GT",
+    "network/AWS",
+    "consult/children",
+    "push/merge"
+  ],
+  "static_envelope": {
+    "cpu_quota": 1,
+    "allowed_cpu": 0,
+    "memory_bytes": 268435456,
+    "swap_bytes": 0,
+    "pids": 128,
+    "seconds": 120
+  },
+  "remote_parent_gates": [
+    "affected debug/release tests",
+    "locked release",
+    "workspace correctness+suspicious Clippy",
+    "actual shim-unset testbuild",
+    "real-input construction admission",
+    "disposable smoke",
+    "frozen science causality Spot EC2"
+  ],
+  "gate": {
+    "returned_control": 313,
+    "source_page_closure_control": 314,
+    "candidate_min": 315,
+    "slots": 320,
+    "gained_gt_lost": true
+  },
+  "hold": "SAME worker/no complete/archive until root disposition",
+  "setup_failure": "/tmp contract creation OSError122 disk quota exceeded; empty original preserved; backing contract moved to /data/cache",
+  "commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "commit_parent": "7916288a8c04736e118dd5037e52c2239f179c71",
+  "canonical_contract": "/data/target/borsuk-sampled-boundary-native.pending/contract.json",
+  "worktree_clean": true,
+  "detached_head": true,
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "no_attribution_trailers": true,
+  "no_merge_or_push": true,
+  "source_file_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "f8a3bfbaa216e3be87ad8a515193138a6f25a5995d116a85c63f05c32f49effc",
+    "crates/borsuk/examples/compare_native_replay.rs": "2f15d561880be70cbfcbcfbead9344644eaf57fccdcc1d84dc2aed67f929598b"
+  },
+  "apis": {
+    "sampled_boundary_position(rows, unit)": "Result<usize>; fixed physical min(32*u+16,rows-1)",
+    "decode_sampled_boundary_row(codes, low, step)": "Result<Vec<f32>>; finite reconstruction and existing cosine normalization; D1..1024",
+    "sampled_boundary_allocation(rows, dimensions, leaves, metadata, replay, cap)": "Result<SampledBoundaryAllocation>; checked samples/tower-capacity/heap/visited/pruning/edge-pair/validation/metadata/serialization/query model; max(construction,replay)",
+    "SemanticUnitRouter::unit_membership()": "&[usize]; authenticated physical-unit labels",
+    "SampledBoundaryAdjacency::build(samples, membership, leaves, cap)": "Result<Self>; private sequential nondiverse HNSW16/32/64; retained directed tower.last arcs; top16 cut counts",
+    "SampledBoundaryAdjacency::select(l2)": "Result<Vec<usize>>; checked40..1 votes, exactly48 when enough leaves, remaining-L2 fallback",
+    "--leaf-boundary-coverage": "CONFIG CONFIG_SHA NEW_ADJACENCY NEW_SELECTION NEW_REPORT; strict borsuk-leaf-boundary-coverage-config-v1 and candidate sampled_boundary_v1; max_payload_bytes<=536870912"
+  },
+  "publication": "Existing create-only sync/readback/identity-check machinery: adjacency before requests, complete paired selection (including adjacency digest) before first truth open. Same producer control and SOURCE page-closure reducer; old cosine schemas/labels remain distinct.",
+  "static_verification": {
+    "rustfmt_exit": 0,
+    "rustfmt_check_exit": 0,
+    "git_diff_check_exit": 0,
+    "log": "/data/target/borsuk-sampled-boundary-native.pending/static-final-3.log",
+    "log_sha256": "7c92edaf08dc8d121e18c1e631e38705200f52cb92e3dc24d14f020d7b8f73f8",
+    "unit": "borsuk-sampled-boundary-static-final-3.service",
+    "invocation": "d2f2805d597246929a43c9f0f4b82ccf",
+    "cpu_max": "100000 100000",
+    "cpuset_cpus_effective": "0",
+    "memory_max": 268435456,
+    "memory_swap_max": 0,
+    "pids_max": 128,
+    "runtime_max_seconds": 120,
+    "reported_memory_peak": "232.7M",
+    "reported_swap": "0B"
+  },
+  "preserved_setup_failures": [
+    {
+      "failure": "Original initialization left clean non-sparse checkout on stale37c4adcf; original brief/submitted marker/claim and stale ref not modified"
+    },
+    {
+      "failure": "Initial /tmp contract OSError122; zero-byte file retained",
+      "path": "/tmp/borsuk-sampled-boundary-native-contract.json.failed-empty"
+    },
+    {
+      "failure": "rustup launcher had no default toolchain in user service",
+      "unit": "borsuk-sampled-boundary-format-1.service",
+      "invocation": "a9287687186947499cdf22d8553bf348",
+      "exit": 1
+    },
+    {
+      "failure": "User-service cpuset delegation unavailable; first final check stopped before rustfmt/diff",
+      "log": "/data/target/borsuk-sampled-boundary-native.pending/static-final.log",
+      "exit": 1
+    },
+    {
+      "resolution": "Final static checks use installed rustfmt directly in system service as rb, with observed cpuset0 and exact requested limits; earlier receipts preserved"
+    }
+  ],
+  "native_fixtures_written_not_executed": {
+    "crates/borsuk/src/semantic_unit_router.rs": [
+      "sampled_boundary_midpoints_decode_and_dimension_contract",
+      "sampled_boundary_phase_admission_and_checked_votes",
+      "sampled_boundary_counts_directed_base_only_and_top16_ties",
+      "sampled_boundary_votes_l2_ties_exclusions_fallback_and_exact48",
+      "sampled_boundary_equal_distance_graph_is_repeatable_and_bounded"
+    ],
+    "crates/borsuk/examples/compare_native_replay.rs": [
+      "sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit",
+      "sampled_boundary_metadata_substitutions_refuse_before_source_construction",
+      "sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels",
+      "sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth"
+    ]
+  },
+  "remote_build_gate_envelope": {
+    "provider": "AWS causality Spot EC2; parent-owned only",
+    "compiler_jobs": 2,
+    "memory_gib": 16,
+    "build_disk_gib": 64,
+    "execution": "bounded externally; exact frozen source; no local native checks authorized"
+  },
+  "remote_commands_not_executed": [
+    "env CARGO_BUILD_JOBS=2 cargo test --locked -p borsuk --lib semantic_unit_router::tests:: -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=2 cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=2 cargo test --locked --release -p borsuk --lib semantic_unit_router::tests:: -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=2 cargo test --locked --release -p borsuk --example compare_native_replay -- --test-threads=1",
+    "env CARGO_BUILD_JOBS=2 cargo build --locked --release -p borsuk --example compare_native_replay",
+    "env CARGO_BUILD_JOBS=2 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+    "target/release/examples/compare_native_replay --leaf-boundary-coverage CONFIG CONFIG_SHA NEW_ADJACENCY NEW_SELECTION NEW_REPORT"
+  ],
+  "remote_runtime_gate_notes": [
+    "Real-input construction admission and separate disposable smoke remain parent-owned prerequisites before the frozen scientific CLI run.",
+    "build_boundary_evidence is the source-only private example phase; the requested full CLI continues into requests after adjacency publication. There is no extra construction-only CLI switch.",
+    "Provisional construction envelope CPU1/memory512MiB/swap0/900s must be externally enforced and measured. Initial2GiB staging must account for every input/output; later SOURCE replay requires a separate larger envelope.",
+    "Complete weak candidate remains MEASURED; protocol/identity/setup errors INVALID; control313 returned/314 SOURCE-scored page closure and candidate>=315 with gained>lost unchanged. No ANN, cold, lifecycle, or vendor-win claim."
+  ]
+}

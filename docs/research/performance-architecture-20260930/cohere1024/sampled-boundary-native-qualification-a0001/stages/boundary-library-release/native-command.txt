@@ -1,0 +1,1 @@
+cargo test --release --locked -p borsuk --lib sampled_boundary_ -- --test-threads=1

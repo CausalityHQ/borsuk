@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-sampled-boundary-native-batch-v1",
+  "source_commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "batch_exit": 0,
+  "completed_stages": 9,
+  "required_stages": 9,
+  "failed_stage": "",
+  "native_qualified": false,
+  "performance_claim": false
+}

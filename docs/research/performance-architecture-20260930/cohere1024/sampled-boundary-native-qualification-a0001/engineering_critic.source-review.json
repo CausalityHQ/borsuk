@@ -1,0 +1,349 @@
+{
+  "role": "engineering_critic",
+  "id": "14260151cd4c45ec",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "fallbacks": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "effort": "",
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791718654,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791719854,
+  "budget_usd": null,
+  "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only dual source review; do not edit/run Cargo/native/tests/data/network or spawn children. Repository /home/rb/worktrees/borsuk-sampled-boundary-native exact commit 9c40e0a5d5b84e6dbe7662d331601780facd066a parent 7916288a8c04736e118dd5037e52c2239f179c71. Only semantic_unit_router.rs and examples/compare_native_replay.rs changed. Read committed docs/research/performance-architecture-20260930/cohere1024/sampled-boundary-nomination-plan/decision.md and three planning/review reports. Review connected source for concrete violations: full source SQ8 authentication/order/bijection/EOF/stamps before graph/requests/truth; directed BASE graph arcs nondiverse fixed geometry and top16; 40 L2 seeds+8 votes and fallback/ties; checked phase memory admission before allocations including serializers and retained state; durable authenticated adjacency before requests and paired selection before truth; unchanged page-closure coverage and gate314 control/candidate315/320 gained>lost; legacy cosine unchanged. Generic Rust library vs benchmark example separation. Inline fixtures meaningful and compile plausibility (native unrun). Return GO for bounded EC2 correctness qualification or concrete minimal repair blockers with source references; no performance win/default adoption claim. Source-only/static read budget CPU1/256MiB/zeroSwap, avoid broad cache scans. Root owns actual execution on causality EC2.",
+  "prompt_sha256": "afb75a5a290a8c31e21abb3a7929758f9a5048354bd3b5d3f84bfc3f10dc712f",
+  "prompt_bytes": 1827,
+  "fingerprint": "94f7fd03d829bfd900a6f0ff48337690d36023ba4b5e8430b2e45d5b02456528",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "cc4b57b0f9af7e63e1b543b17ccfb4aa5e5ae128276f8fa90c9cbcf61f49c6c0",
+  "reused": false,
+  "critique_id": "6887af5350754d73",
+  "critique_role": "engineering_critic",
+  "systemd_unit": "devbox-consult-14260151cd4c45ec.service",
+  "pid": 2264121,
+  "pgid": 2264121,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "budget_usd": null,
+      "timeout_seconds": 1199,
+      "started_at": 1791718655
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791719027,
+  "event_cursor": 36,
+  "events": [
+    {
+      "seq": 13,
+      "at": 1791718782,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 14,
+      "at": 1791718787,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 15,
+      "at": 1791718788,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 16,
+      "at": 1791718793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 17,
+      "at": 1791718793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 18,
+      "at": 1791718799,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 19,
+      "at": 1791718803,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 20,
+      "at": 1791718803,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 21,
+      "at": 1791718807,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 22,
+      "at": 1791718812,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 23,
+      "at": 1791718822,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 24,
+      "at": 1791718822,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 25,
+      "at": 1791718832,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 26,
+      "at": 1791718836,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 27,
+      "at": 1791718855,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 28,
+      "at": 1791718859,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 29,
+      "at": 1791718859,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 30,
+      "at": 1791718906,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 31,
+      "at": 1791718910,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 2"
+    },
+    {
+      "seq": 32,
+      "at": 1791718974,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 33,
+      "at": 1791718979,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 34,
+      "at": 1791718980,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 35,
+      "at": 1791719024,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 36,
+      "at": 1791719026,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "codex": [
+      {
+        "seq": 29,
+        "at": 1791718859,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 30,
+        "at": 1791718906,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 31,
+        "at": 1791718910,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 2"
+      },
+      {
+        "seq": 32,
+        "at": 1791718974,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 33,
+        "at": 1791718979,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 34,
+        "at": 1791718980,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 35,
+        "at": 1791719024,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 36,
+        "at": 1791719026,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "What this change does: adds sampled-SQ8 boundary nomination while preserving layout, scoring, page-closure coverage, and the legacy cosine mode.\n\n**Verdict: GO for bounded EC2 correctness qualification.** I found no concrete repair blocker in commit `9c40e0a5d5b84e6dbe7662d331601780facd066a` against parent `7916288a8c04736e118dd5037e52c2239f179c71`. I read the committed decision and all three planning/review reports.\n\nThe main boundaries hold under static inspection:\n\n- **Authentication precedes graph construction.** The complete SQ8 scan checks exact geometry, length, EOF, SHA, physical-order SHA, positive finite stored norms, ordinal range, uniqueness, and file identity. Range plus uniqueness across all rows establishes the required bijection. Samples use physical positions and authenticated membership. [Scan](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4790), [construction sequence](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5248).\n\n- **Graph and selection semantics match the decision.** Construction uses the private sequential nondiverse helper with m16/m0=32/ef64. Projection counts retained directed `tower.last()` arcs, excludes intra-leaf arcs, and retains top16 by count then leaf ID. Selection preserves 40 L2 seeds, uses checked weighted votes, excludes seeds, resolves ties deterministically, and fills shortages from L2 to exactly48 distinct leaves when available. [Implementation](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:387).\n\n- **Memory admission precedes substantial construction allocations.** The checked model includes sample payload/header storage, bounded graph capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization, and replay scratch. Samples and graph are released before paired replay. I found no concrete omitted allocation large enough to invalidate the stated bound; RSS and allocator behavior remain unmeasured. [Model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:292), [admission placement](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5577).\n\n- **Publication order and failure handling are sound.** The versioned adjacency binds source identities, calibration, geometry, and algorithm parameters. Publication uses exclusive creation, file/directory sync, exact readback, and identity rechecks; failures invalidate the owned output. Adjacency publication precedes requests, and its digest enters the paired seal before truth opens. [Publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5317), [truth boundary](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5705).\n\n- **Scientific controls remain intact.** Coverage counts SOURCE-scored page closure separately from fetched bridges. Control313 returned/control314 coverage, candidate≥315, paired accounting, and `gained > lost` remain enforced. Dataset and filesystem restrictions stay in the example. [Gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435), [control checks](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5784).\n\nThe inline fixtures meaningfully exercise dimensions, partial units, directed-layer counting, ties, fallback, overflow, corruption, metadata substitution, and publication failures. No obvious compile blocker emerged from source inspection.\n\nThis GO permits the prescribed native qualification under the frozen limits. Compilation, affected tests, Clippy, complete test-build, real-input admission, and disposable smoke remain outstanding. It establishes no performance win or default-adoption case.\n\nNo edits, Cargo/native execution, data reads, network operations, or children were performed.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "codex": "What this change does: adds sampled-SQ8 boundary nomination while preserving layout, scoring, page-closure coverage, and the legacy cosine mode.\n\n**Verdict: GO for bounded EC2 correctness qualification.** I found no concrete repair blocker in commit `9c40e0a5d5b84e6dbe7662d331601780facd066a` against parent `7916288a8c04736e118dd5037e52c2239f179c71`. I read the committed decision and all three planning/review reports.\n\nThe main boundaries hold under static inspection:\n\n- **Authentication precedes graph construction.** The complete SQ8 scan checks exact geometry, length, EOF, SHA, physical-order SHA, positive finite stored norms, ordinal range, uniqueness, and file identity. Range plus uniqueness across all rows establishes the required bijection. Samples use physical positions and authenticated membership. [Scan](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4790), [construction sequence](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5248).\n\n- **Graph and selection semantics match the decision.** Construction uses the private sequential nondiverse helper with m16/m0=32/ef64. Projection counts retained directed `tower.last()` arcs, excludes intra-leaf arcs, and retains top16 by count then leaf ID. Selection preserves 40 L2 seeds, uses checked weighted votes, excludes seeds, resolves ties deterministically, and fills shortages from L2 to exactly48 distinct leaves when available. [Implementation](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:387).\n\n- **Memory admission precedes substantial construction allocations.** The checked model includes sample payload/header storage, bounded graph capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization, and replay scratch. Samples and graph are released before paired replay. I found no concrete omitted allocation large enough to invalidate the stated bound; RSS and allocator behavior remain unmeasured. [Model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:292), [admission placement](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5577).\n\n- **Publication order and failure handling are sound.** The versioned adjacency binds source identities, calibration, geometry, and algorithm parameters. Publication uses exclusive creation, file/directory sync, exact readback, and identity rechecks; failures invalidate the owned output. Adjacency publication precedes requests, and its digest enters the paired seal before truth opens. [Publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5317), [truth boundary](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5705).\n\n- **Scientific controls remain intact.** Coverage counts SOURCE-scored page closure separately from fetched bridges. Control313 returned/control314 coverage, candidate≥315, paired accounting, and `gained > lost` remain enforced. Dataset and filesystem restrictions stay in the example. [Gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435), [control checks](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5784).\n\nThe inline fixtures meaningfully exercise dimensions, partial units, directed-layer counting, ties, fallback, overflow, corruption, metadata substitution, and publication failures. No obvious compile blocker emerged from source inspection.\n\nThis GO permits the prescribed native qualification under the frozen limits. Compilation, affected tests, Clippy, complete test-build, real-input admission, and disposable smoke remain outstanding. It establishes no performance win or default-adoption case.\n\nNo edits, Cargo/native execution, data reads, network operations, or children were performed."
+  },
+  "providers_used": [
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 1827,
+  "output_bytes": 4031,
+  "elapsed_seconds": 373,
+  "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)",
+  "progress_truncated": false,
+  "result": "What this change does: adds sampled-SQ8 boundary nomination while preserving layout, scoring, page-closure coverage, and the legacy cosine mode.\n\n**Verdict: GO for bounded EC2 correctness qualification.** I found no concrete repair blocker in commit `9c40e0a5d5b84e6dbe7662d331601780facd066a` against parent `7916288a8c04736e118dd5037e52c2239f179c71`. I read the committed decision and all three planning/review reports.\n\nThe main boundaries hold under static inspection:\n\n- **Authentication precedes graph construction.** The complete SQ8 scan checks exact geometry, length, EOF, SHA, physical-order SHA, positive finite stored norms, ordinal range, uniqueness, and file identity. Range plus uniqueness across all rows establishes the required bijection. Samples use physical positions and authenticated membership. [Scan](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4790), [construction sequence](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5248).\n\n- **Graph and selection semantics match the decision.** Construction uses the private sequential nondiverse helper with m16/m0=32/ef64. Projection counts retained directed `tower.last()` arcs, excludes intra-leaf arcs, and retains top16 by count then leaf ID. Selection preserves 40 L2 seeds, uses checked weighted votes, excludes seeds, resolves ties deterministically, and fills shortages from L2 to exactly48 distinct leaves when available. [Implementation](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:387).\n\n- **Memory admission precedes substantial construction allocations.** The checked model includes sample payload/header storage, bounded graph capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization, and replay scratch. Samples and graph are released before paired replay. I found no concrete omitted allocation large enough to invalidate the stated bound; RSS and allocator behavior remain unmeasured. [Model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:292), [admission placement](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5577).\n\n- **Publication order and failure handling are sound.** The versioned adjacency binds source identities, calibration, geometry, and algorithm parameters. Publication uses exclusive creation, file/directory sync, exact readback, and identity rechecks; failures invalidate the owned output. Adjacency publication precedes requests, and its digest enters the paired seal before truth opens. [Publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5317), [truth boundary](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5705).\n\n- **Scientific controls remain intact.** Coverage counts SOURCE-scored page closure separately from fetched bridges. Control313 returned/control314 coverage, candidate≥315, paired accounting, and `gained > lost` remain enforced. Dataset and filesystem restrictions stay in the example. [Gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435), [control checks](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5784).\n\nThe inline fixtures meaningfully exercise dimensions, partial units, directed-layer counting, ties, fallback, overflow, corruption, metadata substitution, and publication failures. No obvious compile blocker emerged from source inspection.\n\nThis GO permits the prescribed native qualification under the frozen limits. Compilation, affected tests, Clippy, complete test-build, real-input admission, and disposable smoke remain outstanding. It establishes no performance win or default-adoption case.\n\nNo edits, Cargo/native execution, data reads, network operations, or children were performed.",
+  "result_truncated": false
+}

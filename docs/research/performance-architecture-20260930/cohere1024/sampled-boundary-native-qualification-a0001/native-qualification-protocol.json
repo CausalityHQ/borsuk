@@ -1,0 +1,72 @@
+{
+  "schema": "borsuk-sampled-boundary-native-qualification-v1",
+  "status": "FROZEN_READY_NATIVE_CORRECTNESS",
+  "source_commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "source_parent": "7916288a8c04736e118dd5037e52c2239f179c71",
+  "owned_files": [
+    "crates/borsuk/src/semantic_unit_router.rs",
+    "crates/borsuk/examples/compare_native_replay.rs"
+  ],
+  "source_file_sha256": {
+    "crates/borsuk/src/semantic_unit_router.rs": "f8a3bfbaa216e3be87ad8a515193138a6f25a5995d116a85c63f05c32f49effc",
+    "crates/borsuk/examples/compare_native_replay.rs": "2f15d561880be70cbfcbcfbead9344644eaf57fccdcc1d84dc2aed67f929598b"
+  },
+  "required_fixtures": {
+    "crates/borsuk/src/semantic_unit_router.rs": [
+      "sampled_boundary_midpoints_decode_and_dimension_contract",
+      "sampled_boundary_phase_admission_and_checked_votes",
+      "sampled_boundary_counts_directed_base_only_and_top16_ties",
+      "sampled_boundary_votes_l2_ties_exclusions_fallback_and_exact48",
+      "sampled_boundary_equal_distance_graph_is_repeatable_and_bounded"
+    ],
+    "crates/borsuk/examples/compare_native_replay.rs": [
+      "sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit",
+      "sampled_boundary_metadata_substitutions_refuse_before_source_construction",
+      "sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels",
+      "sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth"
+    ]
+  },
+  "compiler_jobs": 2,
+  "memory_bytes": 17179869184,
+  "swap_bytes": 0,
+  "build_disk_bytes": 68719476736,
+  "commands": [
+    "cargo test --locked -p borsuk --lib sampled_boundary_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --example compare_native_replay sampled_boundary_ -- --test-threads=1",
+    "cargo test --release --locked -p borsuk --lib sampled_boundary_ -- --test-threads=1",
+    "cargo test --release --locked -p borsuk --example compare_native_replay sampled_boundary_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --example compare_native_replay leaf_coverage_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --example compare_native_replay sealed_loss_ -- --test-threads=1",
+    "cargo build --release --locked -p borsuk --example compare_native_replay",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh"
+  ],
+  "native_unrun": true,
+  "performance_claim": false,
+  "source_file_count": 463,
+  "native_source_count": 430,
+  "native_source_identity_sha256": "244a7a2e25917820ac6ac0ec11e075e9797530ff6b7cc7b8f26804f966b93164",
+  "identity_algorithm": "sha256(sorted manifest lines: sha256 + two spaces + path + newline)",
+  "review_group": "6887af5350754d73",
+  "reviews_completed_exit0": true,
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "market": "spot",
+  "instance_type": "c7i.4xlarge",
+  "observed_spot_usd_per_hour": 0.3771,
+  "quote_timestamp": "2026-10-11T09:00:00+00:00",
+  "max_bid_usd_per_hour": 0.6,
+  "max_total_usd": 2.25,
+  "max_ancillary_usd": 0.3,
+  "root_disk_gib": 96,
+  "machine_shutdown_seconds": 10800,
+  "external_termination_seconds": 10920,
+  "native_global_seconds": 9000,
+  "compiler_cpu_quota_percent": 400,
+  "compiler_allowed_cpus": "0-3",
+  "compiler_pids": 512,
+  "test_threads": 1,
+  "failure_handling": "Stop at first failed stage, preserve and collect exact terminal artifacts, terminate same instance and wait. No automatic relaunch or arm changes.",
+  "interruption_handling": "INVALID, preserve available evidence, no automatic relaunch.",
+  "real_corpus_queries_truth_unopened": true
+}

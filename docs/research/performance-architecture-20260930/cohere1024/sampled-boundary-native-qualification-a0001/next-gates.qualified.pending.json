@@ -1,0 +1,128 @@
+{
+  "schema": "borsuk-sampled-boundary-next-gates-draft-v1",
+  "status": "PENDING_REAL_INPUT_ADMISSION_NO_LAUNCH",
+  "candidate_source_commit": "9c40e0a5d5b84e6dbe7662d331601780facd066a",
+  "native_qualification": {
+    "instance_id": "i-02f1480305f20e32a",
+    "command_id": "88b4f1db-4cf6-4008-b892-172e2c0f7252",
+    "required_stages": 9,
+    "complete": true
+  },
+  "candidate_binary_pin": {
+    "s3_key": "research/semantic-router/20261011/sampled-boundary-native-qualification-a0001/stages/boundary-release/compare_native_replay",
+    "bytes": 6380056,
+    "sha256": "299ee9c2c7b73fe37f37f91f772ea527d1451b27067e5a4859ea773d7168fd07"
+  },
+  "baseline_producer_identity_preserved": true,
+  "config_schema": "borsuk-leaf-boundary-coverage-config-v1",
+  "rows": 1000000,
+  "dimensions": 1024,
+  "ordinals": [
+    69,
+    83,
+    114,
+    149,
+    151,
+    159,
+    188,
+    189,
+    211,
+    237,
+    257,
+    296,
+    321,
+    351,
+    388,
+    408,
+    413,
+    513,
+    537,
+    587,
+    626,
+    667,
+    669,
+    731,
+    742,
+    821,
+    823,
+    849,
+    851,
+    890,
+    956,
+    991
+  ],
+  "input_pins": {
+    "producer": {
+      "path": "/mnt/borsuk-boundary-data/inputs/sealed-result.jsonl",
+      "bytes": 1220980,
+      "sha256": "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+    },
+    "requests": {
+      "path": "/mnt/borsuk-boundary-data/inputs/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "truth": {
+      "path": "/mnt/borsuk-boundary-data/inputs/truth.u64",
+      "bytes": 80000,
+      "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+    },
+    "sq8": {
+      "path": "/mnt/borsuk-boundary-data/inputs/sq8",
+      "bytes": 1036000000,
+      "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+    },
+    "generation": {
+      "path": "/mnt/borsuk-boundary-data/inputs/generation.json",
+      "bytes": 27501,
+      "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+    },
+    "plane": {
+      "path": "/mnt/borsuk-boundary-data/inputs/plane.json",
+      "bytes": 653,
+      "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+    },
+    "router": {
+      "path": "/mnt/borsuk-boundary-data/inputs/router-root.bin",
+      "bytes": 3041472,
+      "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+    },
+    "membership": {
+      "path": "/mnt/borsuk-boundary-data/inputs/membership.bin",
+      "bytes": 125000,
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+    }
+  },
+  "order": [
+    "exact-source native correctness gates",
+    "real-input source-bound admission using qualified ELF; quality outputs opaque",
+    "separate disposable CLI/asset/exit/cleanup smoke",
+    "freeze source/config and ONE coverage screen"
+  ],
+  "provisional_resources": {
+    "transport_memory_bytes": 2147483648,
+    "construction_cpu_quota_percent": 100,
+    "construction_allowed_cpu": 0,
+    "construction_memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "native_seconds": 900,
+    "staging_bytes": 2147483648
+  },
+  "scientific_gate": {
+    "slots": 320,
+    "control_returned": 313,
+    "control_source_page_closure": 314,
+    "candidate_min_source_page_closure": 315,
+    "gained_greater_than_lost": true,
+    "zero_loss_required": false
+  },
+  "source_limits": {
+    "gets": 128,
+    "bytes": 67108864
+  },
+  "coverage_only": true,
+  "returned_recall_qualified": false,
+  "cold_performance_qualified": false,
+  "serving_adoption_authorized": false,
+  "vendor_win": false
+}

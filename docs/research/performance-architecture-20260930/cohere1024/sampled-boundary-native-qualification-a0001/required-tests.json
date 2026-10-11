@@ -1,0 +1,44 @@
+{
+  "boundary-library-debug": [
+    "semantic_unit_router::tests::sampled_boundary_midpoints_decode_and_dimension_contract",
+    "semantic_unit_router::tests::sampled_boundary_phase_admission_and_checked_votes",
+    "semantic_unit_router::tests::sampled_boundary_counts_directed_base_only_and_top16_ties",
+    "semantic_unit_router::tests::sampled_boundary_votes_l2_ties_exclusions_fallback_and_exact48",
+    "semantic_unit_router::tests::sampled_boundary_equal_distance_graph_is_repeatable_and_bounded"
+  ],
+  "boundary-library-release": [
+    "semantic_unit_router::tests::sampled_boundary_midpoints_decode_and_dimension_contract",
+    "semantic_unit_router::tests::sampled_boundary_phase_admission_and_checked_votes",
+    "semantic_unit_router::tests::sampled_boundary_counts_directed_base_only_and_top16_ties",
+    "semantic_unit_router::tests::sampled_boundary_votes_l2_ties_exclusions_fallback_and_exact48",
+    "semantic_unit_router::tests::sampled_boundary_equal_distance_graph_is_repeatable_and_bounded"
+  ],
+  "boundary-example-debug": [
+    "tests::sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit",
+    "tests::sampled_boundary_metadata_substitutions_refuse_before_source_construction",
+    "tests::sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels",
+    "tests::sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth"
+  ],
+  "boundary-example-release": [
+    "tests::sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit",
+    "tests::sampled_boundary_metadata_substitutions_refuse_before_source_construction",
+    "tests::sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels",
+    "tests::sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth"
+  ],
+  "boundary-coverage-legacy": [
+    "tests::leaf_coverage_real_source_plan_excludes_fetched_bridge_and_keeps_tail",
+    "tests::leaf_coverage_authenticated_metadata_and_fixed48_metric_boundary",
+    "tests::leaf_coverage_actual_orchestration_refuses_terminal_and_sync_before_truth",
+    "tests::leaf_coverage_actual_reducer_rejects_rehashed_nontruth_return_outside_sq8",
+    "tests::leaf_coverage_seal_sync_mutation_and_occupied_path_refuse_before_truth",
+    "tests::leaf_coverage_actual_report_publication_invalidates_success_on_sync_or_sq8_mutation",
+    "tests::leaf_coverage_requests_and_whole_sq8_mapping_refuse_rehashed_corruption",
+    "tests::leaf_coverage_exact_control_and_gain_loss_gate_refuse_mutations"
+  ],
+  "boundary-seal-legacy": [
+    "tests::sealed_loss_bridge_source_completion_and_disjoint_buckets",
+    "tests::sealed_loss_refuses_incomplete_duplicate_out_of_cover_and_charge_evidence",
+    "tests::sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity",
+    "tests::sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth"
+  ]
+}

@@ -1,0 +1,404 @@
+{
+  "role": "research_critic",
+  "id": "0dcdbe546a49403a",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "fallbacks": [
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "effort": "",
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791718654,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791719854,
+  "budget_usd": null,
+  "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only dual source review; do not edit/run Cargo/native/tests/data/network or spawn children. Repository /home/rb/worktrees/borsuk-sampled-boundary-native exact commit 9c40e0a5d5b84e6dbe7662d331601780facd066a parent 7916288a8c04736e118dd5037e52c2239f179c71. Only semantic_unit_router.rs and examples/compare_native_replay.rs changed. Read committed docs/research/performance-architecture-20260930/cohere1024/sampled-boundary-nomination-plan/decision.md and three planning/review reports. Review connected source for concrete violations: full source SQ8 authentication/order/bijection/EOF/stamps before graph/requests/truth; directed BASE graph arcs nondiverse fixed geometry and top16; 40 L2 seeds+8 votes and fallback/ties; checked phase memory admission before allocations including serializers and retained state; durable authenticated adjacency before requests and paired selection before truth; unchanged page-closure coverage and gate314 control/candidate315/320 gained>lost; legacy cosine unchanged. Generic Rust library vs benchmark example separation. Inline fixtures meaningful and compile plausibility (native unrun). Return GO for bounded EC2 correctness qualification or concrete minimal repair blockers with source references; no performance win/default adoption claim. Source-only/static read budget CPU1/256MiB/zeroSwap, avoid broad cache scans. Root owns actual execution on causality EC2.",
+  "prompt_sha256": "eaeb964ec3de65a5bb06b8467a3dc1769d6a84d4ff7773c1006b00006df5724f",
+  "prompt_bytes": 1793,
+  "fingerprint": "cc4b57b0f9af7e63e1b543b17ccfb4aa5e5ae128276f8fa90c9cbcf61f49c6c0",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "ad692a49aa7f6d1a81f14ae1429a9fa6c0bb736a04a6bd27cbedeacca59ebf3c",
+  "reused": false,
+  "critique_id": "6887af5350754d73",
+  "critique_role": "research_critic",
+  "systemd_unit": "devbox-consult-0dcdbe546a49403a.service",
+  "pid": 2263689,
+  "pgid": 2263689,
+  "attempt": 2,
+  "attempts": [
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5",
+      "budget_usd": 4,
+      "timeout_seconds": 1199,
+      "started_at": 1791718655,
+      "effort": "high",
+      "effort_source": "fallback"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "budget_usd": null,
+      "timeout_seconds": 1168,
+      "started_at": 1791718686
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791718938,
+  "event_cursor": 43,
+  "events": [
+    {
+      "seq": 20,
+      "at": 1791718783,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 21,
+      "at": 1791718783,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 22,
+      "at": 1791718787,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 23,
+      "at": 1791718788,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 24,
+      "at": 1791718792,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 25,
+      "at": 1791718797,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 26,
+      "at": 1791718797,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 27,
+      "at": 1791718797,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 28,
+      "at": 1791718797,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 29,
+      "at": 1791718801,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 30,
+      "at": 1791718801,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 31,
+      "at": 1791718805,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 32,
+      "at": 1791718805,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 33,
+      "at": 1791718817,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 34,
+      "at": 1791718817,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 35,
+      "at": 1791718817,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 36,
+      "at": 1791718817,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 37,
+      "at": 1791718842,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 38,
+      "at": 1791718842,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 39,
+      "at": 1791718859,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 40,
+      "at": 1791718864,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 41,
+      "at": 1791718867,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 42,
+      "at": 1791718935,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 43,
+      "at": 1791718937,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "claude": [
+      {
+        "seq": 1,
+        "at": 1791718655,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Claude consultation attempt",
+        "detail": "claude-opus-5-5 · $4 cap · 1199s remaining"
+      },
+      {
+        "seq": 2,
+        "at": 1791718658,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Reviewer thinking applied",
+        "detail": "claude-opus-5-5 / high (fallback)",
+        "effort": "high",
+        "model": "claude-opus-5-5",
+        "source": "fallback"
+      },
+      {
+        "seq": 3,
+        "at": 1791718658,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Claude consultation started"
+      },
+      {
+        "seq": 4,
+        "at": 1791718676,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Provider reported an error",
+        "detail": "success"
+      },
+      {
+        "seq": 5,
+        "at": 1791718686,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Provider attempt exited",
+        "detail": "exit 1"
+      },
+      {
+        "seq": 6,
+        "at": 1791718686,
+        "provider": "claude",
+        "kind": "phase",
+        "label": "Provider limit reached; switching fallback",
+        "detail": "codex"
+      }
+    ],
+    "codex": [
+      {
+        "seq": 36,
+        "at": 1791718817,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 37,
+        "at": 1791718842,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 38,
+        "at": 1791718842,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 39,
+        "at": 1791718859,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 40,
+        "at": 1791718864,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 41,
+        "at": 1791718867,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 42,
+        "at": 1791718935,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 43,
+        "at": 1791718937,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**GO for bounded EC2 correctness qualification of `9c40e0a5d5b84e6dbe7662d331601780facd066a`.** I found no concrete source-level repair blocker. This is permission to falsify the implementation under the frozen limits; compilation, runtime correctness, resource compliance and performance remain unverified.\n\nWhat this change does: It retains the physical layout and scoring rules, replacing nomination with 40 original L2 leaves plus eight adjacency-voted leaves. The adjacency comes from sampled reconstructed SQ8 rows and counts retained directed graph arcs.\n\nThe implementation follows the corrected decision rather than the superseded planning report:\n\n- **Authentication precedes graph construction.** The complete scan checks exact SQ8 length, every stored norm, ordinal range, uniqueness, full SHA, physical-order SHA, EOF and file identity. With exactly `rows` distinct IDs in `[0, rows)`, those checks establish the required bijection. Samples follow physical positions; membership supplies their leaf labels. See [the scanner](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4786) and [sampling flow](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5197).\n\n- **Graph semantics match the contract.** Construction uses the private sequential nondiverse helper with `16/32/64/64`. Projection reads `tower.last()`, counts each stored directed cross-leaf base arc, excludes intra-leaf arcs, and retains top16 by descending count then leaf ID. It introduces no upper-layer or reachability-repair edges. See [construction and projection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:418).\n\n- **Selection is deterministic.** Weights are 40…1, seeds cannot become replacements, vote arithmetic is checked, ties use original L2 rank then leaf ID, and shortages fill in L2 order. For at least48 leaves, the permutation validation and fallback produce exactly48 distinct selections. See [selection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:488).\n\n- **Allocation admission and lifetimes are explicit.** The example checks the phase model before router/sample construction. The model includes bounded tower capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization and query scratch. Samples and graph are dropped before paired replay. This supports remote qualification, but the conservative payload estimate does not prove RSS, cgroup peak or completion within900 seconds. See [allocation model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:289).\n\n- **Both publication boundaries hold statically.** Adjacency publication completes file sync, authenticated readback, directory sync and identity rechecks before requests open. Paired selections bind its digest and complete the same publication sequence before truth opens. Failure cleanup invalidates the owned descriptor. See [adjacency publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5231) and [paired publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5681).\n\n- **The scientific endpoint remains intact.** Coverage uses SOURCE-scored page closure, distinguishes fetched bridges, reproduces control returned313 and coverage314, and requires candidate≥315 with `gained>lost`. The cosine branch retains its original metric and behavior. Dataset scope, filesystem authentication and generation handling remain in the example; the library receives geometry, vectors and membership. See [coverage gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435).\n\nThe research assumptions still need falsification. A midpoint can systematically miss boundary rows; raw directed counts mix geometric proximity with leaf size, destination popularity and approximate discovery. Repeatable graph construction does not establish neighbor fidelity. Diverse discovery followed by explicit neighbor extraction, a fuller FP32 graph, or repartitioning would test different mechanisms. None is justified as a substitute within this frozen arm.\n\nThe inline fixtures are meaningful: they cover partial units, dimensions, directed/base-only counting, top16 ties, vote ties, fallback, exact48, overflow, nonidentity order, corrupt/truncated/grown SQ8, metadata substitution and publication failures. The synthetic orchestration fixture establishes sequencing, not graph quality or ANN recall. Static inspection revealed no obvious compilation obstacle.\n\n**Missing evidence:** exact-revision remote compilation, affected tests, required Clippy and complete test-build; authenticated real-input admission; disposable smoke; enforced resource measurements; and actual returned-recall qualification if coverage survives. The consumed32 screen cannot establish held-out generalization, tail latency, lifecycle cost or a vendor win.\n\nNo files changed. No Cargo, tests, data access, network access or child agents were used.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "claude": "You've hit your weekly limit · resets Oct 13, 12am (UTC)",
+    "codex": "**GO for bounded EC2 correctness qualification of `9c40e0a5d5b84e6dbe7662d331601780facd066a`.** I found no concrete source-level repair blocker. This is permission to falsify the implementation under the frozen limits; compilation, runtime correctness, resource compliance and performance remain unverified.\n\nWhat this change does: It retains the physical layout and scoring rules, replacing nomination with 40 original L2 leaves plus eight adjacency-voted leaves. The adjacency comes from sampled reconstructed SQ8 rows and counts retained directed graph arcs.\n\nThe implementation follows the corrected decision rather than the superseded planning report:\n\n- **Authentication precedes graph construction.** The complete scan checks exact SQ8 length, every stored norm, ordinal range, uniqueness, full SHA, physical-order SHA, EOF and file identity. With exactly `rows` distinct IDs in `[0, rows)`, those checks establish the required bijection. Samples follow physical positions; membership supplies their leaf labels. See [the scanner](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4786) and [sampling flow](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5197).\n\n- **Graph semantics match the contract.** Construction uses the private sequential nondiverse helper with `16/32/64/64`. Projection reads `tower.last()`, counts each stored directed cross-leaf base arc, excludes intra-leaf arcs, and retains top16 by descending count then leaf ID. It introduces no upper-layer or reachability-repair edges. See [construction and projection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:418).\n\n- **Selection is deterministic.** Weights are 40…1, seeds cannot become replacements, vote arithmetic is checked, ties use original L2 rank then leaf ID, and shortages fill in L2 order. For at least48 leaves, the permutation validation and fallback produce exactly48 distinct selections. See [selection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:488).\n\n- **Allocation admission and lifetimes are explicit.** The example checks the phase model before router/sample construction. The model includes bounded tower capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization and query scratch. Samples and graph are dropped before paired replay. This supports remote qualification, but the conservative payload estimate does not prove RSS, cgroup peak or completion within900 seconds. See [allocation model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:289).\n\n- **Both publication boundaries hold statically.** Adjacency publication completes file sync, authenticated readback, directory sync and identity rechecks before requests open. Paired selections bind its digest and complete the same publication sequence before truth opens. Failure cleanup invalidates the owned descriptor. See [adjacency publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5231) and [paired publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5681).\n\n- **The scientific endpoint remains intact.** Coverage uses SOURCE-scored page closure, distinguishes fetched bridges, reproduces control returned313 and coverage314, and requires candidate≥315 with `gained>lost`. The cosine branch retains its original metric and behavior. Dataset scope, filesystem authentication and generation handling remain in the example; the library receives geometry, vectors and membership. See [coverage gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435).\n\nThe research assumptions still need falsification. A midpoint can systematically miss boundary rows; raw directed counts mix geometric proximity with leaf size, destination popularity and approximate discovery. Repeatable graph construction does not establish neighbor fidelity. Diverse discovery followed by explicit neighbor extraction, a fuller FP32 graph, or repartitioning would test different mechanisms. None is justified as a substitute within this frozen arm.\n\nThe inline fixtures are meaningful: they cover partial units, dimensions, directed/base-only counting, top16 ties, vote ties, fallback, exact48, overflow, nonidentity order, corrupt/truncated/grown SQ8, metadata substitution and publication failures. The synthetic orchestration fixture establishes sequencing, not graph quality or ANN recall. Static inspection revealed no obvious compilation obstacle.\n\n**Missing evidence:** exact-revision remote compilation, affected tests, required Clippy and complete test-build; authenticated real-input admission; disposable smoke; enforced resource measurements; and actual returned-recall qualification if coverage survives. The consumed32 screen cannot establish held-out generalization, tail latency, lifecycle cost or a vendor win.\n\nNo files changed. No Cargo, tests, data access, network access or child agents were used."
+  },
+  "providers_used": [
+    "claude",
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 1793,
+  "output_bytes": 5192,
+  "elapsed_seconds": 284,
+  "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)",
+  "progress_truncated": false,
+  "result": "**GO for bounded EC2 correctness qualification of `9c40e0a5d5b84e6dbe7662d331601780facd066a`.** I found no concrete source-level repair blocker. This is permission to falsify the implementation under the frozen limits; compilation, runtime correctness, resource compliance and performance remain unverified.\n\nWhat this change does: It retains the physical layout and scoring rules, replacing nomination with 40 original L2 leaves plus eight adjacency-voted leaves. The adjacency comes from sampled reconstructed SQ8 rows and counts retained directed graph arcs.\n\nThe implementation follows the corrected decision rather than the superseded planning report:\n\n- **Authentication precedes graph construction.** The complete scan checks exact SQ8 length, every stored norm, ordinal range, uniqueness, full SHA, physical-order SHA, EOF and file identity. With exactly `rows` distinct IDs in `[0, rows)`, those checks establish the required bijection. Samples follow physical positions; membership supplies their leaf labels. See [the scanner](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:4786) and [sampling flow](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5197).\n\n- **Graph semantics match the contract.** Construction uses the private sequential nondiverse helper with `16/32/64/64`. Projection reads `tower.last()`, counts each stored directed cross-leaf base arc, excludes intra-leaf arcs, and retains top16 by descending count then leaf ID. It introduces no upper-layer or reachability-repair edges. See [construction and projection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:418).\n\n- **Selection is deterministic.** Weights are 40…1, seeds cannot become replacements, vote arithmetic is checked, ties use original L2 rank then leaf ID, and shortages fill in L2 order. For at least48 leaves, the permutation validation and fallback produce exactly48 distinct selections. See [selection](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:488).\n\n- **Allocation admission and lifetimes are explicit.** The example checks the phase model before router/sample construction. The model includes bounded tower capacities, insertion scratch, flat edge pairs, validation, adjacency, serialization and query scratch. Samples and graph are dropped before paired replay. This supports remote qualification, but the conservative payload estimate does not prove RSS, cgroup peak or completion within900 seconds. See [allocation model](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/src/semantic_unit_router.rs:289).\n\n- **Both publication boundaries hold statically.** Adjacency publication completes file sync, authenticated readback, directory sync and identity rechecks before requests open. Paired selections bind its digest and complete the same publication sequence before truth opens. Failure cleanup invalidates the owned descriptor. See [adjacency publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5231) and [paired publication](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5681).\n\n- **The scientific endpoint remains intact.** Coverage uses SOURCE-scored page closure, distinguishes fetched bridges, reproduces control returned313 and coverage314, and requires candidate≥315 with `gained>lost`. The cosine branch retains its original metric and behavior. Dataset scope, filesystem authentication and generation handling remain in the example; the library receives geometry, vectors and membership. See [coverage gate](/home/rb/worktrees/borsuk-sampled-boundary-native/crates/borsuk/examples/compare_native_replay.rs:5435).\n\nThe research assumptions still need falsification. A midpoint can systematically miss boundary rows; raw directed counts mix geometric proximity with leaf size, destination popularity and approximate discovery. Repeatable graph construction does not establish neighbor fidelity. Diverse discovery followed by explicit neighbor extraction, a fuller FP32 graph, or repartitioning would test different mechanisms. None is justified as a substitute within this frozen arm.\n\nThe inline fixtures are meaningful: they cover partial units, dimensions, directed/base-only counting, top16 ties, vote ties, fallback, exact48, overflow, nonidentity order, corrupt/truncated/grown SQ8, metadata substitution and publication failures. The synthetic orchestration fixture establishes sequencing, not graph quality or ANN recall. Static inspection revealed no obvious compilation obstacle.\n\n**Missing evidence:** exact-revision remote compilation, affected tests, required Clippy and complete test-build; authenticated real-input admission; disposable smoke; enforced resource measurements; and actual returned-recall qualification if coverage survives. The consumed32 screen cannot establish held-out generalization, tail latency, lifecycle cost or a vendor win.\n\nNo files changed. No Cargo, tests, data access, network access or child agents were used.",
+  "result_truncated": false
+}
