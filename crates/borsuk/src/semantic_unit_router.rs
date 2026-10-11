@@ -22,7 +22,40 @@ pub const ALLOCATION_CAP: usize = 128 * 1024 * 1024;
 const HEADER_BYTES: usize = 32;
 const LEAF_UNITS: usize = 64;
 const ITERATIONS: usize = 12;
-const SCHEMA: &str = "BORSUSR2";
+const SCHEMA: &str = "BORSUSR3";
+
+/// Authenticated leaf partition contract; experimental spatial mode is opt-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeafPartition {
+    /// Frozen radius-order chunks of at most 64 units.
+    Radial64V1,
+    /// Deterministic widest-axis bisection with balanced leaf quotas.
+    WidestAxisQuotaV1,
+}
+impl LeafPartition {
+    fn code(self) -> usize {
+        match self {
+            Self::Radial64V1 => 1,
+            Self::WidestAxisQuotaV1 => 2,
+        }
+    }
+    fn from_code(code: usize) -> Result<Self> {
+        match code {
+            1 => Ok(Self::Radial64V1),
+            2 => Ok(Self::WidestAxisQuotaV1),
+            _ => Err("unknown leaf partition".into()),
+        }
+    }
+    fn group_sort(self) -> &'static str {
+        match self {
+            Self::Radial64V1 => "squared distance, original unit ID",
+            Self::WidestAxisQuotaV1 => {
+                "widest f64 axis, numeric coordinate/unit ID, balanced quotas; terminal squared distance/unit ID"
+            }
+        }
+    }
+}
 
 /// Explicit geometry and payload admission; persisted profiles have no default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,7 +161,7 @@ pub struct Artifact {
 }
 
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Algorithm {
     pub trainer: String,
@@ -164,6 +197,7 @@ pub struct Leaf {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub profile: SemanticProfile,
+    pub partition: LeafPartition,
     pub schema: String,
     pub input_schema: String,
     pub input_root_sha256: String,
@@ -203,7 +237,7 @@ pub struct SourceIdentity<'a> {
 
 /// Complete binary publication with unchanged membership and FP16 leaf encoding.
 pub struct RouterArtifacts {
-    /// BORSUSR2 root with exact leaf ranges, identities and f32 bits.
+    /// BORSUSR3 root with exact leaf ranges, identities and f32 bits.
     pub manifest: Vec<u8>,
     /// One little-endian u32 leaf ID per original unit.
     pub membership: Vec<u8>,
@@ -581,6 +615,15 @@ pub fn preflight(
 
 /// Conservative maximum of phases whose allocations do not coexist; not RSS.
 pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result<usize> {
+    admit_with_partition(geometry, cap, profile, LeafPartition::Radial64V1)
+}
+
+fn admit_with_partition(
+    geometry: Geometry,
+    cap: usize,
+    profile: SemanticProfile,
+    partition: LeafPartition,
+) -> Result<usize> {
     let Geometry {
         rows,
         dimensions: d,
@@ -617,6 +660,17 @@ pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result
         product(&[l, sum(&[DIRECTORY_BYTES, product(&[d, 4])?])?])?,
     ])?;
     let prototypes = product(&[3, l, sum(&[product(&[d, 4])?, 256])?])?;
+    // In-place sorting adds only recursion; publication also holds one group roster.
+    let partition_stack = if partition == LeafPartition::WidestAxisQuotaV1 {
+        product(&[c.next_power_of_two().trailing_zeros() as usize + 1, 128])?
+    } else {
+        0
+    };
+    let replay = if partition == LeafPartition::WidestAxisQuotaV1 {
+        product(&[u, size_of::<(f64, usize)>()])?
+    } else {
+        0
+    };
     let training = sum(&[
         2 * ROOT_CAP,
         b,
@@ -636,6 +690,7 @@ pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result
         p,
         product(&[4, u])?,
         prototypes,
+        partition_stack,
         4 * 1024 * 1024,
         8 * 1024 * 1024,
     ])?;
@@ -647,6 +702,8 @@ pub fn admit(geometry: Geometry, cap: usize, profile: SemanticProfile) -> Result
         product(&[16, u])?,
         product(&[3, w])?,
         prototypes,
+        replay,
+        partition_stack,
         8 * 1024 * 1024,
     ])?;
     let estimate = training.max(emit).max(validate);
@@ -731,6 +788,78 @@ fn unit_row_count(geometry: Geometry, unit: usize) -> usize {
     (geometry.rows - 32 * unit).min(32)
 }
 
+fn spatial_leaves(
+    group: &mut [(f64, usize)],
+    leaves: usize,
+    scorer: &UnitCentroidPages,
+    emit: &mut impl FnMut(&[(f64, usize)]) -> Result<()>,
+) -> Result<()> {
+    if leaves == 1 {
+        group.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        return emit(group);
+    }
+    let mut axis = 0;
+    let mut widest = 0.0_f64;
+    for d in 0..scorer.dimensions() {
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for &(_, unit) in group.iter() {
+            let value = f64::from(scorer.unit_centroid(unit).ok_or("partition unit ID")?[d]);
+            low = low.min(value);
+            high = high.max(value);
+        }
+        if high - low > widest {
+            widest = high - low;
+            axis = d;
+        }
+    }
+    group.sort_unstable_by(|a, b| {
+        let x = scorer.unit_centroid(a.1).unwrap()[axis];
+        let y = scorer.unit_centroid(b.1).unwrap()[axis];
+        x.partial_cmp(&y).unwrap().then(a.1.cmp(&b.1))
+    });
+    let left_leaves = leaves / 2;
+    let left_units = group.len() / leaves * left_leaves + (group.len() % leaves).min(left_leaves);
+    let (left, right) = group.split_at_mut(left_units);
+    spatial_leaves(left, left_leaves, scorer, emit)?;
+    spatial_leaves(right, leaves - left_leaves, scorer, emit)
+}
+
+fn partition_group(
+    group: &mut [(f64, usize)],
+    scorer: &UnitCentroidPages,
+    partition: LeafPartition,
+    emit: &mut impl FnMut(&[(f64, usize)]) -> Result<()>,
+) -> Result<()> {
+    if group.is_empty() {
+        return Ok(());
+    }
+    if partition == LeafPartition::WidestAxisQuotaV1 && group.len() > LEAF_UNITS {
+        let leaves = group.len().div_ceil(LEAF_UNITS);
+        spatial_leaves(group, leaves, scorer, emit)
+    } else {
+        for chunk in group.chunks(LEAF_UNITS) {
+            emit(chunk)?;
+        }
+        Ok(())
+    }
+}
+
+fn quota_sizes_match(total: usize, leaves: usize, size: &impl Fn(usize) -> usize) -> bool {
+    if leaves != total.div_ceil(LEAF_UNITS) {
+        return false;
+    }
+    fn visit(n: usize, l: usize, offset: usize, size: &impl Fn(usize) -> usize) -> bool {
+        if l == 1 {
+            return size(offset) == n;
+        }
+        let left = l / 2;
+        let units = n / l * left + (n % l).min(left);
+        visit(units, left, offset, size) && visit(n - units, l - left, offset + left, size)
+    }
+    leaves > 0 && visit(total, leaves, 0, size)
+}
+
 /// Build using the existing deterministic trainer and an explicit allocation cap.
 /// The source descriptor must already be authenticated by the caller.
 pub fn build(
@@ -738,12 +867,22 @@ pub fn build(
     input: &SourceIdentity<'_>,
     allocation_limit: usize,
 ) -> Result<RouterArtifacts> {
+    build_with_partition(blob, input, allocation_limit, LeafPartition::Radial64V1)
+}
+
+/// Build with an explicit experimental partition, preserving training and source payloads.
+pub fn build_with_partition(
+    blob: &[u8],
+    input: &SourceIdentity<'_>,
+    allocation_limit: usize,
+    partition: LeafPartition,
+) -> Result<RouterArtifacts> {
     require(
         allocation_limit <= input.profile.allocation_cap(),
         "construction allocation limit",
     )?;
     let geometry = preflight(blob, input.rows, input.dimensions, input.profile)?;
-    let estimate = admit(geometry, allocation_limit, input.profile)?;
+    admit_with_partition(geometry, allocation_limit, input.profile, partition)?;
     require(
         (1..=256).contains(&input.schema.len())
             && valid_sha(input.root_sha256)
@@ -766,12 +905,38 @@ pub fn build(
         ITERATIONS,
     )?;
     let groups = assign_groups(&sample, &centers)?;
+    drop((sample, centers));
+    build_assigned(
+        blob,
+        input,
+        allocation_limit,
+        partition,
+        training_centers,
+        groups,
+        scorer,
+    )
+}
+
+// Shared production emission seam; tests fix assignments without claiming trainer behavior.
+fn build_assigned(
+    blob: &[u8],
+    input: &SourceIdentity<'_>,
+    allocation_limit: usize,
+    partition: LeafPartition,
+    training_centers: usize,
+    mut groups: Vec<Vec<(f64, usize)>>,
+    scorer: UnitCentroidPages,
+) -> Result<RouterArtifacts> {
+    let geometry = preflight(blob, input.rows, input.dimensions, input.profile)?;
+    let estimate = admit_with_partition(geometry, allocation_limit, input.profile, partition)?;
+    let requested = geometry.units.div_ceil(LEAF_UNITS);
     let record_bytes = 4 + geometry.dimensions * 2;
     let mut membership = vec![0_u8; geometry.units * 4];
     let mut payload = Vec::with_capacity(geometry.units * record_bytes);
     let mut leaves = Vec::with_capacity(2 * requested - 1);
-    for (group_ordinal, group) in groups.iter().enumerate() {
-        for (chunk_ordinal, chunk) in group.chunks(LEAF_UNITS).enumerate() {
+    for (group_ordinal, group) in groups.iter_mut().enumerate() {
+        let mut chunk_ordinal = 0;
+        partition_group(group, &scorer, partition, &mut |chunk| {
             let leaf_id = leaves.len();
             let offset = payload.len();
             let units = chunk.iter().map(|(_, unit)| *unit).collect::<Vec<_>>();
@@ -795,11 +960,14 @@ pub fn build(
                 sha256: hash(&payload[offset..]),
                 prototype: prototype(&scorer, &units)?,
             });
-        }
+            chunk_ordinal += 1;
+            Ok(())
+        })?;
     }
-    drop((scorer, sample, centers, groups));
+    drop((scorer, groups));
     let manifest = Manifest {
         profile: input.profile,
+        partition,
         schema: SCHEMA.into(),
         input_schema: input.schema.into(),
         input_root_sha256: input.root_sha256.into(),
@@ -811,7 +979,7 @@ pub fn build(
         page_rows: 256,
         unit_count: geometry.units,
         final_unit_rows: unit_row_count(geometry, geometry.units - 1),
-        algorithm: fixed_algorithm(requested, training_centers),
+        algorithm: fixed_algorithm(requested, training_centers, partition),
         modeled_peak_allocation_bytes: estimate,
         modeled_allocation_limit_bytes: allocation_limit,
         allocation_model:
@@ -835,7 +1003,7 @@ pub fn build(
     })
 }
 
-fn fixed_algorithm(requested: usize, training: usize) -> Algorithm {
+fn fixed_algorithm(requested: usize, training: usize, partition: LeafPartition) -> Algorithm {
     Algorithm {
         trainer: "train_logical_cell_centroids".into(),
         metric: "SquaredEuclidean".into(),
@@ -844,7 +1012,7 @@ fn fixed_algorithm(requested: usize, training: usize) -> Algorithm {
         training_centers: training,
         max_leaf_units: LEAF_UNITS,
         nearest_ties: "center ordinal".into(),
-        group_sort: "squared distance, original unit ID".into(),
+        group_sort: partition.group_sort().into(),
         root_prototype: "unweighted unit mean; f64 accumulation to finite f32".into(),
         normalization: "none".into(),
         payload: "original FP16 little endian".into(),
@@ -885,9 +1053,20 @@ fn digest_text(bytes: &[u8]) -> String {
     text
 }
 impl Manifest {
-    /// Encode the fixed BORSUSR2 header, directory and exact little-endian f32 bits.
+    /// Encode the fixed BORSUSR3 header, directory and exact little-endian f32 bits.
     /// Publication/open still validate geometry, identities and the full partition.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        require(
+            self.schema == SCHEMA
+                && self.algorithm
+                    == fixed_algorithm(
+                        self.unit_count.div_ceil(LEAF_UNITS),
+                        self.algorithm.training_centers,
+                        self.partition,
+                    )
+                && [1, self.algorithm.requested_centers].contains(&self.algorithm.training_centers),
+            "binary schema or algorithm identity",
+        )?;
         require(
             (1..=256).contains(&self.input_schema.len()),
             "source schema length",
@@ -897,7 +1076,7 @@ impl Manifest {
         let length = sum(&[BINARY_HEADER, directory, plane])?;
         require(length <= self.profile.root_cap(), "binary root cap")?;
         let mut body = vec![0; length];
-        body[..8].copy_from_slice(b"BORSUSR2");
+        body[..8].copy_from_slice(b"BORSUSR3");
         put32(&mut body, 8, BINARY_HEADER)?;
         put32(&mut body, 12, self.profile.code() as usize)?;
         put64(&mut body, 16, self.rows)?;
@@ -920,6 +1099,7 @@ impl Manifest {
         ] {
             put64(&mut body, offset, value)?;
         }
+        put32(&mut body, 88, self.partition.code())?;
         for (offset, digest) in [
             (128, &self.input_root_sha256),
             (160, &self.input_centroids_sha256),
@@ -960,10 +1140,11 @@ impl Manifest {
 // Called only after the enclosing root SHA and profile byte cap are checked.
 fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
     require(
-        body.len() >= BINARY_HEADER && &body[..8] == b"BORSUSR2",
+        body.len() >= BINARY_HEADER && &body[..8] == b"BORSUSR3",
         "binary root version/header",
     )?;
     let profile = SemanticProfile::from_code(word32(body, 12) as u32)?;
+    let partition = LeafPartition::from_code(word32(body, 88))?;
     let rows = word64(body, 16)?;
     let d = word32(body, 24);
     let u = word32(body, 28);
@@ -982,7 +1163,7 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
             && [1, requested].contains(&training)
             && (1..=2 * requested - 1).contains(&l)
             && (1..=256).contains(&schema_len)
-            && body[88..128].iter().all(|&b| b == 0)
+            && body[92..128].iter().all(|&b| b == 0)
             && body[256 + schema_len..BINARY_HEADER]
                 .iter()
                 .all(|&b| b == 0),
@@ -997,7 +1178,7 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
         limit <= profile.allocation_cap(),
         "binary construction limit",
     )?;
-    let estimate = admit(
+    let estimate = admit_with_partition(
         Geometry {
             rows,
             dimensions: d,
@@ -1006,6 +1187,7 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
         },
         limit,
         profile,
+        partition,
     )?;
     let directory = product(&[l, DIRECTORY_BYTES])?;
     let plane_start = sum(&[BINARY_HEADER, directory])?;
@@ -1031,7 +1213,9 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
         let source_rows = word32(body, start + 24);
         let ordered = match previous {
             None => chunk == 0,
-            Some((g, c, n)) if g == group => chunk == c + 1 && n == LEAF_UNITS,
+            Some((g, c, n)) if g == group => {
+                chunk == c + 1 && (partition == LeafPartition::WidestAxisQuotaV1 || n == LEAF_UNITS)
+            }
             Some((g, _, _)) => group > g && chunk == 0,
         };
         require(
@@ -1053,6 +1237,29 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
         end == payload && total_units == u && total_rows == rows,
         "binary complete directory",
     )?;
+    if partition == LeafPartition::WidestAxisQuotaV1 {
+        let mut start = 0;
+        while start < l {
+            let group = word32(body, BINARY_HEADER + start * DIRECTORY_BYTES);
+            let mut end = start + 1;
+            while end < l && word32(body, BINARY_HEADER + end * DIRECTORY_BYTES) == group {
+                end += 1;
+            }
+            let count = (start..end).try_fold(0, |total, id| {
+                sum(&[
+                    total,
+                    word32(body, BINARY_HEADER + id * DIRECTORY_BYTES + 20),
+                ])
+            })?;
+            require(
+                quota_sizes_match(count, end - start, &|id| {
+                    word32(body, BINARY_HEADER + (start + id) * DIRECTORY_BYTES + 20)
+                }),
+                "binary spatial quota sizes",
+            )?;
+            start = end;
+        }
+    }
     for word in body[plane_start..].chunks_exact(4) {
         require(
             f32::from_bits(u32::from_le_bytes(word.try_into()?)).is_finite(),
@@ -1087,6 +1294,7 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
     }
     Ok(Manifest {
         profile,
+        partition,
         schema: SCHEMA.into(),
         input_schema: schema.into(),
         input_root_sha256,
@@ -1098,7 +1306,7 @@ fn decode_root(body: &[u8], input: &SourceIdentity<'_>) -> Result<Manifest> {
         page_rows: 256,
         unit_count: u,
         final_unit_rows: (rows - 32 * (u - 1)).min(32),
-        algorithm: fixed_algorithm(requested, training),
+        algorithm: fixed_algorithm(requested, training, partition),
         modeled_peak_allocation_bytes: estimate,
         modeled_allocation_limit_bytes: limit,
         allocation_model:
@@ -1177,12 +1385,13 @@ impl SemanticUnitRouter {
         };
         let requested = geometry.units.div_ceil(LEAF_UNITS);
         let algorithm = &manifest.algorithm;
-        let estimate = admit(
+        let estimate = admit_with_partition(
             geometry,
             manifest
                 .modeled_allocation_limit_bytes
                 .min(input.profile.allocation_cap()),
             input.profile,
+            manifest.partition,
         )?;
         require(
             manifest.profile == input.profile
@@ -1208,7 +1417,7 @@ impl SemanticUnitRouter {
                 && [1, requested].contains(&algorithm.training_centers)
                 && algorithm.max_leaf_units == LEAF_UNITS
                 && algorithm.nearest_ties == "center ordinal"
-                && algorithm.group_sort == "squared distance, original unit ID"
+                && algorithm.group_sort == manifest.partition.group_sort()
                 && algorithm.root_prototype
                     == "unweighted unit mean; f64 accumulation to finite f32"
                 && algorithm.normalization == "none"
@@ -1248,7 +1457,8 @@ impl SemanticUnitRouter {
             let ordered = previous.map_or(leaf.chunk_ordinal == 0, |prev| {
                 if prev.group_ordinal == leaf.group_ordinal {
                     prev.chunk_ordinal.checked_add(1) == Some(leaf.chunk_ordinal)
-                        && prev.unit_count == LEAF_UNITS
+                        && (manifest.partition == LeafPartition::WidestAxisQuotaV1
+                            || prev.unit_count == LEAF_UNITS)
                 } else {
                     leaf.group_ordinal > prev.group_ordinal && leaf.chunk_ordinal == 0
                 }
@@ -1275,6 +1485,25 @@ impl SemanticUnitRouter {
             offset == manifest.leaf_payload.bytes,
             "incomplete leaf ranges",
         )?;
+        if manifest.partition == LeafPartition::WidestAxisQuotaV1 {
+            let mut start = 0;
+            while start < manifest.leaves.len() {
+                let group = manifest.leaves[start].group_ordinal;
+                let end = start
+                    + manifest.leaves[start..]
+                        .iter()
+                        .take_while(|leaf| leaf.group_ordinal == group)
+                        .count();
+                let count = counts[start..end]
+                    .iter()
+                    .try_fold(0, |n, &size| sum(&[n, size]))?;
+                require(
+                    quota_sizes_match(count, end - start, &|id| counts[start + id]),
+                    "spatial membership quota sizes",
+                )?;
+                start = end;
+            }
+        }
         let mut leaf_offsets = Vec::with_capacity(manifest.leaves.len() + 1);
         leaf_offsets.push(0);
         for count in &mut counts {
@@ -1484,7 +1713,6 @@ pub fn validate_publication(
     blob: &[u8],
 ) -> Result<()> {
     let geometry = preflight(blob, input.rows, input.dimensions, input.profile)?;
-    admit(geometry, input.profile.allocation_cap(), input.profile)?;
     require(
         hash(blob) == input.centroids_sha256,
         "original centroid identity",
@@ -1497,6 +1725,12 @@ pub fn validate_publication(
         input.profile.root_cap(),
     )?;
     let manifest = router.manifest();
+    admit_with_partition(
+        geometry,
+        manifest.modeled_allocation_limit_bytes,
+        input.profile,
+        manifest.partition,
+    )?;
     require(
         payload.len() == manifest.leaf_payload.bytes
             && hash(payload) == manifest.leaf_payload.sha256,
@@ -1539,7 +1773,39 @@ pub fn validate_publication(
             )?;
         }
     }
-    require(seen.iter().all(|v| *v), "incomplete unit partition")
+    require(seen.iter().all(|v| *v), "incomplete unit partition")?;
+    if manifest.partition == LeafPartition::WidestAxisQuotaV1 {
+        let mut start = 0;
+        while start < manifest.leaves.len() {
+            let group = manifest.leaves[start].group_ordinal;
+            let end = start
+                + manifest.leaves[start..]
+                    .iter()
+                    .take_while(|leaf| leaf.group_ordinal == group)
+                    .count();
+            let first_unit = router.leaf_offsets[start];
+            let last_unit = router.leaf_offsets[end];
+            let mut roster = Vec::with_capacity(last_unit - first_unit);
+            for &unit in &router.leaf_units[first_unit..last_unit] {
+                roster.push((0.0, unit as usize));
+            }
+            // Centers are not persisted: replay proves spatial leaf sets, not assignment/radius order.
+            let mut id = start;
+            partition_group(&mut roster, &scorer, manifest.partition, &mut |chunk| {
+                require(
+                    id < end
+                        && chunk.len() == manifest.leaves[id].unit_count
+                        && chunk.iter().all(|&(_, unit)| router.membership[unit] == id),
+                    "spatial partition replay membership",
+                )?;
+                id += 1;
+                Ok(())
+            })?;
+            require(id == end, "spatial partition replay leaf count")?;
+            start = end;
+        }
+    }
+    Ok(())
 }
 
 /// Frozen first-eight/1.15-boundary/max-sixteen rule for normalized coordinates.
@@ -1678,6 +1944,524 @@ pub fn seed_walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spatial_blob(rows: usize, vectors: &[Vec<f32>]) -> Vec<u8> {
+        assert_eq!(vectors.len(), rows.div_ceil(32));
+        let dimensions = vectors[0].len();
+        let mut bytes = b"BORSUCP1".to_vec();
+        bytes.extend_from_slice(&(rows as u64).to_le_bytes());
+        for word in [dimensions as u32, 32, 256, 0] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        for vector in vectors {
+            assert_eq!(vector.len(), dimensions);
+            for &value in vector {
+                bytes.extend_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn spatial_chunks(scorer: &UnitCentroidPages, mut group: Vec<(f64, usize)>) -> Vec<Vec<usize>> {
+        let mut chunks = Vec::new();
+        partition_group(
+            &mut group,
+            scorer,
+            LeafPartition::WidestAxisQuotaV1,
+            &mut |chunk| {
+                chunks.push(chunk.iter().map(|&(_, unit)| unit).collect());
+                Ok(())
+            },
+        )
+        .unwrap();
+        chunks
+    }
+
+    #[test]
+    fn spatial_quota_edges_and_terminal_radius_order() {
+        for (n, sizes) in [
+            (0_usize, vec![]),
+            (1, vec![1]),
+            (64, vec![64]),
+            (65, vec![33, 32]),
+            (127, vec![64, 63]),
+            (128, vec![64, 64]),
+            (129, vec![43, 43, 43]),
+            (193, vec![49, 48, 48, 48]),
+        ] {
+            let vectors = (0..n.max(1))
+                .map(|id| vec![id as f32, 0.])
+                .collect::<Vec<_>>();
+            let blob = spatial_blob(n.max(1) * 32, &vectors);
+            let scorer = UnitCentroidPages::decode(&blob).unwrap();
+            let mut group = (0..n).map(|id| ((n - id) as f64, id)).collect::<Vec<_>>();
+            group.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let chunks = spatial_chunks(&scorer, group.clone());
+            assert_eq!(
+                chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+                sizes,
+                "n={n}"
+            );
+            assert!(quota_sizes_match(n, chunks.len(), &|i| chunks[i].len()) || n == 0);
+            assert_eq!(
+                chunks.iter().flatten().copied().collect::<BTreeSet<_>>(),
+                (0..n).collect()
+            );
+            for chunk in &chunks {
+                assert!(chunk.windows(2).all(|pair| pair[0] > pair[1]));
+            }
+            if n <= 64 {
+                assert_eq!(
+                    chunks.into_iter().flatten().collect::<Vec<_>>(),
+                    group.iter().map(|&(_, id)| id).collect::<Vec<_>>()
+                );
+            }
+            if n > 0 {
+                let blob = self::blob(n * 32);
+                let digest = hash(&blob);
+                let input = SourceIdentity {
+                    centroids_sha256: &digest,
+                    ..source(&blob)
+                };
+                let artifacts = build_with_partition(
+                    &blob,
+                    &input,
+                    ALLOCATION_CAP,
+                    LeafPartition::WidestAxisQuotaV1,
+                )
+                .unwrap();
+                let router = open(&artifacts, &input);
+                assert_eq!(
+                    router
+                        .manifest()
+                        .leaves
+                        .iter()
+                        .map(|leaf| leaf.unit_count)
+                        .collect::<Vec<_>>(),
+                    sizes
+                );
+            }
+        }
+        assert!(!quota_sizes_match(129, 4, &|_| 32));
+        assert!(!quota_sizes_match(65, 2, &|i| [32, 33][i]));
+    }
+
+    #[test]
+    fn spatial_axis_ties_signed_zero_identical_and_extremes() {
+        // Equal spans choose axis zero, which reverses axis one's split.
+        let vectors = (0..128)
+            .map(|id| {
+                if id % 2 == 0 {
+                    vec![1., -1.]
+                } else {
+                    vec![-1., 1.]
+                }
+            })
+            .collect::<Vec<_>>();
+        let blob = spatial_blob(4096, &vectors);
+        let scorer = UnitCentroidPages::decode(&blob).unwrap();
+        let group = (0..128).map(|id| (1., id)).collect::<Vec<_>>();
+        let chunks = spatial_chunks(&scorer, group.clone());
+        assert_eq!(chunks[0], (1..128).step_by(2).collect::<Vec<_>>());
+        assert_eq!(chunks[1], (0..128).step_by(2).collect::<Vec<_>>());
+        let wider_second = vectors
+            .iter()
+            .map(|v| vec![v[0], v[1] * 2.])
+            .collect::<Vec<_>>();
+        let wider_blob = spatial_blob(4096, &wider_second);
+        let wider = UnitCentroidPages::decode(&wider_blob).unwrap();
+        assert_eq!(
+            spatial_chunks(&wider, group.clone())[0],
+            (0..128).step_by(2).collect::<Vec<_>>()
+        );
+        for signed in [false, true] {
+            let vectors = (0..128)
+                .map(|id| vec![if signed && id % 2 == 0 { -0. } else { 0. }, 0.])
+                .collect::<Vec<_>>();
+            let blob = spatial_blob(4096, &vectors);
+            let scorer = UnitCentroidPages::decode(&blob).unwrap();
+            assert_eq!(
+                spatial_chunks(&scorer, group.clone()),
+                vec![(0..64).collect::<Vec<_>>(), (64..128).collect::<Vec<_>>()]
+            );
+        }
+        let vectors = (0..128)
+            .map(|id| vec![if id % 2 == 0 { 65504. } else { -65504. }, 1.])
+            .collect::<Vec<_>>();
+        let blob = spatial_blob(4096, &vectors);
+        let scorer = UnitCentroidPages::decode(&blob).unwrap();
+        assert_eq!(
+            spatial_chunks(&scorer, group)[0],
+            (1..128).step_by(2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn spatial_post_assignment_l2_top48_falsifier() {
+        // Fixed post-assignment groups isolate partitioning; this is not a trainer proof.
+        let vectors = (0..3200)
+            .map(|id| {
+                vec![
+                    if id < 128 {
+                        if id % 2 == 0 { 1. } else { -1. }
+                    } else {
+                        0.5
+                    },
+                    0.,
+                ]
+            })
+            .collect::<Vec<_>>();
+        let blob = spatial_blob(3200 * 32, &vectors);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            profile: SemanticProfile::Scale1m,
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let mut groups = vec![(0..128).map(|id| (1., id)).collect::<Vec<_>>()];
+        groups.extend((0..48).map(|g| {
+            (128 + g * 64..128 + (g + 1) * 64)
+                .map(|id| (0.25, id))
+                .collect::<Vec<_>>()
+        }));
+        let radial = build_assigned(
+            &blob,
+            &input,
+            input.profile.allocation_cap(),
+            LeafPartition::Radial64V1,
+            50,
+            groups.clone(),
+            UnitCentroidPages::decode(&blob).unwrap(),
+        )
+        .unwrap();
+        let spatial = build_assigned(
+            &blob,
+            &input,
+            input.profile.allocation_cap(),
+            LeafPartition::WidestAxisQuotaV1,
+            50,
+            groups,
+            UnitCentroidPages::decode(&blob).unwrap(),
+        )
+        .unwrap();
+        let r = open(&radial, &input);
+        let s = open(&spatial, &input);
+        for router in [&r, &s] {
+            assert_eq!(router.manifest().leaves.len(), 50);
+            assert_eq!(
+                router.leaf_units.iter().copied().collect::<BTreeSet<_>>(),
+                (0..3200_u32).collect()
+            );
+            assert!(
+                router
+                    .manifest()
+                    .leaves
+                    .iter()
+                    .all(|leaf| leaf.unit_count == 64)
+            );
+            assert_eq!(router.manifest().input_centroids_sha256, digest);
+        }
+        assert_eq!(r.manifest().leaves[0].prototype, [0., 0.]);
+        assert_eq!(r.manifest().leaves[1].prototype, [0., 0.]);
+        assert_eq!(s.manifest().leaves[0].prototype, [-1., 0.]);
+        assert_eq!(s.manifest().leaves[1].prototype, [1., 0.]);
+        let r_ids = r.nominate(&[1., 0.]).unwrap();
+        let s_ids = s.nominate(&[1., 0.]).unwrap();
+        assert_eq!(r_ids, (2..50).collect::<Vec<_>>());
+        assert_eq!(s_ids, (1..49).collect::<Vec<_>>());
+        let radial_selection = r
+            .validate_selected(&r_ids, &parts(&r, &radial.leaves, &r_ids))
+            .unwrap();
+        let spatial_selection = s
+            .validate_selected(&s_ids, &parts(&s, &spatial.leaves, &s_ids))
+            .unwrap();
+        assert_eq!(radial_selection.page_closure, (16..400).collect());
+        assert_eq!(spatial_selection.page_closure, (0..392).collect());
+        assert_eq!(
+            spatial_selection
+                .page_closure
+                .difference(&radial_selection.page_closure)
+                .copied()
+                .collect::<Vec<_>>(),
+            (0..16).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            radial_selection
+                .page_closure
+                .difference(&spatial_selection.page_closure)
+                .copied()
+                .collect::<Vec<_>>(),
+            (392..400).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            spatial_selection
+                .units
+                .difference(&radial_selection.units)
+                .copied()
+                .collect::<Vec<_>>(),
+            (0..128).step_by(2).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            radial_selection
+                .units
+                .difference(&spatial_selection.units)
+                .copied()
+                .collect::<Vec<_>>(),
+            (3136..3200).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn spatial_full_builder_roundtrip_dimensions_partial_and_determinism() {
+        for dimensions in [1, 2, 1024] {
+            for rows in [1_usize, 33, 4097] {
+                let vectors = (0..rows.div_ceil(32))
+                    .map(|id| {
+                        let mut vector = vec![0.; dimensions];
+                        if dimensions == 2 {
+                            vector[0] = id as f32;
+                        }
+                        vector
+                    })
+                    .collect::<Vec<_>>();
+                let blob = spatial_blob(rows, &vectors);
+                let digest = hash(&blob);
+                let input = SourceIdentity {
+                    profile: SemanticProfile::Scale1m,
+                    dimensions,
+                    centroids_sha256: &digest,
+                    ..source(&blob)
+                };
+                let a = build_with_partition(
+                    &blob,
+                    &input,
+                    input.profile.allocation_cap(),
+                    LeafPartition::WidestAxisQuotaV1,
+                )
+                .unwrap();
+                let b = build_with_partition(
+                    &blob,
+                    &input,
+                    input.profile.allocation_cap(),
+                    LeafPartition::WidestAxisQuotaV1,
+                )
+                .unwrap();
+                assert_eq!(a.manifest, b.manifest);
+                assert_eq!(a.membership, b.membership);
+                assert_eq!(a.leaves, b.leaves);
+                let router = open(&a, &input);
+                assert_eq!(
+                    router.manifest().partition,
+                    LeafPartition::WidestAxisQuotaV1
+                );
+                assert_eq!(router.manifest().final_unit_rows, 1);
+                let ids = router.nominate(&vec![1.; dimensions]).unwrap();
+                let nomination = router
+                    .validate_selected(&ids, &parts(&router, &a.leaves, &ids))
+                    .unwrap();
+                assert_eq!(nomination.units.len(), rows.div_ceil(32));
+                assert_eq!(nomination.page_closure, (0..rows.div_ceil(256)).collect());
+            }
+        }
+        let blob = spatial_blob(1, &[vec![0.; 1025]]);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            dimensions: 1025,
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        assert!(
+            build_with_partition(
+                &blob,
+                &input,
+                ALLOCATION_CAP,
+                LeafPartition::WidestAxisQuotaV1
+            )
+            .is_err()
+        );
+        for value in [f32::INFINITY, f32::NAN] {
+            let blob = spatial_blob(1, &[vec![value, 0.]]);
+            let digest = hash(&blob);
+            let input = SourceIdentity {
+                centroids_sha256: &digest,
+                ..source(&blob)
+            };
+            assert!(
+                build_with_partition(
+                    &blob,
+                    &input,
+                    ALLOCATION_CAP,
+                    LeafPartition::WidestAxisQuotaV1
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn spatial_version_mode_algorithm_and_balance_refusals() {
+        let blob = blob(129 * 32);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let a = build_with_partition(
+            &blob,
+            &input,
+            ALLOCATION_CAP,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let manifest = open(&a, &input).manifest().clone();
+        for code in [0, 3, u32::MAX] {
+            let mut body = a.manifest.clone();
+            body[88..92].copy_from_slice(&code.to_le_bytes());
+            assert!(
+                SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20)
+                    .is_err()
+            );
+        }
+        let mut body = a.manifest.clone();
+        body[..8].copy_from_slice(b"BORSUSR2");
+        assert!(
+            SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20).is_err()
+        );
+        for offset in [92, 127] {
+            let mut body = a.manifest.clone();
+            body[offset] = 1;
+            assert!(
+                SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20)
+                    .is_err()
+            );
+        }
+        let mut bad = manifest.clone();
+        bad.partition = LeafPartition::Radial64V1;
+        assert!(bad.encode().is_err());
+        bad.algorithm = fixed_algorithm(3, 1, bad.partition);
+        let body = bad.encode().unwrap();
+        assert!(
+            SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20).is_err()
+        );
+        for field in 0..11 {
+            let mut bad = manifest.clone();
+            match field {
+                0 => bad.algorithm.trainer.push('x'),
+                1 => bad.algorithm.metric.push('x'),
+                2 => bad.algorithm.iterations += 1,
+                3 => bad.algorithm.requested_centers += 1,
+                4 => bad.algorithm.training_centers = 2,
+                5 => bad.algorithm.max_leaf_units -= 1,
+                6 => bad.algorithm.nearest_ties.push('x'),
+                7 => bad.algorithm.group_sort.push('x'),
+                8 => bad.algorithm.root_prototype.push('x'),
+                9 => bad.algorithm.normalization.push('x'),
+                _ => bad.algorithm.payload.push('x'),
+            }
+            assert!(bad.encode().is_err(), "field={field}");
+        }
+        let mut bad = manifest;
+        let mut offset = 0;
+        for (leaf, units) in bad.leaves.iter_mut().zip([44, 42, 43]) {
+            leaf.unit_count = units;
+            leaf.bytes = units * 8;
+            leaf.source_rows = units * 32;
+            leaf.offset = offset;
+            offset += leaf.bytes;
+        }
+        let body = bad.encode().unwrap();
+        let error = SemanticUnitRouter::open(&body, &a.membership, &hash(&body), &input, 1 << 20)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("spatial quota sizes"));
+    }
+
+    #[test]
+    fn spatial_publication_rejects_rehashed_membership_fp16_and_prototypes() {
+        let blob = blob(129 * 32);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let a = build_with_partition(
+            &blob,
+            &input,
+            ALLOCATION_CAP,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let manifest = open(&a, &input).manifest().clone();
+        let mut bad = manifest.clone();
+        let mut membership = a.membership.clone();
+        let mut payload = a.leaves.clone();
+        // Equal prototypes/FP16 survive this cross-leaf swap; spatial replay must reject it.
+        let next = bad.leaves[1].offset;
+        payload[..4].copy_from_slice(&43_u32.to_le_bytes());
+        payload[next..next + 4].copy_from_slice(&0_u32.to_le_bytes());
+        membership[..4].copy_from_slice(&1_u32.to_le_bytes());
+        membership[43 * 4..44 * 4].copy_from_slice(&0_u32.to_le_bytes());
+        bad.membership.sha256 = hash(&membership);
+        bad.leaf_payload.sha256 = hash(&payload);
+        for leaf in &mut bad.leaves {
+            leaf.sha256 = hash(&payload[leaf.offset..leaf.offset + leaf.bytes]);
+        }
+        let body = bad.encode().unwrap();
+        SemanticUnitRouter::open(&body, &membership, &hash(&body), &input, 1 << 20).unwrap();
+        let error = validate_publication(&body, &membership, &payload, &input, &blob)
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("spatial partition replay membership")
+        );
+        let mut bad = manifest.clone();
+        let mut payload = a.leaves.clone();
+        payload[5] = 0x80; // Signed-zero payload alteration leaves the numeric prototype unchanged.
+        bad.leaves[0].sha256 = hash(&payload[..bad.leaves[0].bytes]);
+        bad.leaf_payload.sha256 = hash(&payload);
+        let body = bad.encode().unwrap();
+        assert!(validate_publication(&body, &a.membership, &payload, &input, &blob).is_err());
+        let mut bad = manifest;
+        bad.leaves[0].prototype[0] = -0.;
+        let body = bad.encode().unwrap();
+        assert!(validate_publication(&body, &a.membership, &a.leaves, &input, &blob).is_err());
+    }
+
+    #[test]
+    fn spatial_allocation_admission_accounts_for_replay() {
+        let geometry = Geometry {
+            rows: 129 * 32,
+            dimensions: 2,
+            units: 129,
+            blob_bytes: 32 + 129 * 4,
+        };
+        let profile = SemanticProfile::Scale1m;
+        let radial = admit(geometry, profile.allocation_cap(), profile).unwrap();
+        let spatial = admit_with_partition(
+            geometry,
+            profile.allocation_cap(),
+            profile,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        assert_eq!(spatial, radial + 3 * 128);
+        assert!(
+            admit_with_partition(
+                geometry,
+                spatial - 1,
+                profile,
+                LeafPartition::WidestAxisQuotaV1
+            )
+            .is_err()
+        );
+        assert_eq!(
+            admit_with_partition(geometry, spatial, profile, LeafPartition::WidestAxisQuotaV1)
+                .unwrap(),
+            spatial
+        );
+    }
 
     #[test]
     fn sampled_boundary_midpoints_decode_and_dimension_contract() {
@@ -2399,6 +3183,14 @@ mod tests {
             hash(&artifacts.leaves),
             "a308a30fec67ef28269b8c7826438dd8dbcff1fe0f692de7f0685c2a34ee8906"
         );
+        assert_eq!(&artifacts.manifest[..8], b"BORSUSR3");
+        assert_eq!(word32(&artifacts.manifest, 88), 1);
+        let explicit =
+            build_with_partition(&blob, &source, ALLOCATION_CAP, LeafPartition::Radial64V1)
+                .unwrap();
+        assert_eq!(artifacts.manifest, explicit.manifest);
+        assert_eq!(artifacts.membership, explicit.membership);
+        assert_eq!(artifacts.leaves, explicit.leaves);
         let router = open(&artifacts, &source);
         let legacy_prototypes = router
             .manifest()
@@ -2512,6 +3304,7 @@ mod tests {
         }
         let manifest = Manifest {
             profile,
+            partition: LeafPartition::Radial64V1,
             schema: SCHEMA.into(),
             input_schema: input.schema.into(),
             input_root_sha256: input.root_sha256.into(),
@@ -2523,7 +3316,7 @@ mod tests {
             page_rows: 256,
             unit_count: geometry.units,
             final_unit_rows: 32,
-            algorithm: fixed_algorithm(489, 489),
+            algorithm: fixed_algorithm(489, 489, LeafPartition::Radial64V1),
             modeled_peak_allocation_bytes: peak,
             modeled_allocation_limit_bytes: profile.allocation_cap(),
             allocation_model:
