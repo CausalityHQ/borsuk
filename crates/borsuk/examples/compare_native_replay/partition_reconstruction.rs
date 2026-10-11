@@ -1557,21 +1557,70 @@ mod tests {
         )
         .unwrap();
         for (stage, parity, sync_calls) in [(1, None, 7), (2, Some(&p), 13)] {
-            for failed_call in 1..=sync_calls {
+            let success = f.dir.path().join(format!("stage-{stage}-success"));
+            let mut roster = Vec::new();
+            assert!(
+                publish_with_sync(&success, &a, &r, parity, &binary, |file, is_dir| {
+                    let metadata = file.metadata()?;
+                    assert_eq!(metadata.is_dir(), is_dir);
+                    roster.push((metadata.dev(), metadata.ino(), is_dir));
+                    file.sync_all()
+                })
+                .unwrap()
+            );
+            let mut expected_paths = vec![
+                (success.clone(), true),
+                (f.dir.path().to_owned(), true),
+                (success.join("centroids.bin"), false),
+                (success.clone(), true),
+            ];
+            if stage == 2 {
+                for name in [
+                    "radial-root.bin",
+                    "radial-membership.bin",
+                    "radial-leaves.bin",
+                ] {
+                    expected_paths.extend([(success.join(name), false), (success.clone(), true)]);
+                }
+            }
+            expected_paths.extend([
+                (success.join("receipt.json"), false),
+                (success.clone(), true),
+                (f.dir.path().to_owned(), true),
+            ]);
+            let expected_roster = expected_paths
+                .iter()
+                .map(|(path, is_dir)| {
+                    let metadata = std::fs::metadata(path).unwrap();
+                    (metadata.dev(), metadata.ino(), *is_dir)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                roster, expected_roster,
+                "stage {stage} successful sync roster"
+            );
+            assert_eq!(
+                roster.len(),
+                sync_calls,
+                "stage {stage} successful sync count"
+            );
+            for failed_call in 1..=roster.len() {
                 let output = f
                     .dir
                     .path()
                     .join(format!("stage-{stage}-sync-{failed_call}"));
                 let mut calls = 0;
+                let original_failure = format!("injected stage {stage} sync {failed_call} failure");
                 let result = publish_with_sync(&output, &a, &r, parity, &binary, |file, _| {
                     calls += 1;
                     if calls == failed_call {
-                        Err(io::Error::other("injected publication sync failure"))
+                        Err(io::Error::other(original_failure.clone()))
                     } else {
                         file.sync_all()
                     }
                 });
-                assert!(result.is_err(), "stage {stage} sync {failed_call}");
+                let error = result.expect_err("injected publication sync must fail");
+                assert!(error.to_string().contains(&original_failure), "{error}");
                 assert_eq!(calls, failed_call);
                 if output.join("receipt.json").exists() {
                     let v: Value = serde_json::from_slice(
@@ -1611,50 +1660,77 @@ mod tests {
 
     #[test]
     fn partition_reconstruction_sync_time_mutation_and_directory_replacement() {
-        for case in ["input", "output", "directory"] {
-            let f = Fixture::new();
-            let (_, a) = f.auth().unwrap();
-            let r = reconstruct_centroids(&a, &f.config.leaves).unwrap();
-            let binary = authenticate_stream(&f.binary).unwrap();
-            let mut calls = 0;
-            let result = publish_with_sync(
-                &f.config.output_directory,
-                &a,
-                &r,
-                None,
-                &binary,
-                |file, _| {
-                    calls += 1;
-                    if calls == 6 {
-                        match case {
-                            "input" => std::fs::write(&f.config.leaves.path, b"mutated")?,
-                            "output" => std::fs::write(
-                                f.config.output_directory.join("centroids.bin"),
-                                b"mutated",
-                            )?,
-                            "directory" => {
-                                std::fs::rename(
-                                    &f.config.output_directory,
-                                    f.dir.path().join("replaced-dir"),
-                                )?;
-                                std::fs::create_dir(&f.config.output_directory)?;
+        for (stage, receipt_directory_sync) in [(1, 6), (2, 12)] {
+            for case in ["input", "output", "directory"] {
+                let f = Fixture::new();
+                let (_, a) = f.auth().unwrap();
+                let r = reconstruct_centroids(&a, &f.config.leaves).unwrap();
+                let binary = authenticate_stream(&f.binary).unwrap();
+                let parity = if stage == 2 {
+                    Some(
+                        verify_historical_radial(
+                            &a,
+                            &r,
+                            f.config.historical.as_ref().unwrap(),
+                            &f.config.leaves,
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    None
+                };
+                let mut calls = 0;
+                let result = publish_with_sync(
+                    &f.config.output_directory,
+                    &a,
+                    &r,
+                    parity.as_ref(),
+                    &binary,
+                    |file, _| {
+                        calls += 1;
+                        if calls == receipt_directory_sync {
+                            match case {
+                                "input" => std::fs::write(
+                                    if stage == 2 {
+                                        &f.config.historical.as_ref().unwrap().membership.path
+                                    } else {
+                                        &f.config.leaves.path
+                                    },
+                                    b"mutated",
+                                )?,
+                                "output" => std::fs::write(
+                                    f.config.output_directory.join(if stage == 2 {
+                                        "radial-leaves.bin"
+                                    } else {
+                                        "centroids.bin"
+                                    }),
+                                    b"mutated",
+                                )?,
+                                "directory" => {
+                                    std::fs::rename(
+                                        &f.config.output_directory,
+                                        f.dir.path().join("replaced-dir"),
+                                    )?;
+                                    std::fs::create_dir(&f.config.output_directory)?;
+                                }
+                                _ => unreachable!(),
                             }
-                            _ => unreachable!(),
                         }
-                    }
-                    file.sync_all()
-                },
-            );
-            assert!(result.is_err(), "{case}");
-            let owned_dir = if case == "directory" {
-                f.dir.path().join("replaced-dir")
-            } else {
-                f.config.output_directory.clone()
-            };
-            let v: Value =
-                serde_json::from_slice(&std::fs::read(owned_dir.join("receipt.json")).unwrap())
-                    .unwrap();
-            assert_eq!(v["complete"], false);
+                        file.sync_all()
+                    },
+                );
+                assert!(result.is_err(), "stage {stage} {case}");
+                assert!(calls >= receipt_directory_sync, "stage {stage} {case}");
+                let owned_dir = if case == "directory" {
+                    f.dir.path().join("replaced-dir")
+                } else {
+                    f.config.output_directory.clone()
+                };
+                let v: Value =
+                    serde_json::from_slice(&std::fs::read(owned_dir.join("receipt.json")).unwrap())
+                        .unwrap();
+                assert_eq!(v["complete"], false, "stage {stage} {case}");
+            }
         }
     }
 }
