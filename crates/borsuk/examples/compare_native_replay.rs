@@ -4619,7 +4619,7 @@ fn execute_report(
             && report.get("expected_bound_inputs").is_some()))
 }
 
-const LOSS_SCHEMA: &str = "borsuk-sealed-scale-loss-v1";
+const LOSS_SCHEMA: &str = "borsuk-sealed-scale-loss-v2";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -4847,7 +4847,7 @@ fn loss_bucket(c: &LossCoverage, physical: usize, returned: bool) -> &'static st
 fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
     let (c, config_bytes): (LossConfig, _) = read_config(config_path, config_sha)?;
     require(
-        c.schema == "borsuk-sealed-scale-loss-config-v1"
+        c.schema == "borsuk-sealed-scale-loss-config-v2"
             && c.completed.schema == SCALE_CONFIG_SCHEMA,
         "sealed loss config/schema",
     )?;
@@ -5346,7 +5346,7 @@ mod tests {
         let sq8_path = dir.path().join("sq8");
         let sq8 = std::fs::read(&sq8_path).unwrap();
         let truth = std::fs::read(dir.path().join("truth.u64")).unwrap();
-        let mut config = json!({"schema":"borsuk-sealed-scale-loss-config-v1",
+        let mut config = json!({"schema":"borsuk-sealed-scale-loss-config-v2",
             "completed":{"schema":completed.schema,"input":{"path":completed.input.path,
                 "bytes":completed.input.bytes,"sha256":completed.input.sha256},
                 "expected_identity":completed.expected_identity,
@@ -5378,6 +5378,14 @@ mod tests {
         assert_eq!(report["native_ann_called"], false);
         let original_query = rows.iter().find(|r| r["phase"] == "query").unwrap();
         assert_eq!(report["queries"][0]["returned"], original_query["returned"]);
+        config["schema"] = json!("borsuk-sealed-scale-loss-config-v1");
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_loss(&path, &sha(&bytes)).unwrap_err().to_string(),
+            "sealed loss config/schema"
+        );
+        config["schema"] = json!("borsuk-sealed-scale-loss-config-v2");
         config["max_payload_bytes"] = json!(1);
         config["truth"]["path"] = json!(dir.path().join("truth-must-not-open"));
         let bytes = serde_json::to_vec(&config).unwrap();
