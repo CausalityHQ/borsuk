@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-leaf-metric-data-stage-v1",
+  "stage": "experiment",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "scientific_measurement": true,
+  "cold_s3_claim": false,
+  "vendor_win": false
+}

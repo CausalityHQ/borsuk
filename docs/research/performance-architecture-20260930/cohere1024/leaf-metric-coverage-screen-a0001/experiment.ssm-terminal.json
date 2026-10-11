@@ -1,0 +1,22 @@
+{
+    "CommandId": "a217a32f-4ff0-4e63-9fbb-bf4dfefe31e1",
+    "InstanceId": "i-0d66ca46e84655c01",
+    "Comment": "ONE frozen paired L2/cosine consumed32 coverage screen; not cold ANN",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T10:21:02.470Z",
+    "ExecutionElapsedTime": "PT14.704S",
+    "ExecutionEndDateTime": "2026-10-11T10:21:16.470Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/tmp/leaf-data-stage.sh: OK\n/tmp/leaf-data-inner.sh: OK\n{\n  \"schema\": \"borsuk-leaf-metric-data-stage-v1\",\n  \"stage\": \"experiment\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"scientific_measurement\": true,\n  \"cold_s3_claim\": false,\n  \"vendor_win\": false\n}\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-coverage-screen-a0001/ssm-experiment/a217a32f-4ff0-4e63-9fbb-bf4dfefe31e1/i-0d66ca46e84655c01/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-coverage-screen-a0001/ssm-experiment/a217a32f-4ff0-4e63-9fbb-bf4dfefe31e1/i-0d66ca46e84655c01/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

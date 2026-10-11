@@ -1,0 +1,32 @@
+[
+  {
+    "ordinal": 149,
+    "slots": [
+      {
+        "cosine_bridge_only": false,
+        "cosine_fetched": false,
+        "cosine_scored": false,
+        "id": 854493,
+        "l2_bridge_only": false,
+        "l2_fetched": true,
+        "l2_scored": true,
+        "physical_row": 439611
+      }
+    ]
+  },
+  {
+    "ordinal": 742,
+    "slots": [
+      {
+        "cosine_bridge_only": false,
+        "cosine_fetched": false,
+        "cosine_scored": false,
+        "id": 669440,
+        "l2_bridge_only": false,
+        "l2_fetched": true,
+        "l2_scored": true,
+        "physical_row": 481510
+      }
+    ]
+  }
+]

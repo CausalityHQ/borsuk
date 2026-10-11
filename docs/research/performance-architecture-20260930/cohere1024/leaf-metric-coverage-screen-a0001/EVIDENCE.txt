@@ -1,0 +1,5 @@
+MEASURED_KILL is the predeclared coverage-screen decision, not an execution failure.
+The original complete Rust-reduced report.json and paired selection.json remain create-only under:
+s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-coverage-screen-a0001/experiment/
+The included experiment/SHA256SUMS authenticates those omitted bodies. Human-summary.json is an EC2 scalar projection of the Rust-reduced report (only .queries removed); no arithmetic/re-scoring/reduction by the glue. Added-loss projection copies existing Rust-authored flags from the completed reduced human report; no local raw producer/query/truth/SQ8 decoding.
+Full original SSM stdout/stderr retained in ssm-setup and ssm-experiment prefixes in the same campaign. All source/config/runtime/resource/closure commands and exact terminal receipts retained here. Library/default/source remains unchanged.

@@ -1,0 +1,12 @@
+Running as unit: borsuk-leaf-data-experiment.service; invocation ID: 497ea61521bb4c089daaad20ed8a1efe
+/mnt/borsuk-leaf-metric-data/bin/compare_native_replay: OK
+/mnt/borsuk-leaf-metric-data/config.json: OK
+true
+true
+true
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 2.303s
+CPU time consumed: 1.070s
+Memory peak: 1.6M
+Memory swap peak: 0B
