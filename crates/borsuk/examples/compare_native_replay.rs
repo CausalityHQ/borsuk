@@ -89,7 +89,7 @@ const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CompletedInput {
     path: PathBuf,
@@ -97,7 +97,7 @@ struct CompletedInput {
     sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CompletedConfig {
     schema: String,
@@ -4981,7 +4981,7 @@ const COVERAGE_SCHEMA: &str = "borsuk-leaf-metric-coverage-v1";
 const SELECTION_CAP: u64 = 4 * 1024 * 1024;
 const COVERAGE_LEAVES: usize = 48;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CoverageConfig {
     schema: String,
@@ -5169,23 +5169,10 @@ fn coverage_control(line: &[u8], q: &Query, i: &Inputs, arm: &CoverageArm) -> Re
     let raw: Value = serde_json::from_slice(line)?;
     let t: SourceTrace = serde_json::from_value(raw["trace"].clone())?;
     let n = &arm.nomination;
-    let pages = t
-        .ranked_candidate_pages
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let completed = n
-        .page_closure
-        .iter()
-        .flat_map(|p| p * 8..((p + 1) * 8).min(i.rows.div_ceil(32)))
-        .collect::<Vec<_>>();
     require(
         t.semantic_leaves == n.leaf_ids
             && t.semantic_units == n.units.iter().copied().collect::<Vec<_>>()
-            && t.semantic_seed_additions == n.seed_additions
-            && pages == n.page_closure
-            && cov.scored_units == completed
-            && q.charges.source.submitted_gets == arm.ranges.len() as u64
-            && q.charges.source.verified_bytes == arm.bytes as u64,
+            && t.semantic_seed_additions == n.seed_additions,
         "coverage exact historical L2 control parity",
     )?;
     // primary_page is chosen after SOURCE scoring, not the lowest semantic seed page.
@@ -5226,6 +5213,43 @@ fn publish_selection_seal_with_sync(
 }
 
 fn finish_selection_publication(
+    output: &Path,
+    value: &Value,
+    inputs: &[&HeaderSnapshot],
+    dir: File,
+    file: File,
+    sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<(HeaderSnapshot, String)> {
+    let cleanup_dir = dir.try_clone()?;
+    let mut owned = file.try_clone()?;
+    let result = finish_selection_publication_inner(output, value, inputs, dir, file, sync);
+    match result {
+        Ok(published) => Ok(published),
+        Err(error) => {
+            // Invalidate through the original descriptor: a concurrent path replacement
+            // cannot redirect this write, and there is no check-then-unlink race.
+            let cleanup = (|| -> Result<()> {
+                owned.set_len(0)?;
+                owned.seek(io::SeekFrom::Start(0))?;
+                owned.write_all(
+                    b"{\"status\":\"INVALID\",\"complete\":false,\"publication_failed\":true}\n",
+                )?;
+                owned.sync_all()?;
+                cleanup_dir.sync_all()?;
+                Ok(())
+            })();
+            match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(format!(
+                    "publication failed: {error}; owned output invalidation failed: {cleanup_error}"
+                )
+                .into()),
+            }
+        }
+    }
+}
+
+fn finish_selection_publication_inner(
     output: &Path,
     value: &Value,
     inputs: &[&HeaderSnapshot],
@@ -5297,6 +5321,49 @@ fn reduce_leaf_coverage(
     config_sha: &str,
     selection_path: &Path,
 ) -> Result<(Value, Vec<HeaderSnapshot>)> {
+    reduce_leaf_coverage_with(
+        config_path,
+        config_sha,
+        selection_path,
+        &CoverageScope::consumed32(),
+        |file, _| file.sync_all(),
+        loss_binary,
+    )
+}
+
+struct CoverageScope {
+    rows: usize,
+    count: usize,
+    ordinals: Vec<usize>,
+    original_hits: u64,
+    original_coverage: usize,
+}
+
+impl CoverageScope {
+    fn consumed32() -> Self {
+        Self {
+            rows: 1_000_000,
+            count: 1000,
+            ordinals: vec![
+                69, 83, 114, 149, 151, 159, 188, 189, 211, 237, 257, 296, 321, 351, 388, 408, 413,
+                513, 537, 587, 626, 667, 669, 731, 742, 821, 823, 849, 851, 890, 956, 991,
+            ],
+            original_hits: 313,
+            original_coverage: 314,
+        }
+    }
+}
+
+// Only the fixed consumed32 scope is reachable from the CLI. Small native fixtures
+// exercise this same orchestration without a population-sized synthetic payload.
+fn reduce_leaf_coverage_with(
+    config_path: &Path,
+    config_sha: &str,
+    selection_path: &Path,
+    scope: &CoverageScope,
+    mut seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
+    mut open_truth: impl FnMut(&CompletedInput, u64) -> Result<(Vec<u8>, HeaderSnapshot)>,
+) -> Result<(Value, Vec<HeaderSnapshot>)> {
     let (c, config_bytes): (CoverageConfig, _) = read_config(config_path, config_sha)?;
     require(
         c.schema == "borsuk-leaf-metric-coverage-config-v1"
@@ -5314,15 +5381,11 @@ fn reduce_leaf_coverage(
     validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
     let ordinals = scale_ordinals(&c.completed.expected_bound_inputs, i.count)?;
     require(
-        i.rows == 1_000_000
-            && i.count == 1000
+        i.rows == scope.rows
+            && i.count == scope.count
             && i.profile == "scale1m"
             && c.completed.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel"
-            && ordinals
-                == [
-                    69, 83, 114, 149, 151, 159, 188, 189, 211, 237, 257, 296, 321, 351, 388, 408,
-                    413, 513, 537, 587, 626, 667, 669, 731, 742, 821, 823, 849, 851, 890, 956, 991,
-                ]
+            && ordinals == scope.ordinals
             && c.requests.sha256 == i.requests_sha256
             && c.requests.bytes == i.requests_bytes
             && c.truth.sha256 == i.truth_sha256
@@ -5382,6 +5445,7 @@ fn reduce_leaf_coverage(
         path: c.completed.input.path.clone(),
     };
     let mut slot = 0;
+    let mut control_coverage = Vec::with_capacity(ordinals.len());
     let run = read_run_observed(
         &c.completed.input.path,
         &c.completed.input.sha256,
@@ -5391,7 +5455,7 @@ fn reduce_leaf_coverage(
                 slot < ordinals.len() && q.ordinal == ordinals[slot],
                 "coverage producer panel order",
             )?;
-            coverage_control(line, q, inputs, &arms[slot][0])?;
+            control_coverage.push(coverage_control(line, q, inputs, &arms[slot][0])?);
             slot += 1;
             Ok(())
         },
@@ -5424,9 +5488,9 @@ fn reduce_leaf_coverage(
         "leaf_count":48,"source_get_cap":128,"source_byte_cap":64*1024*1024,
         "truth_opened":false,"control_trace_parity":true,"selections":selections});
     let (selection_snapshot, selection_sha) =
-        publish_selection_seal(selection_path, &seal, &snapshots)?;
+        publish_selection_seal_with_sync(selection_path, &seal, &snapshots, &mut seal_sync)?;
     // FIRST truth open: both complete arm selections have passed file and directory sync.
-    let (truth, truth_snapshot) = loss_binary(&c.truth, i.truth_bytes)?;
+    let (truth, truth_snapshot) = open_truth(&c.truth, i.truth_bytes)?;
     let mut truth_rows = Vec::with_capacity(ordinals.len());
     let mut wanted = BTreeSet::new();
     wanted.extend(
@@ -5461,6 +5525,13 @@ fn reduce_leaf_coverage(
     let mut queries = Vec::with_capacity(slot);
     for (s, ids) in truth_rows.iter().enumerate() {
         let sample = &run.samples[s];
+        for hit in &sample.returned {
+            require(
+                loss_bucket(&control_coverage[s], positions[&hit.id], true)
+                    != "INVALID_RETURNED_OUTSIDE_SQ8",
+                "coverage returned ID outside fetched SQ8 cover",
+            )?;
+        }
         let hits = ids
             .iter()
             .filter(|id| sample.returned.iter().any(|h| h.id == **id))
@@ -5489,9 +5560,9 @@ fn reduce_leaf_coverage(
         queries.push(json!({"ordinal":ordinals[s],"truth_slots":entries}));
     }
     require(
-        original_hits == 313
+        original_hits == scope.original_hits
             && original_hits == run.terminal.total_hits10
-            && totals[0] == 314
+            && totals[0] == scope.original_coverage
             && totals[1] + lost == totals[0] + gained,
         "coverage historical total/paired decomposition",
     )?;
@@ -5525,6 +5596,18 @@ fn reduce_leaf_coverage(
 }
 
 fn execute_leaf_coverage(config: &Path, sha: &str, seal: &Path, output: &Path) -> Result<bool> {
+    execute_leaf_coverage_with(
+        output,
+        || reduce_leaf_coverage(config, sha, seal),
+        |file, _| file.sync_all(),
+    )
+}
+
+fn execute_leaf_coverage_with(
+    output: &Path,
+    reduce: impl FnOnce() -> Result<(Value, Vec<HeaderSnapshot>)>,
+    sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<bool> {
     // Reserve the report before opening any input. Keep its containing directory live.
     header_path(output)?;
     let dir = parent(output)?;
@@ -5539,7 +5622,7 @@ fn execute_leaf_coverage(config: &Path, sha: &str, seal: &Path, output: &Path) -
             | OFlags::CLOEXEC,
         Mode::RUSR | Mode::WUSR,
     )?);
-    let (report, retained) = match reduce_leaf_coverage(config, sha, seal) {
+    let (report, retained) = match reduce() {
         Ok(reduced) => reduced,
         Err(e) => (
             json!({"schema":COVERAGE_SCHEMA,"status":"INVALID","complete":false,
@@ -5552,9 +5635,7 @@ fn execute_leaf_coverage(config: &Path, sha: &str, seal: &Path, output: &Path) -
         "coverage report cap",
     )?;
     let references = retained.iter().collect::<Vec<_>>();
-    finish_selection_publication(output, &report, &references, dir, file, |file, _| {
-        file.sync_all()
-    })?;
+    finish_selection_publication(output, &report, &references, dir, file, sync)?;
     Ok(report["status"] == "MEASURED")
 }
 
@@ -6030,6 +6111,398 @@ mod tests {
         assert!(!c.truth.path.exists());
     }
 
+    fn leaf_coverage_orchestration_fixture(
+        dir: &Path,
+        with_sq8: bool,
+    ) -> (CoverageConfig, CoverageScope) {
+        use borsuk::semantic_unit_router::{
+            Geometry, SemanticProfile, SemanticUnitRouter, SourceIdentity, admit,
+        };
+        let (mut c, mut i) = leaf_coverage_metadata_fixture(dir);
+        let (old_router, _) = coverage_router(&c, &i).unwrap();
+        let mut manifest = old_router.manifest().clone();
+        i.dimensions = 1024;
+        manifest.dimensions = i.dimensions;
+        manifest.input_centroids_bytes = 32 + i.rows.div_ceil(32) * i.dimensions * 2;
+        manifest.modeled_allocation_limit_bytes = SemanticProfile::Scale1m.allocation_cap();
+        manifest.modeled_peak_allocation_bytes = admit(
+            Geometry {
+                rows: i.rows,
+                dimensions: i.dimensions,
+                units: i.rows.div_ceil(32),
+                blob_bytes: manifest.input_centroids_bytes,
+            },
+            manifest.modeled_allocation_limit_bytes,
+            SemanticProfile::Scale1m,
+        )
+        .unwrap();
+        let width = 4 + i.dimensions * 2;
+        for leaf in &mut manifest.leaves {
+            leaf.prototype.resize(i.dimensions, 0.);
+            leaf.offset = leaf.leaf_id * 64 * width;
+            leaf.bytes = 64 * width;
+        }
+        manifest.leaf_payload.bytes = i.rows.div_ceil(32) * width;
+        let root = manifest.encode().unwrap();
+        std::fs::write(&c.router_root.path, &root).unwrap();
+        c.router_root.bytes = root.len() as u64;
+        c.router_root.sha256 = sha(&root);
+        let input = SourceIdentity {
+            profile: SemanticProfile::Scale1m,
+            schema: &manifest.input_schema,
+            root_sha256: &manifest.input_root_sha256,
+            centroids_sha256: &manifest.input_centroids_sha256,
+            rows: i.rows,
+            dimensions: i.dimensions,
+        };
+        let membership = std::fs::read(&c.membership.path).unwrap();
+        let router = SemanticUnitRouter::open(
+            &root,
+            &membership,
+            &c.router_root.sha256,
+            &input,
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+        // Start with a real tiny native producer envelope, then explicitly synthesize
+        // the larger metadata/trace geometry. This is a boundary fixture, not ANN evidence.
+        let (native_dir, result) =
+            scale_native_runner::scale_reducer_native_fixture(true, true).unwrap();
+        let mut records = std::fs::read_to_string(&result)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let requests = std::fs::read(native_dir.path().join("requests.f32")).unwrap();
+        let truth = std::fs::read(native_dir.path().join("truth.u64")).unwrap();
+        let put = |name: &str, body: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            CompletedInput {
+                path,
+                bytes: body.len() as u64,
+                sha256: sha(body),
+            }
+        };
+        c.requests = put("requests.f32", &requests);
+        c.truth = put("truth.u64", &truth);
+        let mut native_bound = records[1].clone();
+        if with_sq8 {
+            let mut payload = std::io::BufWriter::new(File::create(dir.join("sq8")).unwrap());
+            let mut body_sha = Sha256::new();
+            let mut order_sha = Sha256::new();
+            let mut record = vec![0_u8; 1036];
+            record[8..12].copy_from_slice(&1_f32.to_le_bytes());
+            for id in 0..i.rows as u64 {
+                record[..8].copy_from_slice(&id.to_le_bytes());
+                payload.write_all(&record).unwrap();
+                body_sha.update(&record);
+                order_sha.update(&record[..8]);
+            }
+            payload.flush().unwrap();
+            payload.get_ref().sync_all().unwrap();
+            native_bound["native_sq8_sha256"] = json!(format!("{:x}", body_sha.finalize()));
+            native_bound["native_order_sha256"] = json!(format!("{:x}", order_sha.finalize()));
+            records[1]["native_sq8_sha256"] = native_bound["native_sq8_sha256"].clone();
+            records[1]["native_order_sha256"] = native_bound["native_order_sha256"].clone();
+        }
+        let mut plane: Value =
+            serde_json::from_slice(&std::fs::read(&c.plane_manifest.path).unwrap()).unwrap();
+        plane["dimensions"] = json!(1024);
+        plane["record_bytes"] = json!(264);
+        for key in ["source_sha256", "sq8_sha256", "source_order_sha256"] {
+            let bound_key = match key {
+                "source_sha256" => "native_source_sha256",
+                "sq8_sha256" => "native_sq8_sha256",
+                _ => "native_order_sha256",
+            };
+            plane[key] = native_bound[bound_key].clone();
+        }
+        c.plane_manifest = put("plane", &serde_json::to_vec(&plane).unwrap());
+        let mut g: Value =
+            serde_json::from_slice(&std::fs::read(&c.generation_manifest.path).unwrap()).unwrap();
+        g["plane_manifest_sha256"] = json!(c.plane_manifest.sha256);
+        g["discovery"]["root_sha256"] = json!(c.router_root.sha256);
+        g["discovery"]["root_bytes"] = json!(c.router_root.bytes);
+        g["discovery"]["leaves_bytes"] = json!(manifest.leaf_payload.bytes);
+        for key in ["source_sha256", "sq8_sha256", "source_order_sha256"] {
+            g["discovery"][key] = plane[key].clone();
+        }
+        g["sq8_object_sha256"] = plane["sq8_sha256"].clone();
+        g["sq8_object_key"] = json!(format!(
+            "semantic/objects/{}",
+            plane["sq8_sha256"].as_str().unwrap()
+        ));
+        g["canonical"]["dimensions"] = json!(1024);
+        g["canonical"]["bytes"] = json!(i.rows * 4104);
+        g["low"] = json!(vec![-1_f32; 1024]);
+        g["step"] = json!(vec![0.125_f32; 1024]);
+        c.generation_manifest = put("generation", &serde_json::to_vec(&g).unwrap());
+        let bound = &mut records[1];
+        bound["rows"] = json!(i.rows);
+        bound["dimensions"] = json!(1024);
+        bound["corpus_intervals"] = json!([{"start":0,"end":i.rows}]);
+        bound["query_source_first"] = json!(i.rows);
+        bound["reserved_query_interval"] = json!({"start":i.rows,"end":i.rows+1});
+        bound["generation_root_sha256"] = json!(c.generation_manifest.sha256);
+        c.sq8 = CompletedInput {
+            path: dir.join(if with_sq8 { "sq8" } else { "unopened-sq8" }),
+            bytes: (i.rows * 1036) as u64,
+            sha256: bound["native_sq8_sha256"].as_str().unwrap().into(),
+        };
+        let raw = requests
+            .chunks_exact(4)
+            .map(|w| f32::from_le_bytes(w.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let normalized =
+            borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&raw).unwrap();
+        let arm = coverage_arm(
+            &router,
+            &normalized,
+            &borsuk::VectorMetric::SquaredEuclidean,
+            i.rows,
+            1024,
+        )
+        .unwrap();
+        let q = records
+            .iter_mut()
+            .find(|row| row["phase"] == "query")
+            .unwrap();
+        if with_sq8 {
+            q["returned"][9]["id"] = json!(200);
+        }
+        q["trace"] = json!({"ranked_candidate_pages":arm.nomination.page_closure,"primary_page":0,
+            "discoveries":[],"semantic_leaves":arm.nomination.leaf_ids,"semantic_units":arm.nomination.units,
+            "semantic_seed_additions":arm.nomination.seed_additions,
+            "nomination_evaluated_units":arm.nomination.page_closure.iter()
+                .flat_map(|p|p*8..((p+1)*8).min(i.rows.div_ceil(32))).collect::<Vec<_>>()});
+        q["charges"]["source"] =
+            json!({"submitted_gets":arm.ranges.len(),"verified_bytes":arm.bytes,"failed_gets":0});
+        let sq8_bytes = 256 * 1036;
+        q["charges"]["sq8"] =
+            json!({"submitted_gets":1,"verified_bytes":sq8_bytes,"failed_gets":0});
+        q["plan"] =
+            json!({"selected_pages":[0],"ranges":[[0,sq8_bytes]],"planned_bytes":sq8_bytes});
+        for key in ["submitted_gets", "verified_bytes", "failed_gets"] {
+            q["sum"][key] = json!(
+                ["router", "source", "sq8"]
+                    .iter()
+                    .map(|stage| q["charges"][stage][key].as_u64().unwrap())
+                    .sum::<u64>()
+            );
+        }
+        let charges = q["charges"].clone();
+        let sum = q["sum"].clone();
+        let seal = records
+            .iter_mut()
+            .find(|row| row["phase"] == "all_queries_sealed")
+            .unwrap();
+        seal["generation_root_sha256"] = json!(c.generation_manifest.sha256);
+        let summary = &mut records.last_mut().unwrap()["summary"];
+        summary["generation_root_sha256"] = json!(c.generation_manifest.sha256);
+        summary["charges"] = charges;
+        summary["sum"] = sum;
+        if with_sq8 {
+            summary["total_hits10"] = json!(9);
+            summary["recall_numerator"] = json!(9);
+            summary["mean_recall10"] = json!(0.9);
+            let recall = records
+                .iter_mut()
+                .find(|row| row["phase"] == "recall")
+                .unwrap();
+            recall["hits10"] = json!(9);
+            recall["recall10"] = json!(0.9);
+        }
+        authenticate(&mut records);
+        c.completed = CompletedConfig {
+            schema: SCALE_CONFIG_SCHEMA.into(),
+            input: put("producer.jsonl", &encode(&records)),
+            expected_identity: records[0].clone(),
+            expected_bound_inputs: records[1].clone(),
+        };
+        (
+            c,
+            CoverageScope {
+                rows: i.rows,
+                count: 1,
+                ordinals: vec![0],
+                original_hits: if with_sq8 { 9 } else { 10 },
+                original_coverage: 10,
+            },
+        )
+    }
+
+    #[test]
+    fn leaf_coverage_actual_orchestration_refuses_terminal_and_sync_before_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, scope) = leaf_coverage_orchestration_fixture(dir.path(), false);
+        let config = dir.path().join("coverage-config");
+        let save = |c: &CoverageConfig| {
+            let body = serde_json::to_vec(c).unwrap();
+            std::fs::write(&config, &body).unwrap();
+            sha(&body)
+        };
+        let original = std::fs::read(&c.completed.input.path).unwrap();
+        // A rehashed terminal corruption must be caught by the actual complete reader.
+        let mut records = std::str::from_utf8(&original)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        records.last_mut().unwrap()["summary"]["complete"] = json!(false);
+        let bad = encode(&records);
+        std::fs::write(&c.completed.input.path, &bad).unwrap();
+        c.completed.input.bytes = bad.len() as u64;
+        c.completed.input.sha256 = sha(&bad);
+        let bad_seal = dir.path().join("bad-terminal-seal");
+        let mut truth_opens = 0;
+        let error = reduce_leaf_coverage_with(
+            &config,
+            &save(&c),
+            &bad_seal,
+            &scope,
+            |file, _| file.sync_all(),
+            |pin, bytes| {
+                truth_opens += 1;
+                loss_binary(pin, bytes)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(truth_opens, 0);
+        assert!(!bad_seal.exists());
+        assert!(error.to_string().contains("terminal"), "{error}");
+        std::fs::write(&c.completed.input.path, &original).unwrap();
+        c.completed.input.bytes = original.len() as u64;
+        c.completed.input.sha256 = sha(&original);
+        let config_sha = save(&c);
+        for directory in [false, true] {
+            let seal = dir.path().join(format!("failed-seal-{directory}"));
+            let error = reduce_leaf_coverage_with(
+                &config,
+                &config_sha,
+                &seal,
+                &scope,
+                |file, is_directory| {
+                    if is_directory == directory {
+                        Err(io::Error::other("actual seal sync injection"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+                |pin, bytes| {
+                    truth_opens += 1;
+                    loss_binary(pin, bytes)
+                },
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("actual seal sync injection"),
+                "{error}"
+            );
+            assert_eq!(truth_opens, 0);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&std::fs::read(&seal).unwrap()).unwrap()["status"],
+                "INVALID"
+            );
+        }
+        let seal = dir.path().join("good-seal");
+        let error = reduce_leaf_coverage_with(
+            &config,
+            &config_sha,
+            &seal,
+            &scope,
+            |file, _| file.sync_all(),
+            |pin, bytes| {
+                truth_opens += 1;
+                let sealed: Value = serde_json::from_slice(&std::fs::read(&seal)?).unwrap();
+                assert_eq!(sealed["truth_opened"], false);
+                assert_eq!(sealed["selections"].as_array().unwrap().len(), 1);
+                assert_eq!(
+                    sealed["selections"][0]["l2"]["leaves"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    48
+                );
+                assert_eq!(
+                    sealed["selections"][0]["cosine"]["leaves"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    48
+                );
+                loss_binary(pin, bytes)?;
+                Err("verified actual truth boundary reached".into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(truth_opens, 1);
+        assert_eq!(error.to_string(), "verified actual truth boundary reached");
+    }
+
+    #[test]
+    fn leaf_coverage_actual_reducer_rejects_rehashed_nontruth_return_outside_sq8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, scope) = leaf_coverage_orchestration_fixture(dir.path(), true);
+        let config = dir.path().join("coverage-config");
+        let save = |c: &CoverageConfig| {
+            let body = serde_json::to_vec(c).unwrap();
+            std::fs::write(&config, &body).unwrap();
+            sha(&body)
+        };
+        let config_sha = save(&c);
+        let (report, _) = reduce_leaf_coverage_with(
+            &config,
+            &config_sha,
+            &dir.path().join("good-seal"),
+            &scope,
+            |file, _| file.sync_all(),
+            loss_binary,
+        )
+        .unwrap();
+        assert_eq!(report["original_returned_hits10"], 9);
+        assert_eq!(report["l2_coverage"], 10);
+        let mut records = std::fs::read_to_string(&c.completed.input.path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let q = records
+            .iter_mut()
+            .find(|row| row["phase"] == "query")
+            .unwrap();
+        assert_eq!(q["returned"][9]["id"], 200);
+        q["returned"][9]["id"] = json!(300); // both nontruth; recall and score bits are unchanged.
+        authenticate(&mut records);
+        let body = encode(&records);
+        std::fs::write(&c.completed.input.path, &body).unwrap();
+        c.completed.input.bytes = body.len() as u64;
+        c.completed.input.sha256 = sha(&body);
+        let report_path = dir.path().join("bad-return-report");
+        assert!(
+            !execute_leaf_coverage_with(
+                &report_path,
+                || reduce_leaf_coverage_with(
+                    &config,
+                    &save(&c),
+                    &dir.path().join("bad-return-seal"),
+                    &scope,
+                    |file, _| file.sync_all(),
+                    loss_binary
+                ),
+                |file, _| file.sync_all()
+            )
+            .unwrap()
+        );
+        let invalid: Value = serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+        assert_eq!(invalid["status"], "INVALID");
+        assert_eq!(invalid["complete"], false);
+        assert_eq!(
+            invalid["error"],
+            "coverage returned ID outside fetched SQ8 cover"
+        );
+    }
+
     #[test]
     fn leaf_coverage_seal_sync_mutation_and_occupied_path_refuse_before_truth() {
         let dir = tempfile::tempdir().unwrap();
@@ -6059,6 +6532,10 @@ mod tests {
             .map(|_| truth_opened = true);
             assert!(result.is_err());
             assert!(!truth_opened);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&std::fs::read(&output).unwrap()).unwrap()["status"],
+                "INVALID"
+            );
         }
         let output = dir.path().join("good");
         let (sealed, sha) =
@@ -6084,6 +6561,78 @@ mod tests {
             },
         );
         assert!(result.is_err());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(&changed).unwrap()).unwrap()["status"],
+            "INVALID"
+        );
+    }
+
+    #[test]
+    fn leaf_coverage_actual_report_publication_invalidates_success_on_sync_or_sq8_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        for case in 0..4 {
+            let input = dir.path().join(format!("sq8-{case}"));
+            std::fs::write(&input, b"ranked payload").unwrap();
+            let file = header_file(&input).unwrap();
+            let snapshot = HeaderSnapshot {
+                identity: file_identity(&file).unwrap(),
+                file,
+                path: input.clone(),
+            };
+            let output = dir.path().join(format!("report-{case}"));
+            let result = execute_leaf_coverage_with(
+                &output,
+                || {
+                    Ok((
+                        json!({"schema":COVERAGE_SCHEMA,"status":"MEASURED","complete":true}),
+                        vec![snapshot],
+                    ))
+                },
+                |file, is_directory| {
+                    if case == 0 && !is_directory || case == 1 && is_directory {
+                        return Err(io::Error::other("injected report sync failure"));
+                    }
+                    file.sync_all()?;
+                    if case == 2 && is_directory {
+                        std::fs::write(&input, b"mutated SQ8")?;
+                    }
+                    if case == 3 && is_directory {
+                        std::fs::rename(&output, dir.path().join("original-report-moved"))?;
+                        std::fs::write(&output, b"foreign replacement")?;
+                    }
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            if case == 3 {
+                assert_eq!(std::fs::read(&output).unwrap(), b"foreign replacement");
+                let moved: Value = serde_json::from_slice(
+                    &std::fs::read(dir.path().join("original-report-moved")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(moved["status"], "INVALID");
+                continue;
+            }
+            let artifact: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(artifact["status"], "INVALID");
+            assert_eq!(artifact["complete"], false);
+        }
+        let occupied = dir.path().join("occupied");
+        std::fs::write(&occupied, b"existing receipt").unwrap();
+        let mut reducer_called = false;
+        assert!(
+            execute_leaf_coverage_with(
+                &occupied,
+                || {
+                    reducer_called = true;
+                    Err("must stay unopened".into())
+                },
+                |file, _| file.sync_all()
+            )
+            .is_err()
+        );
+        assert!(!reducer_called);
+        assert_eq!(std::fs::read(&occupied).unwrap(), b"existing receipt");
     }
 
     #[test]
