@@ -4619,12 +4619,354 @@ fn execute_report(
             && report.get("expected_bound_inputs").is_some()))
 }
 
+const LOSS_SCHEMA: &str = "borsuk-sealed-scale-loss-v1";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LossConfig {
+    schema: String,
+    completed: CompletedConfig,
+    source_order: CompletedInput,
+    truth: CompletedInput,
+    max_payload_bytes: u64,
+}
+
+struct LossCoverage {
+    ordinal: usize,
+    scored_units: Vec<usize>,
+    sq8_rows: Vec<[usize; 2]>,
+}
+
+fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
+    let raw: Value = serde_json::from_slice(line)?;
+    require(
+        raw["serving"]["mode"] == "baseline" && raw["source_nomination_skipped"] == false,
+        "loss analysis requires actual baseline nomination",
+    )?;
+    let t: SourceTrace = serde_json::from_value(raw["trace"].clone())?;
+    require(t.discoveries.is_empty(), "semantic loss trace required")?;
+    let unit_count = i.rows.div_ceil(32);
+    let semantic = source_ordinals(&t.semantic_units, unit_count, 3072)?;
+    require(
+        !semantic.is_empty() && t.semantic_units.windows(2).all(|p| p[0] < p[1]),
+        "sorted semantic loss units",
+    )?;
+    let seed = semantic.first().ok_or("loss seed")? / 8;
+    let additions = (seed * 8..((seed + 1) * 8).min(unit_count))
+        .filter(|u| !semantic.contains(u))
+        .collect::<Vec<_>>();
+    require(
+        t.semantic_seed_additions == additions,
+        "loss seed completion",
+    )?;
+    let walked = semantic
+        .union(&additions.into_iter().collect())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let pages = walked.iter().map(|u| u / 8).collect::<BTreeSet<_>>();
+    require(
+        !pages.is_empty()
+            && pages.len() <= 3072
+            && source_ordinals(&t.ranked_candidate_pages, i.rows.div_ceil(256), 3072)? == pages
+            && t.ranked_candidate_pages.first() == Some(&t.primary_page),
+        "loss ranked SOURCE closure",
+    )?;
+    let scored = source_ordinals(&t.nomination_evaluated_units, unit_count, 24576)?;
+    let expected = pages
+        .iter()
+        .flat_map(|p| p * 8..((p + 1) * 8).min(unit_count))
+        .collect::<BTreeSet<_>>();
+    require(
+        scored == expected,
+        "loss trace must score full SOURCE closure",
+    )?;
+    let record_bytes = source_record_bytes(i.dimensions)?;
+    let (source_ranges, source_bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+        &pages,
+        i.rows,
+        record_bytes,
+        128,
+        64 * 1024 * 1024,
+    )?;
+    require(
+        q.charges.source.submitted_gets == source_ranges.len() as u64
+            && q.charges.source.verified_bytes == source_bytes as u64
+            && q.charges.source.failed_gets == 0,
+        "loss SOURCE cover charges",
+    )?;
+    let selected: Vec<usize> = serde_json::from_value(raw["plan"]["selected_pages"].clone())?;
+    require(
+        !selected.is_empty()
+            && selected.len() <= pages.len()
+            && selected.iter().all(|p| pages.contains(p))
+            && selected.iter().copied().collect::<BTreeSet<_>>().len() == selected.len()
+            && selected.contains(&t.primary_page),
+        "loss selected SQ8 pages",
+    )?;
+    let ranges: Vec<[usize; 2]> = serde_json::from_value(raw["plan"]["ranges"].clone())?;
+    let width = i.dimensions.checked_add(12).ok_or("loss SQ8 width")?;
+    let page = width.checked_mul(256).ok_or("loss SQ8 page")?;
+    let end = width.checked_mul(i.rows).ok_or("loss SQ8 body")?;
+    require(
+        !ranges.is_empty() && ranges.len() <= 32,
+        "loss SQ8 range count",
+    )?;
+    let mut bytes = 0_u64;
+    let mut previous = 0;
+    for &[start, stop] in &ranges {
+        require(
+            start >= previous
+                && start < stop
+                && stop <= end
+                && start % page == 0
+                && (stop % page == 0 || stop == end),
+            "loss SQ8 aligned ordered cover",
+        )?;
+        bytes = plus(bytes, (stop - start) as u64)?;
+        previous = stop;
+    }
+    require(
+        selected.iter().all(|p| {
+            ranges
+                .iter()
+                .any(|r| r[0] <= p * page && r[1] >= ((p + 1) * page).min(end))
+        }) && raw["plan"]["planned_bytes"].as_u64() == Some(bytes)
+            && q.charges.sq8.submitted_gets == ranges.len() as u64
+            && q.charges.sq8.verified_bytes == bytes
+            && q.charges.sq8.failed_gets == 0,
+        "loss actual SQ8 cover/charges",
+    )?;
+    Ok(LossCoverage {
+        ordinal: q.ordinal,
+        scored_units: scored.into_iter().collect(),
+        sq8_rows: ranges
+            .into_iter()
+            .map(|r| [r[0] / width, r[1] / width])
+            .collect(),
+    })
+}
+
+fn loss_binary(pin: &CompletedInput, bytes: u64) -> Result<(Vec<u8>, HeaderSnapshot)> {
+    header_pin(pin, bytes)?;
+    require(pin.bytes == bytes, "loss binary exact geometry")?;
+    let file = header_file(&pin.path)?;
+    let identity = file_identity(&file)?;
+    require(identity.len == bytes, "loss binary exact length")?;
+    let mut body = Vec::with_capacity(usize::try_from(bytes)?);
+    Read::take(&mut &file, bytes + 1).read_to_end(&mut body)?;
+    require(
+        body.len() as u64 == bytes && format!("{:x}", Sha256::digest(&body)) == pin.sha256,
+        "loss binary full SHA/EOF",
+    )?;
+    let snapshot = HeaderSnapshot {
+        file,
+        path: pin.path.clone(),
+        identity,
+    };
+    snapshot.recheck()?;
+    Ok((body, snapshot))
+}
+
+// Validate the complete permutation while retaining positions only for selected IDs.
+fn loss_positions(
+    pin: &CompletedInput,
+    rows: usize,
+    wanted: &BTreeSet<u64>,
+) -> Result<(std::collections::BTreeMap<u64, usize>, HeaderSnapshot)> {
+    let bytes = (rows as u64).checked_mul(8).ok_or("loss order bytes")?;
+    header_pin(pin, bytes)?;
+    require(pin.bytes == bytes, "loss order exact geometry")?;
+    let file = header_file(&pin.path)?;
+    let identity = file_identity(&file)?;
+    require(identity.len == bytes, "loss order exact length")?;
+    let mut input = BufReader::with_capacity(8192, file);
+    let mut seen = vec![0_u8; rows.div_ceil(8)];
+    let mut digest = Sha256::new();
+    let mut positions = std::collections::BTreeMap::new();
+    for physical in 0..rows {
+        let mut word = [0_u8; 8];
+        input.read_exact(&mut word)?;
+        digest.update(word);
+        let id = u64::from_le_bytes(word);
+        require(id < rows as u64, "loss order ordinal")?;
+        let index = id as usize;
+        let mask = 1 << (index % 8);
+        require(seen[index / 8] & mask == 0, "loss order duplicate")?;
+        seen[index / 8] |= mask;
+        if wanted.contains(&id) {
+            positions.insert(id, physical);
+        }
+    }
+    require(
+        input.read(&mut [0])? == 0
+            && format!("{:x}", digest.finalize()) == pin.sha256
+            && positions.len() == wanted.len(),
+        "loss order complete SHA/EOF/mapping",
+    )?;
+    let snapshot = HeaderSnapshot {
+        file: input.into_inner(),
+        path: pin.path.clone(),
+        identity,
+    };
+    snapshot.recheck()?;
+    Ok((positions, snapshot))
+}
+
+fn loss_bucket(c: &LossCoverage, physical: usize, returned: bool) -> &'static str {
+    let source = c.scored_units.binary_search(&(physical / 32)).is_ok();
+    let sq8 = c
+        .sq8_rows
+        .iter()
+        .any(|r| r[0] <= physical && physical < r[1]);
+    match (returned, sq8, source) {
+        (true, true, false) => "bridge_rescued_hit",
+        (true, true, true) => "source_covered_hit",
+        (true, false, _) => "INVALID_RETURNED_OUTSIDE_SQ8",
+        (false, true, _) => "covered_ranking_loss",
+        (false, false, true) => "source_to_sq8_nomination_loss",
+        (false, false, false) => "outside_source_and_sq8",
+    }
+}
+
+fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (LossConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == "borsuk-sealed-scale-loss-config-v1"
+            && c.completed.schema == SCALE_CONFIG_SCHEMA,
+        "sealed loss config/schema",
+    )?;
+    let i: Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
+    validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+    let ordinals = scale_ordinals(&c.completed.expected_bound_inputs, i.count)?;
+    require(
+        c.completed.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel"
+            && c.completed.expected_bound_inputs["serving"]["mode"] == "baseline"
+            && !ordinals.is_empty()
+            && ordinals.len() <= 128
+            && i.profile == "scale1m"
+            && c.source_order.sha256 == i.native_order_sha256
+            && c.source_order.bytes == (i.rows as u64) * 8
+            && c.truth.sha256 == i.truth_sha256
+            && c.truth.bytes == i.truth_bytes,
+        "loss baseline panel/order/truth binding",
+    )?;
+    // Retained unit lists plus parser/set/report working payload, excluding allocator overhead.
+    let modeled = plus(
+        (ordinals.len() as u64) * (24576 * 8 + 32 * 16 + 4096),
+        i.rows.div_ceil(8) as u64 + i.truth_bytes + 8 * 1024 * 1024,
+    )?;
+    require(
+        modeled <= c.max_payload_bytes && c.max_payload_bytes <= 64 * 1024 * 1024,
+        "loss modeled payload admission",
+    )?;
+    let mut coverage = Vec::with_capacity(ordinals.len());
+    let run = read_run_observed(
+        &c.completed.input.path,
+        &c.completed.input.sha256,
+        Some(&c.completed),
+        |line, q, inputs| {
+            coverage.push(loss_coverage(line, q, inputs)?);
+            Ok(())
+        },
+    )?;
+    require(
+        coverage.len() == ordinals.len() && run.samples.len() == coverage.len(),
+        "loss complete authenticated coverage",
+    )?;
+    // No truth descriptor is opened until the complete producer body/seal/terminal validates.
+    let (truth, truth_snapshot) = loss_binary(&c.truth, (i.count * K * 8) as u64)?;
+    let mut truth_rows = Vec::with_capacity(i.count);
+    for row in truth.chunks_exact(K * 8) {
+        let ids = row
+            .chunks_exact(8)
+            .map(|w| u64::from_le_bytes(w.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        require(
+            ids.iter().all(|id| *id < i.rows as u64)
+                && ids.iter().copied().collect::<BTreeSet<_>>().len() == K,
+            "loss truth ordinal uniqueness",
+        )?;
+        truth_rows.push(ids);
+    }
+    let mut wanted = BTreeSet::new();
+    for (slot, &ordinal) in ordinals.iter().enumerate() {
+        wanted.extend(truth_rows[ordinal].iter().copied());
+        wanted.extend(run.samples[slot].returned.iter().map(|h| h.id));
+    }
+    let (positions, order_snapshot) = loss_positions(&c.source_order, i.rows, &wanted)?;
+    let mut totals = std::collections::BTreeMap::<&str, u64>::new();
+    let mut queries = Vec::with_capacity(coverage.len());
+    let mut hits = 0_u64;
+    for (slot, cov) in coverage.iter().enumerate() {
+        require(cov.ordinal == ordinals[slot], "loss query order")?;
+        let sample = &run.samples[slot];
+        for h in &sample.returned {
+            require(
+                loss_bucket(cov, positions[&h.id], true) != "INVALID_RETURNED_OUTSIDE_SQ8",
+                "loss returned ID outside actual ranked cover",
+            )?;
+        }
+        let mut entries = Vec::with_capacity(K);
+        let mut query_hits = 0;
+        for &id in &truth_rows[cov.ordinal] {
+            let returned = sample.returned.iter().any(|h| h.id == id);
+            query_hits += u64::from(returned);
+            let physical = positions[&id];
+            let bucket = loss_bucket(cov, physical, returned);
+            *totals.entry(bucket).or_default() += 1;
+            entries.push(json!({"id":id,"physical_row":physical,"bucket":bucket,
+                "source_scored":cov.scored_units.binary_search(&(physical/32)).is_ok(),
+                "sq8_ranked":cov.sq8_rows.iter().any(|r|r[0]<=physical&&physical<r[1])}));
+        }
+        require(query_hits == sample.hits10, "loss original recall parity")?;
+        hits = plus(hits, query_hits)?;
+        queries.push(json!({"ordinal":cov.ordinal,"hits10":query_hits,"truth_entries":entries,
+            "returned":sample.returned,"original_trace_sha256":sample.trace_sha256.iter().map(|b|format!("{b:02x}")).collect::<Vec<_>>().concat(),
+            "source_scored_units":cov.scored_units.len(),"sq8_ranked_rows":cov.sq8_rows}));
+    }
+    require(
+        hits == run.terminal.total_hits10
+            && totals.values().sum::<u64>() == (coverage.len() * K) as u64,
+        "loss disjoint totals/original hits",
+    )?;
+    order_snapshot.recheck()?;
+    truth_snapshot.recheck()?;
+    require(
+        file_identity(&open_input(&c.completed.input.path)?)? == run.file_identity,
+        "loss producer path changed before report",
+    )?;
+    read_config::<LossConfig>(config_path, config_sha)?;
+    Ok(
+        json!({"schema":LOSS_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
+        "producer_result_sha256":c.completed.input.sha256,"source_order_sha256":c.source_order.sha256,
+        "truth_sha256":c.truth.sha256,"query_count":coverage.len(),"hits10":hits,
+        "misses10":coverage.len()*K-hits as usize,"totals":totals,"queries":queries,
+        "modeled_payload_bytes":modeled,"truth_opened_after_complete_producer_validation":true,
+        "native_ann_called":false,"diagnostic_only":true,"cold_s3_claim":false,
+        "quantization_attribution":false,"producer_mapping_provenance_external_gate_required":true,
+        "vendor_or_scientific_win_claim":false,"qualified":false}),
+    )
+}
+
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let binding = args
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args.get(1).is_some_and(|arg| arg == "--sealed-scale-loss") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --sealed-scale-loss CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), LOSS_SCHEMA, || {
+                reduce_loss(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("loss config SHA encoding")?,
+                )
+            });
+        }
         if binding {
             require(
                 args.len() == 5,
@@ -4780,6 +5122,232 @@ mod tests {
         terminal["sum"] = json!({"submitted_gets":3000,"verified_bytes":13412000,"failed_gets":0});
         authenticate(&mut rows);
         rows
+    }
+
+    fn sealed_loss_fixture() -> (Inputs, Value) {
+        let mut i: Inputs = serde_json::from_value(v2_fixture()[1].clone()).unwrap();
+        i.rows = 1280;
+        i.dimensions = 1024;
+        let mut q = v2_fixture()[5].clone();
+        q["serving"] = json!({"mode":"baseline"});
+        q["source_nomination_skipped"] = json!(false);
+        q["trace"] = json!({"ranked_candidate_pages":[0,2,3],"primary_page":0,
+            "discoveries":[],"semantic_leaves":[0],"semantic_units":[0,16,24],
+            "semantic_seed_additions":[1,2,3,4,5,6,7],
+            "nomination_evaluated_units":(0..8).chain(16..32).collect::<Vec<_>>()});
+        let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+            &BTreeSet::from([0, 2, 3]),
+            i.rows,
+            source_record_bytes(i.dimensions).unwrap(),
+            128,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        q["charges"]["source"] = json!({"submitted_gets":ranges.len(),
+            "verified_bytes":bytes,"failed_gets":0});
+        let bytes = 768 * (i.dimensions + 12);
+        q["charges"]["sq8"] = json!({"submitted_gets":1,"verified_bytes":bytes,"failed_gets":0});
+        q["plan"] = json!({"selected_pages":[0,2],"ranges":[[0,bytes]],"planned_bytes":bytes});
+        (i, q)
+    }
+
+    #[test]
+    fn sealed_loss_bridge_source_completion_and_disjoint_buckets() {
+        let (i, q) = sealed_loss_fixture();
+        let coverage = loss_coverage(
+            &serde_json::to_vec(&q).unwrap(),
+            &serde_json::from_value(q.clone()).unwrap(),
+            &i,
+        )
+        .unwrap();
+        assert_eq!(loss_bucket(&coverage, 0, true), "source_covered_hit");
+        assert_eq!(loss_bucket(&coverage, 256, true), "bridge_rescued_hit");
+        assert_eq!(loss_bucket(&coverage, 256, false), "covered_ranking_loss");
+        assert_eq!(loss_bucket(&coverage, 512, false), "covered_ranking_loss");
+        assert_eq!(
+            loss_bucket(&coverage, 800, false),
+            "source_to_sq8_nomination_loss"
+        );
+        assert_eq!(
+            loss_bucket(&coverage, 1100, false),
+            "outside_source_and_sq8"
+        );
+        assert_eq!(
+            loss_bucket(&coverage, 1100, true),
+            "INVALID_RETURNED_OUTSIDE_SQ8"
+        );
+        // The final physical page may be partial; completion clips units to actual rows.
+        let mut tail = i;
+        tail.rows = 1000;
+        assert!(
+            loss_coverage(
+                &serde_json::to_vec(&q).unwrap(),
+                &serde_json::from_value(q.clone()).unwrap(),
+                &tail
+            )
+            .is_err()
+        ); // old SOURCE charge refuses
+        let mut q = q;
+        let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+            &BTreeSet::from([0, 2, 3]),
+            tail.rows,
+            source_record_bytes(tail.dimensions).unwrap(),
+            128,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        q["charges"]["source"] =
+            json!({"submitted_gets":ranges.len(),"verified_bytes":bytes,"failed_gets":0});
+        let cov = loss_coverage(
+            &serde_json::to_vec(&q).unwrap(),
+            &serde_json::from_value(q).unwrap(),
+            &tail,
+        )
+        .unwrap();
+        assert_eq!(
+            loss_bucket(&cov, 999, false),
+            "source_to_sq8_nomination_loss"
+        );
+    }
+
+    #[test]
+    fn sealed_loss_refuses_incomplete_duplicate_out_of_cover_and_charge_evidence() {
+        let (i, q) = sealed_loss_fixture();
+        for case in 0..8 {
+            let mut bad = q.clone();
+            match case {
+                0 => {
+                    bad["trace"]["nomination_evaluated_units"]
+                        .as_array_mut()
+                        .unwrap()
+                        .pop();
+                }
+                1 => bad["trace"]["nomination_evaluated_units"][1] = json!(0),
+                2 => bad["trace"]["semantic_seed_additions"][0] = json!(9),
+                3 => bad["charges"]["source"]["verified_bytes"] = json!(1),
+                4 => bad["plan"]["selected_pages"] = json!([0, 4]),
+                5 => bad["plan"]["ranges"][0][1] = json!(100),
+                6 => bad["charges"]["sq8"]["verified_bytes"] = json!(1),
+                _ => bad["source_nomination_skipped"] = json!(true),
+            }
+            assert!(
+                loss_coverage(
+                    &serde_json::to_vec(&bad).unwrap(),
+                    &serde_json::from_value(bad).unwrap(),
+                    &i
+                )
+                .is_err(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("order.u64");
+        let body = (0..64_u64)
+            .rev()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>();
+        std::fs::write(&path, &body).unwrap();
+        let mut pin = CompletedInput {
+            path: path.clone(),
+            bytes: body.len() as u64,
+            sha256: sha(&body),
+        };
+        let wanted = BTreeSet::from([3, 44]);
+        let (positions, snapshot) = loss_positions(&pin, 64, &wanted).unwrap();
+        assert_eq!(positions[&3], 60);
+        assert_eq!(positions[&44], 19);
+        std::fs::rename(&path, dir.path().join("old")).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        assert!(snapshot.recheck().is_err());
+        for values in [vec![0_u64; 64], (0..63_u64).chain([64]).collect()] {
+            let bad = values
+                .into_iter()
+                .flat_map(u64::to_le_bytes)
+                .collect::<Vec<_>>();
+            std::fs::write(&path, &bad).unwrap();
+            pin.sha256 = sha(&bad);
+            assert!(loss_positions(&pin, 64, &wanted).is_err());
+        }
+        pin.sha256 = sha(&body);
+        std::fs::write(&path, &body[..body.len() - 1]).unwrap();
+        assert!(loss_positions(&pin, 64, &wanted).is_err());
+        std::fs::write(&path, &body).unwrap();
+        let link = dir.path().join("link");
+        symlink(&path, &link).unwrap();
+        pin.path = link;
+        assert!(loss_positions(&pin, 64, &wanted).is_err());
+    }
+
+    #[test]
+    fn sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth() {
+        let (dir, result) = scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
+        let body = std::fs::read_to_string(&result).unwrap();
+        let rows = body
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let (completed_path, completed_sha) = scale_config(dir.path(), &result, &rows);
+        let (completed, _): (CompletedConfig, _) =
+            read_config(&completed_path, &completed_sha).unwrap();
+        let mut order = (0..32_u64).rev().collect::<Vec<_>>();
+        let eight = order.iter().position(|id| *id == 8).unwrap();
+        order.swap(eight, 31);
+        let order = order
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>();
+        let order_path = dir.path().join("loss-order.u64");
+        std::fs::write(&order_path, &order).unwrap();
+        let truth = std::fs::read(dir.path().join("truth.u64")).unwrap();
+        let mut config = json!({"schema":"borsuk-sealed-scale-loss-config-v1",
+            "completed":{"schema":completed.schema,"input":{"path":completed.input.path,
+                "bytes":completed.input.bytes,"sha256":completed.input.sha256},
+                "expected_identity":completed.expected_identity,
+                "expected_bound_inputs":completed.expected_bound_inputs},
+            "source_order":{"path":order_path,"bytes":order.len(),"sha256":sha(&order)},
+            "truth":{"path":dir.path().join("truth.u64"),"bytes":truth.len(),"sha256":sha(&truth)},
+            "max_payload_bytes":64*1024*1024});
+        let path = dir.path().join("loss.json");
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let report = reduce_loss(&path, &sha(&bytes)).unwrap();
+        assert_eq!(report["query_count"], 1);
+        assert_eq!(
+            report["hits10"].as_u64().unwrap() + report["misses10"].as_u64().unwrap(),
+            10
+        );
+        assert_eq!(
+            report["truth_opened_after_complete_producer_validation"],
+            true
+        );
+        assert_eq!(report["native_ann_called"], false);
+        let original_query = rows.iter().find(|r| r["phase"] == "query").unwrap();
+        assert_eq!(report["queries"][0]["returned"], original_query["returned"]);
+        config["max_payload_bytes"] = json!(1);
+        config["truth"]["path"] = json!(dir.path().join("truth-must-not-open"));
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_loss(&path, &sha(&bytes)).unwrap_err().to_string(),
+            "loss modeled payload admission"
+        );
+        config["max_payload_bytes"] = json!(64 * 1024 * 1024);
+        // A complete body pin alone cannot make a truncated producer/seal acceptable.
+        let bad_path = dir.path().join("truncated.jsonl");
+        let bad = &body.as_bytes()[..body.len() - 10];
+        std::fs::write(&bad_path, bad).unwrap();
+        config["completed"]["input"] = json!({"path":bad_path,"bytes":bad.len(),"sha256":sha(bad)});
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let error = reduce_loss(&path, &sha(&bytes)).unwrap_err().to_string();
+        assert!(
+            !error.contains("No such file"),
+            "truncated producer must refuse before inaccessible truth: {error}"
+        );
     }
 
     fn source_config_value(dir: &Path, rows: &[Value], bytes: &[u8]) -> Value {
