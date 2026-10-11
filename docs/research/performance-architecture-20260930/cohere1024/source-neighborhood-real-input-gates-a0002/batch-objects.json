@@ -1,0 +1,1550 @@
+{
+    "IsTruncated": false,
+    "Contents": [
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/SHA256SUMS",
+            "LastModified": "2026-10-11T16:48:00+00:00",
+            "ETag": "\"0ee898e8ebc499df34d0d792b1dbf7d0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14245,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.SHA256SUMS.put.json",
+            "LastModified": "2026-10-11T16:48:01+00:00",
+            "ETag": "\"c4de5dee5306809cc947378c9e6ac0b8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.anchors.json.put.json",
+            "LastModified": "2026-10-11T16:48:01+00:00",
+            "ETag": "\"d46d231cbfe447ae001364edeb1e12c5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.cgroup-path.txt.put.json",
+            "LastModified": "2026-10-11T16:48:02+00:00",
+            "ETag": "\"d917e4a06124020f0647d3697d79b764\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.config-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:02+00:00",
+            "ETag": "\"2239194fd25933e4db8fea13e62d529e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.config-final-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:03+00:00",
+            "ETag": "\"2239194fd25933e4db8fea13e62d529e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.cpu.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:04+00:00",
+            "ETag": "\"68364a8ab3226e9920bfb890943774f6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.cpu.stat.after.put.json",
+            "LastModified": "2026-10-11T16:48:04+00:00",
+            "ETag": "\"50f3e6ec17f73d96ac357172dd775a01\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.cpuset.cpus.effective.before.put.json",
+            "LastModified": "2026-10-11T16:48:05+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.elf-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:05+00:00",
+            "ETag": "\"23bda6b30edfcdfe8943751c3c1bf0a6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.elf-final-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:06+00:00",
+            "ETag": "\"23bda6b30edfcdfe8943751c3c1bf0a6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.execution-identity.json.put.json",
+            "LastModified": "2026-10-11T16:48:07+00:00",
+            "ETag": "\"73dbc6f459d2835912864c2e2c39da04\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.io.stat.before.put.json",
+            "LastModified": "2026-10-11T16:48:07+00:00",
+            "ETag": "\"c5f1a4068ccdbe6acd391f68b73de175\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.manager-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:48:08+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.events.after.put.json",
+            "LastModified": "2026-10-11T16:48:08+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.high.after.put.json",
+            "LastModified": "2026-10-11T16:48:09+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:10+00:00",
+            "ETag": "\"5632bd5643748ea8ac7fbcc965d33969\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:10+00:00",
+            "ETag": "\"9ccd0337d4902c20771eef02dff33dac\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.stat.after.put.json",
+            "LastModified": "2026-10-11T16:48:11+00:00",
+            "ETag": "\"e28857b62a84ae4e609a959d4ce363ad\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.swap.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:12+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.memory.swap.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:12+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.native-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:48:13+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.native-finished.txt.put.json",
+            "LastModified": "2026-10-11T16:48:13+00:00",
+            "ETag": "\"e42a1c667da90494730044dcf58e04e0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.native-started.txt.put.json",
+            "LastModified": "2026-10-11T16:48:14+00:00",
+            "ETag": "\"6f1565ee11095550abcea40a736973ce\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.native-time.txt.put.json",
+            "LastModified": "2026-10-11T16:48:15+00:00",
+            "ETag": "\"bf436424f1906cbd56718d1411f6fea9\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.native.log.put.json",
+            "LastModified": "2026-10-11T16:48:15+00:00",
+            "ETag": "\"0e05af48b5d5cdfabcf923ee83ad78a1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.cpu.max.put.json",
+            "LastModified": "2026-10-11T16:48:16+00:00",
+            "ETag": "\"38d55c65d71a124115790e3beb802087\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.cpuset.cpus.effective.put.json",
+            "LastModified": "2026-10-11T16:48:16+00:00",
+            "ETag": "\"eb1d21c15a5dcebf2d442df8c548af04\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.events.put.json",
+            "LastModified": "2026-10-11T16:48:17+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.high.put.json",
+            "LastModified": "2026-10-11T16:48:18+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.max.put.json",
+            "LastModified": "2026-10-11T16:48:18+00:00",
+            "ETag": "\"5632bd5643748ea8ac7fbcc965d33969\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.peak.put.json",
+            "LastModified": "2026-10-11T16:48:19+00:00",
+            "ETag": "\"47420a204401202678cb143cdd5292c5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.stat.put.json",
+            "LastModified": "2026-10-11T16:48:19+00:00",
+            "ETag": "\"4567e0e688bff7549c8e302aa4beef06\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.swap.max.put.json",
+            "LastModified": "2026-10-11T16:48:20+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.memory.swap.peak.put.json",
+            "LastModified": "2026-10-11T16:48:21+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.owning-slice.pids.max.put.json",
+            "LastModified": "2026-10-11T16:48:21+00:00",
+            "ETag": "\"3d1fba5c9ec47fded7c92ae89eb6b925\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.phase.log",
+            "LastModified": "2026-10-11T16:48:22+00:00",
+            "ETag": "\"bb474b530d697539db90233b61b5d065\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1432,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.pids.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:22+00:00",
+            "ETag": "\"3d1fba5c9ec47fded7c92ae89eb6b925\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.pids.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:23+00:00",
+            "ETag": "\"e07807548e4eacb00729c2a0a9a1b9e7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.report.json.put.json",
+            "LastModified": "2026-10-11T16:48:24+00:00",
+            "ETag": "\"70e939736ed5e1613ec66257acdcc747\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.resource-evidence-valid.txt.put.json",
+            "LastModified": "2026-10-11T16:48:24+00:00",
+            "ETag": "\"fe0d19821e4c4b908a82fa1ab5e4e560\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.cpu.stat.after.put.json",
+            "LastModified": "2026-10-11T16:48:25+00:00",
+            "ETag": "\"dca0b38d5bf30a8682fd8503ea66e5b1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.events.after.put.json",
+            "LastModified": "2026-10-11T16:48:25+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.high.after.put.json",
+            "LastModified": "2026-10-11T16:48:26+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.high.before.put.json",
+            "LastModified": "2026-10-11T16:48:27+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:27+00:00",
+            "ETag": "\"47420a204401202678cb143cdd5292c5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.stat.after.put.json",
+            "LastModified": "2026-10-11T16:48:28+00:00",
+            "ETag": "\"9ce03ea9b548b41e647c54f7ea2c1005\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.memory.swap.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:28+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.slice.pids.peak.after.put.json",
+            "LastModified": "2026-10-11T16:48:29+00:00",
+            "ETag": "\"44a8daf780d92a38f24bd5991a15b9e7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.systemd-after.stderr.put.json",
+            "LastModified": "2026-10-11T16:48:30+00:00",
+            "ETag": "\"c5f1a4068ccdbe6acd391f68b73de175\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.systemd-after.txt.put.json",
+            "LastModified": "2026-10-11T16:48:30+00:00",
+            "ETag": "\"a59312f0c8b13ee2cc51f9d05489faf1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.systemd-run.log.put.json",
+            "LastModified": "2026-10-11T16:48:31+00:00",
+            "ETag": "\"e4c754863e3d251f0b65d37d64f7f345\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.systemd-show-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:48:31+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/admission.terminal.json.put.json",
+            "LastModified": "2026-10-11T16:48:32+00:00",
+            "ETag": "\"c5ddc8156f0f5fd84f61123a82b90dd9\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/aws-version.txt",
+            "LastModified": "2026-10-11T16:48:33+00:00",
+            "ETag": "\"d67027a668a26c08615960749709e2a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 72,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/borsuk-neighborhood-admission.stop.log",
+            "LastModified": "2026-10-11T16:48:33+00:00",
+            "ETag": "\"2590b90d6bc6b6fb1e0d908ca999ca36\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 109,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/borsuk-neighborhood-hydrate.stop.log",
+            "LastModified": "2026-10-11T16:48:34+00:00",
+            "ETag": "\"4c2315cf23fe4830b1075e1720b22897\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 105,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/borsuk-neighborhood-install.stop.log",
+            "LastModified": "2026-10-11T16:48:34+00:00",
+            "ETag": "\"4114aafac7621eb02c8b93dbebc35a80\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 105,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/borsuk-neighborhood-smoke.stop.log",
+            "LastModified": "2026-10-11T16:48:35+00:00",
+            "ETag": "\"8d2223403d71008dbbb3270b0fd81a63\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 101,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/cleanup-exit.txt",
+            "LastModified": "2026-10-11T16:48:36+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/execution-identity.json",
+            "LastModified": "2026-10-11T16:48:36+00:00",
+            "ETag": "\"c9a8d52cde3f521f2f66b68cc01d8d66\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 586,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydrate.phase.log",
+            "LastModified": "2026-10-11T16:48:37+00:00",
+            "ETag": "\"9bb7f8ca61047542a6e48c71f128857a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 774,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.service.io.stat",
+            "LastModified": "2026-10-11T16:48:37+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.service.memory.peak",
+            "LastModified": "2026-10-11T16:48:38+00:00",
+            "ETag": "\"74ad0729f81f538a00b53076681f5387\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.cgroup.controllers",
+            "LastModified": "2026-10-11T16:48:39+00:00",
+            "ETag": "\"bc83692c2108beb0dcb9a99a5f1eba50\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 26,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.cgroup.subtree_control",
+            "LastModified": "2026-10-11T16:48:39+00:00",
+            "ETag": "\"bc83692c2108beb0dcb9a99a5f1eba50\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 26,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.cpu.max",
+            "LastModified": "2026-10-11T16:48:40+00:00",
+            "ETag": "\"62caa5e8c3c4dc2f35821a06967b54c8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.cpuset.cpus.effective",
+            "LastModified": "2026-10-11T16:48:40+00:00",
+            "ETag": "\"96c8414f1eb827e5d062dc4db914e3bc\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.io.stat",
+            "LastModified": "2026-10-11T16:48:41+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.events",
+            "LastModified": "2026-10-11T16:48:42+00:00",
+            "ETag": "\"8cf9c4033a416c2f57bb114110d0c5f5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 70,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.high",
+            "LastModified": "2026-10-11T16:48:42+00:00",
+            "ETag": "\"7c1a5d12744dec24641ab8ca14fff597\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.high.before",
+            "LastModified": "2026-10-11T16:48:43+00:00",
+            "ETag": "\"7c1a5d12744dec24641ab8ca14fff597\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.max",
+            "LastModified": "2026-10-11T16:48:43+00:00",
+            "ETag": "\"e21ded549dd232c7fc4f6909745abb2e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.peak",
+            "LastModified": "2026-10-11T16:48:44+00:00",
+            "ETag": "\"1ee4410f0792bc8fc210e0c202ebbaa0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.stat",
+            "LastModified": "2026-10-11T16:48:44+00:00",
+            "ETag": "\"ff7175d6920021e7466974839147a605\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1165,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.swap.max",
+            "LastModified": "2026-10-11T16:48:45+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.memory.swap.peak",
+            "LastModified": "2026-10-11T16:48:46+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/hydration.slice.pids.max",
+            "LastModified": "2026-10-11T16:48:46+00:00",
+            "ETag": "\"650a1c9c9baa20730b4fcfdbe4cdc135\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/install.phase.log",
+            "LastModified": "2026-10-11T16:48:47+00:00",
+            "ETag": "\"7b3e6328c867ba7614c2fa67ba358c6b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2070,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/instance-identity.json",
+            "LastModified": "2026-10-11T16:48:47+00:00",
+            "ETag": "\"58c036defab49838f0b0ebae38af7288\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 483,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/kernel.txt",
+            "LastModified": "2026-10-11T16:48:48+00:00",
+            "ETag": "\"b28b0635cf9167ccd84f1068a6a25d9c\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 127,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/last-phase.txt",
+            "LastModified": "2026-10-11T16:48:49+00:00",
+            "ETag": "\"c514939fdd61df26b103925a5122b356\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 9,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/original-exit.txt",
+            "LastModified": "2026-10-11T16:48:49+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.SHA256SUMS.put.json",
+            "LastModified": "2026-10-11T16:48:50+00:00",
+            "ETag": "\"3065075cbe86f5139ef1447c919e0c48\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.anchors.json.put.json",
+            "LastModified": "2026-10-11T16:48:50+00:00",
+            "ETag": "\"533d6d5cd20e0b7b2a7b9d4619267a34\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.cgroup-path.txt.put.json",
+            "LastModified": "2026-10-11T16:48:51+00:00",
+            "ETag": "\"78db0fcf6b0c65a1c0b34f86cb840926\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.config-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:52+00:00",
+            "ETag": "\"1a1da2aeba556759c0ca2ba8d64b4cdd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.config-final-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:52+00:00",
+            "ETag": "\"1a1da2aeba556759c0ca2ba8d64b4cdd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.cpu.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:53+00:00",
+            "ETag": "\"68364a8ab3226e9920bfb890943774f6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.cpu.stat.after.put.json",
+            "LastModified": "2026-10-11T16:48:54+00:00",
+            "ETag": "\"2056d1be4bca7e563faa20f9aacbe077\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.cpuset.cpus.effective.before.put.json",
+            "LastModified": "2026-10-11T16:48:54+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.elf-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:55+00:00",
+            "ETag": "\"23bda6b30edfcdfe8943751c3c1bf0a6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.elf-final-check.log.put.json",
+            "LastModified": "2026-10-11T16:48:55+00:00",
+            "ETag": "\"23bda6b30edfcdfe8943751c3c1bf0a6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.execution-identity.json.put.json",
+            "LastModified": "2026-10-11T16:48:56+00:00",
+            "ETag": "\"73dbc6f459d2835912864c2e2c39da04\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.io.stat.before.put.json",
+            "LastModified": "2026-10-11T16:48:57+00:00",
+            "ETag": "\"c5f1a4068ccdbe6acd391f68b73de175\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.manager-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:48:57+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.events.after.put.json",
+            "LastModified": "2026-10-11T16:48:58+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.high.after.put.json",
+            "LastModified": "2026-10-11T16:48:58+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.max.before.put.json",
+            "LastModified": "2026-10-11T16:48:59+00:00",
+            "ETag": "\"5632bd5643748ea8ac7fbcc965d33969\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:00+00:00",
+            "ETag": "\"ae7bf2f7687cf452da97c80268c99b2d\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.stat.after.put.json",
+            "LastModified": "2026-10-11T16:49:00+00:00",
+            "ETag": "\"3b79da47145ee58285a2b7c157147baf\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.swap.max.before.put.json",
+            "LastModified": "2026-10-11T16:49:01+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.memory.swap.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:01+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.native-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:49:02+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.native-finished.txt.put.json",
+            "LastModified": "2026-10-11T16:49:03+00:00",
+            "ETag": "\"93424c995e679360054af65f53b639dd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.native-started.txt.put.json",
+            "LastModified": "2026-10-11T16:49:03+00:00",
+            "ETag": "\"df6677c948eef82c85ab221580a68a9a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.native-time.txt.put.json",
+            "LastModified": "2026-10-11T16:49:04+00:00",
+            "ETag": "\"f9876ef2116a448d894c7fc6ff340e30\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.native.log.put.json",
+            "LastModified": "2026-10-11T16:49:04+00:00",
+            "ETag": "\"e1d4dc21a80d710513fc9863eec75c76\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.cpu.max.put.json",
+            "LastModified": "2026-10-11T16:49:05+00:00",
+            "ETag": "\"38d55c65d71a124115790e3beb802087\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.cpuset.cpus.effective.put.json",
+            "LastModified": "2026-10-11T16:49:06+00:00",
+            "ETag": "\"eb1d21c15a5dcebf2d442df8c548af04\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.events.put.json",
+            "LastModified": "2026-10-11T16:49:06+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.high.put.json",
+            "LastModified": "2026-10-11T16:49:07+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.max.put.json",
+            "LastModified": "2026-10-11T16:49:08+00:00",
+            "ETag": "\"5632bd5643748ea8ac7fbcc965d33969\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.peak.put.json",
+            "LastModified": "2026-10-11T16:49:08+00:00",
+            "ETag": "\"47420a204401202678cb143cdd5292c5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.stat.put.json",
+            "LastModified": "2026-10-11T16:49:09+00:00",
+            "ETag": "\"7b68bdf163d3e7830f907535c7e7f8b2\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.swap.max.put.json",
+            "LastModified": "2026-10-11T16:49:09+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.memory.swap.peak.put.json",
+            "LastModified": "2026-10-11T16:49:10+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.owning-slice.pids.max.put.json",
+            "LastModified": "2026-10-11T16:49:11+00:00",
+            "ETag": "\"3d1fba5c9ec47fded7c92ae89eb6b925\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.phase.log",
+            "LastModified": "2026-10-11T16:49:11+00:00",
+            "ETag": "\"091148a8450dd721d3fe2610f79ea25b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1428,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.pids.max.before.put.json",
+            "LastModified": "2026-10-11T16:49:12+00:00",
+            "ETag": "\"3d1fba5c9ec47fded7c92ae89eb6b925\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.pids.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:12+00:00",
+            "ETag": "\"e07807548e4eacb00729c2a0a9a1b9e7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.report.json.put.json",
+            "LastModified": "2026-10-11T16:49:13+00:00",
+            "ETag": "\"6b6a1e6e95abbd8be465020d9e9c5442\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.resource-evidence-valid.txt.put.json",
+            "LastModified": "2026-10-11T16:49:14+00:00",
+            "ETag": "\"fe0d19821e4c4b908a82fa1ab5e4e560\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.cpu.stat.after.put.json",
+            "LastModified": "2026-10-11T16:49:14+00:00",
+            "ETag": "\"a696782188c7bc4991b70718c6573972\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.events.after.put.json",
+            "LastModified": "2026-10-11T16:49:15+00:00",
+            "ETag": "\"8e47a2c62edd26128006afad2aac4920\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.high.after.put.json",
+            "LastModified": "2026-10-11T16:49:15+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.high.before.put.json",
+            "LastModified": "2026-10-11T16:49:16+00:00",
+            "ETag": "\"eea68581deb72481c4903a823404d63a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:17+00:00",
+            "ETag": "\"47420a204401202678cb143cdd5292c5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.stat.after.put.json",
+            "LastModified": "2026-10-11T16:49:17+00:00",
+            "ETag": "\"1f79d261fdb8fe8c2ffb28534e2db2d1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.memory.swap.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:18+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.slice.pids.peak.after.put.json",
+            "LastModified": "2026-10-11T16:49:18+00:00",
+            "ETag": "\"44a8daf780d92a38f24bd5991a15b9e7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.systemd-after.stderr.put.json",
+            "LastModified": "2026-10-11T16:49:19+00:00",
+            "ETag": "\"c5f1a4068ccdbe6acd391f68b73de175\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.systemd-after.txt.put.json",
+            "LastModified": "2026-10-11T16:49:20+00:00",
+            "ETag": "\"a59312f0c8b13ee2cc51f9d05489faf1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.systemd-run.log.put.json",
+            "LastModified": "2026-10-11T16:49:20+00:00",
+            "ETag": "\"b8dcbef519bbc29182a861ab6b15b5c7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.systemd-show-exit.txt.put.json",
+            "LastModified": "2026-10-11T16:49:21+00:00",
+            "ETag": "\"c3a34cf0829185e8c444b693eec9cb99\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/smoke.terminal.json.put.json",
+            "LastModified": "2026-10-11T16:49:21+00:00",
+            "ETag": "\"ec6b3461d953d352d58ca01e420aa048\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/support-check.log",
+            "LastModified": "2026-10-11T16:49:22+00:00",
+            "ETag": "\"4327b84e528efd29debe84815e4d74b2\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 258,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/support.sha256",
+            "LastModified": "2026-10-11T16:49:23+00:00",
+            "ETag": "\"3a8c6c64e39a7d7daecb563760d1cff0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 940,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/systemd.txt",
+            "LastModified": "2026-10-11T16:49:23+00:00",
+            "ETag": "\"825ba14ca544ef93d29754df6256db0b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 330,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/terminal.json",
+            "LastModified": "2026-10-11T16:49:24+00:00",
+            "ETag": "\"c37288b649b8a141906270560debf782\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 921,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "Name": "borsuk-bench-453182569524-euc1",
+    "Prefix": "research/semantic-router/20261011/source-neighborhood-data-gates-a0002/batch/",
+    "MaxKeys": 1000,
+    "EncodingType": "url",
+    "KeyCount": 140
+}

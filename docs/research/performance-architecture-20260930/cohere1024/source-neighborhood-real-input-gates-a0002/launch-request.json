@@ -1,0 +1,15 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.xlarge",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-0a12dbed0ca6fac25",
+  "SecurityGroupIds": ["sg-0b1fd3e4fbde4af0d"],
+  "IamInstanceProfile": {"Name": "borsuk-bench-profile"},
+  "MetadataOptions": {"HttpEndpoint": "enabled", "HttpTokens": "required"},
+  "BlockDeviceMappings": [{"DeviceName": "/dev/sda1", "Ebs": {"DeleteOnTermination": true, "Encrypted": true, "Iops": 3000, "Throughput": 125, "VolumeSize": 16, "VolumeType": "gp3"}}],
+  "InstanceMarketOptions": {"MarketType": "spot", "SpotOptions": {"SpotInstanceType": "one-time", "InstanceInterruptionBehavior": "terminate", "MaxPrice": "0.20"}},
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "ClientToken": "borsuk-neighborhood-data-gates-a0002-fc60c18e",
+  "TagSpecifications": [{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "borsuk-source-neighborhood-data-gates-a0002"}, {"Key": "borsuk-source", "Value": "fc60c18e780063804c625a72f722d3e697fb4b61"}, {"Key": "borsuk-goal", "Value": "source-neighborhood-data-gates"}]}]
+}

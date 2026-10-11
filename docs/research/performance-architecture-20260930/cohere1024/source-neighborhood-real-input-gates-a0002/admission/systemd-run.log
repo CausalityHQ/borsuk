@@ -1,0 +1,10 @@
+Running as unit: borsuk-neighborhood-admission.service
+REAL_INPUT_AND_DURABLE_SOURCE_SEAL_AUTHENTICATED
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 13.515s
+CPU time consumed: 12.607s
+Memory peak: 1.1M
+Memory swap peak: 0B
+IO bytes read: 0B
+IO bytes written: 0B

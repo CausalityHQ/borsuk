@@ -1,0 +1,22 @@
+{
+    "CommandId": "e7908e37-d784-4bc0-a0c1-4fdace7a399e",
+    "InstanceId": "i-0bc04948ec797f4a0",
+    "Comment": "borsuk exactfc60 real-input admission and smoke a0002",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T16:45:12.116Z",
+    "ExecutionElapsedTime": "PT4M11.356S",
+    "ExecutionEndDateTime": "2026-10-11T16:49:23.116Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "DRIVER_EXIT=0 BATCH_EXIT=0 COMPLETED_STAGES=2 CLEANUP_EXIT=0 LAST_PHASE=complete\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-neighborhood-data-driver.service\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 4min 11.318s\nCPU time consumed: 2min 16.970s\nMemory peak: 2.2M\nMemory swap peak: 0B\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

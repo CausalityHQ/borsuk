@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-source-neighborhood-data-stage-v1",
+  "execution": {
+    "schema": "borsuk-source-neighborhood-execution-v1",
+    "attempt": "source-neighborhood-data-gates-a0002",
+    "instance_id": "i-0bc04948ec797f4a0",
+    "image_id": "ami-0b8a830d6339a9758",
+    "source_commit": "fc60c18e780063804c625a72f722d3e697fb4b61",
+    "request_sha256": "14f1b97970a2fd736bfadd07c83205d286a9afe745253f8301dc549eabb7eb2a",
+    "package_manifest_sha256": "4608d8df5791761b3c194f6f68cc26f382c908deb0ab05d74a37ab2b76503965",
+    "root_launch_started_epoch": 1791736937,
+    "guest_deadline_seconds": 9600,
+    "external_deadline_seconds": 9720,
+    "total_cost_ceiling_usd": 0.75
+  },
+  "stage": "admission",
+  "status": "GATE_ACCEPTED",
+  "source_commit": "fc60c18e780063804c625a72f722d3e697fb4b61",
+  "source_sha256": "239c80dbe7d0a978a88791d98b9cf0827b10d91105367103d312c89987eca29f",
+  "elf_sha256": "77a8e582e426f1d8500f26b66741ddb978ce7f0d1ef5250b5111c7a3e1da1010",
+  "config_sha256": "5cc67796357ab27afa25117e84bda926bd740f40482a78f4b75f3685b9e037eb",
+  "anchor_seal_sha256": "08a650ecff6e1522cea80c9107e9929979087f0ed92f609963debfce11254dbf",
+  "report_sha256": "4c092836d6e08dda3daeea3e4343a24bcf8af8e40d9eea27419a64589a5dcfd9",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "owning_slice_resources_ok": true,
+  "scientific_measurement": false,
+  "cold_s3_claim": false,
+  "vendor_win": false
+}

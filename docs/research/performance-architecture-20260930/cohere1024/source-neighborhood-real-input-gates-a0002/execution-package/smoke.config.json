@@ -1,0 +1,42 @@
+{
+  "generation_manifest": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/generation.json",
+    "bytes": 27501,
+    "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+  },
+  "plane_manifest": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/plane.json",
+    "bytes": 653,
+    "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+  },
+  "router_root": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/router-root.bin",
+    "bytes": 3041472,
+    "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+  },
+  "membership": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/membership.bin",
+    "bytes": 125000,
+    "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+  },
+  "leaves": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/leaves.bin",
+    "bytes": 64125000,
+    "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+  },
+  "canonical": {
+    "path": "/mnt/borsuk-neighborhood-data/inputs/canonical.bin",
+    "bytes": 4104000000,
+    "sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c"
+  },
+  "schema": "borsuk-source-neighborhood-config-v1",
+  "scope": "scientific",
+  "rows": 1000000,
+  "dimensions": 1024,
+  "anchor_count": 32,
+  "neighbor_count": 32,
+  "canonical_object_key": "semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+  "max_payload_bytes": 738197504,
+  "anchor_seal": "/mnt/borsuk-neighborhood-data/evidence/smoke/anchors.json",
+  "report": "/mnt/borsuk-neighborhood-data/evidence/smoke/report.json"
+}

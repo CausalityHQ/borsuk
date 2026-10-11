@@ -1,0 +1,11 @@
+native-data-inner.sh: OK
+run-data-gates.sh: OK
+run-data-stage.sh: OK
+setup-data.sh: OK
+admission.config.json: OK
+execution-identity.json: OK
+smoke.config.json: OK
+transport.json: OK
+admission.config.sha256: OK
+smoke.config.sha256: OK
+campaign-prefix.txt: OK

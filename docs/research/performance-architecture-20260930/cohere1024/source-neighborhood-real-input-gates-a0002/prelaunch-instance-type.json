@@ -1,0 +1,120 @@
+{
+    "InstanceTypes": [
+        {
+            "InstanceType": "c7i.xlarge",
+            "CurrentGeneration": true,
+            "FreeTierEligible": false,
+            "SupportedUsageClasses": [
+                "on-demand",
+                "spot"
+            ],
+            "SupportedRootDeviceTypes": [
+                "ebs"
+            ],
+            "SupportedVirtualizationTypes": [
+                "hvm"
+            ],
+            "BareMetal": false,
+            "Hypervisor": "nitro",
+            "ProcessorInfo": {
+                "SupportedArchitectures": [
+                    "x86_64"
+                ],
+                "SustainedClockSpeedInGhz": 3.2,
+                "SupportedFeatures": [
+                    "nested-virtualization",
+                    "metal-compatibility"
+                ],
+                "Manufacturer": "Intel"
+            },
+            "VCpuInfo": {
+                "DefaultVCpus": 4,
+                "DefaultCores": 2,
+                "DefaultThreadsPerCore": 2,
+                "ValidCores": [
+                    1,
+                    2
+                ],
+                "ValidThreadsPerCore": [
+                    1,
+                    2
+                ]
+            },
+            "MemoryInfo": {
+                "SizeInMiB": 8192
+            },
+            "InstanceStorageSupported": false,
+            "EbsInfo": {
+                "EbsOptimizedSupport": "default",
+                "EncryptionSupport": "supported",
+                "EbsOptimizedInfo": {
+                    "BaselineBandwidthInMbps": 1250,
+                    "BaselineThroughputInMBps": 156.25,
+                    "BaselineIops": 6000,
+                    "MaximumBandwidthInMbps": 10000,
+                    "MaximumThroughputInMBps": 1250.0,
+                    "MaximumIops": 40000
+                },
+                "NvmeSupport": "required",
+                "MaximumEbsAttachments": 32,
+                "AttachmentLimitType": "dedicated"
+            },
+            "NetworkInfo": {
+                "NetworkPerformance": "Up to 12.5 Gigabit",
+                "MaximumNetworkInterfaces": 4,
+                "MaximumNetworkCards": 1,
+                "DefaultNetworkCardIndex": 0,
+                "NetworkCards": [
+                    {
+                        "NetworkCardIndex": 0,
+                        "NetworkPerformance": "Up to 12.5 Gigabit",
+                        "MaximumNetworkInterfaces": 4,
+                        "BaselineBandwidthInGbps": 1.562,
+                        "PeakBandwidthInGbps": 12.5,
+                        "DefaultEnaQueueCountPerInterface": 4
+                    }
+                ],
+                "Ipv4AddressesPerInterface": 15,
+                "Ipv6AddressesPerInterface": 15,
+                "Ipv6Supported": true,
+                "EnaSupport": "required",
+                "EfaSupported": false,
+                "EncryptionInTransitSupported": true,
+                "EnaSrdSupported": false,
+                "FlexibleEnaQueuesSupport": "unsupported",
+                "ConnectionTrackingConfiguration": {
+                    "DefaultTcpEstablishedTimeout": 432000,
+                    "DefaultUdpTimeout": 30,
+                    "DefaultUdpStreamTimeout": 180
+                },
+                "SecondaryNetworkSupported": false,
+                "Ipv4AddressesPerSecondaryInterface": 0
+            },
+            "PlacementGroupInfo": {
+                "SupportedStrategies": [
+                    "cluster",
+                    "partition",
+                    "spread"
+                ]
+            },
+            "HibernationSupported": true,
+            "BurstablePerformanceSupported": false,
+            "DedicatedHostsSupported": true,
+            "AutoRecoverySupported": true,
+            "SupportedBootModes": [
+                "legacy-bios",
+                "uefi"
+            ],
+            "NitroEnclavesSupport": "supported",
+            "NitroTpmSupport": "supported",
+            "NitroTpmInfo": {
+                "SupportedVersions": [
+                    "2.0"
+                ]
+            },
+            "PhcSupport": "supported",
+            "RebootMigrationSupport": "supported",
+            "SupportedInRegion": true
+        }
+    ]
+}

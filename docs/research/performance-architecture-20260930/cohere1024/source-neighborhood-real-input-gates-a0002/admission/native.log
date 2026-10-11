@@ -1,0 +1,6 @@
+Source neighborhood: EXPLORATORY / INCONCLUSIVE
+Rows 1000000; dimensions 1024; anchors 1; neighbors per anchor 1.
+Per anchor: unit; own-leaf rank; outside top48/page closure/joint cross-leaf; distinct destination units/leaves; max unit count; concentration; canonical dispersion; anchor-to-SQ8-FP16 / SQ8-FP16-to-leaf squared L2. Small fixtures select all leaves if fewer than 48.
+4921; 1; 0/0/0; 1/1; 1; 1.0; 0.47063245550078425; 0.4900482903069738/0.04695949974130141
+Published report remains authoritative; original exit0, drained terminal receipt, exact hashes and resource/OOM status still required. Report alone never accepted.
+In-sample anchors; neighbor slots correlated. Unit indivisibility and conflicting affinities unresolved; unselected leaves may share selected pages; gap bridges unmeasured. No quantization-cause, graph-cut, rare-query, held-out, recall/QPS/cold/vendor/100M claim. Both historical 312/320 KILLs preserved; no ANN arm selected.

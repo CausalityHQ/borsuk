@@ -1,0 +1,25 @@
+{
+  "schema": "borsuk-source-neighborhood-data-batch-v1",
+  "execution": {
+    "schema": "borsuk-source-neighborhood-execution-v1",
+    "attempt": "source-neighborhood-data-gates-a0002",
+    "instance_id": "i-0bc04948ec797f4a0",
+    "image_id": "ami-0b8a830d6339a9758",
+    "source_commit": "fc60c18e780063804c625a72f722d3e697fb4b61",
+    "request_sha256": "14f1b97970a2fd736bfadd07c83205d286a9afe745253f8301dc549eabb7eb2a",
+    "package_manifest_sha256": "4608d8df5791761b3c194f6f68cc26f382c908deb0ab05d74a37ab2b76503965",
+    "root_launch_started_epoch": 1791736937,
+    "guest_deadline_seconds": 9600,
+    "external_deadline_seconds": 9720,
+    "total_cost_ceiling_usd": 0.75
+  },
+  "last_phase": "complete",
+  "original_driver_exit": 0,
+  "batch_exit": 0,
+  "cleanup_exit": 0,
+  "completed_stages": 2,
+  "native_stage_only": false,
+  "scientific_measurement": false,
+  "cold_s3_claim": false,
+  "vendor_win": false
+}
