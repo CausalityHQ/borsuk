@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-cosine-leaf-qualification-v1",
+  "source_commit": "bf7b1b7bcb148f2ecfe58c856ff172bca3b82b82",
+  "native_source_count": 430,
+  "source_file_count": 463,
+  "native_source_map_sha256": "804fe596b19528118a20df1e4556426fd5e33763fb0f438839489a06e1842215",
+  "source_files_sha256": "5b8da4a912bd3d9ac8ac7158a8c430ebcb36609318a3f2038b5cb5b113806068",
+  "instance_id": "i-029219dbcf473f5a6",
+  "stages": [
+    {
+      "name": "affected-router",
+      "session": "4ce48374-4ffe-4b40-9bb2-d31cb9f497d1",
+      "exit": 0,
+      "tests": 15,
+      "command": "cargo test --locked -p borsuk --lib semantic_unit_router::tests:: -- --test-threads=1"
+    },
+    {
+      "name": "release-library-and-baseline",
+      "session": "57d4bf93-be61-4eb6-8880-3877ff6264cb",
+      "exit": 0,
+      "command": "cargo build --release --locked -p borsuk --lib --bin check_cohere_native_baseline"
+    },
+    {
+      "name": "workspace-clippy",
+      "session": "36ffc5cd-19e7-40e0-a357-adcc3406aeb0",
+      "exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+    },
+    {
+      "name": "actual-workspace-test-build",
+      "session": "b27817e5-34b7-4423-9d54-19d8e07db49a",
+      "exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh"
+    }
+  ],
+  "terminated": true,
+  "volume_deleted": true,
+  "performance_claim": false,
+  "recall_gain_claim": false,
+  "production_policy_promoted": false,
+  "status": "NATIVE_QUALIFIED",
+  "workspace_tests_executed": false,
+  "qualification_scope": "compiler and synthetic router correctness only",
+  "test_build_cgroup_peak_bytes": 8589934592,
+  "test_build_memory_max_events": 883,
+  "oom_events": 0,
+  "swap_peak_bytes": 0,
+  "native_source_identity_sha256": "87db33dbb4828b7c846b1c266e258b09d696c1bc0b7459c637bdc9c0a52bbb86",
+  "native_identity_definition": "SHA256 of path-sorted SHA256<TAB>path<LF> native-source.identity.tsv",
+  "full_source_before_after_root_match": true
+}

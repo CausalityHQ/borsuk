@@ -1,0 +1,16 @@
+# Rust-only coverage screen: existing source seam
+
+Source inspected via Git objects b723ca87 plus repaired router bf7b1b7b. This is implementation input, not a launched campaign or quality result.
+
+The cheap first causal screen can use existing public library components without changing generation serving or fetching SOURCE vectors for scoring:
+
+1. Authenticate the existing generation/router/membership and full input authorities; use exactly the existing raw request bytes and library normalize_two_bit_diagnostic_query. Reject profile != Scale1m, incompatible dimension/row/record width, or source/config pin mismatch. No normalization rewrite.
+2. For each of all32 consumed requests, select control = rank_leaves_by_metric(SquaredEuclidean)[..48] and candidate = rank_leaves_by_metric(Cosine)[..48], then call nominate_selected for each. Both use the same immutable membership and physical layout.
+3. Use nomination.page_closure with production plan_two_bit_source_cover(closure,rows,record_bytes,128,67108864). Record exact original pages, walk units including seed additions, coalesced cover ranges, GET count and bytes. This is planner admission, not observed S3 traffic or measured cold latency. A resource refusal must terminate before truth; no cap widening.
+4. Production plan_paged_measured fetches the coalesced cover but passes original walks to plan_walks. Scale1m completion scores all units in original walked pages, not all bridge pages. Thus SOURCE-scored closure membership is physical/256 in original closure; fetched bridge membership is a distinct predicate. Require a synthetic source-bound falsifier comparing this coverage computation with actual existing planner trace before any real-data screen.
+5. Seal both arm nominations/config/source/query identities durably before first truth open. Post-seal stream-authenticate the whole SQ8 body and its ID-order authority exactly as existing loss_positions: all rows, norm finite-positive, logical ID bijection, whole SHA, exact EOF, lifetime file stamps. This maps truth logical IDs to physical positions; it is not a new SQ8 score computation. Retain the current restriction to logical ordinals for this fixture, never generic application-ID assumptions in the library.
+6. Reduce gained/lost SOURCE-scored slots over all320 truth entries. Report fetched bridge membership separately. Coverage baseline314 requires315 for positive gain; consumed-panel mechanism evidence only. Returned recall testing follows only a survivor, with current SQ8 32GET/16773120B limits. Fresh unused holdout required for quality/population/vendor acceptance.
+
+This screen cannot prove cold throughput or a SOURCE/SQ8 scoring gain. Generation serving still uses select_leaves (existing L2 rule). A candidate that survives needs a separately scoped Rust experiment caller integrated with production planner/scorer, not a truth-guided route override or changed stored layout.
+
+Admission order remains real-input runtime-validator check, disposable environment canary, frozen source/config and ONE measured attempt. Current cosine-leaf qualification protocol forbids query/truth/vector execution; do not repurpose its live host silently for this screen. No new Python, Parquet replacement, controller milestone, SIMD or concurrency change is warranted by current evidence.

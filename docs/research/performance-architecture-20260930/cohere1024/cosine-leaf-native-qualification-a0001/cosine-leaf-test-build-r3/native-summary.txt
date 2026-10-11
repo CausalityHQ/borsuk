@@ -1,0 +1,6 @@
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+    Finished `test` profile [unoptimized] target(s) in 3m 19s
+rust-test-build status=0 elapsed_seconds=199 jobs=2

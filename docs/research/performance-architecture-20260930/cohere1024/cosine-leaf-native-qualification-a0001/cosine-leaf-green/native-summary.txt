@@ -1,0 +1,10 @@
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+    Finished `test` profile [unoptimized] target(s) in 1m 21s
+test semantic_unit_router::tests::cosine_leaf_metric_authenticated_router_keeps_default_nomination ... ok
+test semantic_unit_router::tests::cosine_leaf_metric_refuses_invalid_geometry_and_unsupported_metrics ... ok
+test semantic_unit_router::tests::cosine_leaf_metric_removes_mean_length_bias_at_fixed_48 ... ok
+test semantic_unit_router::tests::cosine_leaf_metric_zero_negative_ties_and_finite_extremes ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1907 filtered out; finished in 0.01s

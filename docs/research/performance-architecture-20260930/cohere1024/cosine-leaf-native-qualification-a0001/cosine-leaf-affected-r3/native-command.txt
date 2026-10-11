@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --lib semantic_unit_router::tests:: -- --test-threads=1

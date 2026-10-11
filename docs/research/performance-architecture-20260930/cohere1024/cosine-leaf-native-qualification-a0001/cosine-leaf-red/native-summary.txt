@@ -1,0 +1,9 @@
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+299 |     Centers { left: Vec<f32>, right: Vec<f32>, separation: f32, cut: Option<(f32, usize)> },
+    Finished `test` profile [unoptimized] target(s) in 2m 41s
+test semantic_unit_router::tests::cosine_leaf_metric_removes_mean_length_bias_at_fixed_48 ... FAILED
+  left: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
+ right: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1907 filtered out; finished in 0.00s

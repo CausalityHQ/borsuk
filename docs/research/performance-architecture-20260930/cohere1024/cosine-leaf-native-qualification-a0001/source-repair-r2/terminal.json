@@ -1,0 +1,8 @@
+{
+  "schema": "borsuk-sealed-loss-source-repair-v1",
+  "source_commit": "4883bb0bd81c9cc268a1e0c45c5473c07a520d48",
+  "source_authenticated": true,
+  "native_qualified": false,
+  "original_failure_preserved": true,
+  "deadlines_unchanged": true
+}
