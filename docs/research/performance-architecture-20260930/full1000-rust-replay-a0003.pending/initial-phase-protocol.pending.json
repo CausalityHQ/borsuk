@@ -158,7 +158,7 @@
   },
   "preserve_original_workers": true,
   "prior_attempt": "full1000-rust-replay-a0002",
-  "client_token": "borsuk-full1000-rust-replay-a0002-196d5bc6",
+  "client_token": "borsuk-full1000-rust-replay-a0003-2a62f266",
   "original_failure_boundary_correction": "Transport progress unproven; redirected log was not collected. No Rust stages ran.",
   "source_defect_repaired": "Disable systemd expansion before nested Bash; journal proves invalid variable boot_uptime%%.*",
   "additional_admission": "Readback CPU0/100percent/1GiB/swap0/PID128 before transport",
