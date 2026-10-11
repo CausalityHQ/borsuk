@@ -1301,6 +1301,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scale_nomination_preserves_scattered_closure_and_fresh_limits() {
+        for pages in [513, 48 * LEAF_UNITS] {
+            let units = (0..pages).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
+            let (seed, walk, additions) =
+                seed_walk(&units, 1_000_000, SemanticProfile::Scale1m).unwrap();
+            assert_eq!(seed, 0);
+            assert_eq!(additions, vec![0, 2, 3, 4, 5, 6, 7]);
+            assert_eq!(walk.len(), pages + 7);
+            assert!(units.iter().all(|unit| walk.binary_search(unit).is_ok()));
+            assert_eq!(
+                walk.iter()
+                    .map(|unit| unit / 8)
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                pages
+            );
+            assert!(seed_walk(&units, 1_000_000, SemanticProfile::Fresh1m).is_err());
+        }
+        let excess = (0..=48 * LEAF_UNITS).collect::<BTreeSet<_>>();
+        assert!(seed_walk(&excess, 1_000_000, SemanticProfile::Scale1m).is_err());
+        assert_eq!(SemanticProfile::Fresh1m.closure_page_limit(), 512);
+        assert_eq!(SemanticProfile::Fresh1m.source_unit_limit(), 4096);
+    }
+
+    #[test]
     fn scale_profile_dimension_population_leaf_and_million_row_arithmetic_bounds() {
         let profile = SemanticProfile::Scale1m;
         assert_eq!(
