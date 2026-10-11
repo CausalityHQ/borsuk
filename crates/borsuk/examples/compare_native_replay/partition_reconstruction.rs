@@ -1047,6 +1047,10 @@ mod tests {
             "82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56"
         );
         assert_eq!(
+            digest(include_bytes!("../../src/lib.rs")),
+            "40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8"
+        );
+        assert_eq!(
             digest(include_bytes!("../../../../Cargo.lock")),
             "81d59b7f67df2a2269974028eeaaffbec29b482abb1a0e8f9e10be63263f055e"
         );
