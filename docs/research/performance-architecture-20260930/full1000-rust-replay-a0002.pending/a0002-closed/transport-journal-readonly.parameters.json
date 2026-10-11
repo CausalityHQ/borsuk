@@ -1,0 +1,11 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "timeout -k 2 10 journalctl -u borsuk-rust-replay-transport.service --no-pager -n 40 -o short-precise",
+    "systemd-run --version; systemd-run --help | grep -A2 expand-environment"
+  ],
+  "executionTimeout": [
+    "60"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "date -u +%FT%TZ; date +%s",
+    "cat /proc/uptime; grep ^'btime ' /proc/stat",
+    "systemctl show borsuk-rust-replay-shutdown.timer -p ActiveState -p SubState -p NextElapseUSecMonotonic -p TimersMonotonic -p ActiveEnterTimestamp -p ActiveEnterTimestampMonotonic",
+    "cat /mnt/borsuk-scale1m/evidence/setup/transport-manager.exit",
+    "cat /mnt/borsuk-scale1m/evidence/setup/transport-cgroup.txt",
+    "for f in cpu.max cpuset.cpus.effective memory.max memory.swap.max pids.max; do printf '%s ' \"$f\"; cat /mnt/borsuk-scale1m/evidence/setup/\"$f\".before; done",
+    "cat /mnt/borsuk-scale1m/evidence/setup/transport-unit.log"
+  ],
+  "executionTimeout": [
+    "60"
+  ]
+}

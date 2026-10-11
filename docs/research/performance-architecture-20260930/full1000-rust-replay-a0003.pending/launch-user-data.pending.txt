@@ -1,0 +1,3 @@
+#!/bin/bash
+set -eu
+systemd-run --unit=borsuk-rust-replay-shutdown --on-active=7200s /usr/sbin/shutdown -h now

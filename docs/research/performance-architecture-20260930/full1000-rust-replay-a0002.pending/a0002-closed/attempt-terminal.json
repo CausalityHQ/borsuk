@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-full1000-rust-replay-attempt-v1",
+  "status": "INVALID_SYSTEMD_ENVIRONMENT_EXPANSION",
+  "freeze_commit": "2a62f2665a1a4d872c149ac741895d79d75271f5",
+  "instance_id": "i-0715bbadb49dc6943",
+  "root_volume_id": "vol-05b914bd85f7005fd",
+  "original_setup_command": "a39f24b7-3e41-412d-bea5-91987dc92853",
+  "original_setup_exit": 1,
+  "original_transport_exit": 124,
+  "all_ten_inputs_body_sha_and_length_verified": true,
+  "actual_resource_readback": {
+    "cpu_max": "100000 100000",
+    "cpuset": "0",
+    "memory_max": 1073741824,
+    "memory_swap_max": 0,
+    "pids_max": 128
+  },
+  "original_transport_invocation": "612decdc473a4e518250d5e67bc38ca9",
+  "native_stages_run": 0,
+  "exact_cause_proven": true,
+  "cause": "Systemd evaluated braced Bash parameter boot_uptime%%.* as invalid environment variable and replaced with empty string",
+  "journal_command": "b2f5d45a-e028-43c2-9b43-2be8b35624ba",
+  "direct_same_guard_exit": 0,
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "external_timer_stopped_after_verified_termination": true,
+  "automatic_retry": false,
+  "algorithm_rejected": false,
+  "performance_claim": false
+}

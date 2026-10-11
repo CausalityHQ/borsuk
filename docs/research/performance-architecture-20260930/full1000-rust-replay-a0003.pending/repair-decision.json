@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-replay-environment-repair-v2",
+  "prior_attempt": "full1000-rust-replay-a0002",
+  "prior_source": "2a62f2665a1a4d872c149ac741895d79d75271f5",
+  "original_setup_exit": 1,
+  "original_transport_exit": 124,
+  "all_ten_body_hashes_pass": true,
+  "resource_readback_pass": true,
+  "native_stages_run": 0,
+  "exact_cause_proven": true,
+  "journal_evidence": "Invalid environment variable name evaluates to an empty string: boot_uptime%%.*",
+  "mechanism": "systemd expands braced shell parameter before bash; remaining-time expression changes",
+  "repair": "--expand-environment=no for each nested shell invocation",
+  "same_clock_guard_direct_exit": 0,
+  "inputs_and_rust_binary_pins_changed": false,
+  "scientific_limits_changed": false,
+  "runtime_verified": false,
+  "new_paid_attempt_launched": false
+}

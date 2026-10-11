@@ -1,0 +1,34 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "root=/mnt/borsuk-scale1m",
+    "ev=\"$root/evidence/historical-archive-admission\"",
+    "mkdir \"$ev\"",
+    "export AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1",
+    "left=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))",
+    "(( left > 30 )) || exit 124\n(( left <= 120 )) || left=120",
+    "set +e",
+    "systemd-run --expand-environment=no --unit=borsuk-rust-replay-historical-archive-admission --wait --pipe -p WorkingDirectory=\"$root\" -p CPUQuota=100% -p CPUQuotaPeriodSec=100ms -p AllowedCPUs=0 -p MemoryMax=1G -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStopSec=30 -p RuntimeMaxSec=\"$(( left + 120 ))\" --setenv=RUSTUP_HOME=\"$root/.rustup\" --setenv=CARGO_HOME=\"$root/.cargo\" --setenv=PATH=\"$root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\" /bin/bash -c 'set -euo pipefail\ntrap '\\''exit 97'\\'' TERM HUP INT\nroot=/mnt/borsuk-scale1m\nev=\"$root/evidence/historical-archive-admission\"\ncg=$(awk -F: '\\''$1==0 {print $3}'\\'' /proc/self/cgroup)\nprintf \"%s\\n\" \"$cg\" > \"$ev/cgroup-path.txt\"\nfor f in cpu.max cpuset.cpus.effective memory.max memory.swap.max pids.max; do cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.before\"; done\ntest \"$(cat \"$ev/cpu.max.before\")\" = \"100000 100000\"\ntest \"$(cat \"$ev/cpuset.cpus.effective.before\")\" = 0\ntest \"$(cat \"$ev/memory.max.before\")\" = 1073741824\ntest \"$(cat \"$ev/memory.swap.max.before\")\" = 0\ntest \"$(cat \"$ev/pids.max.before\")\" = 128\nleft=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))\n(( left > 30 )) || exit 124\n(( left <= 120 )) || left=120\nprintf \"%s\\n\" '\\''/mnt/borsuk-scale1m/bin/extract_closed_native_replay /mnt/borsuk-scale1m/closed/historical/authority.json f4df2f1b91c0348f33ff574afd216fa48c5db3d74f6f1bedfe296198b2e74d26 /mnt/borsuk-scale1m/replay-historical'\\'' > \"$ev/native-command.txt\"\nprintf \"%s  %s\\n\" 2525dfcedfb8b13b553e83466d96aa04b90f0f3a5fda78e19784a282a98f40f5 \"$root/bin/extract_closed_native_replay\" | sha256sum -c - > \"$ev/release-before.log\"\ndate -u +%FT%TZ > \"$ev/native-started.txt\"\nset +e\n/usr/bin/time -v -o \"$ev/native-time.txt\" timeout --kill-after=30 \"$left\" /mnt/borsuk-scale1m/bin/extract_closed_native_replay /mnt/borsuk-scale1m/closed/historical/authority.json f4df2f1b91c0348f33ff574afd216fa48c5db3d74f6f1bedfe296198b2e74d26 /mnt/borsuk-scale1m/replay-historical > \"$ev/native.log\" 2>&1\nstatus=$?\nset -e\nprintf \"%s\\n\" \"$status\" > \"$ev/native-exit.txt\"\ndate -u +%FT%TZ > \"$ev/native-finished.txt\"\nfor f in memory.peak memory.events memory.swap.peak pids.peak cpu.stat; do if test -f \"/sys/fs/cgroup$cg/$f\"; then cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.after\"; fi; done\nexit \"$status\"' > \"$ev/systemd-run.log\" 2>&1",
+    "manager=$?",
+    "set -e",
+    "printf \"%s\\n\" \"$manager\" > \"$ev/manager-exit.txt\"",
+    "set +e",
+    "timeout --kill-after=2 10 systemctl show borsuk-rust-replay-historical-archive-admission.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup > \"$ev/systemd-after.txt\" 2> \"$ev/systemd-after.stderr\"",
+    "show_status=$?",
+    "set -e",
+    "printf \"%s\\n\" \"$show_status\" > \"$ev/systemd-show-exit.txt\"",
+    "drained=false",
+    "if test -s \"$ev/cgroup-path.txt\"; then cg=$(cat \"$ev/cgroup-path.txt\"); if [[ \"$cg\" == \"/system.slice/borsuk-rust-replay-historical-archive-admission.service\" ]]; then if test ! -d \"/sys/fs/cgroup$cg\"; then drained=true; elif grep -qx \"populated 0\" \"/sys/fs/cgroup$cg/cgroup.events\"; then drained=true; fi; fi; fi",
+    "native=null; if test -s \"$ev/native-exit.txt\"; then native=$(cat \"$ev/native-exit.txt\"); [[ \"$native\" =~ ^[0-9]+$ ]] || native=null; fi",
+    "jq -n --arg schema borsuk-full1000-rust-replay-stage-v1 --arg stage 'historical-archive-admission' --arg source 5660b97d7c153e265cd96688113217717d61bd61 --argjson manager \"$manager\" --argjson native \"$native\" --argjson drained \"$drained\" '{schema:$schema,stage:$stage,source_commit:$source,manager_exit:$manager,native_exit:$native,owned_cgroup_drained:$drained,performance_claim:false}' > \"$ev/terminal.json\"",
+    "(cd \"$ev\" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > \"$ev/SHA256SUMS\"",
+    "publication_deadline=$(( $(date +%s) + 120 ))",
+    "for file in \"$ev\"/*; do remaining=$(( publication_deadline - $(date +%s) - 2 )); (( remaining > 0 )) || exit 124; (( remaining <= 90 )) || remaining=90; timeout --kill-after=2 \"$remaining\" aws s3api put-object --bucket borsuk-bench-453182569524-euc1 --key research/semantic-router/20261011/full1000-rust-replay-a0003/stages/historical-archive-admission/\"$(basename \"$file\")\" --body \"$file\" --if-none-match \"*\" > /dev/null; done",
+    "cat \"$ev/terminal.json\"",
+    "[[ \"$native\" == 0 && \"$manager\" == 0 && \"$drained\" == true ]]"
+  ],
+  "executionTimeout": [
+    "7800"
+  ]
+}

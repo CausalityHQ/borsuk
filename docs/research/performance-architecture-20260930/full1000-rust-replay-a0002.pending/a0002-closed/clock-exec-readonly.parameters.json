@@ -1,0 +1,11 @@
+{
+  "commands": [
+    "#!/usr/bin/env bash",
+    "set -uo pipefail",
+    "systemctl show borsuk-rust-replay-transport.service -p ExecStart -p Result -p ExecMainCode -p ExecMainStatus",
+    "read -r boot_uptime ignored < /proc/uptime; now=$(date +%s); machine_stop=$(( now - ${boot_uptime%%.*} + 7200 )); native_deadline=$(( machine_stop - 240 )); printf 'clock now=%s uptime=%s stop=%s deadline=%s\\n' \"$now\" \"$boot_uptime\" \"$machine_stop\" \"$native_deadline\"; (( native_deadline > now + 30 )); printf 'same_guard_rc=%s\\n' \"$?\""
+  ],
+  "executionTimeout": [
+    "60"
+  ]
+}

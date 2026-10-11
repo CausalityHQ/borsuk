@@ -1,0 +1,22 @@
+{
+    "CommandId": "956fb699-6021-4d3c-9766-7a9a10407311",
+    "InstanceId": "i-0715bbadb49dc6943",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T00:48:39.110Z",
+    "ExecutionElapsedTime": "PT0.08S",
+    "ExecutionEndDateTime": "2026-10-11T00:48:39.110Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "2026-10-11T00:48:39Z\n1791679719\n156.03 1204.05\nbtime 1791679563\nTimersMonotonic={ OnActiveUSec=2h ; next_elapse=2h 11.025678s }\nNextElapseUSecMonotonic=2h 11.025678s\nActiveState=active\nSubState=waiting\nActiveEnterTimestamp=Sun 2026-10-11 00:46:12 UTC\nActiveEnterTimestampMonotonic=11025678\n124\n/system.slice/borsuk-rust-replay-transport.service\ncpu.max 100000 100000\ncpuset.cpus.effective 0\nmemory.max 1073741824\nmemory.swap.max 0\npids.max 128\nRunning as unit: borsuk-rust-replay-transport.service; invocation ID: 612decdc473a4e518250d5e67bc38ca9\n/mnt/borsuk-scale1m/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-scale1m/bin/publish_two_bit_generation: OK\n/mnt/borsuk-scale1m/closed/historical/artifacts.sha256: OK\n/mnt/borsuk-scale1m/closed/historical/evidence.tar.gz: OK\n/mnt/borsuk-scale1m/closed/local/artifacts.sha256: OK\n/mnt/borsuk-scale1m/closed/local/evidence.tar.gz: OK\n/mnt/borsuk-scale1m/prepared/queries.f32: OK\n/mnt/borsuk-scale1m/prepared/truth.u64: OK\n/mnt/borsuk-scale1m/bin/compare_native_replay: OK\n/mnt/borsuk-scale1m/bin/extract_closed_native_replay: OK\nFinished with result: exit-code\nMain processes terminated with: code=exited/status=124\nService runtime: 6.195s\nCPU time consumed: 4.939s\nMemory peak: 3.1M\nMemory swap peak: 0B\n",
+    "StandardOutputUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/full1000-rust-replay-a0002/ssm/setup-failure-readonly/956fb699-6021-4d3c-9766-7a9a10407311/i-0715bbadb49dc6943/awsrunShellScript/0.awsrunShellScript/stdout",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "https://s3.eu-central-1.amazonaws.com/borsuk-bench-453182569524-euc1/research/semantic-router/20261011/full1000-rust-replay-a0002/ssm/setup-failure-readonly/956fb699-6021-4d3c-9766-7a9a10407311/i-0715bbadb49dc6943/awsrunShellScript/0.awsrunShellScript/stderr",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
