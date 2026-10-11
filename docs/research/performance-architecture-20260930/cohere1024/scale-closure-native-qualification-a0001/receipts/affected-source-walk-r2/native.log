@@ -1,0 +1,37 @@
+
+running 32 tests
+test two_bit_generation::source_walk_tests::bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work ... ok
+test two_bit_generation::source_walk_tests::diagnostic_normalization_preserves_native_query_space_and_rejections ... ok
+test two_bit_generation::source_walk_tests::diagnostic_page_limit_admits_short_closure_without_relaxing_control ... ok
+test two_bit_generation::source_walk_tests::diagnostic_source_cover_charges_bridges_and_partial_tail_before_scoring ... ok
+test two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs ... ok
+test two_bit_generation::source_walk_tests::direct_bridge_counterexample_changes_population_and_winner_pure ... ok
+test two_bit_generation::source_walk_tests::direct_closure_rejects_graph_discovery_before_any_io ... ok
+test two_bit_generation::source_walk_tests::empty_head_reuse_and_coordinated_restart_charge_retained_body ... ok
+test two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps ... ok
+test two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io ... ok
+test two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle ... ok
+test two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain ... ok
+test two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps ... ok
+test two_bit_generation::source_walk_tests::native_direct_closure_real_planner_bridge_counterexample_changes_winner ... ok
+test two_bit_generation::source_walk_tests::native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains ... ok
+test two_bit_generation::source_walk_tests::native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures ... ok
+test two_bit_generation::source_walk_tests::native_fresh1m_membership_nomination_parity_and_bounds ... ok
+test two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768 ... ok
+test two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768 ... ok
+test two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity ... ok
+test two_bit_generation::source_walk_tests::native_sq8_range_trace_early_refusal_never_exposes_a_reused_trace_for_baseline_and_direct ... ok
+test two_bit_generation::source_walk_tests::native_sq8_range_trace_failure_outcomes_are_truthful_and_leave_ranking_unstarted ... ok
+test two_bit_generation::source_walk_tests::native_sq8_range_trace_memory_and_capacity_are_refused_before_slot_or_any_get ... ok
+test two_bit_generation::source_walk_tests::native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct ... ok
+test two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains ... ok
+test two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges ... ok
+test two_bit_generation::source_walk_tests::scale_scattered_codec_walk_covers_rows_and_partial_tail ... ok
+test two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once ... ok
+test two_bit_generation::source_walk_tests::semantic_d768_diagnostic_scratch_preserves_production_search ... ok
+test two_bit_generation::source_walk_tests::semantic_object_store_parity ... ok
+test two_bit_generation::source_walk_tests::source_nomination_handles_one_graph_partial_rows_and_rejects_invalid_walks ... ok
+test two_bit_generation::source_walk_tests::source_nomination_precedes_centroid_cutoff_and_scores_units_once ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 1875 filtered out; finished in 38.87s
+

@@ -1,0 +1,7 @@
+Running as unit: borsuk-scale-red-nomination.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=101
+Service runtime: 273ms
+CPU time consumed: 273ms
+Memory peak: 2.7M
+Memory swap peak: 0B

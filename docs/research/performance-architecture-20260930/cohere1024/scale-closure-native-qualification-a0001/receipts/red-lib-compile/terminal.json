@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-scale-closure-native-stage-v1",
+  "stage": "red-lib-compile",
+  "source_commit": "6bf1ec2568dc113656acec329c48dc7a7b881700",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

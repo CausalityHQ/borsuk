@@ -1,0 +1,7 @@
+Running as unit: borsuk-scale-green-nomination.service; invocation ID: 1099ad74214a4266a0ad9a4d2defe4cc
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=101
+Service runtime: 271ms
+CPU time consumed: 270ms
+Memory peak: 256.0K
+Memory swap peak: 0B

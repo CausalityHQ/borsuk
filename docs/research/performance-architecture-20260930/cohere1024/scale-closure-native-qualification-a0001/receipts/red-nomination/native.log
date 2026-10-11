@@ -1,0 +1,18 @@
+
+running 1 test
+test semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits ... FAILED
+
+failures:
+
+---- semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits stdout ----
+
+thread 'semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits' (9145) panicked at crates/borsuk/src/semantic_unit_router.rs:1308:72:
+called `Result::unwrap()` on an `Err` value: "semantic closure page cap"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1905 filtered out; finished in 0.00s
+

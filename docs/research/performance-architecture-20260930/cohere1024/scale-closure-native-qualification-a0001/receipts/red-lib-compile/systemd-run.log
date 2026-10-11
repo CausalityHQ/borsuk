@@ -1,0 +1,7 @@
+Running as unit: borsuk-scale-red-lib-compile.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 2min 49.935s
+CPU time consumed: 4min 4.382s
+Memory peak: 1.2G
+Memory swap peak: 0B

@@ -1,0 +1,1 @@
+"$test_elf" two_bit_generation::source_walk_tests::  --test-threads=1

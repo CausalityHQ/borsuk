@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-scale-closure-native-stage-v1",
+  "stage": "green-nomination",
+  "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+  "manager_exit": 101,
+  "native_exit": 101,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

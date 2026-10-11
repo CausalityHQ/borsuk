@@ -1,0 +1,345 @@
+{
+  "id": "0bdee193d7284629",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "effort": "xhigh",
+  "fallbacks": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791689332,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791690532,
+  "budget_usd": null,
+  "prompt_preview": "Read-only planning specialist. Give one actionable plan, risks and a bounded falsifying test; do not edit files.\nRead-only bounded Rust design diagnosis, /home/rb/worktrees/borsuk-prod-ready-v9. Physical checkout stale/dirty NEVER alter; use git show c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38 exact source; current main4f5d45af2dc8082900f94a97712c3e207cc7eede docs protocol. User Rust-only, causality EC2 only native. No local Cargo/rustc/native/test/mocks/real request/truth/raw JSONL decoding/archive/network/children/consults/edits. Bounded source reads CPU1/256MiB/noSwap/120s. New actual full1000 Cohere D1024 cosinek10 1M cold run failed INVALID at native query527: Router semantic closure page cap. Authenticated safe terminal native summary /data/target/borsuk-full1000-cold-measurement-a0001.pending/full1000-collected/native.log, terminal.json, memory.events.after. completed527/all_queries_sealedfalse/truth_unopened/noOOMswap, 63.87MB processpeak; no population quality/latency claims. Instance terminating; don't touch. Source semantic_unit_router.rs seed_walk lines1261..1291 rejects distinct(unit/8)>profile.closure_page_limit; Scale1m/Fresh1m512, selected48*64=3072unit possible. Original32queries actualR10 314/320 passed but notfullpopulation. Need choose smallest evidence-based next causal change: is512 an arbitrary legacy scientific cap vs structural invariant? Trace ALL dependent closure/source/scorer limits in Rust (two_bit_generation.rs,two_bit_source.rs,rotated_two_bit.rs). Recommend preregistered bounded new envelope OR locality/routing redesign, preserving every nominated unit and quality semantics; NO silentcapraise/truncation/GTpeek/dataset specialization ornewPythoncontroller. Goal cold throughput/tails pertotal$ vsS3Vectors/TP, not passing benchmark atanycost. Quantify worst-case units/pages/source bytes/RAM fromsource and concrete unverified assumptions. Propose smallest actualnative query527 reproducer and distinct correctness/recall falsifier before rerunningfullpopulation. No new implementation/run, answer with exactlineevidence and alternatives.",
+  "prompt_sha256": "0587e9249dbc1f4dc9e64f125697a49f3348ed585cb085bcea594f39328b2450",
+  "prompt_bytes": 2286,
+  "fingerprint": "1423cec377a901f633b371ed3d292f3a41fd8a9ff13725ec1d576965c0389948",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "be13c56d85fe5686f8a410cb9c40da4a4f9f0eed76cb39ec15c847034e3fb268",
+  "reused": false,
+  "specialist_route": {
+    "model": "gpt-6-astra",
+    "effort": "xhigh",
+    "source": "jev",
+    "decision_id": "e89e0a05-11e8-489b-be59-6d61181975be"
+  },
+  "launch_command": "specialist_start",
+  "systemd_unit": "devbox-consult-0bdee193d7284629.service",
+  "pid": 3077262,
+  "pgid": 3077262,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "budget_usd": null,
+      "timeout_seconds": 1200,
+      "started_at": 1791689332
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791689734,
+  "event_cursor": 32,
+  "events": [
+    {
+      "seq": 9,
+      "at": 1791689396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 10,
+      "at": 1791689398,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 11,
+      "at": 1791689408,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 12,
+      "at": 1791689412,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 13,
+      "at": 1791689426,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 14,
+      "at": 1791689430,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 15,
+      "at": 1791689437,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 16,
+      "at": 1791689439,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 17,
+      "at": 1791689450,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 18,
+      "at": 1791689452,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 19,
+      "at": 1791689458,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 20,
+      "at": 1791689465,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 21,
+      "at": 1791689466,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 22,
+      "at": 1791689479,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 23,
+      "at": 1791689479,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 24,
+      "at": 1791689495,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 25,
+      "at": 1791689496,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 26,
+      "at": 1791689553,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 27,
+      "at": 1791689553,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 28,
+      "at": 1791689603,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 29,
+      "at": 1791689613,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 30,
+      "at": 1791689613,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 31,
+      "at": 1791689728,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 32,
+      "at": 1791689734,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "codex": [
+      {
+        "seq": 25,
+        "at": 1791689496,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 26,
+        "at": 1791689553,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 27,
+        "at": 1791689553,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 28,
+        "at": 1791689603,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 29,
+        "at": 1791689613,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 30,
+        "at": 1791689613,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 31,
+        "at": 1791689728,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 32,
+        "at": 1791689734,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**Recommend a preregistered admission change, followed by a one-query falsifier\u2014not an immediate full1000 rerun.** The 512-page limit is a historical experimental envelope. It is not implied by the router\u2019s structure, but several downstream limits depend on it.\n\nAll Rust references below are from `git show c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38`, under `crates/borsuk/src/`. Documentation references are from `4f5d45af2dc8082900f94a97712c3e207cc7eede`; none refer to the dirty checkout\u2019s contents.\n\nThe [terminal summary](/data/target/borsuk-full1000-cold-measurement-a0001.pending/full1000-collected/native.log:1) confirms INVALID at original ordinal 527, 527 completed queries, no complete seal, truth unopened, and process peak 63,873,024 bytes. Its failed query never reached SOURCE or SQ8. The memory-events receipt records no OOM. These receipts establish an admission failure, with no population recall or latency conclusion.\n\n**Why 512 is historical, and why a one-line increase is unsafe**\n\nThe historical `docs/research/performance-architecture-20260930/semantic-1m/fixed48/plan.md:7\u201326` explicitly describes a 1.5\u00d7 projection, a projected maximum of 433.5 pages, and a rounded 512-page allowance. Its `decision.md:7` calls these \u201cexperiment admission limits, not universal architecture limits.\u201d\n\nThe complete dependency chain is:\n\n| Layer | Exact evidence | Consequence |\n|---|---|---|\n| Nomination | `semantic_unit_router.rs:62\u201390, 951\u2013963, 1240\u20131247` | Up to 48 leaves \u00d7 64 units; Scale1m inherits 512 closure pages and 4,096 scored units. Leaf selection imposes no physical-page locality guarantee. |\n| Seed completion | `semantic_unit_router.rs:1261\u20131296` | Rejects distinct `unit/8` pages above 512; otherwise preserves every nominated unit and adds at most seven units within the existing seed page. |\n| Downstream admission | `two_bit_generation.rs:789\u2013855` | Rechecks walk length and closure limit, and requires semantic nomination\u2019s page count to equal the whole closure. |\n| SOURCE scoring | `two_bit_generation.rs:854\u2013948` | Scores original walk units, then completes pages. **Completion silently stops at `source_unit_limit`**, currently 4,096. Raising only the page limit would change completion semantics. |\n| SOURCE transport | `two_bit_generation.rs:760\u2013775, 1274\u20131278, 1775\u20131818` | Semantic serving clamps SOURCE to 64 MiB/128 GETs. Cover admission precedes SOURCE I/O. |\n| Gap reads | `budgeted_page_rank.rs:46\u201396` | Joins the smallest gaps to meet the GET limit; charges all bridge bytes. Page count alone cannot establish byte admission. |\n| SQ8 selection | `two_bit_generation.rs:735\u2013749, 1277\u20131278`; `budgeted_page_rank.rs:185\u2013230` | Retains the existing budgeted selection: 16,773,120 bytes/32 GETs. Whole SOURCE nomination does not mean whole-closure SQ8 scanning. |\n| Memory | `two_bit_generation.rs:663\u2013677, 1345\u20131418` | Trace accounting hard-codes 512/4,096; planner allowance explicitly assumes 3,079 walk/4,096 scored units. Paged SOURCE reserves twice its byte budget per active query. |\n| SOURCE representation | `two_bit_source.rs:425\u2013469` | Authenticated units contain 32 rows; record width and digest-table memory derive from geometry. There is no 512-page representation limit here. |\n| Codec | `rotated_two_bit.rs:113\u2013151, 238\u2013249, 299\u2013324` | Record width and query scratch depend on dimensions. The scorer has no closure-page limit. |\n\nExisting boundary tests deliberately reject a 513th page and verify complete scoring of 512 pages: `semantic_unit_router.rs:1691\u20131712`, `two_bit_generation.rs:6718\u20136775`. Their assertions encode the old envelope.\n\n**Bounds derived from source**\n\nFor this fixture, N=1,000,000 and D=1024. These are arithmetic bounds, not measurements of query 527.\n\n| Quantity | Bound |\n|---|---:|\n| Corpus units / physical 256-row pages | 31,250 / 3,907 |\n| Original nominated units | 3,072 |\n| Seed-completed walk | 3,079 units |\n| Distinct closure pages without a locality guarantee | 3,072 |\n| Units needed to complete that closure | 24,576 |\n| Two-bit record / 32-row unit / 256-row page | 264 / 8,448 / 67,584 bytes |\n| SOURCE bytes for 512 full pages, excluding bridges | 34,603,008 = 33 MiB |\n| SOURCE bytes for 3,072 full pages, excluding bridges | 207,618,048 = 198 MiB |\n| Conservative SOURCE-cover ceiling including bridges | Entire object: 264,000,000 bytes |\n| D1024 codec preparation scratch | 532,480 bytes |\n| SOURCE digest table | 1,000,000 bytes; plane admission charges two copies |\n\nUnder the retained 64 MiB SOURCE ceiling, at most **992 full closure pages** fit before bridge costs; a partial final page needs separate accounting. Even 1,024 full pages require 66 MiB.\n\nOn a 64-bit target, expanding the existing trace formula from 512/4,096 to 3,072/24,576 increases its ID payload from 61,888 to 246,208 bytes, excluding the trace structure and allocator overhead. The scoring memo\u2019s reserved tuple payload becomes 393,216 bytes. The 1 MiB planner allowance needs an allocation-lifetime audit; neither sufficiency nor insufficiency follows from the old RSS peak.\n\nRetaining SOURCE\u2019s current byte limit preserves its 128 MiB modeled buffer term. Automatically admitting the entire SOURCE object would instead require about **503.54 MiB for that term alone**. Adding the existing SQ8 response/ranking term yields approximately **555.48 MiB**, before metadata, planner, codec and caller pins. That cannot fit the current 512 MiB model.\n\n**One actionable plan**\n\n1. **Reproduce the exact failure using the existing native runner.** Keep `count:1000`, all authenticated inputs, generation identity, baseline serving and resource limits. Change only execution to:\n   ```json\n   {\"mode\":\"diagnostic_panel\",\"ordinals\":[527],\"trace\":false}\n   ```\n   Use a fresh output/config identity. Original ordinal indexing is explicit at `check_cohere_native_baseline.rs:530\u2013541, 2114\u20132118`; the runner authenticates and validates all request rows before execution at `1983\u20131993`. Expected old-source result: the same router error, zero query SOURCE/SQ8 reads, truth unopened. This needs one executed query, not replaying 0\u2013526.\n\n2. **Freeze a new candidate that removes the unsupported locality assumption.** For Scale1m, derive closure capacity from maximum nominated units: `48\u00d764=3072`; derive complete SOURCE-scoring capacity as `8\u00d73072=24576`, clipped to actual geometry. Keep leaf selection, normalization, tie rules, membership, seed completion, codec and SQ8 budgeted selection unchanged. Update trace accounting and prove planner allocation bounds together. Make incomplete semantic page completion an explicit error rather than allowing the existing break to hide it.\n\n   **Retain SOURCE 64 MiB/128 GETs, SQ8 16,773,120 bytes/32 GETs, fetch parallelism 16, concurrency one, and the 512 MiB/no-swap host limit.** This admits structurally valid nominations while retaining an independent economic/resource refusal. It does not promise every possible closure will fit.\n\n3. **Instrument the rejection boundary minimally.** Record selected-leaf count, nominated-unit count, closure-page count, completed-unit requirement, exact cover bytes/ranges and modeled memory before payload I/O. Keep diagnostics bounded; no vector bodies or truth. The current terminal does not reveal query 527\u2019s exact closure size.\n\n4. **Run the separate correctness/recall falsifier below.** Only after it passes, perform a truth-free, native routing-and-cover preflight across all 1,000 authenticated requests. It should calculate every exact closure and cover without fetching query SOURCE/SQ8 bodies. This detects another late admission failure cheaply.\n\n5. **Freeze and qualify the successor campaign separately.** Require affected Rust tests, workspace Clippy and workspace test compilation on the exact candidate, source-bound actual-input admission, and a separate disposable staging canary. Then consider full1000 execution. Preserve this attempt\u2019s INVALID disposition and every historical arm.\n\nAll proposed native execution belongs on a newly authorized, bounded `causality` EC2 Spot host. Preserve the existing safety ceilings and interruption/cleanup protocol; terminate after terminal collection.\n\n**Bounded falsifying tests**\n\n- **Causal/resource test:** one candidate query at ordinal 527, CPU one, 512 MiB, no swap, concurrency one, fetch16, and a preregistered 120-second native deadline. Require unchanged nominated-unit identity, complete SOURCE scoring of its closure, and successful execution within the retained byte/GET limits. If it instead exceeds the exact SOURCE cover or memory envelope, the proposed admission change is insufficient. Preserve that result; do not respond with another automatic cap increase.\n\n- **Correctness test:** native boundary cases for 512, 513 and 3,072 closure pages, seed additions, partial final pages and malformed memberships. Verify that every nominated unit survives, each closure unit is scored exactly once when payload admission succeeds, and over-budget covers reject before I/O. Compare complete page maxima/ranking against exhaustive scoring of that same closure using the actual codec. Cases within the old envelope must retain identical ranking and returned results.\n\n- **Recall falsifier:** freeze 32 additional original ordinals by a deterministic, truth-blind selection rule before execution, excluding the previously evaluated diagnostic panel and ordinal 527. Run actual authenticated records through the candidate; seal all outputs before opening truth. A proposed gate is no underfill and at least 304/320 returned hits@10. Report ordinal 527 separately as a targeted regression. Passing this small panel is screening evidence only; full-population quality remains unqualified.\n\nThe principal risk is that fragmentation makes SOURCE traffic and completion CPU expensive even after admission is coherent. If the retained envelope fails, prefer a separately qualified locality/layout change preserving nominated logical units. Physical regrouping requires new authenticated layouts and can change page completion and downstream ranking; it needs fresh correctness and recall evidence. Reducing selected leaves, truncating units, or switching to direct SQ8 closure is a different algorithmic intervention, not this fix.\n\nNo files were edited and no native execution, data decoding, network access, children or consultations were performed. Query 527\u2019s actual closure size and the candidate\u2019s runtime memory/cost remain unverified.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "codex": "**Recommend a preregistered admission change, followed by a one-query falsifier\u2014not an immediate full1000 rerun.** The 512-page limit is a historical experimental envelope. It is not implied by the router\u2019s structure, but several downstream limits depend on it.\n\nAll Rust references below are from `git show c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38`, under `crates/borsuk/src/`. Documentation references are from `4f5d45af2dc8082900f94a97712c3e207cc7eede`; none refer to the dirty checkout\u2019s contents.\n\nThe [terminal summary](/data/target/borsuk-full1000-cold-measurement-a0001.pending/full1000-collected/native.log:1) confirms INVALID at original ordinal 527, 527 completed queries, no complete seal, truth unopened, and process peak 63,873,024 bytes. Its failed query never reached SOURCE or SQ8. The memory-events receipt records no OOM. These receipts establish an admission failure, with no population recall or latency conclusion.\n\n**Why 512 is historical, and why a one-line increase is unsafe**\n\nThe historical `docs/research/performance-architecture-20260930/semantic-1m/fixed48/plan.md:7\u201326` explicitly describes a 1.5\u00d7 projection, a projected maximum of 433.5 pages, and a rounded 512-page allowance. Its `decision.md:7` calls these \u201cexperiment admission limits, not universal architecture limits.\u201d\n\nThe complete dependency chain is:\n\n| Layer | Exact evidence | Consequence |\n|---|---|---|\n| Nomination | `semantic_unit_router.rs:62\u201390, 951\u2013963, 1240\u20131247` | Up to 48 leaves \u00d7 64 units; Scale1m inherits 512 closure pages and 4,096 scored units. Leaf selection imposes no physical-page locality guarantee. |\n| Seed completion | `semantic_unit_router.rs:1261\u20131296` | Rejects distinct `unit/8` pages above 512; otherwise preserves every nominated unit and adds at most seven units within the existing seed page. |\n| Downstream admission | `two_bit_generation.rs:789\u2013855` | Rechecks walk length and closure limit, and requires semantic nomination\u2019s page count to equal the whole closure. |\n| SOURCE scoring | `two_bit_generation.rs:854\u2013948` | Scores original walk units, then completes pages. **Completion silently stops at `source_unit_limit`**, currently 4,096. Raising only the page limit would change completion semantics. |\n| SOURCE transport | `two_bit_generation.rs:760\u2013775, 1274\u20131278, 1775\u20131818` | Semantic serving clamps SOURCE to 64 MiB/128 GETs. Cover admission precedes SOURCE I/O. |\n| Gap reads | `budgeted_page_rank.rs:46\u201396` | Joins the smallest gaps to meet the GET limit; charges all bridge bytes. Page count alone cannot establish byte admission. |\n| SQ8 selection | `two_bit_generation.rs:735\u2013749, 1277\u20131278`; `budgeted_page_rank.rs:185\u2013230` | Retains the existing budgeted selection: 16,773,120 bytes/32 GETs. Whole SOURCE nomination does not mean whole-closure SQ8 scanning. |\n| Memory | `two_bit_generation.rs:663\u2013677, 1345\u20131418` | Trace accounting hard-codes 512/4,096; planner allowance explicitly assumes 3,079 walk/4,096 scored units. Paged SOURCE reserves twice its byte budget per active query. |\n| SOURCE representation | `two_bit_source.rs:425\u2013469` | Authenticated units contain 32 rows; record width and digest-table memory derive from geometry. There is no 512-page representation limit here. |\n| Codec | `rotated_two_bit.rs:113\u2013151, 238\u2013249, 299\u2013324` | Record width and query scratch depend on dimensions. The scorer has no closure-page limit. |\n\nExisting boundary tests deliberately reject a 513th page and verify complete scoring of 512 pages: `semantic_unit_router.rs:1691\u20131712`, `two_bit_generation.rs:6718\u20136775`. Their assertions encode the old envelope.\n\n**Bounds derived from source**\n\nFor this fixture, N=1,000,000 and D=1024. These are arithmetic bounds, not measurements of query 527.\n\n| Quantity | Bound |\n|---|---:|\n| Corpus units / physical 256-row pages | 31,250 / 3,907 |\n| Original nominated units | 3,072 |\n| Seed-completed walk | 3,079 units |\n| Distinct closure pages without a locality guarantee | 3,072 |\n| Units needed to complete that closure | 24,576 |\n| Two-bit record / 32-row unit / 256-row page | 264 / 8,448 / 67,584 bytes |\n| SOURCE bytes for 512 full pages, excluding bridges | 34,603,008 = 33 MiB |\n| SOURCE bytes for 3,072 full pages, excluding bridges | 207,618,048 = 198 MiB |\n| Conservative SOURCE-cover ceiling including bridges | Entire object: 264,000,000 bytes |\n| D1024 codec preparation scratch | 532,480 bytes |\n| SOURCE digest table | 1,000,000 bytes; plane admission charges two copies |\n\nUnder the retained 64 MiB SOURCE ceiling, at most **992 full closure pages** fit before bridge costs; a partial final page needs separate accounting. Even 1,024 full pages require 66 MiB.\n\nOn a 64-bit target, expanding the existing trace formula from 512/4,096 to 3,072/24,576 increases its ID payload from 61,888 to 246,208 bytes, excluding the trace structure and allocator overhead. The scoring memo\u2019s reserved tuple payload becomes 393,216 bytes. The 1 MiB planner allowance needs an allocation-lifetime audit; neither sufficiency nor insufficiency follows from the old RSS peak.\n\nRetaining SOURCE\u2019s current byte limit preserves its 128 MiB modeled buffer term. Automatically admitting the entire SOURCE object would instead require about **503.54 MiB for that term alone**. Adding the existing SQ8 response/ranking term yields approximately **555.48 MiB**, before metadata, planner, codec and caller pins. That cannot fit the current 512 MiB model.\n\n**One actionable plan**\n\n1. **Reproduce the exact failure using the existing native runner.** Keep `count:1000`, all authenticated inputs, generation identity, baseline serving and resource limits. Change only execution to:\n   ```json\n   {\"mode\":\"diagnostic_panel\",\"ordinals\":[527],\"trace\":false}\n   ```\n   Use a fresh output/config identity. Original ordinal indexing is explicit at `check_cohere_native_baseline.rs:530\u2013541, 2114\u20132118`; the runner authenticates and validates all request rows before execution at `1983\u20131993`. Expected old-source result: the same router error, zero query SOURCE/SQ8 reads, truth unopened. This needs one executed query, not replaying 0\u2013526.\n\n2. **Freeze a new candidate that removes the unsupported locality assumption.** For Scale1m, derive closure capacity from maximum nominated units: `48\u00d764=3072`; derive complete SOURCE-scoring capacity as `8\u00d73072=24576`, clipped to actual geometry. Keep leaf selection, normalization, tie rules, membership, seed completion, codec and SQ8 budgeted selection unchanged. Update trace accounting and prove planner allocation bounds together. Make incomplete semantic page completion an explicit error rather than allowing the existing break to hide it.\n\n   **Retain SOURCE 64 MiB/128 GETs, SQ8 16,773,120 bytes/32 GETs, fetch parallelism 16, concurrency one, and the 512 MiB/no-swap host limit.** This admits structurally valid nominations while retaining an independent economic/resource refusal. It does not promise every possible closure will fit.\n\n3. **Instrument the rejection boundary minimally.** Record selected-leaf count, nominated-unit count, closure-page count, completed-unit requirement, exact cover bytes/ranges and modeled memory before payload I/O. Keep diagnostics bounded; no vector bodies or truth. The current terminal does not reveal query 527\u2019s exact closure size.\n\n4. **Run the separate correctness/recall falsifier below.** Only after it passes, perform a truth-free, native routing-and-cover preflight across all 1,000 authenticated requests. It should calculate every exact closure and cover without fetching query SOURCE/SQ8 bodies. This detects another late admission failure cheaply.\n\n5. **Freeze and qualify the successor campaign separately.** Require affected Rust tests, workspace Clippy and workspace test compilation on the exact candidate, source-bound actual-input admission, and a separate disposable staging canary. Then consider full1000 execution. Preserve this attempt\u2019s INVALID disposition and every historical arm.\n\nAll proposed native execution belongs on a newly authorized, bounded `causality` EC2 Spot host. Preserve the existing safety ceilings and interruption/cleanup protocol; terminate after terminal collection.\n\n**Bounded falsifying tests**\n\n- **Causal/resource test:** one candidate query at ordinal 527, CPU one, 512 MiB, no swap, concurrency one, fetch16, and a preregistered 120-second native deadline. Require unchanged nominated-unit identity, complete SOURCE scoring of its closure, and successful execution within the retained byte/GET limits. If it instead exceeds the exact SOURCE cover or memory envelope, the proposed admission change is insufficient. Preserve that result; do not respond with another automatic cap increase.\n\n- **Correctness test:** native boundary cases for 512, 513 and 3,072 closure pages, seed additions, partial final pages and malformed memberships. Verify that every nominated unit survives, each closure unit is scored exactly once when payload admission succeeds, and over-budget covers reject before I/O. Compare complete page maxima/ranking against exhaustive scoring of that same closure using the actual codec. Cases within the old envelope must retain identical ranking and returned results.\n\n- **Recall falsifier:** freeze 32 additional original ordinals by a deterministic, truth-blind selection rule before execution, excluding the previously evaluated diagnostic panel and ordinal 527. Run actual authenticated records through the candidate; seal all outputs before opening truth. A proposed gate is no underfill and at least 304/320 returned hits@10. Report ordinal 527 separately as a targeted regression. Passing this small panel is screening evidence only; full-population quality remains unqualified.\n\nThe principal risk is that fragmentation makes SOURCE traffic and completion CPU expensive even after admission is coherent. If the retained envelope fails, prefer a separately qualified locality/layout change preserving nominated logical units. Physical regrouping requires new authenticated layouts and can change page completion and downstream ranking; it needs fresh correctness and recall evidence. Reducing selected leaves, truncating units, or switching to direct SQ8 closure is a different algorithmic intervention, not this fix.\n\nNo files were edited and no native execution, data decoding, network access, children or consultations were performed. Query 527\u2019s actual closure size and the candidate\u2019s runtime memory/cost remain unverified."
+  },
+  "providers_used": [
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 2286,
+  "output_bytes": 10542,
+  "elapsed_seconds": 402,
+  "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)\ndevbox-ask: codex consult still running (6m 30s)",
+  "progress_truncated": false,
+  "result": "**Recommend a preregistered admission change, followed by a one-query falsifier\u2014not an immediate full1000 rerun.** The 512-page limit is a historical experimental envelope. It is not implied by the router\u2019s structure, but several downstream limits depend on it.\n\nAll Rust references below are from `git show c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38`, under `crates/borsuk/src/`. Documentation references are from `4f5d45af2dc8082900f94a97712c3e207cc7eede`; none refer to the dirty checkout\u2019s contents.\n\nThe [terminal summary](/data/target/borsuk-full1000-cold-measurement-a0001.pending/full1000-collected/native.log:1) confirms INVALID at original ordinal 527, 527 completed queries, no complete seal, truth unopened, and process peak 63,873,024 bytes. Its failed query never reached SOURCE or SQ8. The memory-events receipt records no OOM. These receipts establish an admission failure, with no population recall or latency conclusion.\n\n**Why 512 is historical, and why a one-line increase is unsafe**\n\nThe historical `docs/research/performance-architecture-20260930/semantic-1m/fixed48/plan.md:7\u201326` explicitly describes a 1.5\u00d7 projection, a projected maximum of 433.5 pages, and a rounded 512-page allowance. Its `decision.md:7` calls these \u201cexperiment admission limits, not universal architecture limits.\u201d\n\nThe complete dependency chain is:\n\n| Layer | Exact evidence | Consequence |\n|---|---|---|\n| Nomination | `semantic_unit_router.rs:62\u201390, 951\u2013963, 1240\u20131247` | Up to 48 leaves \u00d7 64 units; Scale1m inherits 512 closure pages and 4,096 scored units. Leaf selection imposes no physical-page locality guarantee. |\n| Seed completion | `semantic_unit_router.rs:1261\u20131296` | Rejects distinct `unit/8` pages above 512; otherwise preserves every nominated unit and adds at most seven units within the existing seed page. |\n| Downstream admission | `two_bit_generation.rs:789\u2013855` | Rechecks walk length and closure limit, and requires semantic nomination\u2019s page count to equal the whole closure. |\n| SOURCE scoring | `two_bit_generation.rs:854\u2013948` | Scores original walk units, then completes pages. **Completion silently stops at `source_unit_limit`**, currently 4,096. Raising only the page limit would change completion semantics. |\n| SOURCE transport | `two_bit_generation.rs:760\u2013775, 1274\u20131278, 1775\u20131818` | Semantic serving clamps SOURCE to 64 MiB/128 GETs. Cover admission precedes SOURCE I/O. |\n| Gap reads | `budgeted_page_rank.rs:46\u201396` | Joins the smallest gaps to meet the GET limit; charges all bridge bytes. Page count alone cannot establish byte admission. |\n| SQ8 selection | `two_bit_generation.rs:735\u2013749, 1277\u20131278`; `budgeted_page_rank.rs:185\u2013230` | Retains the existing budgeted selection: 16,773,120 bytes/32 GETs. Whole SOURCE nomination does not mean whole-closure SQ8 scanning. |\n| Memory | `two_bit_generation.rs:663\u2013677, 1345\u20131418` | Trace accounting hard-codes 512/4,096; planner allowance explicitly assumes 3,079 walk/4,096 scored units. Paged SOURCE reserves twice its byte budget per active query. |\n| SOURCE representation | `two_bit_source.rs:425\u2013469` | Authenticated units contain 32 rows; record width and digest-table memory derive from geometry. There is no 512-page representation limit here. |\n| Codec | `rotated_two_bit.rs:113\u2013151, 238\u2013249, 299\u2013324` | Record width and query scratch depend on dimensions. The scorer has no closure-page limit. |\n\nExisting boundary tests deliberately reject a 513th page and verify complete scoring of 512 pages: `semantic_unit_router.rs:1691\u20131712`, `two_bit_generation.rs:6718\u20136775`. Their assertions encode the old envelope.\n\n**Bounds derived from source**\n\nFor this fixture, N=1,000,000 and D=1024. These are arithmetic bounds, not measurements of query 527.\n\n| Quantity | Bound |\n|---|---:|\n| Corpus units / physical 256-row pages | 31,250 / 3,907 |\n| Original nominated units | 3,072 |\n| Seed-completed walk | 3,079 units |\n| Distinct closure pages without a locality guarantee | 3,072 |\n| Units needed to complete that closure | 24,576 |\n| Two-bit record / 32-row unit / 256-row page | 264 / 8,448 / 67,584 bytes |\n| SOURCE bytes for 512 full pages, excluding bridges | 34,603,008 = 33 MiB |\n| SOURCE bytes for 3,072 full pages, excluding bridges | 207,618,048 = 198 MiB |\n| Conservative SOURCE-cover ceiling including bridges | Entire object: 264,000,000 bytes |\n| D1024 codec preparation scratch | 532,480 bytes |\n| SOURCE digest table | 1,000,000 bytes; plane admission charges two copies |\n\nUnder the retained 64 MiB SOURCE ceiling, at most **992 full closure pages** fit before bridge costs; a partial final page needs separate accounting. Even 1,024 full pages require 66 MiB.\n\nOn a 64-bit target, expanding the existing trace formula from 512/4,096 to 3,072/24,576 increases its ID payload from 61,888 to 246,208 bytes, excluding the trace structure and allocator overhead. The scoring memo\u2019s reserved tuple payload becomes 393,216 bytes. The 1 MiB planner allowance needs an allocation-lifetime audit; neither sufficiency nor insufficiency follows from the old RSS peak.\n\nRetaining SOURCE\u2019s current byte limit preserves its 128 MiB modeled buffer term. Automatically admitting the entire SOURCE object would instead require about **503.54 MiB for that term alone**. Adding the existing SQ8 response/ranking term yields approximately **555.48 MiB**, before metadata, planner, codec and caller pins. That cannot fit the current 512 MiB model.\n\n**One actionable plan**\n\n1. **Reproduce the exact failure using the existing native runner.** Keep `count:1000`, all authenticated inputs, generation identity, baseline serving and resource limits. Change only execution to:\n   ```json\n   {\"mode\":\"diagnostic_panel\",\"ordinals\":[527],\"trace\":false}\n   ```\n   Use a fresh output/config identity. Original ordinal indexing is explicit at `check_cohere_native_baseline.rs:530\u2013541, 2114\u20132118`; the runner authenticates and validates all request rows before execution at `1983\u20131993`. Expected old-source result: the same router error, zero query SOURCE/SQ8 reads, truth unopened. This needs one executed query, not replaying 0\u2013526.\n\n2. **Freeze a new candidate that removes the unsupported locality assumption.** For Scale1m, derive closure capacity from maximum nominated units: `48\u00d764=3072`; derive complete SOURCE-scoring capacity as `8\u00d73072=24576`, clipped to actual geometry. Keep leaf selection, normalization, tie rules, membership, seed completion, codec and SQ8 budgeted selection unchanged. Update trace accounting and prove planner allocation bounds together. Make incomplete semantic page completion an explicit error rather than allowing the existing break to hide it.\n\n   **Retain SOURCE 64 MiB/128 GETs, SQ8 16,773,120 bytes/32 GETs, fetch parallelism 16, concurrency one, and the 512 MiB/no-swap host limit.** This admits structurally valid nominations while retaining an independent economic/resource refusal. It does not promise every possible closure will fit.\n\n3. **Instrument the rejection boundary minimally.** Record selected-leaf count, nominated-unit count, closure-page count, completed-unit requirement, exact cover bytes/ranges and modeled memory before payload I/O. Keep diagnostics bounded; no vector bodies or truth. The current terminal does not reveal query 527\u2019s exact closure size.\n\n4. **Run the separate correctness/recall falsifier below.** Only after it passes, perform a truth-free, native routing-and-cover preflight across all 1,000 authenticated requests. It should calculate every exact closure and cover without fetching query SOURCE/SQ8 bodies. This detects another late admission failure cheaply.\n\n5. **Freeze and qualify the successor campaign separately.** Require affected Rust tests, workspace Clippy and workspace test compilation on the exact candidate, source-bound actual-input admission, and a separate disposable staging canary. Then consider full1000 execution. Preserve this attempt\u2019s INVALID disposition and every historical arm.\n\nAll proposed native execution belongs on a newly authorized, bounded `causality` EC2 Spot host. Preserve the existing safety ceilings and interruption/cleanup protocol; terminate after terminal collection.\n\n**Bounded falsifying tests**\n\n- **Causal/resource test:** one candidate query at ordinal 527, CPU one, 512 MiB, no swap, concurrency one, fetch16, and a preregistered 120-second native deadline. Require unchanged nominated-unit identity, complete SOURCE scoring of its closure, and successful execution within the retained byte/GET limits. If it instead exceeds the exact SOURCE cover or memory envelope, the proposed admission change is insufficient. Preserve that result; do not respond with another automatic cap increase.\n\n- **Correctness test:** native boundary cases for 512, 513 and 3,072 closure pages, seed additions, partial final pages and malformed memberships. Verify that every nominated unit survives, each closure unit is scored exactly once when payload admission succeeds, and over-budget covers reject before I/O. Compare complete page maxima/ranking against exhaustive scoring of that same closure using the actual codec. Cases within the old envelope must retain identical ranking and returned results.\n\n- **Recall falsifier:** freeze 32 additional original ordinals by a deterministic, truth-blind selection rule before execution, excluding the previously evaluated diagnostic panel and ordinal 527. Run actual authenticated records through the candidate; seal all outputs before opening truth. A proposed gate is no underfill and at least 304/320 returned hits@10. Report ordinal 527 separately as a targeted regression. Passing this small panel is screening evidence only; full-population quality remains unqualified.\n\nThe principal risk is that fragmentation makes SOURCE traffic and completion CPU expensive even after admission is coherent. If the retained envelope fails, prefer a separately qualified locality/layout change preserving nominated logical units. Physical regrouping requires new authenticated layouts and can change page completion and downstream ranking; it needs fresh correctness and recall evidence. Reducing selected leaves, truncating units, or switching to direct SQ8 closure is a different algorithmic intervention, not this fix.\n\nNo files were edited and no native execution, data decoding, network access, children or consultations were performed. Query 527\u2019s actual closure size and the candidate\u2019s runtime memory/cost remain unverified.",
+  "result_truncated": false
+}

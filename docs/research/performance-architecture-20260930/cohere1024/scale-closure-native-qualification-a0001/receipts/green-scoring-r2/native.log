@@ -1,0 +1,6 @@
+
+running 1 test
+test two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1906 filtered out; finished in 0.04s
+

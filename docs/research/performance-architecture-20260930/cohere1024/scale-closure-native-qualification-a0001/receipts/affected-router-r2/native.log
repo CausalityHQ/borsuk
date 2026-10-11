@@ -1,0 +1,16 @@
+
+running 11 tests
+test semantic_unit_router::tests::fresh48_seed_completion_retains_all_3072_units_and_512_pages ... ok
+test semantic_unit_router::tests::fresh_binary_root_selected_leaves_and_scattered_closure_without_training ... ok
+test semantic_unit_router::tests::frozen_native100k_membership_leaves_and_nomination ... ok
+test semantic_unit_router::tests::membership_directory_parity_and_capacity ... ok
+test semantic_unit_router::tests::profile_geometry_phase_caps_and_maximum_binary_size ... ok
+test semantic_unit_router::tests::refreshed_hashes_cannot_hide_bad_membership_partition_or_nonfinite_values ... ok
+test semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits ... ok
+test semantic_unit_router::tests::scale_profile_build_and_nomination_support_singleton_and_partial_pages ... ok
+test semantic_unit_router::tests::scale_profile_dimension_population_leaf_and_million_row_arithmetic_bounds ... ok
+test semantic_unit_router::tests::schema_marker_is_bounded_before_construction ... ok
+test semantic_unit_router::tests::selected_validation_is_bounded_and_retains_every_unit_and_partial_tail ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1896 filtered out; finished in 0.41s
+

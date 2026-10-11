@@ -1,0 +1,47 @@
+
+running 42 tests
+test scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs ... ok
+test scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt ... ok
+test scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt ... ok
+test scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs ... ok
+test scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation ... ok
+test scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission ... ok
+test scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes ... ok
+test scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt ... ok
+test tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch ... ok
+test tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source ... ok
+test tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth ... ok
+test tests::actual_native_queries_seal_and_reduce_against_literal_oracles ... ok
+test tests::cold_fetch_parallelism_selector_is_explicit_and_bounded ... ok
+test tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte ... ok
+test tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid ... ok
+test tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded ... ok
+test tests::explicit_scale_population_receipts_and_negative_geometry ... ok
+test tests::full_selected_requests_require_equal_reserved_digest ... ok
+test tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth ... ok
+test tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null ... ok
+test tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed ... ok
+test tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal ... ok
+test tests::panel_authenticates_every_original_request_row_before_any_open ... ok
+test tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal ... ok
+test tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection ... ok
+test tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal ... ok
+test tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line ... ok
+test tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap ... ok
+test tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed ... ok
+test tests::panel_selector_refusals_precede_every_open_and_publication ... ok
+test tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct ... ok
+test tests::prefix_or_requests_tampering_blocks_first_truth_open ... ok
+test tests::production_contract_rejects_unknown_hash_geometry_and_caps ... ok
+test tests::query_runtime_bounds_blocking_threads_and_drains ... ok
+test tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output ... ok
+test tests::scratch_formula_keeps_codec_and_trace_separate ... ok
+test tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows ... ok
+test tests::serving_mode_and_format_marker_are_required_explicit_and_strict ... ok
+test tests::source_binding_and_all_request_rows_fail_before_queries ... ok
+test tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority ... ok
+test tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open ... ok
+test tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 58.74s
+

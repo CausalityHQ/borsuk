@@ -1,0 +1,18 @@
+
+running 1 test
+test two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once ... FAILED
+
+failures:
+
+---- two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once stdout ----
+
+thread 'two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once' (9856) panicked at crates/borsuk/src/two_bit_generation.rs:6734:14:
+called `Result::unwrap()` on an `Err` value: Invalid("walked source geometry")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1905 filtered out; finished in 0.00s
+

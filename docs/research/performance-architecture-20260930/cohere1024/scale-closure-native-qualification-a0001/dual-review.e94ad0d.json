@@ -1,0 +1,792 @@
+{
+  "id": "cb44cf12afe548a3",
+  "status": "completed",
+  "started_at": 1791689933,
+  "agent": "borsuk/prod-ready-v9",
+  "force_reason": "New native full1000 terminal INVALID at query527 exposed a distinct coupled library closure/scoring/memory envelope defect. Prior dual critique reviewed only reducer header byte admission; this review gates a new two-file library candidate and must occur before native qualification.",
+  "rolling_6h_count": 4,
+  "prompt_preview": "Read-only dual source review /home/rb/worktrees/borsuk-prod-ready-v9. NEVER alter stale/dirty physical checkout. Use exact git show candidatee94ad0def2d48876133c1ecb2e6122331ae00238, redparent6bf1ec2568dc113656acec329c48dc7a7b881700, originalmain1e5c5533e862d8f19b9c070e65d55629ea123053. ONLY crates/borsuk/src/semantic_unit_router.rs +two_bit_generation.rs; identical copies /data/target/borsuk-scale-closure-envelope. Candidate SOURCE_ONLY_UNVERIFIED, rustfmt/diff checks only. Actual full1000 failednativequery527 Router semantic closure page cap beforeSOURCE/SQ8, completed527 unsealedtruthunopened/OOM0/swap0; immutable docs main1e5. No populationperformanceclaim. Completed routed plan0bdee193d7284629 recommends structuralScale3072pages/24576completeunits while retaining64MiB/128SOURCEgets and16,773,120B/32SQ8gets plus512MiB host. OriginalFresh512/4096 historicalbounds remain unchanged; graph/Native limits unchanged. Candidate derivesScaleclosureselected_leaf_limit*LEAF_UNITS, sources8*closure; trace conservative structuralmax; explicitScale expected full-unit count computedfromclosure and checkedbeforecompletion/afterloop (no silentlypartialscore). Scaleplannerreserve3MiB chargedstandard/direct; otherprofiles1MiB. Comment's conservative simultaneouspayload accounting eightwalkvectors3079*8 +fourscorevectors24576*16 +eightpagevectors3072*16 +twoBTreeSets3072*64 +64KiB =2,621,888B; verify lifetimes/capacities/BTreeSet assumption, not a claim RSSproved. Existingdirectory ranking/sourcebuffers/codec/trace chargedseparately. Selection/ties/normalization/membership/sourcecoverbytes/SQ8selection/API/schema/format otherwise unchanged. Redtests: scale_nomination_preserves_scattered_closure_and_fresh_limits (513/3072pages preservesunitsseed+7, oldFreshrefuses, malformedcount); scale_scattered_source_walk_scores_complete_pages_once (exactonceallunits/rankedmaxima, Freshrefusal; candidateadds513partial-final-page). No native test yet; red expected oldclosurecap. Need concrete compile/correctness/admission/memory bugs, smallestsourcefix, exactsourcecodec versusdummy-scorecoverage limitation, and fast EC2 gate for query527 beforefull rerun. Are worst-case3MiBplanner and expandedtrace consistently charged at ALL paths/diagnostic callers? Is old<=512 ranking retained? Could source64MiB cover still refuse (expected distinctresource outcome)? Do NOT demand blanketcapraise/GTtune/dropnomination/datasetspecialization/Pythonframework/backwardcompatibility. All nativeCargo/rustc/tests/mocks/realrequests/truth/archive/reduction ONLYcausalityEC2; localbounded source reads CPU1/256MiB/noSwap/120s, no execution/realdata/edits/network/children/consults. Preserve all heldworkers and jobs. State HOLD blockers separatelyfrom limitations, cite exactlineevidence. Root owns compiler94? nowlibaffected/releasebaseline/workspaceClippy/REAL envunsettestbuild and actual-inputfalsifier, no launchauthorizedbythisreview.",
+  "prompt_sha256": "22c3cf7a7901f75275761583d77cbc9cb51513bed53a9d207df2a94dd87a33d0",
+  "prompt_bytes": 2931,
+  "fingerprint": "58158387fe6a5b4a6c9e0e86cc2ff550f01e9372feb33b2811f428cd03deceea",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "reviewers": [
+    {
+      "role": "research_critic",
+      "id": "2b2ca2536f354994",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "fallbacks": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791689933,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791691133,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent research and first-principles critic. Challenge assumptions, compare alternatives and prior art, and identify missing evidence. Do not edit files.\n\nMaterial to critique:\nRead-only dual source review /home/rb/worktrees/borsuk-prod-ready-v9. NEVER alter stale/dirty physical checkout. Use exact git show candidatee94ad0def2d48876133c1ecb2e6122331ae00238, redparent6bf1ec2568dc113656acec329c48dc7a7b881700, originalmain1e5c5533e862d8f19b9c070e65d55629ea123053. ONLY crates/borsuk/src/semantic_unit_router.rs +two_bit_generation.rs; identical copies /data/target/borsuk-scale-closure-envelope. Candidate SOURCE_ONLY_UNVERIFIED, rustfmt/diff checks only. Actual full1000 failednativequery527 Router semantic closure page cap beforeSOURCE/SQ8, completed527 unsealedtruthunopened/OOM0/swap0; immutable docs main1e5. No populationperformanceclaim. Completed routed plan0bdee193d7284629 recommends structuralScale3072pages/24576completeunits while retaining64MiB/128SOURCEgets and16,773,120B/32SQ8gets plus512MiB host. OriginalFresh512/4096 historicalbounds remain unchanged; graph/Native limits unchanged. Candidate derivesScaleclosureselected_leaf_limit*LEAF_UNITS, sources8*closure; trace conservative structuralmax; explicitScale expected full-unit count computedfromclosure and checkedbeforecompletion/afterloop (no silentlypartialscore). Scaleplannerreserve3MiB chargedstandard/direct; otherprofiles1MiB. Comment's conservative simultaneouspayload accounting eightwalkvectors3079*8 +fourscorevectors24576*16 +eightpagevectors3072*16 +twoBTreeSets3072*64 +64KiB =2,621,888B; verify lifetimes/capacities/BTreeSet assumption, not a claim RSSproved. Existingdirectory ranking/sourcebuffers/codec/trace chargedseparately. Selection/ties/normalization/membership/sourcecoverbytes/SQ8selection/API/schema/format otherwise unchanged. Redtests: scale_nomination_preserves_scattered_closure_and_fresh_limits (513/3072pages preservesunitsseed+7, oldFreshrefuses, malformedcount); scale_scattered_source_walk_scores_complete_pages_once (exactonceallunits/rankedmaxima, Freshrefusal; candidateadds513partial-final-page). No native test yet; red expected oldclosurecap. Need concrete compile/correctness/admission/memory bugs, smallestsourcefix, exactsourcecodec versusdummy-scorecoverage limitation, and fast EC2 gate for query527 beforefull rerun. Are worst-case3MiBplanner and expandedtrace consistently charged at ALL paths/diagnostic callers? Is old<=512 ranking retained? Could source64MiB cover still refuse (expected distinctresource outcome)? Do NOT demand blanketcapraise/GTtune/dropnomination/datasetspecialization/Pythonframework/backwardcompatibility. All nativeCargo/rustc/tests/mocks/realrequests/truth/archive/reduction ONLYcausalityEC2; localbounded source reads CPU1/256MiB/noSwap/120s, no execution/realdata/edits/network/children/consults. Preserve all heldworkers and jobs. State HOLD blockers separatelyfrom limitations, cite exactlineevidence. Root owns compiler94? nowlibaffected/releasebaseline/workspaceClippy/REAL envunsettestbuild and actual-inputfalsifier, no launchauthorizedbythisreview.",
+      "prompt_sha256": "23e1539149214e7aa64c548b1da753fd2c2109e4e95cc8b31f498304d2cc9a2f",
+      "prompt_bytes": 3315,
+      "fingerprint": "da0425d07eefd8e351fcc81b75ee782caf374a92ec5c66f6bafd55d28b18b164",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "1423cec377a901f633b371ed3d292f3a41fd8a9ff13725ec1d576965c0389948",
+      "reused": false,
+      "critique_id": "cb44cf12afe548a3",
+      "critique_role": "research_critic",
+      "systemd_unit": "devbox-consult-2b2ca2536f354994.service",
+      "pid": 3579458,
+      "pgid": 3579458,
+      "attempt": 2,
+      "attempts": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5",
+          "budget_usd": 4,
+          "timeout_seconds": 1200,
+          "started_at": 1791689933,
+          "effort": "xhigh",
+          "effort_source": "jev"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol",
+          "budget_usd": null,
+          "timeout_seconds": 1184,
+          "started_at": 1791689949
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791690155,
+      "event_cursor": 53,
+      "events": [
+        {
+          "seq": 30,
+          "at": 1791690009,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 31,
+          "at": 1791690009,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 32,
+          "at": 1791690014,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 33,
+          "at": 1791690017,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 34,
+          "at": 1791690017,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 35,
+          "at": 1791690017,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 36,
+          "at": 1791690018,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 37,
+          "at": 1791690031,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 38,
+          "at": 1791690031,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 39,
+          "at": 1791690032,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 40,
+          "at": 1791690032,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 41,
+          "at": 1791690036,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 42,
+          "at": 1791690036,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 43,
+          "at": 1791690036,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 44,
+          "at": 1791690036,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 45,
+          "at": 1791690057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 46,
+          "at": 1791690057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 47,
+          "at": 1791690057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 48,
+          "at": 1791690057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 49,
+          "at": 1791690089,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 50,
+          "at": 1791690093,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 51,
+          "at": 1791690093,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 52,
+          "at": 1791690154,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 53,
+          "at": 1791690155,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "claude": [
+          {
+            "seq": 1,
+            "at": 1791689933,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation attempt",
+            "detail": "claude-opus-5-5 \u00b7 $4 cap \u00b7 1200s remaining"
+          },
+          {
+            "seq": 2,
+            "at": 1791689934,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Reviewer thinking applied",
+            "detail": "claude-opus-5-5 / xhigh (jev)",
+            "effort": "xhigh",
+            "model": "claude-opus-5-5",
+            "source": "jev"
+          },
+          {
+            "seq": 3,
+            "at": 1791689934,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Claude consultation started"
+          },
+          {
+            "seq": 4,
+            "at": 1791689948,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider reported an error",
+            "detail": "success"
+          },
+          {
+            "seq": 5,
+            "at": 1791689949,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider attempt exited",
+            "detail": "exit 1"
+          },
+          {
+            "seq": 6,
+            "at": 1791689949,
+            "provider": "claude",
+            "kind": "phase",
+            "label": "Provider limit reached; switching fallback",
+            "detail": "codex"
+          }
+        ],
+        "codex": [
+          {
+            "seq": 46,
+            "at": 1791690057,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 47,
+            "at": 1791690057,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 48,
+            "at": 1791690057,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 49,
+            "at": 1791690089,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 50,
+            "at": 1791690093,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 51,
+            "at": 1791690093,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 52,
+            "at": 1791690154,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 53,
+            "at": 1791690155,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "**Verdict: HOLD for native qualification.** I found no demonstrated compile or ranking bug by source inspection. The structural fix is coherent, but it does not establish that query 527 clears the remaining resource gates.\n\nReviewed only the two requested files using pinned Git objects: candidate `e94ad0def2d48876133c1ecb2e6122331ae00238`, red parent `6bf1ec2568dc113656acec329c48dc7a7b881700`, and original main `1e5c5533e862d8f19b9c070e65d55629ea123053`. No edits, execution, data access, network, workers, or consultations.\n\nBelow, `R` means `crates/borsuk/src/semantic_unit_router.rs`; `T` means `crates/borsuk/src/two_bit_generation.rs`. Line numbers refer to **candidate Git source**, not the dirty checkout.\n\n**Source conclusions**\n\n- **3072 pages / 24576 units follows from nomination geometry.** At most 48 leaves \u00d7 64 units can nominate distinct pages. Seed completion adds units only inside an existing page. Fresh retains 512/4096; Native constants remain unchanged. (`R:62\u201395, 1265\u20131300`)\n- **Scale completion is complete and exact once on valid input.** Admission sorts and deduplicates units, checks page-count agreement, and validates the seed page. Completion visits distinct pages, skips originally scored units, accounts for the partial final page, and checks the final count. The subtraction in the new geometry calculation is protected by admitted unit IDs. (`T:807\u2013842, 853\u2013870, 903\u2013940`)\n- **Previously accepted Scale closures \u2264512 retain their ranking logic.** Such closures contain at most 4096 units, so the old allowance already completed them. Page maxima, score ordering, page-ID ties, seed handling, and physical selection are unchanged. Allocation and diagnostic admission can change despite identical rankings. (`T:882\u2013985`)\n\n**HOLD blockers**\n\n1. **The candidate remains SOURCE_ONLY_UNVERIFIED.** Source reads cannot establish compilation, Clippy, release behavior, or native test success. The root must collect exact-revision affected-test compilation, release-baseline checks, workspace Clippy, and the required complete test-build gate on causality EC2. I found no source reason to bypass those gates.\n\n2. **The new regressions establish dummy-score coverage, not production codec correctness.** They return `unit as f64`, including the partial-tail case. Production instead scores every row through `PreparedTwoBit`, takes the unit maximum, then ranks page maxima. (`T:729\u2013747, 6754\u20136807`) The existing codec/retained-capacity exercise uses Fresh and 512 pages. (`T:6837\u20136880`)\n\n   Smallest missing verification: a bounded Scale test through `plan_two_bit_source_walks` above 512 pages, with encoded records, distinct scores and ties, a partial tail, exact row-read coverage, and measured trace **capacities**. It should also verify that missing or malformed completion records fail. This needs no algorithm change.\n\n3. **\u201cCharged at ALL diagnostic callers\u201d is not established.** Generation open includes the profile reserve per active query; direct admission adds its own reserve and trace allowance. Local and paged diagnostics subtract the expanded trace allowance before codec preparation. Separate range diagnostics add their charge. (`T:1384\u20131455, 1670\u20131683, 1792\u20131805, 2312\u20132327, 2474\u20132555`)\n\n   However, the public standalone planner has no memory-admission argument and allocates the enlarged memo/trace directly. (`T:698\u2013728, 874`) External diagnostic callers were outside the permitted review scope. Their accounting needs an audit before an all-callers claim; this is an evidence gap, not a proven missed charge.\n\n**Memory limitations and smallest source corrections**\n\nThe stated arithmetic is correct: **2,621,888 B**, leaving **523,840 B** below 3 MiB. The source supports substantial headroom: admission clones are temporary; completion retains the memo and page vectors; rebuilding maxima temporarily adds another score vector. Four maximum-sized score vectors conservatively exceed those visible simultaneous allocations. (`T:818\u2013842, 874\u2013960`)\n\nTwo qualifications remain:\n\n- The `64 B/element` BTreeSet allowance is an assumption, not a bound established by these files. Also, the cloned seed-completion set can contain **3079** elements while the original contains 3072. (`R:1294\u20131300`) Smallest correction: describe that larger set in the accounting comment and validate the pinned native allocator/toolchain. This discrepancy alone does **not** demonstrate a 3 MiB overrun.\n- `DirectClosureMemory` still documents a fixed **1 MiB** planner term, although Scale now charges 3 MiB. Update that documentation to say profile-dependent. (`T:201\u2013203, 2474`)\n\nThe expanded `scratch_bytes(rows)` applies to every profile. Its semantic ID term grows by **184,320 B** at one million rows. Consequently, a previously sufficient diagnostic scratch budget can now refuse Fresh, and non-Scale direct models also become more conservative. That is an admission consequence, not a ranking regression. (`T:665\u2013682`)\n\n**SOURCE can still refuse\u2014and that is expected**\n\nThe unchanged semantic caps remain 64 MiB/128 SOURCE GETs and 16,773,120 B/32 SQ8 GETs. SOURCE cover bytes are checked before fetching. (`T:1311\u20131315, 778\u2013794, 1813\u20131835`)\n\nFor a runtime-reported 264-byte SOURCE record, 3072 full pages alone require **198 MiB**, before bridge bytes. Thus structural admission cannot promise SOURCE admission. Even a smaller scattered closure can exceed 64 MiB when reduced to 128 ranges. Record this as the distinct SOURCE resource outcome; an unexpected codec, geometry, or environment error remains execution INVALID.\n\n**Fast EC2 gate before the full rerun**\n\nAfter compiler checks and the separate disposable canary, the root should replay the **exact authenticated request identified as query 527** through the candidate\u2019s ordinary native SOURCE\u2192SQ8 path, with the existing byte/GET limits, concurrency, and 512 MiB host ceiling.\n\nRequire:\n\n- unchanged leaf nomination and original unit/page closure;\n- expected complete-unit count equals exact-once scoring coverage;\n- successful SOURCE/SQ8 admission, or a precisely identified resource refusal;\n- terminal request/byte receipts, trace capacities, peak memory, OOM and swap evidence.\n\nTruth can remain unopened for this stage replay; recall qualification then needs the authorized bounded actual-input falsifier. A direct-closure replay cannot clear the ordinary SOURCE path because it deliberately skips nomination scoring. (`T:2653\u20132695`)\n\nFirst-principles comparison favors this structural correction as the smallest repair that preserves nomination semantics. Physical reordering could reduce page amplification but would require separate layout qualification. Scoring only nominated units would change page maxima. Neither is needed to resolve the demonstrated closure-cap failure.\n\nThe reported 527 completed queries with unopened truth establish neither population recall nor performance. Query 527 is the next falsifier, not proof that the full population passes.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "claude": "You've hit your weekly limit \u00b7 resets Oct 13, 12am (UTC)",
+        "codex": "**Verdict: HOLD for native qualification.** I found no demonstrated compile or ranking bug by source inspection. The structural fix is coherent, but it does not establish that query 527 clears the remaining resource gates.\n\nReviewed only the two requested files using pinned Git objects: candidate `e94ad0def2d48876133c1ecb2e6122331ae00238`, red parent `6bf1ec2568dc113656acec329c48dc7a7b881700`, and original main `1e5c5533e862d8f19b9c070e65d55629ea123053`. No edits, execution, data access, network, workers, or consultations.\n\nBelow, `R` means `crates/borsuk/src/semantic_unit_router.rs`; `T` means `crates/borsuk/src/two_bit_generation.rs`. Line numbers refer to **candidate Git source**, not the dirty checkout.\n\n**Source conclusions**\n\n- **3072 pages / 24576 units follows from nomination geometry.** At most 48 leaves \u00d7 64 units can nominate distinct pages. Seed completion adds units only inside an existing page. Fresh retains 512/4096; Native constants remain unchanged. (`R:62\u201395, 1265\u20131300`)\n- **Scale completion is complete and exact once on valid input.** Admission sorts and deduplicates units, checks page-count agreement, and validates the seed page. Completion visits distinct pages, skips originally scored units, accounts for the partial final page, and checks the final count. The subtraction in the new geometry calculation is protected by admitted unit IDs. (`T:807\u2013842, 853\u2013870, 903\u2013940`)\n- **Previously accepted Scale closures \u2264512 retain their ranking logic.** Such closures contain at most 4096 units, so the old allowance already completed them. Page maxima, score ordering, page-ID ties, seed handling, and physical selection are unchanged. Allocation and diagnostic admission can change despite identical rankings. (`T:882\u2013985`)\n\n**HOLD blockers**\n\n1. **The candidate remains SOURCE_ONLY_UNVERIFIED.** Source reads cannot establish compilation, Clippy, release behavior, or native test success. The root must collect exact-revision affected-test compilation, release-baseline checks, workspace Clippy, and the required complete test-build gate on causality EC2. I found no source reason to bypass those gates.\n\n2. **The new regressions establish dummy-score coverage, not production codec correctness.** They return `unit as f64`, including the partial-tail case. Production instead scores every row through `PreparedTwoBit`, takes the unit maximum, then ranks page maxima. (`T:729\u2013747, 6754\u20136807`) The existing codec/retained-capacity exercise uses Fresh and 512 pages. (`T:6837\u20136880`)\n\n   Smallest missing verification: a bounded Scale test through `plan_two_bit_source_walks` above 512 pages, with encoded records, distinct scores and ties, a partial tail, exact row-read coverage, and measured trace **capacities**. It should also verify that missing or malformed completion records fail. This needs no algorithm change.\n\n3. **\u201cCharged at ALL diagnostic callers\u201d is not established.** Generation open includes the profile reserve per active query; direct admission adds its own reserve and trace allowance. Local and paged diagnostics subtract the expanded trace allowance before codec preparation. Separate range diagnostics add their charge. (`T:1384\u20131455, 1670\u20131683, 1792\u20131805, 2312\u20132327, 2474\u20132555`)\n\n   However, the public standalone planner has no memory-admission argument and allocates the enlarged memo/trace directly. (`T:698\u2013728, 874`) External diagnostic callers were outside the permitted review scope. Their accounting needs an audit before an all-callers claim; this is an evidence gap, not a proven missed charge.\n\n**Memory limitations and smallest source corrections**\n\nThe stated arithmetic is correct: **2,621,888 B**, leaving **523,840 B** below 3 MiB. The source supports substantial headroom: admission clones are temporary; completion retains the memo and page vectors; rebuilding maxima temporarily adds another score vector. Four maximum-sized score vectors conservatively exceed those visible simultaneous allocations. (`T:818\u2013842, 874\u2013960`)\n\nTwo qualifications remain:\n\n- The `64 B/element` BTreeSet allowance is an assumption, not a bound established by these files. Also, the cloned seed-completion set can contain **3079** elements while the original contains 3072. (`R:1294\u20131300`) Smallest correction: describe that larger set in the accounting comment and validate the pinned native allocator/toolchain. This discrepancy alone does **not** demonstrate a 3 MiB overrun.\n- `DirectClosureMemory` still documents a fixed **1 MiB** planner term, although Scale now charges 3 MiB. Update that documentation to say profile-dependent. (`T:201\u2013203, 2474`)\n\nThe expanded `scratch_bytes(rows)` applies to every profile. Its semantic ID term grows by **184,320 B** at one million rows. Consequently, a previously sufficient diagnostic scratch budget can now refuse Fresh, and non-Scale direct models also become more conservative. That is an admission consequence, not a ranking regression. (`T:665\u2013682`)\n\n**SOURCE can still refuse\u2014and that is expected**\n\nThe unchanged semantic caps remain 64 MiB/128 SOURCE GETs and 16,773,120 B/32 SQ8 GETs. SOURCE cover bytes are checked before fetching. (`T:1311\u20131315, 778\u2013794, 1813\u20131835`)\n\nFor a runtime-reported 264-byte SOURCE record, 3072 full pages alone require **198 MiB**, before bridge bytes. Thus structural admission cannot promise SOURCE admission. Even a smaller scattered closure can exceed 64 MiB when reduced to 128 ranges. Record this as the distinct SOURCE resource outcome; an unexpected codec, geometry, or environment error remains execution INVALID.\n\n**Fast EC2 gate before the full rerun**\n\nAfter compiler checks and the separate disposable canary, the root should replay the **exact authenticated request identified as query 527** through the candidate\u2019s ordinary native SOURCE\u2192SQ8 path, with the existing byte/GET limits, concurrency, and 512 MiB host ceiling.\n\nRequire:\n\n- unchanged leaf nomination and original unit/page closure;\n- expected complete-unit count equals exact-once scoring coverage;\n- successful SOURCE/SQ8 admission, or a precisely identified resource refusal;\n- terminal request/byte receipts, trace capacities, peak memory, OOM and swap evidence.\n\nTruth can remain unopened for this stage replay; recall qualification then needs the authorized bounded actual-input falsifier. A direct-closure replay cannot clear the ordinary SOURCE path because it deliberately skips nomination scoring. (`T:2653\u20132695`)\n\nFirst-principles comparison favors this structural correction as the smallest repair that preserves nomination semantics. Physical reordering could reduce page amplification but would require separate layout qualification. Scoring only nominated units would change page maxima. Neither is needed to resolve the demonstrated closure-cap failure.\n\nThe reported 527 completed queries with unopened truth establish neither population recall nor performance. Query 527 is the next falsifier, not proof that the full population passes."
+      },
+      "providers_used": [
+        "claude",
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 3315,
+      "output_bytes": 7032,
+      "elapsed_seconds": 222,
+      "progress": "devbox-consult-stream: provider result success\nReading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)",
+      "progress_truncated": false,
+      "result": "**Verdict: HOLD for native qualification.** I found no demonstrated compile or ranking bug by source inspection. The structural fix is coherent, but it does not establish that query 527 clears the remaining resource gates.\n\nReviewed only the two requested files using pinned Git objects: candidate `e94ad0def2d48876133c1ecb2e6122331ae00238`, red parent `6bf1ec2568dc113656acec329c48dc7a7b881700`, and original main `1e5c5533e862d8f19b9c070e65d55629ea123053`. No edits, execution, data access, network, workers, or consultations.\n\nBelow, `R` means `crates/borsuk/src/semantic_unit_router.rs`; `T` means `crates/borsuk/src/two_bit_generation.rs`. Line numbers refer to **candidate Git source**, not the dirty checkout.\n\n**Source conclusions**\n\n- **3072 pages / 24576 units follows from nomination geometry.** At most 48 leaves \u00d7 64 units can nominate distinct pages. Seed completion adds units only inside an existing page. Fresh retains 512/4096; Native constants remain unchanged. (`R:62\u201395, 1265\u20131300`)\n- **Scale completion is complete and exact once on valid input.** Admission sorts and deduplicates units, checks page-count agreement, and validates the seed page. Completion visits distinct pages, skips originally scored units, accounts for the partial final page, and checks the final count. The subtraction in the new geometry calculation is protected by admitted unit IDs. (`T:807\u2013842, 853\u2013870, 903\u2013940`)\n- **Previously accepted Scale closures \u2264512 retain their ranking logic.** Such closures contain at most 4096 units, so the old allowance already completed them. Page maxima, score ordering, page-ID ties, seed handling, and physical selection are unchanged. Allocation and diagnostic admission can change despite identical rankings. (`T:882\u2013985`)\n\n**HOLD blockers**\n\n1. **The candidate remains SOURCE_ONLY_UNVERIFIED.** Source reads cannot establish compilation, Clippy, release behavior, or native test success. The root must collect exact-revision affected-test compilation, release-baseline checks, workspace Clippy, and the required complete test-build gate on causality EC2. I found no source reason to bypass those gates.\n\n2. **The new regressions establish dummy-score coverage, not production codec correctness.** They return `unit as f64`, including the partial-tail case. Production instead scores every row through `PreparedTwoBit`, takes the unit maximum, then ranks page maxima. (`T:729\u2013747, 6754\u20136807`) The existing codec/retained-capacity exercise uses Fresh and 512 pages. (`T:6837\u20136880`)\n\n   Smallest missing verification: a bounded Scale test through `plan_two_bit_source_walks` above 512 pages, with encoded records, distinct scores and ties, a partial tail, exact row-read coverage, and measured trace **capacities**. It should also verify that missing or malformed completion records fail. This needs no algorithm change.\n\n3. **\u201cCharged at ALL diagnostic callers\u201d is not established.** Generation open includes the profile reserve per active query; direct admission adds its own reserve and trace allowance. Local and paged diagnostics subtract the expanded trace allowance before codec preparation. Separate range diagnostics add their charge. (`T:1384\u20131455, 1670\u20131683, 1792\u20131805, 2312\u20132327, 2474\u20132555`)\n\n   However, the public standalone planner has no memory-admission argument and allocates the enlarged memo/trace directly. (`T:698\u2013728, 874`) External diagnostic callers were outside the permitted review scope. Their accounting needs an audit before an all-callers claim; this is an evidence gap, not a proven missed charge.\n\n**Memory limitations and smallest source corrections**\n\nThe stated arithmetic is correct: **2,621,888 B**, leaving **523,840 B** below 3 MiB. The source supports substantial headroom: admission clones are temporary; completion retains the memo and page vectors; rebuilding maxima temporarily adds another score vector. Four maximum-sized score vectors conservatively exceed those visible simultaneous allocations. (`T:818\u2013842, 874\u2013960`)\n\nTwo qualifications remain:\n\n- The `64 B/element` BTreeSet allowance is an assumption, not a bound established by these files. Also, the cloned seed-completion set can contain **3079** elements while the original contains 3072. (`R:1294\u20131300`) Smallest correction: describe that larger set in the accounting comment and validate the pinned native allocator/toolchain. This discrepancy alone does **not** demonstrate a 3 MiB overrun.\n- `DirectClosureMemory` still documents a fixed **1 MiB** planner term, although Scale now charges 3 MiB. Update that documentation to say profile-dependent. (`T:201\u2013203, 2474`)\n\nThe expanded `scratch_bytes(rows)` applies to every profile. Its semantic ID term grows by **184,320 B** at one million rows. Consequently, a previously sufficient diagnostic scratch budget can now refuse Fresh, and non-Scale direct models also become more conservative. That is an admission consequence, not a ranking regression. (`T:665\u2013682`)\n\n**SOURCE can still refuse\u2014and that is expected**\n\nThe unchanged semantic caps remain 64 MiB/128 SOURCE GETs and 16,773,120 B/32 SQ8 GETs. SOURCE cover bytes are checked before fetching. (`T:1311\u20131315, 778\u2013794, 1813\u20131835`)\n\nFor a runtime-reported 264-byte SOURCE record, 3072 full pages alone require **198 MiB**, before bridge bytes. Thus structural admission cannot promise SOURCE admission. Even a smaller scattered closure can exceed 64 MiB when reduced to 128 ranges. Record this as the distinct SOURCE resource outcome; an unexpected codec, geometry, or environment error remains execution INVALID.\n\n**Fast EC2 gate before the full rerun**\n\nAfter compiler checks and the separate disposable canary, the root should replay the **exact authenticated request identified as query 527** through the candidate\u2019s ordinary native SOURCE\u2192SQ8 path, with the existing byte/GET limits, concurrency, and 512 MiB host ceiling.\n\nRequire:\n\n- unchanged leaf nomination and original unit/page closure;\n- expected complete-unit count equals exact-once scoring coverage;\n- successful SOURCE/SQ8 admission, or a precisely identified resource refusal;\n- terminal request/byte receipts, trace capacities, peak memory, OOM and swap evidence.\n\nTruth can remain unopened for this stage replay; recall qualification then needs the authorized bounded actual-input falsifier. A direct-closure replay cannot clear the ordinary SOURCE path because it deliberately skips nomination scoring. (`T:2653\u20132695`)\n\nFirst-principles comparison favors this structural correction as the smallest repair that preserves nomination semantics. Physical reordering could reduce page amplification but would require separate layout qualification. Scoring only nominated units would change page maxima. Neither is needed to resolve the demonstrated closure-cap failure.\n\nThe reported 527 completed queries with unopened truth establish neither population recall nor performance. Query 527 is the next falsifier, not proof that the full population passes.",
+      "result_truncated": false
+    },
+    {
+      "role": "engineering_critic",
+      "id": "bf963240b90740da",
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "fallbacks": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "effort": "",
+      "agent": "borsuk/prod-ready-v9",
+      "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+      "status": "completed",
+      "runner_started": true,
+      "started_at": 1791689933,
+      "timeout_seconds": 1200,
+      "deadline_at": 1791691133,
+      "budget_usd": null,
+      "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only dual source review /home/rb/worktrees/borsuk-prod-ready-v9. NEVER alter stale/dirty physical checkout. Use exact git show candidatee94ad0def2d48876133c1ecb2e6122331ae00238, redparent6bf1ec2568dc113656acec329c48dc7a7b881700, originalmain1e5c5533e862d8f19b9c070e65d55629ea123053. ONLY crates/borsuk/src/semantic_unit_router.rs +two_bit_generation.rs; identical copies /data/target/borsuk-scale-closure-envelope. Candidate SOURCE_ONLY_UNVERIFIED, rustfmt/diff checks only. Actual full1000 failednativequery527 Router semantic closure page cap beforeSOURCE/SQ8, completed527 unsealedtruthunopened/OOM0/swap0; immutable docs main1e5. No populationperformanceclaim. Completed routed plan0bdee193d7284629 recommends structuralScale3072pages/24576completeunits while retaining64MiB/128SOURCEgets and16,773,120B/32SQ8gets plus512MiB host. OriginalFresh512/4096 historicalbounds remain unchanged; graph/Native limits unchanged. Candidate derivesScaleclosureselected_leaf_limit*LEAF_UNITS, sources8*closure; trace conservative structuralmax; explicitScale expected full-unit count computedfromclosure and checkedbeforecompletion/afterloop (no silentlypartialscore). Scaleplannerreserve3MiB chargedstandard/direct; otherprofiles1MiB. Comment's conservative simultaneouspayload accounting eightwalkvectors3079*8 +fourscorevectors24576*16 +eightpagevectors3072*16 +twoBTreeSets3072*64 +64KiB =2,621,888B; verify lifetimes/capacities/BTreeSet assumption, not a claim RSSproved. Existingdirectory ranking/sourcebuffers/codec/trace chargedseparately. Selection/ties/normalization/membership/sourcecoverbytes/SQ8selection/API/schema/format otherwise unchanged. Redtests: scale_nomination_preserves_scattered_closure_and_fresh_limits (513/3072pages preservesunitsseed+7, oldFreshrefuses, malformedcount); scale_scattered_source_walk_scores_complete_pages_once (exactonceallunits/rankedmaxima, Freshrefusal; candidateadds513partial-final-page). No native test yet; red expected oldclosurecap. Need concrete compile/correctness/admission/memory bugs, smallestsourcefix, exactsourcecodec versusdummy-scorecoverage limitation, and fast EC2 gate for query527 beforefull rerun. Are worst-case3MiBplanner and expandedtrace consistently charged at ALL paths/diagnostic callers? Is old<=512 ranking retained? Could source64MiB cover still refuse (expected distinctresource outcome)? Do NOT demand blanketcapraise/GTtune/dropnomination/datasetspecialization/Pythonframework/backwardcompatibility. All nativeCargo/rustc/tests/mocks/realrequests/truth/archive/reduction ONLYcausalityEC2; localbounded source reads CPU1/256MiB/noSwap/120s, no execution/realdata/edits/network/children/consults. Preserve all heldworkers and jobs. State HOLD blockers separatelyfrom limitations, cite exactlineevidence. Root owns compiler94? nowlibaffected/releasebaseline/workspaceClippy/REAL envunsettestbuild and actual-inputfalsifier, no launchauthorizedbythisreview.",
+      "prompt_sha256": "e1869f3de9175f1f3988517a5470f4a74de092731e88a014a3000a611f24ccd3",
+      "prompt_bytes": 3349,
+      "fingerprint": "ce2b20a761035b4ab1aa3fcbd2cfadbfbead0ee4ddbf92c4d91926d53bece2b8",
+      "evidence": {
+        "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+        "git_branch": "devbox/prod-ready-v9",
+        "git_dirty": true,
+        "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+        "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+        "worktree_evidence_truncated": true,
+        "active_goal": {
+          "id": "goal-1790540483-1790540483843307105-2322852",
+          "agent": "borsuk/prod-ready-v9",
+          "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+          "status": "queued",
+          "revision": 4,
+          "actor": "devbox",
+          "note": "re-apply delivery failed; prior goal state restored",
+          "created_at": 1790540483,
+          "updated_at": 1790781535
+        }
+      },
+      "previous_fingerprint": "da0425d07eefd8e351fcc81b75ee782caf374a92ec5c66f6bafd55d28b18b164",
+      "reused": false,
+      "critique_id": "cb44cf12afe548a3",
+      "critique_role": "engineering_critic",
+      "systemd_unit": "devbox-consult-bf963240b90740da.service",
+      "pid": 3579520,
+      "pgid": 3579520,
+      "attempt": 1,
+      "attempts": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra"
+        },
+        {
+          "provider": "claude",
+          "model": "claude-opus-5-5"
+        },
+        {
+          "provider": "codex",
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "attempt_history": [
+        {
+          "provider": "codex",
+          "model": "gpt-6-astra",
+          "budget_usd": null,
+          "timeout_seconds": 1199,
+          "started_at": 1791689934
+        }
+      ],
+      "exit_code": 0,
+      "finished_at": 1791690245,
+      "event_cursor": 56,
+      "events": [
+        {
+          "seq": 33,
+          "at": 1791690057,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 34,
+          "at": 1791690058,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 35,
+          "at": 1791690059,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 36,
+          "at": 1791690083,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 37,
+          "at": 1791690083,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 38,
+          "at": 1791690083,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 39,
+          "at": 1791690083,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 40,
+          "at": 1791690084,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 41,
+          "at": 1791690084,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 42,
+          "at": 1791690111,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 43,
+          "at": 1791690111,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 44,
+          "at": 1791690111,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 45,
+          "at": 1791690112,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 46,
+          "at": 1791690113,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 47,
+          "at": 1791690113,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 48,
+          "at": 1791690151,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 49,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 50,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 51,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command started"
+        },
+        {
+          "seq": 52,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 53,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 54,
+          "at": 1791690174,
+          "provider": "codex",
+          "kind": "tool",
+          "label": "Shell command completed",
+          "detail": "exit 0"
+        },
+        {
+          "seq": 55,
+          "at": 1791690243,
+          "provider": "codex",
+          "kind": "partial",
+          "label": "Answer available"
+        },
+        {
+          "seq": 56,
+          "at": 1791690244,
+          "provider": "codex",
+          "kind": "phase",
+          "label": "Consultation completed",
+          "detail": "exit 0"
+        }
+      ],
+      "events_truncated": true,
+      "provider_events": {
+        "codex": [
+          {
+            "seq": 49,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 50,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 51,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command started"
+          },
+          {
+            "seq": 52,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 53,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 54,
+            "at": 1791690174,
+            "provider": "codex",
+            "kind": "tool",
+            "label": "Shell command completed",
+            "detail": "exit 0"
+          },
+          {
+            "seq": 55,
+            "at": 1791690243,
+            "provider": "codex",
+            "kind": "partial",
+            "label": "Answer available"
+          },
+          {
+            "seq": 56,
+            "at": 1791690244,
+            "provider": "codex",
+            "kind": "phase",
+            "label": "Consultation completed",
+            "detail": "exit 0"
+          }
+        ]
+      },
+      "partial_result": "What this change does: candidate `e94ad0d` separates Scale\u2019s structural closure allowance from Fresh\u2019s historical limits and requires complete Scale source scoring. **Verdict: HOLD for native qualification; no confirmed production correctness defect found in the reviewed delta.**\n\nReferences below are candidate Git-object line numbers: **R** = `crates/borsuk/src/semantic_unit_router.rs`; **G** = `crates/borsuk/src/two_bit_generation.rs`. I compared against both `6bf1ec2` and `1e5c553`.\n\n**HOLD blockers \u2014 evidence still required**\n\n1. **The expanded path has not been exercised through the real source codec.** The new tests return `unit as f64` directly (`G:6755\u20136807`). They test complete, unique unit visitation and page maxima, including the partial final page, but bypass record lookup, `PreparedTwoBit::score`, physical SOURCE admission and SQ8 selection. Those operations occur at `G:729\u2013767` and `G:1813\u20131856`.\n\n   Smallest additional test: exercise `plan_two_bit_source_walks` with encoded, distinguishable records across 513 pages, including gaps and a partial tail. Count row accesses, place a page maximum in a completion-only unit, and assert ranking, trace capacities and unchanged SQ8 admission. Run it only on the authorized EC2 environment.\n\n2. **Compilation, release execution and host-memory qualification remain unverified.** Source inspection cannot discharge the root-owned affected-library tests, release baseline, workspace Clippy, genuine environment-unset test build, or actual-input falsifier. Preserve `SOURCE_ONLY_UNVERIFIED` until their exact-revision receipts succeed. The new memory comment itself correctly separates modeled payload from RSS (`G:686\u2013691`).\n\n**Correctness and accounting conclusions**\n\n- **The closure bound is coherent.** At most 48 \u00d7 64 nominated units imply at most 3,072 physical pages. Seed completion adds units within an existing page (`R:1265\u20131300`). Fresh retains 512 pages/4,096 units; Native retains its previous bounds (`R:81\u201395`).\n- **Complete scoring is enforced.** Walk admission validates unit bounds and uniqueness (`G:818\u2013840`). Expected completion counts include the partial final page (`G:903\u2013916`); the final equality check rejects incomplete scoring (`G:937\u2013940`). The subtraction is safe because its pages derive from validated units.\n- **Previously admitted Scale closures of \u2264512 pages retain ranking behavior.** They already fit within 4,096 complete units. Completion order, maxima and tie-breaking remain unchanged (`G:917\u2013984`); increased capacities do not alter scores.\n- **Generation-owned paths charge the reserve consistently.** Standard opening adds the profile-specific reserve before multiplying query memory by concurrency (`G:1384\u20131396`). Local and paged diagnostics deduct the expanded trace allowance before codec preparation (`G:1670\u20131683`, `1792\u20131805`). Direct admission includes both the reserve and trace (`G:2474\u20132493`), and range diagnostics charge additional memory (`G:2312\u20132327`, `2554\u20132555`).\n- **\u201cAll diagnostic callers\u201d is not established.** The public standalone `plan_two_bit_source_walks` has no memory-budget parameter; its documented caller responsibilities remain external (`G:698\u2013715`). Callers outside these two permitted files were not inspected. Their accounting must not be assumed updated.\n\n**Small source corrections, not release-blocking algorithm changes**\n\n- `G:201\u2013203` still documents the direct planner\u2019s working reserve as **1 MiB**. Update it to **3 MiB for Scale, 1 MiB otherwise**, matching `G:692\u2013696`.\n- The planner comment\u2019s two `3072 \u00d7 64` BTreeSet terms are slightly imprecise: the cloned walk set can reach **3,079** entries (`R:1294\u20131300`). Allowing those seven additional entries adds 448 modeled bytes and still fits comfortably below 3 MiB. The 64-byte-per-entry assumption remains toolchain-dependent, not a Rust allocation guarantee. I found no demonstrated reserve overrun in the inspected lifetimes and capacities, but this is not an RSS proof.\n\n**Expected resource limitation**\n\nThe unchanged **64 MiB SOURCE cap can still refuse** after structural admission. At D1024, source records are 264 bytes (`G:1359\u20131366`); 3,072 full pages require **198 MiB before bridges**. Cover bytes are checked before fetching (`G:787\u2013794`, `1818\u20131833`). Such a refusal is a distinct resource outcome, not evidence that closure completion is broken. No blanket cap increase is justified.\n\nFor the root\u2019s next authorized EC2 gate, replay the exact recorded **query 527**, preserving its original ordinal convention and authenticated inputs. After source-bound admission and the separate disposable canary, run one production-path diagnostic query with unchanged SOURCE/SQ8 limits and the 512 MiB host limit. Record closure size, complete scored-unit count, trace capacities, physical requests/bytes, terminal status, peak memory, OOM and swap. Distinguish successful completion, SOURCE-budget refusal and execution INVALID before authorizing the full rerun; preserve truth handling under the frozen protocol.\n\nOnly bounded source inspection and `git diff --check` were performed; the latter exited 0. No checkout edits, native execution, real-data access, network calls, consultations or worker changes occurred.",
+      "partial_result_truncated": false,
+      "provider_partials": {
+        "codex": "What this change does: candidate `e94ad0d` separates Scale\u2019s structural closure allowance from Fresh\u2019s historical limits and requires complete Scale source scoring. **Verdict: HOLD for native qualification; no confirmed production correctness defect found in the reviewed delta.**\n\nReferences below are candidate Git-object line numbers: **R** = `crates/borsuk/src/semantic_unit_router.rs`; **G** = `crates/borsuk/src/two_bit_generation.rs`. I compared against both `6bf1ec2` and `1e5c553`.\n\n**HOLD blockers \u2014 evidence still required**\n\n1. **The expanded path has not been exercised through the real source codec.** The new tests return `unit as f64` directly (`G:6755\u20136807`). They test complete, unique unit visitation and page maxima, including the partial final page, but bypass record lookup, `PreparedTwoBit::score`, physical SOURCE admission and SQ8 selection. Those operations occur at `G:729\u2013767` and `G:1813\u20131856`.\n\n   Smallest additional test: exercise `plan_two_bit_source_walks` with encoded, distinguishable records across 513 pages, including gaps and a partial tail. Count row accesses, place a page maximum in a completion-only unit, and assert ranking, trace capacities and unchanged SQ8 admission. Run it only on the authorized EC2 environment.\n\n2. **Compilation, release execution and host-memory qualification remain unverified.** Source inspection cannot discharge the root-owned affected-library tests, release baseline, workspace Clippy, genuine environment-unset test build, or actual-input falsifier. Preserve `SOURCE_ONLY_UNVERIFIED` until their exact-revision receipts succeed. The new memory comment itself correctly separates modeled payload from RSS (`G:686\u2013691`).\n\n**Correctness and accounting conclusions**\n\n- **The closure bound is coherent.** At most 48 \u00d7 64 nominated units imply at most 3,072 physical pages. Seed completion adds units within an existing page (`R:1265\u20131300`). Fresh retains 512 pages/4,096 units; Native retains its previous bounds (`R:81\u201395`).\n- **Complete scoring is enforced.** Walk admission validates unit bounds and uniqueness (`G:818\u2013840`). Expected completion counts include the partial final page (`G:903\u2013916`); the final equality check rejects incomplete scoring (`G:937\u2013940`). The subtraction is safe because its pages derive from validated units.\n- **Previously admitted Scale closures of \u2264512 pages retain ranking behavior.** They already fit within 4,096 complete units. Completion order, maxima and tie-breaking remain unchanged (`G:917\u2013984`); increased capacities do not alter scores.\n- **Generation-owned paths charge the reserve consistently.** Standard opening adds the profile-specific reserve before multiplying query memory by concurrency (`G:1384\u20131396`). Local and paged diagnostics deduct the expanded trace allowance before codec preparation (`G:1670\u20131683`, `1792\u20131805`). Direct admission includes both the reserve and trace (`G:2474\u20132493`), and range diagnostics charge additional memory (`G:2312\u20132327`, `2554\u20132555`).\n- **\u201cAll diagnostic callers\u201d is not established.** The public standalone `plan_two_bit_source_walks` has no memory-budget parameter; its documented caller responsibilities remain external (`G:698\u2013715`). Callers outside these two permitted files were not inspected. Their accounting must not be assumed updated.\n\n**Small source corrections, not release-blocking algorithm changes**\n\n- `G:201\u2013203` still documents the direct planner\u2019s working reserve as **1 MiB**. Update it to **3 MiB for Scale, 1 MiB otherwise**, matching `G:692\u2013696`.\n- The planner comment\u2019s two `3072 \u00d7 64` BTreeSet terms are slightly imprecise: the cloned walk set can reach **3,079** entries (`R:1294\u20131300`). Allowing those seven additional entries adds 448 modeled bytes and still fits comfortably below 3 MiB. The 64-byte-per-entry assumption remains toolchain-dependent, not a Rust allocation guarantee. I found no demonstrated reserve overrun in the inspected lifetimes and capacities, but this is not an RSS proof.\n\n**Expected resource limitation**\n\nThe unchanged **64 MiB SOURCE cap can still refuse** after structural admission. At D1024, source records are 264 bytes (`G:1359\u20131366`); 3,072 full pages require **198 MiB before bridges**. Cover bytes are checked before fetching (`G:787\u2013794`, `1818\u20131833`). Such a refusal is a distinct resource outcome, not evidence that closure completion is broken. No blanket cap increase is justified.\n\nFor the root\u2019s next authorized EC2 gate, replay the exact recorded **query 527**, preserving its original ordinal convention and authenticated inputs. After source-bound admission and the separate disposable canary, run one production-path diagnostic query with unchanged SOURCE/SQ8 limits and the 512 MiB host limit. Record closure size, complete scored-unit count, trace capacities, physical requests/bytes, terminal status, peak memory, OOM and swap. Distinguish successful completion, SOURCE-budget refusal and execution INVALID before authorizing the full rerun; preserve truth handling under the frozen protocol.\n\nOnly bounded source inspection and `git diff --check` were performed; the latter exited 0. No checkout edits, native execution, real-data access, network calls, consultations or worker changes occurred."
+      },
+      "providers_used": [
+        "codex"
+      ],
+      "active_provider": "codex",
+      "phase": "Consultation completed",
+      "input_bytes": 3349,
+      "output_bytes": 5304,
+      "elapsed_seconds": 312,
+      "progress": "Reading additional input from stdin...\n2026-10-11T03:38:58.621382Z ERROR codex_models_manager::manager: failed to load models cache: EOF while parsing a value at line 1 column 0\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)",
+      "progress_truncated": false,
+      "result": "What this change does: candidate `e94ad0d` separates Scale\u2019s structural closure allowance from Fresh\u2019s historical limits and requires complete Scale source scoring. **Verdict: HOLD for native qualification; no confirmed production correctness defect found in the reviewed delta.**\n\nReferences below are candidate Git-object line numbers: **R** = `crates/borsuk/src/semantic_unit_router.rs`; **G** = `crates/borsuk/src/two_bit_generation.rs`. I compared against both `6bf1ec2` and `1e5c553`.\n\n**HOLD blockers \u2014 evidence still required**\n\n1. **The expanded path has not been exercised through the real source codec.** The new tests return `unit as f64` directly (`G:6755\u20136807`). They test complete, unique unit visitation and page maxima, including the partial final page, but bypass record lookup, `PreparedTwoBit::score`, physical SOURCE admission and SQ8 selection. Those operations occur at `G:729\u2013767` and `G:1813\u20131856`.\n\n   Smallest additional test: exercise `plan_two_bit_source_walks` with encoded, distinguishable records across 513 pages, including gaps and a partial tail. Count row accesses, place a page maximum in a completion-only unit, and assert ranking, trace capacities and unchanged SQ8 admission. Run it only on the authorized EC2 environment.\n\n2. **Compilation, release execution and host-memory qualification remain unverified.** Source inspection cannot discharge the root-owned affected-library tests, release baseline, workspace Clippy, genuine environment-unset test build, or actual-input falsifier. Preserve `SOURCE_ONLY_UNVERIFIED` until their exact-revision receipts succeed. The new memory comment itself correctly separates modeled payload from RSS (`G:686\u2013691`).\n\n**Correctness and accounting conclusions**\n\n- **The closure bound is coherent.** At most 48 \u00d7 64 nominated units imply at most 3,072 physical pages. Seed completion adds units within an existing page (`R:1265\u20131300`). Fresh retains 512 pages/4,096 units; Native retains its previous bounds (`R:81\u201395`).\n- **Complete scoring is enforced.** Walk admission validates unit bounds and uniqueness (`G:818\u2013840`). Expected completion counts include the partial final page (`G:903\u2013916`); the final equality check rejects incomplete scoring (`G:937\u2013940`). The subtraction is safe because its pages derive from validated units.\n- **Previously admitted Scale closures of \u2264512 pages retain ranking behavior.** They already fit within 4,096 complete units. Completion order, maxima and tie-breaking remain unchanged (`G:917\u2013984`); increased capacities do not alter scores.\n- **Generation-owned paths charge the reserve consistently.** Standard opening adds the profile-specific reserve before multiplying query memory by concurrency (`G:1384\u20131396`). Local and paged diagnostics deduct the expanded trace allowance before codec preparation (`G:1670\u20131683`, `1792\u20131805`). Direct admission includes both the reserve and trace (`G:2474\u20132493`), and range diagnostics charge additional memory (`G:2312\u20132327`, `2554\u20132555`).\n- **\u201cAll diagnostic callers\u201d is not established.** The public standalone `plan_two_bit_source_walks` has no memory-budget parameter; its documented caller responsibilities remain external (`G:698\u2013715`). Callers outside these two permitted files were not inspected. Their accounting must not be assumed updated.\n\n**Small source corrections, not release-blocking algorithm changes**\n\n- `G:201\u2013203` still documents the direct planner\u2019s working reserve as **1 MiB**. Update it to **3 MiB for Scale, 1 MiB otherwise**, matching `G:692\u2013696`.\n- The planner comment\u2019s two `3072 \u00d7 64` BTreeSet terms are slightly imprecise: the cloned walk set can reach **3,079** entries (`R:1294\u20131300`). Allowing those seven additional entries adds 448 modeled bytes and still fits comfortably below 3 MiB. The 64-byte-per-entry assumption remains toolchain-dependent, not a Rust allocation guarantee. I found no demonstrated reserve overrun in the inspected lifetimes and capacities, but this is not an RSS proof.\n\n**Expected resource limitation**\n\nThe unchanged **64 MiB SOURCE cap can still refuse** after structural admission. At D1024, source records are 264 bytes (`G:1359\u20131366`); 3,072 full pages require **198 MiB before bridges**. Cover bytes are checked before fetching (`G:787\u2013794`, `1818\u20131833`). Such a refusal is a distinct resource outcome, not evidence that closure completion is broken. No blanket cap increase is justified.\n\nFor the root\u2019s next authorized EC2 gate, replay the exact recorded **query 527**, preserving its original ordinal convention and authenticated inputs. After source-bound admission and the separate disposable canary, run one production-path diagnostic query with unchanged SOURCE/SQ8 limits and the 512 MiB host limit. Record closure size, complete scored-unit count, trace capacities, physical requests/bytes, terminal status, peak memory, OOM and swap. Distinguish successful completion, SOURCE-budget refusal and execution INVALID before authorizing the full rerun; preserve truth handling under the frozen protocol.\n\nOnly bounded source inspection and `git diff --check` were performed; the latter exited 0. No checkout edits, native execution, real-data access, network calls, consultations or worker changes occurred.",
+      "result_truncated": false
+    }
+  ],
+  "reused": false,
+  "finished_at": 1791690351,
+  "elapsed_seconds": 312,
+  "input_bytes": 2931,
+  "output_bytes": 12336
+}
