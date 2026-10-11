@@ -1305,6 +1305,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cosine_leaf_metric_removes_mean_length_bias_at_fixed_48() {
+        let mut prototypes = vec![vec![1.0, 0.5]; 50];
+        prototypes[0] = vec![0.125, 0.0];
+        prototypes[49] = vec![-1.0, 0.0];
+        let selected = rank_leaves(
+            &[1.0, 0.0],
+            prototypes.iter().map(Vec::as_slice),
+            SemanticProfile::Scale1m,
+        )
+        .unwrap();
+        // Red oracle: the aligned weak mean wins under angular ranking. Current
+        // squared-distance nomination instead excludes it in favour of IDs1..48.
+        assert_eq!(selected, (0..48).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn scale_nomination_preserves_scattered_closure_and_fresh_limits() {
         for pages in [513, 48 * LEAF_UNITS] {
             let units = (0..pages).map(|page| page * 8 + 1).collect::<BTreeSet<_>>();
