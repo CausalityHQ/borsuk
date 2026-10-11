@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-full1000.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=2
+Service runtime: 3min 8.863s
+CPU time consumed: 56.357s
+Memory peak: 2.9M
+Memory swap peak: 0B

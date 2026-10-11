@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/check_cohere_native_baseline /mnt/borsuk-scale1m/closed/s3/full1000-config.json 25a9c74bcafa604bf919e0eba786568eab3a59cb97a0701eee4109a3bbbc65a9 /mnt/borsuk-scale1m/closed/s3/full1000-result.jsonl

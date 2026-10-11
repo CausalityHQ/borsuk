@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-full1000-rust-replay-stage-v1",
+  "stage": "full1000",
+  "source_commit": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+  "manager_exit": 2,
+  "native_exit": 2,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}
