@@ -1,0 +1,22 @@
+{
+    "CommandId": "4f76087e-11c0-419b-9de9-bb1c3fb84864",
+    "InstanceId": "i-09badae56dde771e2",
+    "Comment": "Original independent Rust header binding for staging canary",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:09:50.765Z",
+    "ExecutionElapsedTime": "PT14.286S",
+    "ExecutionEndDateTime": "2026-10-11T02:10:04.765Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"canary-header-binding\",\n  \"source_commit\": \"d077a54f456af30242753ed1e2e397a9416191f7\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
