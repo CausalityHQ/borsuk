@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/compare_native_replay --completed-scale /mnt/borsuk-scale1m/closed/local/completed-config.json 1bca05ae6add910f846a09d371d42e9fe707cc9993fa9c8914de79b1a5cc6b0c /mnt/borsuk-scale1m/closed/local/completed-reduction.json
