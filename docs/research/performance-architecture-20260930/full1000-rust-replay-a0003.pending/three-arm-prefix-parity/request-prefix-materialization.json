@@ -1,0 +1,17 @@
+{
+  "scope": "opaque input byte copy on EC2 only; no decode, normalization, corpus/truth regeneration or result reduction",
+  "source": {
+    "path": "/mnt/borsuk-scale1m/prepared/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "fresh_prefix": {
+    "path": "/mnt/borsuk-scale1m/closed/historical/requests-q32.f32",
+    "bytes": 131072,
+    "required_sha256": "664f5b269756a1de5a77c4ec359e56ccbe85c87603fa01fc5d87cc3f02e52667"
+  },
+  "authority": "required prefix digest comes from the independently authenticated historical config/header, not the copy",
+  "validation": "qualified Rust parity must authenticate both complete bodies and exact prefix equality; all three completed native reductions passed before copy",
+  "claims_performance": false,
+  "original_historical_request_body_in_current_admitted_roster": false
+}
