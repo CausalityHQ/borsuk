@@ -6284,8 +6284,9 @@ mod tests {
         let sq8_bytes = 256 * 1036;
         q["charges"]["sq8"] =
             json!({"submitted_gets":1,"verified_bytes":sq8_bytes,"failed_gets":0});
-        q["plan"] =
-            json!({"selected_pages":[0],"ranges":[[0,sq8_bytes]],"planned_bytes":sq8_bytes});
+        q["plan"] = json!({"selected_pages":[0],"ranges":[[0,sq8_bytes]],
+            "planned_bytes":sq8_bytes,"target_pages":1,"target_shortfall":0,
+            "primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
         for key in ["submitted_gets", "verified_bytes", "failed_gets"] {
             q["sum"][key] = json!(
                 ["router", "source", "sq8"]
@@ -6301,8 +6302,11 @@ mod tests {
             .find(|row| row["phase"] == "all_queries_sealed")
             .unwrap();
         seal["generation_root_sha256"] = json!(c.generation_manifest.sha256);
+        seal["reserved_query_count"] = json!(1);
         let summary = &mut records.last_mut().unwrap()["summary"];
         summary["generation_root_sha256"] = json!(c.generation_manifest.sha256);
+        summary["reserved_query_count"] = json!(1);
+        summary["diagnostic_prefix"] = json!(false);
         summary["charges"] = charges;
         summary["sum"] = sum;
         if with_sq8 {
