@@ -6814,7 +6814,7 @@ mod source_walk_tests {
     #[test]
     fn scale_scattered_codec_walk_covers_rows_and_partial_tail() {
         let pages = 513;
-        let rows = (pages - 1) * 256 + 1;
+        let rows = 2 * (pages - 1) * 256 + 1;
         let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 2], 17).unwrap();
         let prepared = codec.prepare_query(&[3., 1.], 400_000).unwrap();
         let records = [[1., 0.], [0., 1.], [-1., 0.], [0., -1.]]
@@ -6834,11 +6834,13 @@ mod source_walk_tests {
             4
         );
         let record_id = |row: usize| ((row / 256 % 3) * 2 + (row / 32 % 2)) % 4;
+        assert!(scores[record_id(2 * 256)] > scores[record_id(2 * 256 + 32)]);
         let mut walk = (0..8).collect::<Vec<_>>();
-        walk.extend((1..pages).map(|page| page * 8 + usize::from(page + 1 != pages)));
+        walk.extend((1..pages).map(|slot| slot * 16 + usize::from(slot + 1 != pages)));
         let walks = [(0, walk)];
         let mut expected = (0..pages)
-            .map(|page| {
+            .map(|slot| {
+                let page = slot * 2;
                 let maximum = (page * 256..((page + 1) * 256).min(rows))
                     .map(|row| scores[record_id(row)])
                     .fold(f64::NEG_INFINITY, f64::max);
@@ -6869,12 +6871,17 @@ mod source_walk_tests {
             Some(&mut trace),
         )
         .unwrap();
-        assert!(reads.iter().all(|&count| count == 1));
+        assert!(
+            reads
+                .iter()
+                .enumerate()
+                .all(|(row, &count)| { count == u8::from((row / 256).is_multiple_of(2)) })
+        );
         assert_eq!(
             trace.ranked_candidate_pages,
             expected.iter().map(|&(page, _)| page).collect::<Vec<_>>()
         );
-        assert_eq!(trace.nomination_evaluated_units.len(), rows.div_ceil(32));
+        assert_eq!(trace.nomination_evaluated_units.len(), (pages - 1) * 8 + 1);
         let retained = std::mem::size_of::<TwoBitPlanTrace>()
             + (trace.nomination_evaluated_units.capacity()
                 + trace.ranked_candidate_pages.capacity()
@@ -6892,7 +6899,7 @@ mod source_walk_tests {
                     Some(SemanticProfile::Scale1m),
                     &walks,
                     &prepared,
-                    |row| if row == 511 {
+                    |row| if row == 767 {
                         if missing { None } else { Some(&[]) }
                     } else {
                         Some(records[record_id(row)].as_slice())
@@ -6904,15 +6911,22 @@ mod source_walk_tests {
                 .is_err()
             );
         }
-        let closure = (0..pages).collect::<BTreeSet<_>>();
-        let bytes = rows * 264;
+        let closure = (0..pages).map(|slot| slot * 2).collect::<BTreeSet<_>>();
+        let width = records[0].len();
+        let (cover, bytes) =
+            plan_two_bit_source_cover(&closure, rows, width, 128, rows * width).unwrap();
+        assert!(cover.len() <= 128);
+        assert!(
+            bytes > ((pages - 1) * 256 + 1) * width,
+            "bridge bytes must be charged"
+        );
         assert_eq!(
-            plan_two_bit_source_cover(&closure, rows, 264, 128, bytes)
+            plan_two_bit_source_cover(&closure, rows, width, 128, bytes)
                 .unwrap()
                 .1,
             bytes
         );
-        assert!(plan_two_bit_source_cover(&closure, rows, 264, 128, bytes - 1).is_err());
+        assert!(plan_two_bit_source_cover(&closure, rows, width, 128, bytes - 1).is_err());
     }
 
     #[test]
