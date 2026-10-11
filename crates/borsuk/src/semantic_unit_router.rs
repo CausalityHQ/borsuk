@@ -1020,6 +1020,30 @@ impl SemanticUnitRouter {
         )
     }
 
+    /// Rank every authenticated leaf by an explicit metric, with leaf-ID ties.
+    /// Supports squared Euclidean and cosine distance. Cosine accepts finite,
+    /// nonzero queries; a zero prototype has zero similarity (distance one).
+    /// The caller chooses an admitted leaf count through `nominate_selected`.
+    /// This does not change the persisted selection rule used by serving.
+    /// Caller-owned ranking payload is at most 24 bytes per leaf (scores + IDs).
+    pub fn rank_leaves_by_metric(
+        &self,
+        query: &[f32],
+        metric: &VectorMetric,
+    ) -> Result<Vec<usize>> {
+        Ok(rank_prototypes(
+            query,
+            self.manifest
+                .leaves
+                .iter()
+                .map(|leaf| leaf.prototype.as_slice()),
+            metric,
+        )?
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect())
+    }
+
     /// Nominate every unit in the selected root-authenticated membership slices.
     /// No leaf payload or source record is needed to establish this partition.
     pub fn nominate_selected(&self, leaf_ids: &[usize]) -> Result<Nomination> {
@@ -1223,25 +1247,7 @@ fn rank_leaves<'a>(
     prototypes: impl ExactSizeIterator<Item = &'a [f32]>,
     profile: SemanticProfile,
 ) -> Result<Vec<usize>> {
-    require(
-        !query.is_empty() && query.iter().all(|x| x.is_finite()) && prototypes.len() > 0,
-        "root query geometry",
-    )?;
-    let mut ranked = Vec::with_capacity(prototypes.len());
-    for (id, prototype) in prototypes.enumerate() {
-        require(
-            prototype.len() == query.len() && prototype.iter().all(|x| x.is_finite()),
-            "root prototype geometry",
-        )?;
-        let mut distance = 0_f64;
-        for (&q, &p) in query.iter().zip(prototype) {
-            let delta = f64::from(q) - f64::from(p);
-            distance += delta * delta;
-        }
-        require(distance.is_finite(), "root distance")?;
-        ranked.push((distance, id));
-    }
-    ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let ranked = rank_prototypes(query, prototypes, &VectorMetric::SquaredEuclidean)?;
     let mut count = match profile {
         SemanticProfile::Native100k => ranked.len().min(8),
         SemanticProfile::Scale1m => ranked.len().min(48),
@@ -1260,6 +1266,67 @@ fn rank_leaves<'a>(
         }
     }
     Ok(ranked[..count].iter().map(|&(_, id)| id).collect())
+}
+
+fn rank_prototypes<'a>(
+    query: &[f32],
+    prototypes: impl ExactSizeIterator<Item = &'a [f32]>,
+    metric: &VectorMetric,
+) -> Result<Vec<(f64, usize)>> {
+    require(
+        matches!(
+            metric,
+            VectorMetric::SquaredEuclidean | VectorMetric::Cosine
+        ),
+        "unsupported root ranking metric",
+    )?;
+    require(
+        !query.is_empty() && query.iter().all(|x| x.is_finite()) && prototypes.len() > 0,
+        "root query geometry",
+    )?;
+    let query_norm = if *metric == VectorMetric::Cosine {
+        let norm = query.iter().map(|&q| f64::from(q).powi(2)).sum::<f64>();
+        require(norm.is_finite() && norm > 0.0, "cosine root query norm")?;
+        norm.sqrt()
+    } else {
+        1.0
+    };
+    let mut ranked = Vec::with_capacity(prototypes.len());
+    for (id, prototype) in prototypes.enumerate() {
+        require(
+            prototype.len() == query.len() && prototype.iter().all(|x| x.is_finite()),
+            "root prototype geometry",
+        )?;
+        let distance = if *metric == VectorMetric::SquaredEuclidean {
+            let mut distance = 0_f64;
+            for (&q, &p) in query.iter().zip(prototype) {
+                let delta = f64::from(q) - f64::from(p);
+                distance += delta * delta;
+            }
+            distance
+        } else {
+            let mut dot = 0_f64;
+            let mut norm = 0_f64;
+            for (&q, &p) in query.iter().zip(prototype) {
+                let p = f64::from(p);
+                dot += f64::from(q) * p;
+                norm += p * p;
+            }
+            require(
+                dot.is_finite() && norm.is_finite(),
+                "cosine root prototype norm",
+            )?;
+            if norm == 0.0 {
+                1.0
+            } else {
+                1.0 - (dot / query_norm / norm.sqrt()).clamp(-1.0, 1.0)
+            }
+        };
+        require(distance.is_finite(), "root distance")?;
+        ranked.push((distance, id));
+    }
+    ranked.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    Ok(ranked)
 }
 
 /// Complete only the lowest nominated physical page, preserving the page closure.
@@ -1309,15 +1376,143 @@ mod tests {
         let mut prototypes = vec![vec![1.0, 0.5]; 50];
         prototypes[0] = vec![0.125, 0.0];
         prototypes[49] = vec![-1.0, 0.0];
-        let selected = rank_leaves(
+        let baseline = rank_leaves(
             &[1.0, 0.0],
             prototypes.iter().map(Vec::as_slice),
             SemanticProfile::Scale1m,
         )
         .unwrap();
-        // Red oracle: the aligned weak mean wins under angular ranking. Current
-        // squared-distance nomination instead excludes it in favour of IDs1..48.
+        assert_eq!(baseline, (1..49).collect::<Vec<_>>());
+        let selected = rank_prototypes(
+            &[1.0, 0.0],
+            prototypes.iter().map(Vec::as_slice),
+            &VectorMetric::Cosine,
+        )
+        .unwrap()
+        .into_iter()
+        .take(SemanticProfile::Scale1m.selected_leaf_limit())
+        .map(|(_, id)| id)
+        .collect::<Vec<_>>();
         assert_eq!(selected, (0..48).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cosine_leaf_metric_zero_negative_ties_and_finite_extremes() {
+        let prototypes = [[0.0, -0.0], [-1.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0]];
+        for scale in [1.0, 8.0, f32::MAX, f32::from_bits(1)] {
+            let ranked = rank_prototypes(
+                &[scale, 0.0],
+                prototypes.iter().map(|p| p.as_slice()),
+                &VectorMetric::Cosine,
+            )
+            .unwrap();
+            assert_eq!(
+                ranked.iter().map(|&(_, id)| id).collect::<Vec<_>>(),
+                vec![2, 3, 0, 4, 1]
+            );
+            assert_eq!(
+                ranked.iter().map(|&(d, _)| d).collect::<Vec<_>>(),
+                vec![0.0, 0.0, 1.0, 1.0, 2.0]
+            );
+        }
+        for scale in [f32::MAX, f32::from_bits(1)] {
+            let prototypes = [[scale, 0.0], [0.0, scale], [-scale, 0.0]];
+            let ranked = rank_prototypes(
+                &[scale, 0.0],
+                prototypes.iter().map(|p| p.as_slice()),
+                &VectorMetric::Cosine,
+            )
+            .unwrap();
+            assert_eq!(ranked, vec![(0.0, 0), (1.0, 1), (2.0, 2)]);
+        }
+    }
+
+    #[test]
+    fn cosine_leaf_metric_refuses_invalid_geometry_and_unsupported_metrics() {
+        let prototypes = [[1.0, 0.0]];
+        for query in [
+            vec![],
+            vec![0.0, 0.0],
+            vec![f32::NAN, 1.0],
+            vec![f32::INFINITY, 0.0],
+            vec![1.0],
+        ] {
+            assert!(
+                rank_prototypes(
+                    &query,
+                    prototypes.iter().map(|p| p.as_slice()),
+                    &VectorMetric::Cosine
+                )
+                .is_err()
+            );
+        }
+        for prototype in [
+            vec![],
+            vec![1.0],
+            vec![f32::NAN, 1.0],
+            vec![f32::INFINITY, 1.0],
+        ] {
+            assert!(
+                rank_prototypes(
+                    &[1.0, 0.0],
+                    std::iter::once(prototype.as_slice()),
+                    &VectorMetric::Cosine
+                )
+                .is_err()
+            );
+        }
+        assert!(rank_prototypes(&[1.0, 0.0], std::iter::empty(), &VectorMetric::Cosine).is_err());
+        for metric in [
+            VectorMetric::Euclidean,
+            VectorMetric::InnerProduct,
+            VectorMetric::Angular,
+        ] {
+            assert!(
+                rank_prototypes(
+                    &[1.0, 0.0],
+                    prototypes.iter().map(|p| p.as_slice()),
+                    &metric
+                )
+                .is_err()
+            );
+        }
+        // Preserve the historical L2 zero-query admission and exact score.
+        assert_eq!(
+            rank_prototypes(
+                &[0.0, 0.0],
+                prototypes.iter().map(|p| p.as_slice()),
+                &VectorMetric::SquaredEuclidean
+            )
+            .unwrap(),
+            vec![(1.0, 0)]
+        );
+    }
+
+    #[test]
+    fn cosine_leaf_metric_authenticated_router_keeps_default_nomination() {
+        let blob = blob(100_000);
+        let digest = hash(&blob);
+        let input = SourceIdentity {
+            centroids_sha256: &digest,
+            ..source(&blob)
+        };
+        let artifacts = build(&blob, &input, ALLOCATION_CAP).unwrap();
+        let router = open(&artifacts, &input);
+        assert_eq!(router.manifest().leaves.len(), 49);
+        for metric in [VectorMetric::SquaredEuclidean, VectorMetric::Cosine] {
+            assert_eq!(
+                router.rank_leaves_by_metric(&[3.0, 4.0], &metric).unwrap(),
+                (0..49).collect::<Vec<_>>()
+            );
+        }
+        let selected = router.nominate(&[3.0, 4.0]).unwrap();
+        assert_eq!(selected, (0..16).collect::<Vec<_>>());
+        assert!(
+            router
+                .nominate_selected(&(0..49).collect::<Vec<_>>())
+                .is_err()
+        );
+        assert_eq!(router.manifest().encode().unwrap(), artifacts.manifest);
     }
 
     #[test]
