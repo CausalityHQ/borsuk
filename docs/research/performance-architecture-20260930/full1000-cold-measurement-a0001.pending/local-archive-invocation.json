@@ -1,0 +1,22 @@
+{
+    "CommandId": "d6fb453d-afc7-4525-8217-d78b5de2492f",
+    "InstanceId": "i-0e3a9cd556f473d78",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T03:21:21.196Z",
+    "ExecutionElapsedTime": "PT13.848S",
+    "ExecutionEndDateTime": "2026-10-11T03:21:34.196Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"local-archive-admission\",\n  \"source_commit\": \"5660b97d7c153e265cd96688113217717d61bd61\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

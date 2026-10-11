@@ -1,0 +1,22 @@
+{
+    "CommandId": "f99a3ae2-9ce3-49b9-bebc-0c6553622b29",
+    "InstanceId": "i-0e3a9cd556f473d78",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T03:22:06.767Z",
+    "ExecutionElapsedTime": "PT14.649S",
+    "ExecutionEndDateTime": "2026-10-11T03:22:20.767Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"updated-reducer-smoke\",\n  \"source_commit\": \"2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
