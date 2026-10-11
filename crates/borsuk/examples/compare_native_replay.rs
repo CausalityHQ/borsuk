@@ -14,6 +14,10 @@
 //! Direct closure SQ8 costs are counterfactual; no scores or recall are evaluated.
 //! Header binding: --bind-completed-scale AUTHORITY AUTHORITY_SHA NEW_CONFIG.
 //! Independently pins v7 headers for --completed-scale; does not establish closure.
+//! Source-only sampled boundary: --leaf-boundary-coverage CONFIG CONFIG_SHA
+//! NEW_ADJACENCY NEW_SELECTION NEW_REPORT. Uses the strict CoverageConfig shape,
+//! schema borsuk-leaf-boundary-coverage-config-v1, max_payload_bytes <=512 MiB.
+//! Adjacency is durable before requests; both nominations are durable before truth.
 #![recursion_limit = "256"]
 
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
@@ -4776,6 +4780,17 @@ fn loss_positions(
     order_sha256: &str,
     wanted: &BTreeSet<u64>,
 ) -> Result<(std::collections::BTreeMap<u64, usize>, HeaderSnapshot)> {
+    scan_loss_sq8(pin, rows, dimensions, order_sha256, wanted, |_, _| Ok(()))
+}
+
+fn scan_loss_sq8(
+    pin: &CompletedInput,
+    rows: usize,
+    dimensions: usize,
+    order_sha256: &str,
+    wanted: &BTreeSet<u64>,
+    mut observe: impl FnMut(usize, &[u8]) -> Result<()>,
+) -> Result<(std::collections::BTreeMap<u64, usize>, HeaderSnapshot)> {
     require(
         rows > 0 && dimensions > 0 && dimensions <= 1024,
         "loss SQ8 shape",
@@ -4808,6 +4823,7 @@ fn loss_positions(
         let mask = 1 << (index % 8);
         require(seen[index / 8] & mask == 0, "loss SQ8 duplicate")?;
         seen[index / 8] |= mask;
+        observe(physical, &record[12..])?;
         if wanted.contains(&id) {
             positions.insert(id, physical);
         }
@@ -4978,6 +4994,9 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
 }
 
 const COVERAGE_SCHEMA: &str = "borsuk-leaf-metric-coverage-v1";
+const BOUNDARY_SCHEMA: &str = "borsuk-leaf-boundary-coverage-v1";
+const BOUNDARY_CONFIG_SCHEMA: &str = "borsuk-leaf-boundary-coverage-config-v1";
+const BOUNDARY_CANDIDATE: &str = "sampled_boundary_v1";
 const SELECTION_CAP: u64 = 4 * 1024 * 1024;
 const COVERAGE_LEAVES: usize = 48;
 
@@ -5141,7 +5160,20 @@ fn coverage_arm(
         ranked.len() >= COVERAGE_LEAVES,
         "coverage needs exactly 48 leaves",
     )?;
-    let nomination = router.nominate_selected(&ranked[..COVERAGE_LEAVES])?;
+    coverage_selected_arm(router, &ranked[..COVERAGE_LEAVES], rows, dimensions)
+}
+
+fn coverage_selected_arm(
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    leaves: &[usize],
+    rows: usize,
+    dimensions: usize,
+) -> Result<CoverageArm> {
+    require(
+        leaves.len() == COVERAGE_LEAVES,
+        "coverage needs exactly 48 leaves",
+    )?;
+    let nomination = router.nominate_selected(leaves)?;
     let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
         &nomination.page_closure,
         rows,
@@ -5153,6 +5185,101 @@ fn coverage_arm(
         nomination,
         ranges,
         bytes,
+    })
+}
+
+struct BoundaryEvidence {
+    adjacency: borsuk::semantic_unit_router::SampledBoundaryAdjacency,
+    snapshots: Vec<HeaderSnapshot>,
+    sha256: String,
+}
+
+fn boundary_samples(
+    c: &CoverageConfig,
+    i: &Inputs,
+    low: &[f32],
+    step: &[f32],
+) -> Result<(Vec<Vec<f32>>, HeaderSnapshot)> {
+    use borsuk::semantic_unit_router::{decode_sampled_boundary_row, sampled_boundary_position};
+    let mut samples = Vec::with_capacity(i.rows.div_ceil(32));
+    let (_, snapshot) = scan_loss_sq8(
+        &c.sq8,
+        i.rows,
+        i.dimensions,
+        &i.native_order_sha256,
+        &BTreeSet::new(),
+        |physical, codes| {
+            if physical == sampled_boundary_position(i.rows, physical / 32)? {
+                require(
+                    samples.len() == physical / 32,
+                    "boundary physical sample order",
+                )?;
+                samples.push(decode_sampled_boundary_row(codes, low, step)?);
+            }
+            Ok(())
+        },
+    )?;
+    require(
+        samples.len() == i.rows.div_ceil(32),
+        "boundary complete samples",
+    )?;
+    Ok((samples, snapshot))
+}
+
+// The caller has admitted both live phases before opening metadata. No requests
+// or truth are opened until this source-only artifact has synced and read back.
+fn build_boundary_evidence(
+    c: &CoverageConfig,
+    i: &Inputs,
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    output: &Path,
+    inputs: &[&HeaderSnapshot],
+    model: &borsuk::semantic_unit_router::SampledBoundaryAllocation,
+    sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<BoundaryEvidence> {
+    use borsuk::semantic_unit_router::SampledBoundaryAdjacency;
+    let (generation, generation_snapshot) = header_json(&c.generation_manifest)?;
+    let low: Vec<f32> = serde_json::from_value(generation["low"].clone())?;
+    let step: Vec<f32> = serde_json::from_value(generation["step"].clone())?;
+    let calibration = json!({"low":low,"step":step});
+    let calibration_sha = format!("{:x}", Sha256::digest(serde_json::to_vec(&calibration)?));
+    drop(calibration);
+    drop(generation);
+    let (samples, sq8_snapshot) = boundary_samples(c, i, &low, &step)?;
+    let adjacency = SampledBoundaryAdjacency::build(
+        &samples,
+        router.unit_membership(),
+        router.manifest().leaves.len(),
+        usize::try_from(c.max_payload_bytes)?,
+    )?;
+    drop(samples); // The graph was dropped by build; neither overlaps paired replay.
+    let mut references = inputs.to_vec();
+    references.extend([&generation_snapshot, &sq8_snapshot]);
+    let sidecar = json!({"schema":"borsuk-sampled-boundary-adjacency-v1","status":"SEALED",
+        "candidate":BOUNDARY_CANDIDATE,"generation_sha256":c.generation_manifest.sha256,
+        "calibration_sha256":calibration_sha,"plane_sha256":c.plane_manifest.sha256,
+        "router_sha256":c.router_root.sha256,"membership_sha256":c.membership.sha256,
+        "sq8_sha256":c.sq8.sha256,"sq8_bytes":c.sq8.bytes,"order_sha256":i.native_order_sha256,
+        "source_sha256":i.native_source_sha256,"rows":i.rows,"dimensions":i.dimensions,
+        "leaf_count":router.manifest().leaves.len(),
+        "unit_rows":32,"sample_rule":"min(32*u+16,rows-1)","sample_labels":"physical_unit_membership",
+        "normalization":"normalize_two_bit_diagnostic_query",
+        "algorithm":"sequential-nondiverse-retained-directed-base-v1",
+        "m":16,"m0":32,"ef_construction":64,"ef_search":64,"destinations_per_leaf":16,
+        "edge_layer":"tower.last()","edge_order":"count_desc_leaf_id_asc",
+        "seeds":40,"replacements":8,"vote_weights":"40-rank; rank=0..39",
+        "vote_order":"votes_desc_l2_rank_asc_leaf_id_asc","fallback":"remaining_l2",
+        "biases":["fixed_midpoint","leaf_size","destination_popularity","approximate_discovery"],
+        "implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs"))),
+        "router_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/semantic_unit_router.rs"))),
+        "graph_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/centroid_hnsw.rs"))),
+        "allocation_model":model,"requests_opened":false,"truth_opened":false,
+        "serving_publication_authority":false,"exact_knn":false,"adjacency":adjacency});
+    let (snapshot, sha256) = publish_selection_seal_with_sync(output, &sidecar, &references, sync)?;
+    Ok(BoundaryEvidence {
+        adjacency,
+        snapshots: vec![generation_snapshot, sq8_snapshot, snapshot],
+        sha256,
     })
 }
 
@@ -5361,12 +5488,43 @@ fn reduce_leaf_coverage_with(
     config_sha: &str,
     selection_path: &Path,
     scope: &CoverageScope,
+    seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
+    open_truth: impl FnMut(&CompletedInput, u64) -> Result<(Vec<u8>, HeaderSnapshot)>,
+) -> Result<(Value, Vec<HeaderSnapshot>)> {
+    reduce_leaf_coverage_candidate_with(
+        config_path,
+        config_sha,
+        selection_path,
+        None,
+        scope,
+        seal_sync,
+        open_truth,
+    )
+}
+
+fn reduce_leaf_coverage_candidate_with(
+    config_path: &Path,
+    config_sha: &str,
+    selection_path: &Path,
+    boundary_path: Option<&Path>,
+    scope: &CoverageScope,
     mut seal_sync: impl FnMut(&File, bool) -> io::Result<()>,
     mut open_truth: impl FnMut(&CompletedInput, u64) -> Result<(Vec<u8>, HeaderSnapshot)>,
 ) -> Result<(Value, Vec<HeaderSnapshot>)> {
+    let boundary_mode = boundary_path.is_some();
+    let candidate_label = if boundary_mode {
+        BOUNDARY_CANDIDATE
+    } else {
+        "cosine"
+    };
     let (c, config_bytes): (CoverageConfig, _) = read_config(config_path, config_sha)?;
     require(
-        c.schema == "borsuk-leaf-metric-coverage-config-v1"
+        c.schema
+            == if boundary_mode {
+                BOUNDARY_CONFIG_SCHEMA
+            } else {
+                "borsuk-leaf-metric-coverage-config-v1"
+            }
             && c.completed.schema == SCALE_CONFIG_SCHEMA,
         "coverage config/schema",
     )?;
@@ -5408,10 +5566,53 @@ fn reduce_leaf_coverage_with(
         c.router_root.bytes <= 4 * 1024 * 1024
             && c.membership.bytes == i.rows.div_ceil(32) as u64 * 4
             && modeled <= c.max_payload_bytes
-            && c.max_payload_bytes <= 256 * 1024 * 1024,
+            && c.max_payload_bytes
+                <= if boundary_mode {
+                    512 * 1024 * 1024
+                } else {
+                    256 * 1024 * 1024
+                },
         "coverage modeled payload admission",
     )?;
+    let boundary_model = if boundary_mode {
+        // The binary root's exact width bounds leaf count before decoding it.
+        let leaves = usize::try_from(c.router_root.bytes)?
+            .checked_sub(512)
+            .ok_or("boundary root header")?
+            / (64 + 4 * i.dimensions);
+        Some(borsuk::semantic_unit_router::sampled_boundary_allocation(
+            i.rows,
+            i.dimensions,
+            leaves,
+            usize::try_from(plus(
+                c.router_root
+                    .bytes
+                    .checked_mul(32)
+                    .ok_or("boundary metadata model")?,
+                16 * 1024 * 1024,
+            )?)?,
+            usize::try_from(modeled)?,
+            usize::try_from(c.max_payload_bytes)?,
+        )?)
+    } else {
+        None
+    };
     let (router, metadata_snapshots) = coverage_router(&c, &i)?;
+    let boundary = if let Some(path) = boundary_path {
+        let mut inputs = metadata_snapshots.iter().collect::<Vec<_>>();
+        inputs.push(&config_snapshot);
+        Some(build_boundary_evidence(
+            &c,
+            &i,
+            &router,
+            path,
+            &inputs,
+            boundary_model.as_ref().ok_or("boundary allocation model")?,
+            &mut seal_sync,
+        )?)
+    } else {
+        None
+    };
     let (requests, requests_snapshot) = loss_binary(&c.requests, i.requests_bytes)?;
     let mut arms = Vec::with_capacity(ordinals.len());
     for &ordinal in &ordinals {
@@ -5429,13 +5630,24 @@ fn reduce_leaf_coverage_with(
                 i.rows,
                 i.dimensions,
             )?,
-            coverage_arm(
-                &router,
-                &normalized,
-                &borsuk::VectorMetric::Cosine,
-                i.rows,
-                i.dimensions,
-            )?,
+            if let Some(evidence) = &boundary {
+                let ranked = router
+                    .rank_leaves_by_metric(&normalized, &borsuk::VectorMetric::SquaredEuclidean)?;
+                coverage_selected_arm(
+                    &router,
+                    &evidence.adjacency.select(&ranked)?,
+                    i.rows,
+                    i.dimensions,
+                )?
+            } else {
+                coverage_arm(
+                    &router,
+                    &normalized,
+                    &borsuk::VectorMetric::Cosine,
+                    i.rows,
+                    i.dimensions,
+                )?
+            },
         ]);
     }
     let producer_file = header_file(&c.completed.input.path)?;
@@ -5468,15 +5680,18 @@ fn reduce_leaf_coverage_with(
     )?;
     let mut snapshots = metadata_snapshots.iter().collect::<Vec<_>>();
     snapshots.extend([&config_snapshot, &requests_snapshot, &producer_snapshot]);
+    if let Some(evidence) = &boundary {
+        snapshots.extend(evidence.snapshots.iter());
+    }
     let selections = arms
         .iter()
         .enumerate()
         .map(|(s, a)| {
             json!({"ordinal":ordinals[s],
-        "l2":coverage_arm_value(&a[0]),"cosine":coverage_arm_value(&a[1])})
+        "l2":coverage_arm_value(&a[0]),(candidate_label):coverage_arm_value(&a[1])})
         })
         .collect::<Vec<_>>();
-    let seal = json!({"schema":"borsuk-leaf-metric-selection-seal-v1","status":"SEALED",
+    let mut seal = json!({"schema":if boundary_mode { "borsuk-leaf-boundary-selection-seal-v1" } else { "borsuk-leaf-metric-selection-seal-v1" },"status":"SEALED",
         "config_sha256":config_sha,"implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs"))),
         "router_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/semantic_unit_router.rs"))),
         "generation_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/two_bit_generation.rs"))),
@@ -5487,6 +5702,12 @@ fn reduce_leaf_coverage_with(
         "source_sha256":i.native_source_sha256,"normalization":"normalize_two_bit_diagnostic_query",
         "leaf_count":48,"source_get_cap":128,"source_byte_cap":64*1024*1024,
         "truth_opened":false,"control_trace_parity":true,"selections":selections});
+    if let Some(evidence) = &boundary {
+        seal["candidate"] = json!(BOUNDARY_CANDIDATE);
+        seal["adjacency_sha256"] = json!(evidence.sha256);
+        seal["adjacency_path"] = json!(boundary_path);
+        seal["adjacency_sealed_before_requests"] = json!(true);
+    }
     let (selection_snapshot, selection_sha) =
         publish_selection_seal_with_sync(selection_path, &seal, &snapshots, &mut seal_sync)?;
     // FIRST truth open: both complete arm selections have passed file and directory sync.
@@ -5553,9 +5774,9 @@ fn reduce_leaf_coverage_with(
             gained += usize::from(!state[0].0 && state[1].0);
             lost += usize::from(state[0].0 && !state[1].0);
             entries.push(json!({"id":id,"physical_row":physical,
-                "l2_scored":state[0].0,"cosine_scored":state[1].0,
-                "l2_fetched":state[0].1,"cosine_fetched":state[1].1,
-                "l2_bridge_only":state[0].1&&!state[0].0,"cosine_bridge_only":state[1].1&&!state[1].0}));
+                "l2_scored":state[0].0,(format!("{candidate_label}_scored")):state[1].0,
+                "l2_fetched":state[0].1,(format!("{candidate_label}_fetched")):state[1].1,
+                "l2_bridge_only":state[0].1&&!state[0].0,(format!("{candidate_label}_bridge_only")):state[1].1&&!state[1].0}));
         }
         queries.push(json!({"ordinal":ordinals[s],"truth_slots":entries}));
     }
@@ -5573,10 +5794,10 @@ fn reduce_leaf_coverage_with(
     sq8_snapshot.recheck()?;
     truth_snapshot.recheck()?;
     read_config::<CoverageConfig>(config_path, config_sha)?;
-    let report = json!({"schema":COVERAGE_SCHEMA,"status":"MEASURED","complete":true,
+    let mut report = json!({"schema":if boundary_mode { BOUNDARY_SCHEMA } else { COVERAGE_SCHEMA },"status":"MEASURED","complete":true,
         "config_sha256":config_sha,"config_bytes":config_bytes,"selection_seal_sha256":selection_sha,
         "selection_seal_bytes":selection_snapshot.identity.len,"selection_seal_path":selection_path,
-        "l2_coverage":totals[0],"cosine_coverage":totals[1],"truth_slots":slot*K,
+        "l2_coverage":totals[0],(format!("{candidate_label}_coverage")):totals[1],"truth_slots":slot*K,
         "gained_slots":gained,"lost_slots":lost,"queries":queries,
         "coverage_gate_passed":coverage_survives(totals[0],totals[1],gained,lost),
         "original_returned_hits10":run.terminal.total_hits10,"original_returned_gate":"FAIL",
@@ -5584,6 +5805,20 @@ fn reduce_leaf_coverage_with(
         "consumed_panel":true,"planner_only":true,"source_payload_read":false,"native_ann_called":false,
         "cold_s3_claim":false,"vendor_or_scientific_win_claim":false,"qualified":false});
     let mut retained = metadata_snapshots;
+    if let Some(evidence) = boundary {
+        report["candidate"] = json!(BOUNDARY_CANDIDATE);
+        report["adjacency_sha256"] = json!(evidence.sha256);
+        report["adjacency_path"] = json!(boundary_path);
+        report["adjacency_sealed_before_requests"] = json!(true);
+        report["allocation_model"] = json!(boundary_model);
+        report["modeled_payload_bytes"] = json!(
+            boundary_model
+                .as_ref()
+                .ok_or("boundary allocation model")?
+                .peak
+        );
+        retained.extend(evidence.snapshots);
+    }
     retained.extend([
         config_snapshot,
         requests_snapshot,
@@ -5608,6 +5843,15 @@ fn execute_leaf_coverage_with(
     reduce: impl FnOnce() -> Result<(Value, Vec<HeaderSnapshot>)>,
     sync: impl FnMut(&File, bool) -> io::Result<()>,
 ) -> Result<bool> {
+    execute_leaf_coverage_as(output, COVERAGE_SCHEMA, reduce, sync)
+}
+
+fn execute_leaf_coverage_as(
+    output: &Path,
+    schema: &str,
+    reduce: impl FnOnce() -> Result<(Value, Vec<HeaderSnapshot>)>,
+    sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<bool> {
     // Reserve the report before opening any input. Keep its containing directory live.
     header_path(output)?;
     let dir = parent(output)?;
@@ -5625,7 +5869,7 @@ fn execute_leaf_coverage_with(
     let (report, retained) = match reduce() {
         Ok(reduced) => reduced,
         Err(e) => (
-            json!({"schema":COVERAGE_SCHEMA,"status":"INVALID","complete":false,
+            json!({"schema":schema,"status":"INVALID","complete":false,
             "error":e.to_string().chars().take(512).collect::<String>(),"qualified":false}),
             vec![],
         ),
@@ -5645,6 +5889,31 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--leaf-boundary-coverage")
+        {
+            require(
+                args.len() == 7,
+                "usage: compare_native_replay --leaf-boundary-coverage CONFIG CONFIG_SHA NEW_ADJACENCY NEW_SELECTION NEW_REPORT",
+            )?;
+            return execute_leaf_coverage_as(
+                Path::new(&args[6]),
+                BOUNDARY_SCHEMA,
+                || {
+                    reduce_leaf_coverage_candidate_with(
+                        Path::new(&args[2]),
+                        args[3].to_str().ok_or("coverage config SHA encoding")?,
+                        Path::new(&args[5]),
+                        Some(Path::new(&args[4])),
+                        &CoverageScope::consumed32(),
+                        |file, _| file.sync_all(),
+                        loss_binary,
+                    )
+                },
+                |file, _| file.sync_all(),
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--leaf-metric-coverage")
@@ -5947,6 +6216,255 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn sampled_boundary_stream_authenticates_nonidentity_order_and_partial_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, mut i) = leaf_coverage_metadata_fixture(dir.path());
+        i.rows = 65;
+        i.dimensions = 2;
+        let mut body = Vec::new();
+        let mut order = Vec::new();
+        for physical in 0..i.rows {
+            let id = ((physical + 17) % i.rows) as i64;
+            body.extend_from_slice(&id.to_le_bytes());
+            order.extend_from_slice(&id.to_le_bytes());
+            body.extend_from_slice(&1_f32.to_le_bytes());
+            body.extend_from_slice(&[physical as u8 + 1, 1]);
+        }
+        c.sq8 = CompletedInput {
+            path: dir.path().join("sampled-sq8"),
+            bytes: body.len() as u64,
+            sha256: sha(&body),
+        };
+        i.native_order_sha256 = sha(&order);
+        std::fs::write(&c.sq8.path, &body).unwrap();
+        let (samples, stamp) = boundary_samples(&c, &i, &[0., 0.], &[1., 1.]).unwrap();
+        assert_eq!(samples.len(), 3);
+        for (sample, physical) in samples.iter().zip([16, 48, 64]) {
+            let raw = [physical as f32 + 1., 1.];
+            let expected =
+                borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&raw).unwrap();
+            assert_eq!(sample.as_slice(), expected.as_ref());
+        }
+        // Authenticated record corruption, including unsampled records, must fail.
+        for case in [
+            "duplicate",
+            "negative",
+            "range",
+            "norm",
+            "truncated",
+            "grown",
+            "digest",
+            "order",
+            "zero",
+            "nonfinite",
+        ] {
+            let mut corrupt = body.clone();
+            let mut pin: CoverageConfig =
+                serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+            let mut input: Inputs =
+                serde_json::from_value(serde_json::to_value(&i).unwrap()).unwrap();
+            match case {
+                "duplicate" => {
+                    let id = corrupt[..8].to_vec();
+                    corrupt[14..22].copy_from_slice(&id);
+                }
+                "negative" => corrupt[..8].copy_from_slice(&(-1_i64).to_le_bytes()),
+                "range" => corrupt[..8].copy_from_slice(&65_i64.to_le_bytes()),
+                "norm" => corrupt[8..12].copy_from_slice(&f32::NAN.to_le_bytes()),
+                "truncated" => {
+                    corrupt.pop();
+                }
+                "grown" => corrupt.push(0),
+                "order" => input.native_order_sha256 = "0".repeat(64),
+                "zero" => corrupt[16 * 14 + 12..16 * 14 + 14].fill(0),
+                "nonfinite" => corrupt[16 * 14 + 12] = 255,
+                _ => {}
+            }
+            pin.sq8.sha256 = if case == "digest" {
+                "0".repeat(64)
+            } else {
+                sha(&corrupt)
+            };
+            if matches!(case, "duplicate" | "negative" | "range") {
+                let bytes = corrupt
+                    .chunks_exact(14)
+                    .flat_map(|r| r[..8].iter().copied())
+                    .collect::<Vec<_>>();
+                input.native_order_sha256 = sha(&bytes);
+            }
+            std::fs::write(&pin.sq8.path, &corrupt).unwrap();
+            let step = if case == "nonfinite" {
+                [f32::MAX, 1.]
+            } else {
+                [1., 1.]
+            };
+            assert!(
+                boundary_samples(&pin, &input, &[0., 0.], &step).is_err(),
+                "{case}"
+            );
+        }
+        assert!(stamp.recheck().is_err());
+    }
+
+    #[test]
+    fn sampled_boundary_metadata_substitutions_refuse_before_source_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, mut i) = leaf_coverage_metadata_fixture(dir.path());
+        let original = std::fs::read(&c.generation_manifest.path).unwrap();
+        let generation_sha = i.generation_root_sha256.clone();
+        for case in [
+            "generation",
+            "calibration_shape",
+            "calibration_step",
+            "membership",
+            "router",
+        ] {
+            let mut generation: Value = serde_json::from_slice(&original).unwrap();
+            match case {
+                "generation" => generation["generation"] = json!(2),
+                "calibration_shape" => generation["low"] = json!([0.]),
+                "calibration_step" => generation["step"] = json!([0., 1.]),
+                "membership" => {
+                    generation["discovery"]["membership_sha256"] = json!("f".repeat(64))
+                }
+                "router" => generation["discovery"]["root_sha256"] = json!("f".repeat(64)),
+                _ => unreachable!(),
+            }
+            let encoded = serde_json::to_vec(&generation).unwrap();
+            std::fs::write(&c.generation_manifest.path, &encoded).unwrap();
+            c.generation_manifest.bytes = encoded.len() as u64;
+            c.generation_manifest.sha256 = sha(&encoded);
+            i.generation_root_sha256 = if case == "generation" {
+                generation_sha.clone()
+            } else {
+                c.generation_manifest.sha256.clone()
+            };
+            assert!(coverage_router(&c, &i).is_err(), "{case}");
+        }
+        assert!(!c.sq8.path.exists());
+        assert!(!c.requests.path.exists());
+        assert!(!c.truth.path.exists());
+    }
+
+    #[test]
+    fn sampled_boundary_actual_seals_precede_requests_and_truth_with_distinct_labels() {
+        use std::cell::Cell;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, scope) = leaf_coverage_orchestration_fixture(dir.path(), true);
+        c.schema = BOUNDARY_CONFIG_SCHEMA.into();
+        c.max_payload_bytes = 512 * 1024 * 1024;
+        let config = dir.path().join("boundary-config");
+        let encoded = serde_json::to_vec(&c).unwrap();
+        std::fs::write(&config, &encoded).unwrap();
+        let adjacency = dir.path().join("adjacency");
+        let selection = dir.path().join("selection");
+        let syncs = Cell::new(0);
+        let truth_opens = Cell::new(0);
+        let (report, retained) = reduce_leaf_coverage_candidate_with(
+            &config,
+            &sha(&encoded),
+            &selection,
+            Some(&adjacency),
+            &scope,
+            |file, _| {
+                file.sync_all()?;
+                syncs.set(syncs.get() + 1);
+                Ok(())
+            },
+            |pin, bytes| {
+                assert_eq!(syncs.get(), 4); // adjacency file+dir, then paired file+dir.
+                let a = std::fs::read(&adjacency).unwrap();
+                let sidecar: Value = serde_json::from_slice(&a).unwrap();
+                let seal: Value =
+                    serde_json::from_slice(&std::fs::read(&selection).unwrap()).unwrap();
+                assert_eq!(sidecar["requests_opened"], false);
+                assert_eq!(sidecar["truth_opened"], false);
+                assert_eq!(sidecar["candidate"], BOUNDARY_CANDIDATE);
+                assert_eq!(seal["adjacency_sha256"], sha(&a));
+                assert_eq!(seal["schema"], "borsuk-leaf-boundary-selection-seal-v1");
+                assert!(seal["selections"][0].get("cosine").is_none());
+                assert!(seal["selections"][0].get(BOUNDARY_CANDIDATE).is_some());
+                truth_opens.set(truth_opens.get() + 1);
+                loss_binary(pin, bytes)
+            },
+        )
+        .unwrap();
+        assert_eq!(truth_opens.get(), 1);
+        assert_eq!(report["status"], "MEASURED");
+        assert_eq!(report["schema"], BOUNDARY_SCHEMA);
+        assert_eq!(report["coverage_gate_passed"], false); // weak completion stays MEASURED.
+        assert_eq!(report["l2_coverage"], 10);
+        assert!(report.get("cosine_coverage").is_none());
+        for snapshot in &retained {
+            snapshot.recheck().unwrap();
+        }
+
+        // A rehashed old-cosine config cannot be admitted through the boundary entrypoint.
+        c.schema = "borsuk-leaf-metric-coverage-config-v1".into();
+        let encoded = serde_json::to_vec(&c).unwrap();
+        std::fs::write(&config, &encoded).unwrap();
+        let error = reduce_leaf_coverage_candidate_with(
+            &config,
+            &sha(&encoded),
+            &dir.path().join("unused-selection"),
+            Some(&dir.path().join("unused-adjacency")),
+            &scope,
+            |_, _| panic!("wrong schema reached publication"),
+            |_, _| panic!("wrong schema reached truth"),
+        )
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("config/schema"));
+    }
+
+    #[test]
+    fn sampled_boundary_adjacency_sync_failure_stops_before_requests_and_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, scope) = leaf_coverage_orchestration_fixture(dir.path(), true);
+        c.schema = BOUNDARY_CONFIG_SCHEMA.into();
+        c.max_payload_bytes = 512 * 1024 * 1024;
+        // Deliberately remove requests: an adjacency failure must be reached first.
+        std::fs::remove_file(&c.requests.path).unwrap();
+        let config = dir.path().join("boundary-config");
+        let encoded = serde_json::to_vec(&c).unwrap();
+        std::fs::write(&config, &encoded).unwrap();
+        let adjacency = dir.path().join("adjacency");
+        let selection = dir.path().join("selection");
+        let report = dir.path().join("report");
+        assert!(
+            !execute_leaf_coverage_as(
+                &report,
+                BOUNDARY_SCHEMA,
+                || {
+                    reduce_leaf_coverage_candidate_with(
+                        &config,
+                        &sha(&encoded),
+                        &selection,
+                        Some(&adjacency),
+                        &scope,
+                        |_, _| Err(io::Error::other("boundary injected sync failure")),
+                        |_, _| panic!("truth opened before adjacency publication"),
+                    )
+                },
+                |file, _| file.sync_all()
+            )
+            .unwrap()
+        );
+        let failed: Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+        assert_eq!(failed["schema"], BOUNDARY_SCHEMA);
+        assert_eq!(failed["status"], "INVALID");
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap()
+                .contains("boundary injected sync failure")
+        );
+        let failed: Value = serde_json::from_slice(&std::fs::read(&adjacency).unwrap()).unwrap();
+        assert_eq!(failed["status"], "INVALID");
+        assert!(!selection.exists());
     }
 
     fn leaf_coverage_metadata_fixture(dir: &Path) -> (CoverageConfig, Inputs) {

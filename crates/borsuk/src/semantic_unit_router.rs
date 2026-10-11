@@ -242,6 +242,307 @@ fn sum(values: &[usize]) -> Result<usize> {
     })
 }
 
+/// Fixed midpoint rule for the sampled SQ8 boundary experiment, in physical order.
+pub fn sampled_boundary_position(rows: usize, unit: usize) -> Result<usize> {
+    let units = sum(&[rows, 31])? / 32;
+    require(rows > 0 && unit < units, "boundary sample unit")?;
+    Ok(sum(&[product(&[unit, 32])?, 16])?.min(rows - 1))
+}
+
+/// Reconstruct one sampled SQ8 row and apply the existing cosine normalization.
+/// The caller authenticates calibration and record identity; no logical ID is used here.
+pub fn decode_sampled_boundary_row(codes: &[u8], low: &[f32], step: &[f32]) -> Result<Vec<f32>> {
+    require(
+        (1..=1024).contains(&codes.len()) && low.len() == codes.len() && step.len() == codes.len(),
+        "boundary sample dimensions",
+    )?;
+    let mut row = Vec::with_capacity(codes.len());
+    for ((&code, &low), &step) in codes.iter().zip(low).zip(step) {
+        let value = low + f32::from(code) * step;
+        require(
+            low.is_finite() && step.is_finite() && step > 0. && value.is_finite(),
+            "boundary reconstruction/calibration",
+        )?;
+        row.push(value);
+    }
+    Ok(crate::sq8_source::cosine_vector(&row)?.into_owned())
+}
+
+/// Checked live-payload phase bounds, not measured RSS or allocator overhead.
+#[allow(missing_docs)]
+#[derive(Debug, Serialize)]
+pub struct SampledBoundaryAllocation {
+    pub samples: usize,
+    pub graph: usize,
+    pub insertion_scratch: usize,
+    pub edge_pairs: usize,
+    pub validation: usize,
+    pub adjacency: usize,
+    pub serialization: usize,
+    pub query_scratch: usize,
+    pub metadata: usize,
+    pub construction_phase: usize,
+    pub replay_phase: usize,
+    pub peak: usize,
+}
+
+/// Admit before metadata/sample allocation. Samples and graph must be dropped before replay.
+/// `metadata` covers caller-owned authenticated metadata and decoding copies;
+/// `replay` covers the existing paired replay excluding this adjacency's allocations.
+pub fn sampled_boundary_allocation(
+    rows: usize,
+    dimensions: usize,
+    leaves: usize,
+    metadata: usize,
+    replay: usize,
+    cap: usize,
+) -> Result<SampledBoundaryAllocation> {
+    use std::mem::size_of;
+    let units = sum(&[rows, 31])? / 32;
+    require(
+        rows > 0
+            && units <= u32::MAX as usize
+            && (1..=1024).contains(&dimensions)
+            && leaves > 0
+            && leaves <= units,
+        "boundary allocation geometry",
+    )?;
+    let samples = product(&[
+        units,
+        sum(&[size_of::<Vec<f32>>(), product(&[dimensions, 4])?])?,
+    ])?;
+    // The private builder caps levels at 16. Vec growth retains up to 64 base
+    // and 32 upper IDs after reciprocal pruning, including the temporary +1 arc.
+    let graph = product(&[
+        units,
+        sum(&[
+            size_of::<Vec<Vec<u32>>>(),
+            product(&[17, size_of::<Vec<u32>>()])?,
+            product(&[64 + 16 * 32, 4])?,
+        ])?,
+    ])?;
+    // levels/order/epoch marks; frontier can visit every node (ef does NOT bound it).
+    // Bound doubling heaps, found/selected vectors, cached-key pruning and sort scratch.
+    let insertion_scratch = sum(&[
+        product(&[units, size_of::<usize>() + 4 + 4 + 2 * 8])?,
+        128 * 8 * 4 + 64 * 32,
+    ])?;
+    let edge_pairs = product(&[units, 32, 8])?;
+    let validation = sum(&[rows.div_ceil(8), product(&[dimensions, 20])?, 8192 + 12])?;
+    let adjacency = sum(&[
+        product(&[sum(&[leaves, 1])?, size_of::<usize>()])?,
+        product(&[leaves, 16, 8])?,
+    ])?;
+    // Per-link JSON objects include BTreeMap's spare node slots, keys and Value
+    // headers (2 KiB bound); encoded/readback buffers are separately capped at 4 MiB.
+    let serialization = sum(&[product(&[leaves, 16, 2048])?, 4 * 4 * 1024 * 1024])?;
+    let query_scratch = sum(&[product(&[leaves, 64])?, 640 * 32])?;
+    let construction_phase = sum(&[
+        metadata,
+        samples,
+        graph,
+        insertion_scratch,
+        edge_pairs,
+        validation,
+        adjacency,
+        serialization,
+    ])?;
+    let replay_phase = sum(&[replay, adjacency, query_scratch])?;
+    let peak = construction_phase.max(replay_phase);
+    require(peak <= cap, "boundary phase allocation cap")?;
+    Ok(SampledBoundaryAllocation {
+        samples,
+        graph,
+        insertion_scratch,
+        edge_pairs,
+        validation,
+        adjacency,
+        serialization,
+        query_scratch,
+        metadata,
+        construction_phase,
+        replay_phase,
+        peak,
+    })
+}
+
+/// One retained directed sampled-graph cut count, not an exact kNN count.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SampledBoundaryLink {
+    pub leaf: u32,
+    pub count: u32,
+}
+
+/// Generic source-only adjacency over admitted physical-unit membership.
+/// Fixed midpoint and raw counts carry midpoint, leaf-size and popularity bias.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct SampledBoundaryAdjacency {
+    offsets: Vec<usize>,
+    links: Vec<SampledBoundaryLink>,
+    directed_cross_leaf_arcs: u64,
+    zero_link_leaves: usize,
+}
+
+impl SampledBoundaryAdjacency {
+    /// Sequential nondiverse m16/m0=32/ef64 construction, with no repaired edges.
+    /// Sample vectors are borrowed and never retained by the returned adjacency.
+    pub fn build(
+        samples: &[Vec<f32>],
+        membership: &[usize],
+        leaves: usize,
+        cap: usize,
+    ) -> Result<Self> {
+        let dimensions = samples.first().ok_or("boundary empty samples")?.len();
+        sampled_boundary_allocation(
+            product(&[samples.len(), 32])?,
+            dimensions,
+            leaves,
+            0,
+            0,
+            cap,
+        )?;
+        require(
+            samples.len() == membership.len() && membership.iter().all(|&leaf| leaf < leaves),
+            "boundary membership",
+        )?;
+        for sample in samples {
+            let squared = sample.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>();
+            require(
+                sample.len() == dimensions
+                    && sample.iter().all(|v| v.is_finite())
+                    && (squared - 1.).abs() <= 1e-5,
+                "boundary normalized samples",
+            )?;
+        }
+        let graph = crate::centroid_hnsw::build_hnsw_adjacency(samples, 16, 32, 64, 64);
+        match graph {
+            Some(graph) => Self::project(&graph.neighbours, membership, leaves),
+            None => Ok(Self {
+                offsets: vec![0; leaves + 1],
+                links: Vec::new(),
+                directed_cross_leaf_arcs: 0,
+                zero_link_leaves: leaves,
+            }),
+        }
+    }
+
+    fn project(towers: &[Vec<Vec<u32>>], membership: &[usize], leaves: usize) -> Result<Self> {
+        require(
+            towers.len() == membership.len()
+                && leaves > 0
+                && membership.iter().all(|&leaf| leaf < leaves),
+            "boundary graph membership",
+        )?;
+        let mut pairs = Vec::with_capacity(product(&[towers.len(), 32])?);
+        for (unit, tower) in towers.iter().enumerate() {
+            let base = tower.last().ok_or("boundary missing base layer")?;
+            require(base.len() <= 32, "boundary base width")?;
+            for &target in base {
+                let target = target as usize;
+                require(target < membership.len(), "boundary arc target")?;
+                if membership[unit] != membership[target] {
+                    pairs.push((
+                        u32::try_from(membership[unit])?,
+                        u32::try_from(membership[target])?,
+                    ));
+                }
+            }
+        }
+        let directed_cross_leaf_arcs = pairs.len() as u64;
+        pairs.sort_unstable(); // In-place; never allocate a leaf-squared count matrix.
+        let mut offsets = Vec::with_capacity(sum(&[leaves, 1])?);
+        let mut links = Vec::with_capacity(product(&[leaves, 16])?);
+        let mut at = 0;
+        for source in 0..leaves {
+            offsets.push(links.len());
+            let mut top = Vec::with_capacity(17);
+            while at < pairs.len() && pairs[at].0 as usize == source {
+                let target = pairs[at].1;
+                let mut count = 0_u32;
+                while at < pairs.len() && pairs[at] == (source as u32, target) {
+                    count = count.checked_add(1).ok_or("boundary cut count overflow")?;
+                    at += 1;
+                }
+                top.push(SampledBoundaryLink {
+                    leaf: target,
+                    count,
+                });
+                top.sort_unstable_by(|a, b| b.count.cmp(&a.count).then(a.leaf.cmp(&b.leaf)));
+                top.truncate(16);
+            }
+            links.extend(top);
+        }
+        offsets.push(links.len());
+        let zero_link_leaves = offsets.windows(2).filter(|pair| pair[0] == pair[1]).count();
+        Ok(Self {
+            offsets,
+            links,
+            directed_cross_leaf_arcs,
+            zero_link_leaves,
+        })
+    }
+
+    /// Select first40 L2 plus eight vote replacements; shortages retain original L2 order.
+    /// For fewer than48 leaves, return every leaf in the same deterministic policy.
+    pub fn select(&self, l2: &[usize]) -> Result<Vec<usize>> {
+        let leaves = self.offsets.len() - 1;
+        require(l2.len() == leaves, "boundary L2 length")?;
+        let mut rank = vec![usize::MAX; leaves];
+        for (position, &leaf) in l2.iter().enumerate() {
+            require(
+                leaf < leaves && rank[leaf] == usize::MAX,
+                "boundary L2 permutation",
+            )?;
+            rank[leaf] = position;
+        }
+        let seeds = leaves.min(40);
+        let mut votes = vec![0_u64; leaves];
+        for (position, &leaf) in l2[..seeds].iter().enumerate() {
+            for link in &self.links[self.offsets[leaf]..self.offsets[leaf + 1]] {
+                let target = link.leaf as usize;
+                if rank[target] >= seeds {
+                    votes[target] = boundary_vote(
+                        votes[target],
+                        u64::from(link.count),
+                        (40 - position) as u64,
+                    )?;
+                }
+            }
+        }
+        let mut candidates = l2[seeds..]
+            .iter()
+            .copied()
+            .filter(|&leaf| votes[leaf] > 0)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by(|&a, &b| {
+            votes[b]
+                .cmp(&votes[a])
+                .then(rank[a].cmp(&rank[b]))
+                .then(a.cmp(&b))
+        });
+        let target = leaves.min(48);
+        let mut selected = Vec::with_capacity(target);
+        selected.extend_from_slice(&l2[..seeds]);
+        selected.extend(candidates.into_iter().take(target - seeds));
+        for &leaf in &l2[seeds..] {
+            if selected.len() == target {
+                break;
+            }
+            if !selected.contains(&leaf) {
+                selected.push(leaf);
+            }
+        }
+        Ok(selected)
+    }
+}
+
+fn boundary_vote(total: u64, count: u64, weight: u64) -> Result<u64> {
+    total
+        .checked_add(count.checked_mul(weight).ok_or("boundary vote overflow")?)
+        .ok_or_else(|| "boundary vote overflow".into())
+}
+
 /// Check native centroid geometry and exact encoded size before decoding.
 pub fn preflight(
     blob: &[u8],
@@ -1001,6 +1302,11 @@ impl SemanticUnitRouter {
         &self.manifest
     }
 
+    /// Authenticated leaf label for each physical unit, independent of logical IDs.
+    pub fn unit_membership(&self) -> &[usize] {
+        &self.membership
+    }
+
     /// Normalize an original f32 cosine query using the existing native helper,
     /// then nominate leaves. Prepare source scoring from the original query first.
     pub fn nominate(&self, query: &[f32]) -> Result<Vec<usize>> {
@@ -1372,6 +1678,182 @@ pub fn seed_walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampled_boundary_midpoints_decode_and_dimension_contract() {
+        for (rows, expected) in [
+            (1_usize, vec![0]),
+            (32, vec![16]),
+            (33, vec![16, 32]),
+            (48, vec![16, 47]),
+            (65, vec![16, 48, 64]),
+        ] {
+            assert_eq!(
+                (0..rows.div_ceil(32))
+                    .map(|u| sampled_boundary_position(rows, u).unwrap())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(sampled_boundary_position(rows, rows.div_ceil(32)).is_err());
+        }
+        assert!(sampled_boundary_position(0, 0).is_err());
+        assert!(sampled_boundary_position(usize::MAX, 0).is_err());
+        assert_eq!(
+            decode_sampled_boundary_row(&[2], &[-3.], &[1.]).unwrap(),
+            [-1.]
+        );
+        let row = decode_sampled_boundary_row(&[3, 4], &[0., 0.], &[1., 1.]).unwrap();
+        assert_eq!(row, [0.6, 0.8]);
+        let row =
+            decode_sampled_boundary_row(&vec![1; 1024], &vec![0.; 1024], &vec![1.; 1024]).unwrap();
+        assert_eq!(row, vec![1. / 32.; 1024]);
+        assert!(
+            decode_sampled_boundary_row(&vec![1; 1025], &vec![0.; 1025], &vec![1.; 1025]).is_err()
+        );
+        for (codes, low, step) in [
+            (&[0][..], 0., 1.),
+            (&[1], f32::NAN, 1.),
+            (&[1], 0., 0.),
+            (&[1], 0., -1.),
+            (&[255], 0., f32::MAX),
+        ] {
+            assert!(decode_sampled_boundary_row(codes, &[low], &[step]).is_err());
+        }
+        assert!(decode_sampled_boundary_row(&[1, 2], &[1.], &[1.]).is_err());
+    }
+
+    #[test]
+    fn sampled_boundary_phase_admission_and_checked_votes() {
+        let model = sampled_boundary_allocation(
+            1_000_000,
+            1024,
+            977,
+            112 * 1024 * 1024,
+            164_435_968,
+            512 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(
+            model.samples,
+            128_000_000 + 31_250 * std::mem::size_of::<Vec<f32>>()
+        );
+        assert_eq!(model.edge_pairs, 31_250 * 32 * 8);
+        assert_eq!(model.peak, model.construction_phase.max(model.replay_phase));
+        assert!(model.peak > 256 * 1024 * 1024);
+        assert!(
+            sampled_boundary_allocation(
+                1_000_000,
+                1024,
+                977,
+                112 * 1024 * 1024,
+                164_435_968,
+                model.peak - 1
+            )
+            .is_err()
+        );
+        for (rows, dimensions, metadata) in [(usize::MAX, 1, 0), (32, 1025, 0), (32, 1, usize::MAX)]
+        {
+            assert!(
+                sampled_boundary_allocation(rows, dimensions, 1, metadata, 0, usize::MAX).is_err()
+            );
+        }
+        assert_eq!(boundary_vote(3, 2, 40).unwrap(), 83);
+        assert!(boundary_vote(u64::MAX, 1, 1).is_err());
+        assert!(boundary_vote(0, u64::MAX, 40).is_err());
+    }
+
+    #[test]
+    fn sampled_boundary_counts_directed_base_only_and_top16_ties() {
+        // Physical membership is deliberately nonidentity. Upper arcs differ from base arcs.
+        let graph = vec![
+            vec![vec![4], vec![2, 3]],
+            vec![vec![0]],
+            vec![vec![1]],
+            vec![vec![]],
+            vec![vec![0]],
+            vec![vec![0, 1, 3]], // The same-leaf5->0 arc must contribute nothing.
+        ];
+        let a = SampledBoundaryAdjacency::project(&graph, &[2, 0, 1, 0, 1, 2], 3).unwrap();
+        let links = |leaf| &a.links[a.offsets[leaf]..a.offsets[leaf + 1]];
+        assert_eq!(links(0), [SampledBoundaryLink { leaf: 2, count: 1 }]);
+        assert_eq!(
+            links(1),
+            [
+                SampledBoundaryLink { leaf: 0, count: 1 },
+                SampledBoundaryLink { leaf: 2, count: 1 }
+            ]
+        );
+        assert_eq!(
+            links(2),
+            [
+                SampledBoundaryLink { leaf: 0, count: 3 },
+                SampledBoundaryLink { leaf: 1, count: 1 }
+            ]
+        );
+        assert_eq!(a.directed_cross_leaf_arcs, 7);
+        let mut graph = vec![vec![vec![]]; 19];
+        graph[0][0] = (1..19).collect();
+        let a =
+            SampledBoundaryAdjacency::project(&graph, &(0..19).collect::<Vec<_>>(), 19).unwrap();
+        assert_eq!(
+            a.links.iter().map(|l| l.leaf).collect::<Vec<_>>(),
+            (1..=16).collect::<Vec<_>>()
+        );
+        assert_eq!(a.directed_cross_leaf_arcs, 18);
+        assert_eq!(a.offsets[1], 16);
+    }
+
+    #[test]
+    fn sampled_boundary_votes_l2_ties_exclusions_fallback_and_exact48() {
+        let mut graph = vec![vec![vec![]]; 64];
+        graph[0][0] = vec![50, 51, 2]; // seed2 must never be a replacement.
+        graph[1][0] = vec![52];
+        graph[39][0] = vec![52]; // 39+1 ties the two40 votes.
+        let a =
+            SampledBoundaryAdjacency::project(&graph, &(0..64).collect::<Vec<_>>(), 64).unwrap();
+        let mut l2 = (0..64).collect::<Vec<_>>();
+        l2.swap(50, 51);
+        let selected = a.select(&l2).unwrap();
+        let expected = (0..40)
+            .chain([51, 50, 52, 40, 41, 42, 43, 44])
+            .collect::<Vec<_>>();
+        assert_eq!(selected, expected);
+        assert_eq!(selected.iter().collect::<BTreeSet<_>>().len(), 48);
+        // Independent direct sum oracle for the projected one-row-per-leaf graph.
+        let mut votes = [0_u64; 64];
+        for seed in 0..40 {
+            for &dest in &graph[seed][0] {
+                votes[dest as usize] += (40 - seed) as u64;
+            }
+        }
+        assert_eq!((votes[50], votes[51], votes[52]), (40, 40, 40));
+        let empty = SampledBoundaryAdjacency::project(
+            &vec![vec![vec![]]; 64],
+            &(0..64).collect::<Vec<_>>(),
+            64,
+        )
+        .unwrap();
+        assert_eq!(empty.select(&l2).unwrap(), l2[..48]);
+        l2[63] = l2[0];
+        assert!(empty.select(&l2).is_err());
+        let singleton =
+            SampledBoundaryAdjacency::build(&[vec![1.]], &[0], 1, 32 * 1024 * 1024).unwrap();
+        assert_eq!(singleton.select(&[0]).unwrap(), [0]);
+    }
+
+    #[test]
+    fn sampled_boundary_equal_distance_graph_is_repeatable_and_bounded() {
+        let samples = vec![vec![1., 0.]; 64];
+        let membership = (0..64).map(|u| u % 3).collect::<Vec<_>>();
+        let build =
+            || SampledBoundaryAdjacency::build(&samples, &membership, 3, 32 * 1024 * 1024).unwrap();
+        assert_eq!(build(), build());
+        assert!(SampledBoundaryAdjacency::build(&samples, &membership, 3, 1).is_err());
+        assert!(
+            SampledBoundaryAdjacency::build(&[vec![0., 0.]], &[0], 1, 32 * 1024 * 1024).is_err()
+        );
+        assert!(SampledBoundaryAdjacency::build(&[vec![1.]], &[1], 1, 32 * 1024 * 1024).is_err());
+    }
 
     #[test]
     fn cosine_leaf_metric_removes_mean_length_bias_at_fixed_48() {
