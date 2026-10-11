@@ -1,0 +1,347 @@
+{
+  "id": "d70dc13b52be4350",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "effort": "xhigh",
+  "fallbacks": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791714581,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791715781,
+  "budget_usd": null,
+  "prompt_preview": "Read-only planning specialist. Give one actionable plan, risks and a bounded falsifying test; do not edit files.\nRead-only bounded Rust planning audit. Repo /home/rb/worktrees/borsuk-prod-ready-v9 has STALE DIRTY physical HEAD; use git show/objects, never checkout/reset/edit. Main commit703e29b099bfb31b263446fabd102b92bdcab9eb; qualified native source240a570dff26daa7ec556159c9f9ecd370ed0dce. Current goal generic Rust ANN, matched Cohere D1024/cosine/k10 cold; no Python/controller feature/new dataset/warm work. New exact frozen real-input native screen, sealed both 48-leaf arms before truth, completed causality EC2: L2 SOURCE coverage314/320, cosine312, gained0/lost2, original returned313. Cutoff315/netgain failed, arm KILL, production L2 unchanged, host/volume closed. No ANN/cold win. Evidence git703:docs/research/performance-architecture-20260930/cohere1024/leaf-metric-coverage-screen-a0001/{decision.md,closed.json,experiment/human-summary.json}; admission precedes at f2a5b4cb. Six original SOURCE/SQ8 omissions q742x2/q823x3/q991x1 remain. Added Rust-authored loss flags q149 ID854493 phys439611, q742 ID669440 phys481510, cosine SOURCE neither scored nor fetched. Need distinguish leaf nomination vs within-leaf unit walk vs planner/cover before selecting next causal routing/layout change. Examine native compare_native_replay.rs coverage_router/coverage_nomination/coverage_slot/coverage_arm_value/reduce_leaf_coverage_with, semantic_unit_router.rs nomination/SourceWalk and budgeted_page_rank.rs/shared production cover. Existing completed Fable synthesis git703:docs/research/next-route-research-20260928/fable-result.md rejects V139/V146/V149/V150 centroid-summary hierarchies and copy-cost arms on historical OTHER workload; reconcile, do not assume those other dataset results transfer numerically. Question: do EXISTING preserved native report/seal fields + public APIs suffice to label ORIGINAL six omissions by those layers? If not, give smallest bounded Rust-only increment to this already qualified example (or necessary generic public API) for source-bound layer attribution, fixed consumed32, no new ANN queries/score changes/count search/GT-based parameter tuning. Exact evidence/fields/invariants/tests/cheap EC2 falsifier. Do not propose another cosine48 run or choose production algorithm before layer evidence. Source and already-reduced HUMAN reports only locally; no vector/query/truth/SQ8/raw-producer/seal decode, Cargo/rustc/native/tests/network/cloud/children/edits. Any new data parsing/reduction MUST be Rust on causality EC2. Return concise plan or explain existing evidence is sufficient; no new framework.",
+  "prompt_sha256": "64eb10271b416c0a3c1dcebd04b3ef2d8f0565f9613b2298612549645c2150f7",
+  "prompt_bytes": 2844,
+  "fingerprint": "1396a95942cc528f64031d9430e4aa7a89f6369dba7a2ee6ed92e0868f17000f",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "8e95d7485af252a8b609b21896957b2aa23dddb561ec75b33cd5d2de2815ee94",
+  "reused": false,
+  "specialist_route": {
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "source": "jev",
+    "decision_id": "a2207c27-d34f-44a9-91d7-4d7a1f3e25da"
+  },
+  "launch_command": "specialist_start",
+  "systemd_unit": "devbox-consult-d70dc13b52be4350.service",
+  "pid": 3087369,
+  "pgid": 3087369,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "budget_usd": null,
+      "timeout_seconds": 1200,
+      "started_at": 1791714581
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791714966,
+  "event_cursor": 89,
+  "events": [
+    {
+      "seq": 66,
+      "at": 1791714754,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 67,
+      "at": 1791714754,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 68,
+      "at": 1791714754,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 69,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 70,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 71,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 72,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 73,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 74,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 75,
+      "at": 1791714781,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 76,
+      "at": 1791714782,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 77,
+      "at": 1791714782,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 78,
+      "at": 1791714782,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 1"
+    },
+    {
+      "seq": 79,
+      "at": 1791714793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 80,
+      "at": 1791714793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 81,
+      "at": 1791714793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 82,
+      "at": 1791714793,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 83,
+      "at": 1791714794,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 84,
+      "at": 1791714794,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 85,
+      "at": 1791714794,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 1"
+    },
+    {
+      "seq": 86,
+      "at": 1791714794,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 87,
+      "at": 1791714901,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 88,
+      "at": 1791714962,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 89,
+      "at": 1791714965,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "codex": [
+      {
+        "seq": 82,
+        "at": 1791714793,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 83,
+        "at": 1791714794,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 84,
+        "at": 1791714794,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 85,
+        "at": 1791714794,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 1"
+      },
+      {
+        "seq": 86,
+        "at": 1791714794,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 87,
+        "at": 1791714901,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 88,
+        "at": 1791714962,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 89,
+        "at": 1791714965,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**Existing evidence suffices to infer that all six original omissions first occur at leaf nomination.** It does not identify why those leaves were excluded or select a replacement algorithm.\n\nAt qualified source `240a570d`:\n\n- `semantic_unit_router.rs:1051\u20131170`: `nominate_selected` retains every unit belonging to selected leaves; seed completion only adds units.\n- `compare_native_replay.rs:4640\u20134746,5167\u20135178`: control validation binds that nomination to the original producer and requires every unit in the complete physical page closure to be SOURCE-scored.\n- `budgeted_page_rank.rs:28\u201397`: SOURCE cover preserves every closure page, adds bridges, or fails admission.\n\nTherefore, an unscored target lies outside that closure, and its unit cannot belong to a selected leaf. The closed native loss report establishes exactly six such targets: q742\u00d72, q823\u00d73, q991\u00d71. A within-leaf truncation or SOURCE-cover omission would contradict the validated invariants. q537 remains a separate covered ranking loss.\n\nOne actionable plan: **add a report-only reduction mode to `compare_native_replay.rs` that makes this attribution explicit from preserved artifacts.** No generic public API change is necessary.\n\n1. On causality EC2, authenticate the preserved selection seal, native loss report and original configuration against their immutable hashes. Reuse `coverage_router` for generation/root/membership binding. Check matching producer, SQ8, physical-order and truth identities, and the exact `CoverageScope::consumed32()` roster before consuming target entries. Keep the historical sealer\u2019s source identity distinct from the new reducer\u2019s identity.\n\n2. Reconstruct only the **original L2 nomination**, using `nominate_selected` on the sealed leaf IDs; compare its units, walk, seed additions and closure exactly with the preserved seal. Recompute SOURCE cover through `plan_two_bit_source_cover` at unchanged 128 GET/64 MiB limits. This requires no query ranking, SOURCE scores, ANN requests or cosine replay. Read target IDs/physical positions from the authenticated, already-reduced loss report; no fresh truth or SQ8-body pass is needed.\n\n3. Emit, for each existing truth slot: `ordinal`, `id`, `physical_row`, `unit_id`, `page_id`, selected-leaf membership, walked membership, closure membership, SOURCE transport coverage, original SOURCE-scored flag, original SQ8 coverage, returned flag and attribution. Selected-leaf membership can use the complete unit union returned by the existing API; an owning-leaf getter is unnecessary. Treat nominated-but-unwalked units and uncovered closure pages as **INVALID**, rather than valid loss categories.\n\nThe bounded falsifier is one offline reduction over all 32 preserved queries on fresh causality Spot EC2: CPU0/100%, 512 MiB RAM, zero swap, pids128, \u226460 seconds native runtime, output \u22644 MiB. Require 320 disjoint slots, SOURCE coverage314, returned313, precisely the six nomination exclusions above, zero valid walk/SOURCE-cover/SQ8-admission omissions, and q537\u2019s covered ranking loss. Any contradictory authentic slot falsifies this attribution and stops algorithm selection. Preserve terminal receipts and terminate compute immediately.\n\nAdd small Rust fixtures covering complete nomination, page-completion rescue, fetched-but-unscored SOURCE bridges, partial tails, and rehashed inconsistent selections. Before handing off an increment, qualify its exact revision on EC2 with the affected example tests, required workspace Clippy, and `bash scripts/check_rust_test_build.sh` with bounded compiler concurrency.\n\nThe main interpretation risk is that coverage-report `l2_fetched` means **SOURCE transport coverage**, while loss-report `sq8_ranked` means actual SQ8 cover; bridges must remain separate. Fable\u2019s historical summary-hierarchy and copy-cost rejections constrain candidate selection, but their numerical results do not transfer to this Cohere workload.\n\nNo files were edited or data decoded; no compilation, tests, network, cloud or child jobs ran. The conclusion identifies the first lost layer, not its geometric cause or an ANN/cold-performance win.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "codex": "**Existing evidence suffices to infer that all six original omissions first occur at leaf nomination.** It does not identify why those leaves were excluded or select a replacement algorithm.\n\nAt qualified source `240a570d`:\n\n- `semantic_unit_router.rs:1051\u20131170`: `nominate_selected` retains every unit belonging to selected leaves; seed completion only adds units.\n- `compare_native_replay.rs:4640\u20134746,5167\u20135178`: control validation binds that nomination to the original producer and requires every unit in the complete physical page closure to be SOURCE-scored.\n- `budgeted_page_rank.rs:28\u201397`: SOURCE cover preserves every closure page, adds bridges, or fails admission.\n\nTherefore, an unscored target lies outside that closure, and its unit cannot belong to a selected leaf. The closed native loss report establishes exactly six such targets: q742\u00d72, q823\u00d73, q991\u00d71. A within-leaf truncation or SOURCE-cover omission would contradict the validated invariants. q537 remains a separate covered ranking loss.\n\nOne actionable plan: **add a report-only reduction mode to `compare_native_replay.rs` that makes this attribution explicit from preserved artifacts.** No generic public API change is necessary.\n\n1. On causality EC2, authenticate the preserved selection seal, native loss report and original configuration against their immutable hashes. Reuse `coverage_router` for generation/root/membership binding. Check matching producer, SQ8, physical-order and truth identities, and the exact `CoverageScope::consumed32()` roster before consuming target entries. Keep the historical sealer\u2019s source identity distinct from the new reducer\u2019s identity.\n\n2. Reconstruct only the **original L2 nomination**, using `nominate_selected` on the sealed leaf IDs; compare its units, walk, seed additions and closure exactly with the preserved seal. Recompute SOURCE cover through `plan_two_bit_source_cover` at unchanged 128 GET/64 MiB limits. This requires no query ranking, SOURCE scores, ANN requests or cosine replay. Read target IDs/physical positions from the authenticated, already-reduced loss report; no fresh truth or SQ8-body pass is needed.\n\n3. Emit, for each existing truth slot: `ordinal`, `id`, `physical_row`, `unit_id`, `page_id`, selected-leaf membership, walked membership, closure membership, SOURCE transport coverage, original SOURCE-scored flag, original SQ8 coverage, returned flag and attribution. Selected-leaf membership can use the complete unit union returned by the existing API; an owning-leaf getter is unnecessary. Treat nominated-but-unwalked units and uncovered closure pages as **INVALID**, rather than valid loss categories.\n\nThe bounded falsifier is one offline reduction over all 32 preserved queries on fresh causality Spot EC2: CPU0/100%, 512 MiB RAM, zero swap, pids128, \u226460 seconds native runtime, output \u22644 MiB. Require 320 disjoint slots, SOURCE coverage314, returned313, precisely the six nomination exclusions above, zero valid walk/SOURCE-cover/SQ8-admission omissions, and q537\u2019s covered ranking loss. Any contradictory authentic slot falsifies this attribution and stops algorithm selection. Preserve terminal receipts and terminate compute immediately.\n\nAdd small Rust fixtures covering complete nomination, page-completion rescue, fetched-but-unscored SOURCE bridges, partial tails, and rehashed inconsistent selections. Before handing off an increment, qualify its exact revision on EC2 with the affected example tests, required workspace Clippy, and `bash scripts/check_rust_test_build.sh` with bounded compiler concurrency.\n\nThe main interpretation risk is that coverage-report `l2_fetched` means **SOURCE transport coverage**, while loss-report `sq8_ranked` means actual SQ8 cover; bridges must remain separate. Fable\u2019s historical summary-hierarchy and copy-cost rejections constrain candidate selection, but their numerical results do not transfer to this Cohere workload.\n\nNo files were edited or data decoded; no compilation, tests, network, cloud or child jobs ran. The conclusion identifies the first lost layer, not its geometric cause or an ANN/cold-performance win."
+  },
+  "providers_used": [
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 2844,
+  "output_bytes": 4143,
+  "elapsed_seconds": 385,
+  "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)\ndevbox-ask: codex consult still running (6m 00s)",
+  "progress_truncated": false,
+  "result": "**Existing evidence suffices to infer that all six original omissions first occur at leaf nomination.** It does not identify why those leaves were excluded or select a replacement algorithm.\n\nAt qualified source `240a570d`:\n\n- `semantic_unit_router.rs:1051\u20131170`: `nominate_selected` retains every unit belonging to selected leaves; seed completion only adds units.\n- `compare_native_replay.rs:4640\u20134746,5167\u20135178`: control validation binds that nomination to the original producer and requires every unit in the complete physical page closure to be SOURCE-scored.\n- `budgeted_page_rank.rs:28\u201397`: SOURCE cover preserves every closure page, adds bridges, or fails admission.\n\nTherefore, an unscored target lies outside that closure, and its unit cannot belong to a selected leaf. The closed native loss report establishes exactly six such targets: q742\u00d72, q823\u00d73, q991\u00d71. A within-leaf truncation or SOURCE-cover omission would contradict the validated invariants. q537 remains a separate covered ranking loss.\n\nOne actionable plan: **add a report-only reduction mode to `compare_native_replay.rs` that makes this attribution explicit from preserved artifacts.** No generic public API change is necessary.\n\n1. On causality EC2, authenticate the preserved selection seal, native loss report and original configuration against their immutable hashes. Reuse `coverage_router` for generation/root/membership binding. Check matching producer, SQ8, physical-order and truth identities, and the exact `CoverageScope::consumed32()` roster before consuming target entries. Keep the historical sealer\u2019s source identity distinct from the new reducer\u2019s identity.\n\n2. Reconstruct only the **original L2 nomination**, using `nominate_selected` on the sealed leaf IDs; compare its units, walk, seed additions and closure exactly with the preserved seal. Recompute SOURCE cover through `plan_two_bit_source_cover` at unchanged 128 GET/64 MiB limits. This requires no query ranking, SOURCE scores, ANN requests or cosine replay. Read target IDs/physical positions from the authenticated, already-reduced loss report; no fresh truth or SQ8-body pass is needed.\n\n3. Emit, for each existing truth slot: `ordinal`, `id`, `physical_row`, `unit_id`, `page_id`, selected-leaf membership, walked membership, closure membership, SOURCE transport coverage, original SOURCE-scored flag, original SQ8 coverage, returned flag and attribution. Selected-leaf membership can use the complete unit union returned by the existing API; an owning-leaf getter is unnecessary. Treat nominated-but-unwalked units and uncovered closure pages as **INVALID**, rather than valid loss categories.\n\nThe bounded falsifier is one offline reduction over all 32 preserved queries on fresh causality Spot EC2: CPU0/100%, 512 MiB RAM, zero swap, pids128, \u226460 seconds native runtime, output \u22644 MiB. Require 320 disjoint slots, SOURCE coverage314, returned313, precisely the six nomination exclusions above, zero valid walk/SOURCE-cover/SQ8-admission omissions, and q537\u2019s covered ranking loss. Any contradictory authentic slot falsifies this attribution and stops algorithm selection. Preserve terminal receipts and terminate compute immediately.\n\nAdd small Rust fixtures covering complete nomination, page-completion rescue, fetched-but-unscored SOURCE bridges, partial tails, and rehashed inconsistent selections. Before handing off an increment, qualify its exact revision on EC2 with the affected example tests, required workspace Clippy, and `bash scripts/check_rust_test_build.sh` with bounded compiler concurrency.\n\nThe main interpretation risk is that coverage-report `l2_fetched` means **SOURCE transport coverage**, while loss-report `sq8_ranked` means actual SQ8 cover; bridges must remain separate. Fable\u2019s historical summary-hierarchy and copy-cost rejections constrain candidate selection, but their numerical results do not transfer to this Cohere workload.\n\nNo files were edited or data decoded; no compilation, tests, network, cloud or child jobs ran. The conclusion identifies the first lost layer, not its geometric cause or an ANN/cold-performance win.",
+  "result_truncated": false
+}
