@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-three-arm-prefix-parity.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 119ms
+CPU time consumed: 114ms
+Memory peak: 4.3M
+Memory swap peak: 0B
