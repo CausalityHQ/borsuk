@@ -1,0 +1,22 @@
+{
+    "CommandId": "b2fedd7c-9cf5-4b65-a2c1-2c899a4698f5",
+    "InstanceId": "i-09badae56dde771e2",
+    "Comment": "Original Rust archive admission before cold canary",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:04:42.538Z",
+    "ExecutionElapsedTime": "PT13.808S",
+    "ExecutionEndDateTime": "2026-10-11T02:04:55.538Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"local-archive-admission\",\n  \"source_commit\": \"5660b97d7c153e265cd96688113217717d61bd61\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

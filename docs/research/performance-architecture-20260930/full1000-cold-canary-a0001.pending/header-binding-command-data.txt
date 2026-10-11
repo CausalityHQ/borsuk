@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=/mnt/borsuk-scale1m
+ev="$root/evidence/canary-header-binding"
+(set -o noclobber; printf '%s
+' $'{\n  "schema": "borsuk-completed-header-authority-v1",\n  "config": {\n    "path": "/mnt/borsuk-scale1m/closed/s3/canary-one-query-config.json",\n    "bytes": 3065,\n    "sha256": "2024586d5a5b296095cc61195060a08726aa9bac59c943fc1bcceddf3d01a898"\n  },\n  "result": {\n    "path": "/mnt/borsuk-scale1m/closed/s3/canary-one-query-result.jsonl",\n    "bytes": 50535,\n    "sha256": "1c1cf03a55e49a1e83b2d8d8ab3a4ffcd6aa46352356aa745e84a9f08b53b05d"\n  },\n  "cohort": {\n    "bytes": 6238,\n    "path": "/mnt/borsuk-scale1m/replay-local/prepared-parent_cohort_complete.json",\n    "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"\n  },\n  "binary_sha256": "59fe47aa1001b3ca24d1f9ff31444f97fcda72e3e297c8d7d846f5c3d811bfc3",\n  "sources": {\n    "runner_source_sha256": "d5e593e5f8e2aa02697b366cc3bcd8e6fa4160071ea0e2ac337063f9ff0023c4",\n    "generation_source_sha256": "6acb7cdbb23d790aee8bfbcba8924ae09f0c7c7738e87ca2b3e40006fd0e3f38",\n    "router_source_sha256": "2961d9295d49e217e4b8c24ef734b09f079fa112306e65655962cebba17c7ae5",\n    "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",\n    "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",\n    "sq8_range_source_sha256": "3f6407664d5f2c1be817e4b32e6a9dce8d4bf8e66ca455e237d0e7b0716ad711",\n    "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b"\n  }\n}' > "$root/closed/s3/header-authority.json")
+mkdir "$ev"
+export AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1
+left=$(( $(cat "$root/gate-deadline.epoch") - $(date +%s) ))
+(( left > 30 )) || exit 124
+(( left <= 120 )) || left=120
+set +e
+systemd-run --expand-environment=no --unit=borsuk-rust-replay-canary-header-binding --wait --pipe -p WorkingDirectory="$root" -p CPUQuota=100% -p CPUQuotaPeriodSec=100ms -p AllowedCPUs=0 -p MemoryMax=1G -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStopSec=30 -p RuntimeMaxSec="$(( left + 120 ))" --setenv=RUSTUP_HOME="$root/.rustup" --setenv=CARGO_HOME="$root/.cargo" --setenv=PATH="$root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" /bin/bash -c 'set -euo pipefail
+trap '\''exit 97'\'' TERM HUP INT
+root=/mnt/borsuk-scale1m
+ev="$root/evidence/canary-header-binding"
+cg=$(awk -F: '\''$1==0 {print $3}'\'' /proc/self/cgroup)
+printf "%s\n" "$cg" > "$ev/cgroup-path.txt"
+for f in cpu.max cpuset.cpus.effective memory.max memory.swap.max pids.max; do cat "/sys/fs/cgroup$cg/$f" > "$ev/$f.before"; done
+test "$(cat "$ev/cpu.max.before")" = "100000 100000"
+test "$(cat "$ev/cpuset.cpus.effective.before")" = 0
+test "$(cat "$ev/memory.max.before")" = 1073741824
+test "$(cat "$ev/memory.swap.max.before")" = 0
+test "$(cat "$ev/pids.max.before")" = 128
+left=$(( $(cat "$root/gate-deadline.epoch") - $(date +%s) ))
+(( left > 30 )) || exit 124
+(( left <= 120 )) || left=120
+printf "%s\n" '\''/mnt/borsuk-scale1m/bin/compare_native_replay --bind-completed-scale /mnt/borsuk-scale1m/closed/s3/header-authority.json d00f006934ff5891d78fe4912e5ea5bae4884263921125f09c15119cc36ea6a0 /mnt/borsuk-scale1m/closed/s3/completed-config.json'\'' > "$ev/native-command.txt"
+printf "%s  %s\n" 0837efd7c339e4d0968cfebc21a1390dfec18f9a0229b334cfaeddefa20236fd "$root/bin/compare_native_replay" | sha256sum -c - > "$ev/release-before.log"
+date -u +%FT%TZ > "$ev/native-started.txt"
+set +e
+/usr/bin/time -v -o "$ev/native-time.txt" timeout --kill-after=30 "$left" /mnt/borsuk-scale1m/bin/compare_native_replay --bind-completed-scale /mnt/borsuk-scale1m/closed/s3/header-authority.json d00f006934ff5891d78fe4912e5ea5bae4884263921125f09c15119cc36ea6a0 /mnt/borsuk-scale1m/closed/s3/completed-config.json > "$ev/native.log" 2>&1
+status=$?
+set -e
+printf "%s\n" "$status" > "$ev/native-exit.txt"
+date -u +%FT%TZ > "$ev/native-finished.txt"
+for f in memory.peak memory.events memory.swap.peak pids.peak cpu.stat; do if test -f "/sys/fs/cgroup$cg/$f"; then cat "/sys/fs/cgroup$cg/$f" > "$ev/$f.after"; fi; done
+exit "$status"' > "$ev/systemd-run.log" 2>&1
+manager=$?
+set -e
+printf "%s\n" "$manager" > "$ev/manager-exit.txt"
+set +e
+timeout --kill-after=2 10 systemctl show borsuk-rust-replay-canary-header-binding.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup > "$ev/systemd-after.txt" 2> "$ev/systemd-after.stderr"
+show_status=$?
+set -e
+printf "%s\n" "$show_status" > "$ev/systemd-show-exit.txt"
+drained=false
+if test -s "$ev/cgroup-path.txt"; then cg=$(cat "$ev/cgroup-path.txt"); if [[ "$cg" == "/system.slice/borsuk-rust-replay-canary-header-binding.service" ]]; then if test ! -d "/sys/fs/cgroup$cg"; then drained=true; elif grep -qx "populated 0" "/sys/fs/cgroup$cg/cgroup.events"; then drained=true; fi; fi; fi
+native=null; if test -s "$ev/native-exit.txt"; then native=$(cat "$ev/native-exit.txt"); [[ "$native" =~ ^[0-9]+$ ]] || native=null; fi
+if [[ "$native" == 0 ]]; then cp --no-clobber /mnt/borsuk-scale1m/closed/s3/completed-config.json "$ev/completed-config.json"; fi
+jq -n --arg schema borsuk-full1000-rust-replay-stage-v1 --arg stage 'canary-header-binding' --arg source d077a54f456af30242753ed1e2e397a9416191f7 --argjson manager "$manager" --argjson native "$native" --argjson drained "$drained" '{schema:$schema,stage:$stage,source_commit:$source,manager_exit:$manager,native_exit:$native,owned_cgroup_drained:$drained,performance_claim:false}' > "$ev/terminal.json"
+(cd "$ev" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > "$ev/SHA256SUMS"
+publication_deadline=$(( $(date +%s) + 120 ))
+for file in "$ev"/*; do remaining=$(( publication_deadline - $(date +%s) - 2 )); (( remaining > 0 )) || exit 124; (( remaining <= 90 )) || remaining=90; timeout --kill-after=2 "$remaining" aws s3api put-object --bucket borsuk-bench-453182569524-euc1 --key research/semantic-router/20261011/full1000-cold-canary-a0001/stages/canary-header-binding/"$(basename "$file")" --body "$file" --if-none-match "*" > /dev/null; done
+cat "$ev/terminal.json"
+[[ "$native" == 0 && "$manager" == 0 && "$drained" == true ]]

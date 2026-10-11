@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/extract_closed_native_replay /mnt/borsuk-scale1m/closed/local/authority.json 12cb5f16b91ed22ca3855b7a63028c32049b8bf6c56e4a9ab28f5ad5116121c0 /mnt/borsuk-scale1m/replay-local

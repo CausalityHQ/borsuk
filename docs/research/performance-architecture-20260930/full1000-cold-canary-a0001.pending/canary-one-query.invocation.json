@@ -1,0 +1,22 @@
+{
+    "CommandId": "25aa41a4-557a-436f-84f0-141a892c2462",
+    "InstanceId": "i-09badae56dde771e2",
+    "Comment": "Original one-query native S3 cold staging canary no performance claim",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:06:14.098Z",
+    "ExecutionElapsedTime": "PT16.107S",
+    "ExecutionEndDateTime": "2026-10-11T02:06:30.098Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"canary-one-query\",\n  \"source_commit\": \"c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
