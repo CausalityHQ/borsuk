@@ -212,6 +212,7 @@ fn mul(a: u64, b: u64) -> Result<u64> {
 struct Ledger {
     cap: u64,
     metadata: u64,
+    retained: u64,
     phases: std::collections::BTreeMap<String, u64>,
 }
 impl Ledger {
@@ -220,26 +221,37 @@ impl Ledger {
         let mut ledger = Self {
             cap,
             metadata,
+            retained: 0,
             phases: Default::default(),
         };
         ledger.phase("metadata", &[])?;
         Ok(ledger)
     }
     fn phase(&mut self, name: &str, parts: &[u64]) -> Result<u64> {
-        let total = parts.iter().try_fold(self.metadata, |n, &p| plus(n, p))?;
+        let total = parts
+            .iter()
+            .try_fold(plus(self.metadata, self.retained)?, |n, &p| plus(n, p))?;
         if total > self.cap {
             return Err(Box::new(ResourceFailure(format!(
                 "{name} owns {total} > {}",
                 self.cap
             ))));
         }
-        self.phases.insert(name.into(), total);
+        self.phases
+            .entry(name.into())
+            .and_modify(|peak| *peak = (*peak).max(total))
+            .or_insert(total);
         Ok(total)
+    }
+    fn retain(&mut self, name: &str, bytes: u64) -> Result<()> {
+        self.phase(name, &[bytes])?;
+        self.retained = plus(self.retained, bytes)?;
+        Ok(())
     }
     fn remaining(&self, retained: &[u64]) -> Result<usize> {
         let used = retained
             .iter()
-            .try_fold(self.metadata, |n, &p| plus(n, p))?;
+            .try_fold(plus(self.metadata, self.retained)?, |n, &p| plus(n, p))?;
         usize::try_from(
             self.cap
                 .checked_sub(used)
@@ -1587,6 +1599,7 @@ fn select_arm(
     expected: LeafPartition,
     ledger: &mut Ledger,
     retained: u64,
+    stamps: &mut Vec<HeaderSnapshot>,
 ) -> Result<Vec<CoverageArm>> {
     ledger.phase(
         "replay root authentication",
@@ -1650,10 +1663,33 @@ fn select_arm(
             })?;
         arms.push(arm);
     }
-    rs.recheck()?;
-    ms.recheck()?;
+    retain_replay_snapshot(stamps, rs)?;
+    retain_replay_snapshot(stamps, ms)?;
     // Router and request-local vectors are dropped before the other arm is opened.
     Ok(arms)
+}
+
+fn retain_replay_snapshot(stamps: &mut Vec<HeaderSnapshot>, replay: HeaderSnapshot) -> Result<()> {
+    replay.recheck()?;
+    let imported = stamps
+        .iter_mut()
+        .find(|s| s.path == replay.path)
+        .ok_or("replay role was not imported")?;
+    imported.recheck()?;
+    require(
+        imported.identity == replay.identity,
+        "import/replay descriptor continuity",
+    )?;
+    // Replace the earlier descriptor for this SAME role; the newly consumed descriptor stays live.
+    *imported = replay;
+    distinct(stamps)
+}
+
+fn seal_retained_charge(queries: usize) -> Result<u64> {
+    plus(
+        plus(replay_charge(queries)?, mul(64, SELECTION_CAP)?)?,
+        8 * RESERVE,
+    )
 }
 
 fn control(
@@ -1779,11 +1815,11 @@ fn seal_then_reduce(
     sync: &mut impl FnMut(&File, bool) -> io::Result<()>,
     open_truth: &mut impl FnMut(&CompletedInput, u64) -> Result<(Vec<u8>, HeaderSnapshot)>,
 ) -> Result<(Value, Vec<HeaderSnapshot>)> {
-    let retained = replay_charge(scope.ordinals.len())?;
-    ledger.phase(
-        "paired seal serialization readback",
-        &[retained, 4 * SELECTION_CAP],
+    require(
+        ledger.retained >= seal_retained_charge(scope.ordinals.len())?,
+        "caller seal Value/producer trace retention",
     )?;
+    ledger.phase("paired seal serialization readback", &[4 * SELECTION_CAP])?;
     distinct(&stamps)?;
     let refs = stamps.iter().collect::<Vec<_>>();
     let (selection_stamp, selection_sha) =
@@ -1796,7 +1832,6 @@ fn seal_then_reduce(
     ledger.phase(
         "truth order scan reduction",
         &[
-            retained,
             c.truth.bytes,
             i.rows.div_ceil(8) as u64,
             8192,
@@ -1991,6 +2026,7 @@ fn reduce_with(
         LeafPartition::Radial64V1,
         &mut ledger,
         nominations,
+        &mut stamps,
     )?;
     let spatial = select_arm(
         &c.spatial,
@@ -2000,6 +2036,7 @@ fn reduce_with(
         LeafPartition::WidestAxisQuotaV1,
         &mut ledger,
         nominations,
+        &mut stamps,
     )?;
     drop(requests);
     ledger.phase(
@@ -2008,10 +2045,9 @@ fn reduce_with(
     )?;
     let (run, controls, traces) = control(&completed, &radial, &scope.ordinals)?;
     distinct(&stamps)?;
-    extra = mul(64, SELECTION_CAP)?;
-    ledger.phase(
-        "seal Value and reducer ownership",
-        &[nominations, extra, 8 * RESERVE],
+    ledger.retain(
+        "seal Value and producer trace ownership",
+        seal_retained_charge(scope.ordinals.len())?,
     )?;
     let seal = json!({"schema":"borsuk-paired-partition-selection-seal-v1","status":"SEALED","complete":true,
         "config_sha256":sha,"authority_sha256":approval_sha,"original":a.construction.original,
@@ -2991,6 +3027,12 @@ mod tests {
                 Err("truth spy reached".into())
             };
             let mut ledger = Ledger::new(OWNED_CAP, RESERVE).unwrap();
+            ledger
+                .retain(
+                    "live seal fixture",
+                    seal_retained_charge(scope.ordinals.len()).unwrap(),
+                )
+                .unwrap();
             assert!(
                 seal_then_reduce(
                     &c,
@@ -3023,6 +3065,12 @@ mod tests {
             Err("stop after first permitted truth open".into())
         };
         let mut ledger = Ledger::new(OWNED_CAP, RESERVE).unwrap();
+        ledger
+            .retain(
+                "live seal fixture",
+                seal_retained_charge(scope.ordinals.len()).unwrap(),
+            )
+            .unwrap();
         assert!(
             seal_then_reduce(
                 &c,
@@ -3449,5 +3497,186 @@ mod tests {
         assert!(source_map(format!("{}  ../outside.rs\n", "1".repeat(64)).as_bytes()).is_err());
         assert!(source_map(format!("{}  a.rs", "1".repeat(64)).as_bytes()).is_err());
         assert!(!c.truth.path.exists());
+    }
+
+    #[test]
+    fn paired_replay_descriptors_retained_mutation_refused_before_truth() {
+        let f = Fixture::new(100353, 1024);
+        let c = screen_config(&f);
+        let i = inputs(100353, 1024);
+        let scope = CoverageScope {
+            rows: 100353,
+            count: 1,
+            ordinals: vec![0],
+            original_hits: 0,
+            original_coverage: 0,
+        };
+        let run = empty_run(&i, &f.config);
+        let mut request = vec![0_u8; 4096];
+        request[..4].copy_from_slice(&1_f32.to_le_bytes());
+        for path in [
+            &f.radial.root.path,
+            &f.radial.membership.path,
+            &f.spatial.root.path,
+            &f.spatial.membership.path,
+        ] {
+            let mut ledger = Ledger::new(OWNED_CAP, RESERVE).unwrap();
+            let mut stamps = Vec::new();
+            let (blob, _) = binary(&f.c.inputs.centroids, f.c.inputs.centroids.bytes).unwrap();
+            let groups = import(
+                &f.radial,
+                &f.a.original,
+                &blob,
+                LeafPartition::Radial64V1,
+                None,
+                &mut ledger,
+                &mut stamps,
+            )
+            .unwrap()
+            .unwrap();
+            import(
+                &f.spatial,
+                &f.a.original,
+                &blob,
+                LeafPartition::WidestAxisQuotaV1,
+                Some(&groups),
+                &mut ledger,
+                &mut stamps,
+            )
+            .unwrap();
+            drop((blob, groups));
+            let imported_fd = std::os::fd::AsRawFd::as_raw_fd(
+                &stamps.iter().find(|s| &s.path == path).unwrap().file,
+            );
+            let r = select_arm(
+                &f.radial,
+                &f.a.original,
+                &request,
+                &[0],
+                LeafPartition::Radial64V1,
+                &mut ledger,
+                replay_charge(1).unwrap(),
+                &mut stamps,
+            )
+            .unwrap();
+            let s = select_arm(
+                &f.spatial,
+                &f.a.original,
+                &request,
+                &[0],
+                LeafPartition::WidestAxisQuotaV1,
+                &mut ledger,
+                replay_charge(1).unwrap(),
+                &mut stamps,
+            )
+            .unwrap();
+            let replay_fd = std::os::fd::AsRawFd::as_raw_fd(
+                &stamps.iter().find(|s| &s.path == path).unwrap().file,
+            );
+            assert_ne!(
+                imported_fd,
+                replay_fd,
+                "replay descriptor retained for {}",
+                path.display()
+            );
+            let original = std::fs::read(path).unwrap();
+            std::fs::write(path, &original).unwrap();
+            ledger
+                .retain("live seal fixture", seal_retained_charge(1).unwrap())
+                .unwrap();
+            let seal = json!({"status":"SEALED","radial":coverage_arm_value(&r[0]),"spatial":coverage_arm_value(&s[0])});
+            let mut opened = 0;
+            let mut truth = |_: &CompletedInput, _: u64| -> Result<(Vec<u8>, HeaderSnapshot)> {
+                opened += 1;
+                Err("truth spy".into())
+            };
+            let selection = f.dir.path().join(format!("replay-seal-{replay_fd}"));
+            assert!(
+                seal_then_reduce(
+                    &c,
+                    &i,
+                    &scope,
+                    &r,
+                    &s,
+                    &run,
+                    &[],
+                    &seal,
+                    &selection,
+                    stamps,
+                    &mut ledger,
+                    &mut |file, _| file.sync_all(),
+                    &mut truth
+                )
+                .is_err()
+            );
+            assert_eq!(opened, 0);
+            assert!(!selection.exists());
+        }
+    }
+
+    #[test]
+    fn paired_live_seal_serialization_and_truth_budget_boundaries() {
+        let f = Fixture::new(33, 3);
+        let c = screen_config(&f);
+        let i = inputs(33, 3);
+        let scope = CoverageScope {
+            rows: 33,
+            count: 1,
+            ordinals: vec![0],
+            original_hits: 0,
+            original_coverage: 0,
+        };
+        let run = empty_run(&i, &f.config);
+        let seal = json!({"status":"SEALED","truth_opened":false});
+        let retained = seal_retained_charge(1).unwrap();
+        for (name, cap, created) in [
+            (
+                "serialization",
+                RESERVE + retained + 4 * SELECTION_CAP - 1,
+                false,
+            ),
+            ("truth", RESERVE + retained + 4 * SELECTION_CAP, true),
+        ] {
+            let mut ledger = Ledger::new(cap, RESERVE).unwrap();
+            ledger.retain("live caller seal/traces", retained).unwrap();
+            let selection = f.dir.path().join(format!("budget-{name}"));
+            let mut opened = 0;
+            let mut truth = |_: &CompletedInput, _: u64| -> Result<(Vec<u8>, HeaderSnapshot)> {
+                opened += 1;
+                Err("truth spy".into())
+            };
+            let error = seal_then_reduce(
+                &c,
+                &i,
+                &scope,
+                &[],
+                &[],
+                &run,
+                &[],
+                &seal,
+                &selection,
+                vec![],
+                &mut ledger,
+                &mut |file, _| file.sync_all(),
+                &mut truth,
+            )
+            .unwrap_err();
+            assert_eq!(failure(error.as_ref())["status"], "FAIL");
+            assert_eq!(opened, 0);
+            assert_eq!(selection.exists(), created);
+            if created {
+                assert_eq!(
+                    ledger.phases["paired seal serialization readback"],
+                    RESERVE + retained + 4 * SELECTION_CAP
+                );
+            }
+        }
+        let mut ledger = Ledger::new(100, 10).unwrap();
+        ledger.retain("live", 30).unwrap();
+        assert_eq!(ledger.phase("reused phase", &[20]).unwrap(), 60);
+        assert_eq!(ledger.phase("reused phase", &[1]).unwrap(), 41);
+        assert_eq!(ledger.phases["reused phase"], 60);
+        assert_eq!(ledger.retained, 30);
+        assert!(ledger.phase("cumulative overflow", &[61]).is_err());
     }
 }
