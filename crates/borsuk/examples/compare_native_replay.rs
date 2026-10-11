@@ -2430,6 +2430,44 @@ fn publish_bound_headers_with_sync(
 #[cfg(test)]
 mod completed_header_binding_tests {
     use super::*;
+    #[test]
+    fn bind_completed_scale_authenticates_population_sized_result_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("population-result.jsonl");
+        let mut file = File::create(&path).unwrap();
+        let prefix = b"{\"first\":1}\n{\"second\":2}\n";
+        file.write_all(prefix).unwrap();
+        let mut digest = Sha256::new();
+        digest.update(prefix);
+        // The binder authenticates opaque tail bytes; the completed reducer validates rows.
+        let block = [b'x'; 8192];
+        let mut bytes = prefix.len() as u64;
+        while bytes < FILE_CAP {
+            let n = usize::try_from((FILE_CAP - bytes).min(block.len() as u64)).unwrap();
+            file.write_all(&block[..n]).unwrap();
+            digest.update(&block[..n]);
+            bytes += n as u64;
+        }
+        file.sync_all().unwrap();
+        drop(file);
+        let mut pin = CompletedInput {
+            path: path.clone(),
+            bytes,
+            sha256: format!("{:x}", digest.finalize()),
+        };
+        let (headers, snapshot) = authenticated_headers(&pin).unwrap();
+        assert_eq!(headers, [json!({"first":1}), json!({"second":2})]);
+        recheck_header_file(&snapshot.file, &snapshot.path, &snapshot.identity).unwrap();
+        pin.sha256 = "0".repeat(64);
+        assert!(
+            authenticated_headers(&pin)
+                .unwrap_err()
+                .to_string()
+                .contains("whole-body SHA/EOF")
+        );
+        pin.bytes = FILE_CAP + 1;
+        assert!(header_pin(&pin, HEADER_RESULT_CAP).is_err());
+    }
 
     // Frozen independently from the reviewed c3e52c8 emission and source-pin roster.
     // Changing a production pin must not silently change the golden oracle.
