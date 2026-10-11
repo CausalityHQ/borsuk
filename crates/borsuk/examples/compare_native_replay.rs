@@ -6244,6 +6244,9 @@ mod tests {
         bound["corpus_intervals"] = json!([{"start":0,"end":i.rows}]);
         bound["query_source_first"] = json!(i.rows);
         bound["reserved_query_interval"] = json!({"start":i.rows,"end":i.rows+1});
+        // This synthesized fixture reserves exactly the one selected request;
+        // the original tiny producer reserved two and therefore had a different digest.
+        bound["reserved_queries_sha256"] = bound["requests_sha256"].clone();
         bound["generation_root_sha256"] = json!(c.generation_manifest.sha256);
         c.sq8 = CompletedInput {
             path: dir.join(if with_sq8 { "sq8" } else { "unopened-sq8" }),
