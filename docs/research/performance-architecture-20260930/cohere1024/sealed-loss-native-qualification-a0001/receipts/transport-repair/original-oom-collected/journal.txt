@@ -1,0 +1,4 @@
+Oct 11 07:01:55 ip-172-31-15-180 systemd[1]: Started borsuk-loss-analysis-inputs.service - /bin/bash /mnt/borsuk-sealed-loss-qualification/analysis-inputs.sh.
+Oct 11 07:01:57 ip-172-31-15-180 systemd[1]: borsuk-loss-analysis-inputs.service: A process of this unit has been killed by the OOM killer.
+Oct 11 07:01:57 ip-172-31-15-180 systemd[1]: borsuk-loss-analysis-inputs.service: Failed with result 'oom-kill'.
+Oct 11 07:01:57 ip-172-31-15-180 systemd[1]: borsuk-loss-analysis-inputs.service: Consumed 1.672s CPU time, 259.4M memory peak, 0B memory swap peak.

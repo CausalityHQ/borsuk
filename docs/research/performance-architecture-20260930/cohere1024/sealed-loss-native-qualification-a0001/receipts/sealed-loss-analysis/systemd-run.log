@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-sealed-loss-analysis.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 5.182s
+CPU time consumed: 1.021s
+Memory peak: 1.7M
+Memory swap peak: 0B

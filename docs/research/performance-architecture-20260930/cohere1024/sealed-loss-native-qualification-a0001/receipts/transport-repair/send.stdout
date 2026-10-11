@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "a2d9cf82-5cae-477c-9de2-cc81cc3586b6",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "single-stream input transport repair; original OOM preserved; unchanged caps/source/deadlines",
+        "ExpiresAfter": "2026-10-11T07:15:31.614000+00:00",
+        "Parameters": {
+            "commands": [
+                "set -eu\nroot=/mnt/borsuk-sealed-loss-qualification\nmkdir \"$root/evidence/analysis-inputs-failed-a0001\"\nsystemctl show borsuk-loss-analysis-inputs.service > \"$root/evidence/analysis-inputs-failed-a0001/unit.show\"\njournalctl -u borsuk-loss-analysis-inputs.service --no-pager > \"$root/evidence/analysis-inputs-failed-a0001/journal.txt\"\nstate=$(systemctl show borsuk-loss-analysis-inputs.service -p ActiveState --value)\ntest \"$state\" = failed || test \"$state\" = inactive\ncg=$(systemctl show borsuk-loss-analysis-inputs.service -p ControlGroup --value)\nif test -n \"$cg\" && test -d \"/sys/fs/cgroup$cg\"; then\n cp \"/sys/fs/cgroup$cg/memory.events\" \"$root/evidence/analysis-inputs-failed-a0001/memory.events\"\n cp \"/sys/fs/cgroup$cg/cgroup.events\" \"$root/evidence/analysis-inputs-failed-a0001/cgroup.events\"\n grep -qx 'populated 0' \"$root/evidence/analysis-inputs-failed-a0001/cgroup.events\"\nfi\nAWS_MAX_ATTEMPTS=1 timeout -k 2 30 aws s3 cp \"$root/evidence/analysis-inputs-failed-a0001\" s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261011/sealed-loss-native-qualification-a0001/stages/analysis-inputs-failed-a0001/ --recursive --only-show-errors\nmv \"$root/analysis-inputs\" \"$root/analysis-inputs-failed-a0001\"\nAWS_MAX_ATTEMPTS=1 timeout -k 2 30 aws s3api get-object --bucket borsuk-bench-453182569524-euc1 --key research/semantic-router/20261011/sealed-loss-native-qualification-a0001/inputs/transport-r2/analysis-inputs.sh \"$root/analysis-inputs-r2.sh\" > /dev/null\nprintf '%s  %s\\n' f33a11b2f73bb557ea912d12f259b33e7eca25a009830866f33c9cd15913141d \"$root/analysis-inputs-r2.sh\" | sha256sum -c -\nsystemd-run --unit=borsuk-loss-analysis-inputs-r2 --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStopSec=10 -p RuntimeMaxSec=480s /bin/bash \"$root/analysis-inputs-r2.sh\"\n"
+            ],
+            "executionTimeout": [
+                "540"
+            ]
+        },
+        "InstanceIds": [
+            "i-05f4d4ae54bb4f5b6"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T07:05:31.614000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 60,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}

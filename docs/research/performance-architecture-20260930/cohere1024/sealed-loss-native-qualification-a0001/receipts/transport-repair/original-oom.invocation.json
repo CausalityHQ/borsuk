@@ -1,0 +1,22 @@
+{
+    "CommandId": "f4afc3b8-871c-42fe-b1ec-cba1023a3cb2",
+    "InstanceId": "i-05f4d4ae54bb4f5b6",
+    "Comment": "offline original sealed32 input authentication; no ANN calls; after all five native gates",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-11T07:01:54.469Z",
+    "ExecutionElapsedTime": "PT3.237S",
+    "ExecutionEndDateTime": "2026-10-11T07:01:57.469Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-sealed-loss-qualification/loss-config.json: OK\n/mnt/borsuk-sealed-loss-qualification/analysis-inputs.sh: OK\nsealed-result.jsonl: OK\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-loss-analysis-inputs.service\nFinished with result: oom-kill\nMain processes terminated with: code=killed/status=TERM\nService runtime: 1.912s\nCPU time consumed: 1.672s\nMemory peak: 259.4M\nMemory swap peak: 0B\nfailed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

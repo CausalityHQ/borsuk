@@ -1,0 +1,1 @@
+/mnt/borsuk-sealed-loss-qualification/source/target/release/examples/compare_native_replay --sealed-scale-loss /mnt/borsuk-sealed-loss-qualification/loss-config.json f17c890a8045de63184090e603132119aea32047478bd35c8d379235e7fe39db /mnt/borsuk-sealed-loss-qualification/evidence/sealed-loss-analysis/loss-report.json

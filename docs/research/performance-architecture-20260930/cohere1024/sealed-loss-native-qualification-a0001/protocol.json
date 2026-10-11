@@ -1,0 +1,159 @@
+{
+  "schema": "borsuk-sealed-loss-native-qualification-v1",
+  "source_commit": "26100d05dcacebcc115481a504b090955c84324b",
+  "native_source_count": 430,
+  "native_identity_encoding": "sorted SHA256<TAB>relative-path<LF>",
+  "native_source_identity_sha256": "49b4d0f34b7522357ead214c6749a4b0ffef6fce0a93b33e6c65fa68dd218d5f",
+  "archive_base_source": "6bf1ec2568dc113656acec329c48dc7a7b881700",
+  "support_source_file_count": 463,
+  "source_archive_reuse": "immutable original archive plus exactly three authenticated Rust overlays; full map checked before and after every stage",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "instance_type": "c7i.2xlarge",
+  "market": "spot",
+  "on_demand_fallback": false,
+  "spot_max_bid_usd_per_hour": 0.5,
+  "max_compute_usd": 1.25,
+  "max_ancillary_usd": 0.25,
+  "max_total_usd": 1.5,
+  "root_volume_gib": 80,
+  "root_volume_delete_on_termination": true,
+  "machine_shutdown_from_boot_seconds": 9000,
+  "external_termination_from_launch_seconds": 9120,
+  "native_global_deadline_seconds": 7200,
+  "compiler_resources": {
+    "cpu_quota_percent": 400,
+    "allowed_cpus": "0-3",
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "cargo_jobs": 2,
+    "test_threads": 1
+  },
+  "offline_resources": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_bytes": 536870912,
+    "swap_bytes": 0,
+    "pids": 128,
+    "modeled_payload_cap_bytes": 67108864,
+    "native_max_seconds": 900,
+    "input_transport_max_seconds": 450
+  },
+  "stages": [
+    {
+      "name": "sealed-loss-tests-r2",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay",
+        "sealed_loss_",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "reducer-example-tests",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay",
+        "--",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "name": "release-reducer",
+      "argv": [
+        "cargo",
+        "build",
+        "--release",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--example",
+        "compare_native_replay"
+      ]
+    },
+    {
+      "name": "workspace-clippy",
+      "argv": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ]
+    },
+    {
+      "name": "real-workspace-test-build",
+      "argv": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "BORSUK_TEST_BUILD_JOBS=2",
+        "CARGO_BUILD_JOBS=2",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ]
+    }
+  ],
+  "required_narrow_tests": [
+    "tests::sealed_loss_bridge_source_completion_and_disjoint_buckets",
+    "tests::sealed_loss_refuses_incomplete_duplicate_out_of_cover_and_charge_evidence",
+    "tests::sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity",
+    "tests::sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth"
+  ],
+  "offline_after_all_native_gates": true,
+  "offline_if_remaining_seconds_at_least": 1500,
+  "offline_operation": "qualified Rust --sealed-scale-loss on original immutable completed32 producer, full actual SQ8 payload, and original full truth; no ANN rerun or scientific performance experiment",
+  "offline_acceptance": {
+    "schema": "borsuk-sealed-scale-loss-v2",
+    "complete": true,
+    "query_count": 32,
+    "hits10": 313,
+    "misses10": 7,
+    "returned_outside_sq8": 0,
+    "mapping_authenticated_from_ranked_sq8": true,
+    "qualified": false
+  },
+  "interruption": "INVALID, preserve synced terminal repetitions, terminate and collect; no automatic restart or repetition",
+  "first_stage_failure": "preserve original exit/receipts; stop subsequent stages and terminate after collection unless a demonstrated setup/source defect is repaired within the same existing bounded host and deadline",
+  "terminal_action": "terminate immediately, wait, verify root volume deletion, collect and verify original manifests, clear original background marker and timer",
+  "historical_panel_disposition": "313/320 zero underfill QUALITYFAIL against frozen314; control and population UNRUN",
+  "claims": {
+    "ann_rerun": false,
+    "cold_performance": false,
+    "vendor_win": false,
+    "population_latency_or_capacity_qps": false,
+    "quantization_attribution": false,
+    "production_ready": false
+  },
+  "reviews": [
+    "61b99ed9ffb64ec5",
+    "265ef2fa4f7b49f4"
+  ],
+  "review_reconciliation": "both mapping assertions repaired; SQ8 payload and header-order hashes independently supported by both critics; incompatible loss markers advanced to v2 and old-marker refusal added; native qualification UNRUN at freeze",
+  "repair": {
+    "original_source": "070fddf3e6b9e225fefd593df4ed111c2a9f17ab",
+    "original_stage": "sealed-loss-tests",
+    "original_native_exit": 101,
+    "defect": "Hit lacked serde::Serialize; new report explicitly emits id/score_bits JSON",
+    "old_stage_preserved": true,
+    "same_instance": true,
+    "deadlines_and_host_limits_unchanged": true
+  }
+}

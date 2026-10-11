@@ -1,0 +1,22 @@
+{
+    "CommandId": "a2d9cf82-5cae-477c-9de2-cc81cc3586b6",
+    "InstanceId": "i-05f4d4ae54bb4f5b6",
+    "Comment": "single-stream input transport repair; original OOM preserved; unchanged caps/source/deadlines",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T07:05:31.838Z",
+    "ExecutionElapsedTime": "PT26.328S",
+    "ExecutionEndDateTime": "2026-10-11T07:05:57.838Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-sealed-loss-qualification/analysis-inputs-r2.sh: OK\nsealed-result.jsonl: OK\nsq8: OK\ntruth.u64: OK\nAUTHENTICATED_SEALED_PANEL_SQ8_TRUTH_NO_ANN_RERUN\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-loss-analysis-inputs-r2.service\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 25.109s\nCPU time consumed: 4.903s\nMemory peak: 1.8M\nMemory swap peak: 0B\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

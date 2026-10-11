@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-reducer-example-tests.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 5min 5.230s
+CPU time consumed: 5min 2.237s
+Memory peak: 276.7M
+Memory swap peak: 0B
