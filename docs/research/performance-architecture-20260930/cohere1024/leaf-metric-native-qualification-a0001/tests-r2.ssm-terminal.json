@@ -1,0 +1,22 @@
+{
+    "CommandId": "0eaa3ef3-f588-48fa-8495-8dd0f96c4fe1",
+    "InstanceId": "i-0defaf8a335f362fd",
+    "Comment": "leaf-metric fixture-only repair 607da22f same host",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 2,
+    "ExecutionStartDateTime": "2026-10-11T09:06:18.377Z",
+    "ExecutionElapsedTime": "PT0.003S",
+    "ExecutionEndDateTime": "2026-10-11T09:06:18.377Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "/var/lib/amazon/ssm/i-0defaf8a335f362fd/document/orchestration/0eaa3ef3-f588-48fa-8495-8dd0f96c4fe1/awsrunShellScript/0.awsrunShellScript/_script.sh: 1: set: Illegal option -o pipefail\nfailed to run commands: exit status 2",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

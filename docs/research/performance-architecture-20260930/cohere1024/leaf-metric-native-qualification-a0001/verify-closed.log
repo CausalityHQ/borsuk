@@ -1,0 +1,7 @@
+Running as unit: run-p142207-i771718802.service; invocation ID: e9b604e5ace249dcb94396c8120d079f
+ALL_FIVE_GATES_AUTHENTICATED_SOURCE463_NATIVE430_TERMINATED_VOLUME_DELETED
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7.486s
+             CPU time consumed: 3.305s
+                   Memory peak: 55.3M (swap: 0B)

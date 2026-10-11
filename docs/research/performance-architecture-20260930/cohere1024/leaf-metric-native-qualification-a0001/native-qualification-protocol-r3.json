@@ -1,0 +1,50 @@
+{
+  "schema": "borsuk-leaf-metric-native-qualification-v1",
+  "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+  "base": "556e5bf147ef0ac3f8fa083212204ea4af560065",
+  "scope": "Rust fixed48 paired metadata coverage probe; compiler and synthetic correctness only",
+  "source_file_count": 463,
+  "native_source_count": 430,
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "market": "spot",
+  "instance_type": "c7i.2xlarge",
+  "observed_spot_usd_per_hour": 0.2034,
+  "quote_timestamp": "2026-10-11T06:00:00+00:00",
+  "max_bid_usd_per_hour": 0.5,
+  "max_total_usd": 1.45,
+  "max_ancillary_usd": 0.25,
+  "machine_shutdown_seconds": 8400,
+  "external_termination_seconds": 8520,
+  "native_global_seconds": 6000,
+  "compiler": {
+    "cpu_quota_percent": 400,
+    "allowed_cpus": "0-3",
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "cargo_jobs": 2,
+    "test_threads": 1
+  },
+  "serial_stages": [
+    "cargo test --locked -p borsuk --example compare_native_replay leaf_coverage_ -- --test-threads=1",
+    "cargo test --locked -p borsuk --example compare_native_replay sealed_loss_ -- --test-threads=1",
+    "cargo build --release --locked -p borsuk --example compare_native_replay",
+    "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh"
+  ],
+  "required_new_test_prefix": "tests::leaf_coverage_",
+  "required_new_test_count": 8,
+  "failure_handling": "stop on the first failed layer; preserve original terminal/log; repair exact source on the same bounded host only with frozen revision and new stage identity; no automatic new instance",
+  "real_query_truth_vector_reads": false,
+  "ann_measurement": false,
+  "vendor_win": false,
+  "interruption_handling": "INVALID, preserve terminal artifacts, no automatic relaunch",
+  "terminate_after_terminal": true,
+  "native_source_identity_sha256": "a163a80a5aee2a4823e0728c9934cbf240b1a29570142a38fa7e1861952fcb10",
+  "preserved_source_revisions": [
+    "4ec3cb767f9628923786573e82ab4b756b2a6dfb",
+    "607da22f323e18ecf4285393b037bb1e6486b2b5"
+  ],
+  "repair_scope": "test-only producer fixture digest, complete plan accounting and reserved counts; production invariants unchanged"
+}

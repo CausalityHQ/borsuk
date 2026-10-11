@@ -1,0 +1,22 @@
+{
+    "CommandId": "6981ba13-3db3-45c4-8e86-ba23406905bb",
+    "InstanceId": "i-0defaf8a335f362fd",
+    "Comment": "leaf-metric eight Rust tests exact 4ec3cb76",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-11T09:00:38.854Z",
+    "ExecutionElapsedTime": "PT2M42.821S",
+    "ExecutionEndDateTime": "2026-10-11T09:03:20.854Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-11T08:53:54+00:00\",\n    \"ContentLength\": 4486,\n    \"ETag\": \"\\\"55db50bb405808c265d94e327fbb799c\\\"\",\n    \"ChecksumCRC64NVME\": \"n1/+RlVhttc=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n/mnt/borsuk-leaf-metric-qualification/leaf-metric-tests.sh: OK\n{\n  \"schema\": \"borsuk-sealed-loss-native-stage-v1\",\n  \"stage\": \"leaf-metric-tests\",\n  \"source_commit\": \"4ec3cb767f9628923786573e82ab4b756b2a6dfb\",\n  \"manager_exit\": 101,\n  \"native_exit\": 101,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

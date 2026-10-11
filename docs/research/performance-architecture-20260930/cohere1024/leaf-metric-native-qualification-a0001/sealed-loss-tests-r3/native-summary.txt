@@ -1,0 +1,6 @@
+    Finished `test` profile [unoptimized] target(s) in 0.19s
+test tests::sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth ... ok
+test tests::sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity ... ok
+test tests::sealed_loss_bridge_source_completion_and_disjoint_buckets ... ok
+test tests::sealed_loss_refuses_incomplete_duplicate_out_of_cover_and_charge_evidence ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 102 filtered out; finished in 1.23s

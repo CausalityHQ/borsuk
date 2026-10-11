@@ -1,0 +1,111 @@
+{
+  "schema": "borsuk-leaf-metric-native-qualification-closed-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+  "base_commit": "556e5bf147ef0ac3f8fa083212204ea4af560065",
+  "source_file_count": 463,
+  "native_source_count": 430,
+  "native_source_identity_sha256": "a163a80a5aee2a4823e0728c9934cbf240b1a29570142a38fa7e1861952fcb10",
+  "full_source_before_after_root_match": true,
+  "instance_id": "i-0defaf8a335f362fd",
+  "root_volume_id": "vol-08e774940109dda3a",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "market": "spot",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "external_timer_active": false,
+  "stages": [
+    {
+      "schema": "borsuk-sealed-loss-native-stage-v1",
+      "stage": "leaf-metric-tests-r3",
+      "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "performance_claim": false,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay leaf_coverage_ -- --test-threads=1",
+      "terminal_sha256": "d0899793cb7d013b917b8a876bf97a2f636127e5a769f77f80eb133ad37231d3",
+      "memory_peak_bytes": 923557888
+    },
+    {
+      "schema": "borsuk-sealed-loss-native-stage-v1",
+      "stage": "sealed-loss-tests-r3",
+      "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "performance_claim": false,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay sealed_loss_ -- --test-threads=1",
+      "terminal_sha256": "bd5ff4dcc944e71d5ea335a127217c62a3ee7e4e69c1b5880c5a19a73039edae",
+      "memory_peak_bytes": 97230848
+    },
+    {
+      "schema": "borsuk-sealed-loss-native-stage-v1",
+      "stage": "leaf-metric-release-r3",
+      "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "performance_claim": false,
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "terminal_sha256": "3fbb3f19e420b34cbbb3cebaf41943c0f7b4f644cda370023beb8beb73952163",
+      "memory_peak_bytes": 5251014656
+    },
+    {
+      "schema": "borsuk-sealed-loss-native-stage-v1",
+      "stage": "leaf-metric-clippy-r3",
+      "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "performance_claim": false,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "terminal_sha256": "4c7f6670308df306da9e46ea6fcd2a8c1920a0e2c2bc6a3af66dc40273bcd20e",
+      "memory_peak_bytes": 6292086784
+    },
+    {
+      "schema": "borsuk-sealed-loss-native-stage-v1",
+      "stage": "leaf-metric-test-build-r3",
+      "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+      "manager_exit": 0,
+      "native_exit": 0,
+      "owned_cgroup_drained": true,
+      "performance_claim": false,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+      "terminal_sha256": "f0b9afceff40ab308411d886a97d7a93142fe5bd3a05d3a093e1492b583afbc4",
+      "memory_peak_bytes": 8589934592
+    }
+  ],
+  "mandatory_new_tests": 8,
+  "mandatory_regressions": 4,
+  "workspace_tests_compiled_not_executed": true,
+  "workspace_clippy_correctness_suspicious": true,
+  "real_shim_unset_test_build": true,
+  "compiler": {
+    "allowed_cpus": "0-3",
+    "cpu_percent": 400,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "pids": 512,
+    "jobs": 2
+  },
+  "all_stage_swap_peak_zero": true,
+  "all_stage_oom_kill_zero": true,
+  "test_build_memory_max_events": 809,
+  "release_binary": {
+    "role": "compare_native_replay",
+    "bytes": 6011808,
+    "sha256": "e6dede4dbb786a5d90bf7cecdf0959cba32e7ae30cf9812381603494da0f33d4"
+  },
+  "preserved_failed_sources": [
+    "4ec3cb767f9628923786573e82ab4b756b2a6dfb",
+    "607da22f323e18ecf4285393b037bb1e6486b2b5"
+  ],
+  "preserved_setup_failure": "SSM /bin/sh rejected pipefail before any overlay/native execution; explicit Bash wrapper fixed it",
+  "real_corpus_query_truth_execution": false,
+  "performance_claim": false,
+  "cold_s3_claim": false,
+  "vendor_win": false
+}

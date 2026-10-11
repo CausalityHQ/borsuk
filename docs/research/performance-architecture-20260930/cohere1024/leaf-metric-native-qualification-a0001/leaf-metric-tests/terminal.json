@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-sealed-loss-native-stage-v1",
+  "stage": "leaf-metric-tests",
+  "source_commit": "4ec3cb767f9628923786573e82ab4b756b2a6dfb",
+  "manager_exit": 101,
+  "native_exit": 101,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

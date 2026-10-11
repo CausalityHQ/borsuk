@@ -1,0 +1,2 @@
+Full original stage evidence: s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-native-qualification-a0001/stages/leaf-metric-test-build-r3/
+Original SHA256SUMS covers full evidence. This Git subset keeps receipts and full-log hashes; the root verified every full member. Delivery uses its own separate manifest.

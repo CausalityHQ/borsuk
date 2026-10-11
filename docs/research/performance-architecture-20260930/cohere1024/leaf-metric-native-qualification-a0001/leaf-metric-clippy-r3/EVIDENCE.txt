@@ -1,0 +1,2 @@
+Full original stage evidence: s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261011/leaf-metric-native-qualification-a0001/stages/leaf-metric-clippy-r3/
+SHA256SUMS is the authenticated original full roster. This Git delivery subset preserves terminal/resource/command receipts and full-log identities; it intentionally omits the full compiler and source-list logs, retained under the S3 prefix above. The root downloaded and verified every original roster member before preparing this subset. The final delivery has its own separate manifest.

@@ -1,0 +1,1 @@
+NATIVE_QUALIFIED: compiler and synthetic correctness only; all five gates passed on exact 240a570d, instance terminated and root volume deleted. Real-data coverage and performance remain unrun.

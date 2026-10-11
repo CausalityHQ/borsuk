@@ -1,0 +1,22 @@
+{
+    "CommandId": "5dc3a62a-3c6a-4042-a9bf-f6ee2d358cb6",
+    "InstanceId": "i-0defaf8a335f362fd",
+    "Comment": "four serial Rust gates exact 240a570d same instance",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T09:12:54.936Z",
+    "ExecutionElapsedTime": "PT13M43.227S",
+    "ExecutionEndDateTime": "2026-10-11T09:26:37.936Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/tmp/borsuk-leaf-metric-remaining-r3.sh: OK\ntrue\n./cgroup-path.txt: OK\n./cpu.max.before: OK\n./cpu.stat.after: OK\n./cpuset.cpus.effective.before: OK\n./manager-exit.txt: OK\n./memory.events.after: OK\n./memory.max.before: OK\n./memory.peak.after: OK\n./memory.swap.max.before: OK\n./memory.swap.peak.after: OK\n./native-command.txt: OK\n./native-exit.txt: OK\n./native-finished.txt: OK\n./native-started.txt: OK\n./native-time.txt: OK\n./native.log: OK\n./pids.max.before: OK\n./pids.peak.after: OK\n./source-after.log: OK\n./source-before.log: OK\n./systemd-after.stderr: OK\n./systemd-after.txt: OK\n./systemd-run.log: OK\n./systemd-show-exit.txt: OK\n./terminal.json: OK\n{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-11T09:11:59+00:00\",\n    \"ContentLength\": 4503,\n    \"ETag\": \"\\\"201028404e6741c69f2dd180f7479b7e\\\"\",\n    \"ChecksumCRC64NVME\": \"yFbeL2llfG4=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n/mnt/borsuk-leaf-metric-qualification/r3-inputs/sealed-loss-tests-r3.sh: OK\n{\n  \"schema\": \"borsuk-sealed-loss-native-stage-v1\",\n  \"stage\": \"sealed-loss-tests-r3\",\n  \"source_commit\": \"240a570dff26daa7ec556159c9f9ecd370ed0dce\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\ntrue\n{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-11T09:12:01+00:00\",\n    \"ContentLength\": 4581,\n    \"ETag\": \"\\\"f175a09127d99611a2aabdefb8201369\\\"\",\n    \"ChecksumCRC64NVME\": \"Js55gHKqqH0=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n/mnt/borsuk-leaf-metric-qualification/r3-inputs/leaf-metric-release-r3.sh: OK\n{\n  \"schema\": \"borsuk-sealed-loss-native-stage-v1\",\n  \"stage\": \"leaf-metric-release-r3\",\n  \"source_commit\": \"240a570dff26daa7ec556159c9f9ecd370ed0dce\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\ntrue\n{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-11T09:12:02+00:00\",\n    \"ContentLength\": 4512,\n    \"ETag\": \"\\\"c0b74afe97f0f563a3e05df69822dac8\\\"\",\n    \"ChecksumCRC64NVME\": \"DOXWJ3Z9UJc=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n/mnt/borsuk-leaf-metric-qualification/r3-inputs/leaf-metric-clippy-r3.sh: OK\n{\n  \"schema\": \"borsuk-sealed-loss-native-stage-v1\",\n  \"stage\": \"leaf-metric-clippy-r3\",\n  \"source_commit\": \"240a570dff26daa7ec556159c9f9ecd370ed0dce\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\ntrue\n{\n    \"AcceptRanges\": \"bytes\",\n    \"LastModified\": \"2026-10-11T09:12:03+00:00\",\n    \"ContentLength\": 4578,\n    \"ETag\": \"\\\"2450808eaf8866da6b93a0f87ad47e90\\\"\",\n    \"ChecksumCRC64NVME\": \"t+s3zdb0slA=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ContentType\": \"binary/octet-stream\",\n    \"ServerSideEncryption\": \"AES256\",\n    \"Metadata\": {}\n}\n/mnt/borsuk-leaf-metric-qualification/r3-inputs/leaf-metric-test-build-r3.sh: OK\n{\n  \"schema\": \"borsuk-sealed-loss-native-stage-v1\",\n  \"stage\": \"leaf-metric-test-build-r3\",\n  \"source_commit\": \"240a570dff26daa7ec556159c9f9ecd370ed0dce\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\ntrue\nALL_REMAINING_RUST_GATES_CLOSED\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

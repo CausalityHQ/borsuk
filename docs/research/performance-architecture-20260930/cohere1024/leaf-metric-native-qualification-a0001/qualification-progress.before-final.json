@@ -1,0 +1,42 @@
+{
+  "schema": "borsuk-leaf-metric-qualification-progress-v1",
+  "status": "QUALIFICATION_IN_PROGRESS",
+  "source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce",
+  "native_source_identity_sha256": "a163a80a5aee2a4823e0728c9934cbf240b1a29570142a38fa7e1861952fcb10",
+  "instance_id": "i-0defaf8a335f362fd",
+  "source_file_count": 463,
+  "native_source_count": 430,
+  "completed": [
+    {
+      "name": "leaf-metric-tests-r3",
+      "count": 8,
+      "exit": 0,
+      "terminal_sha256": "d0899793cb7d013b917b8a876bf97a2f636127e5a769f77f80eb133ad37231d3"
+    },
+    {
+      "name": "sealed-loss-tests-r3",
+      "count": 4,
+      "exit": 0,
+      "terminal_sha256": "bd5ff4dcc944e71d5ea335a127217c62a3ee7e4e69c1b5880c5a19a73039edae"
+    },
+    {
+      "name": "leaf-metric-release-r3",
+      "exit": 0
+    },
+    {
+      "name": "leaf-metric-clippy-r3",
+      "exit": 0
+    }
+  ],
+  "remaining": [
+    "real_unset_workspace_test_build"
+  ],
+  "full_qualification": false,
+  "performance_claim": false,
+  "release_binary": {
+    "sha256": "e6dede4dbb786a5d90bf7cecdf0959cba32e7ae30cf9812381603494da0f33d4",
+    "bytes": 6011808,
+    "role": "compare_native_replay",
+    "native_source_commit": "240a570dff26daa7ec556159c9f9ecd370ed0dce"
+  }
+}

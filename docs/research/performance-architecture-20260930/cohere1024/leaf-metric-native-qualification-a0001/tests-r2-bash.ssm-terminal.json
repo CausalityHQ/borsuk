@@ -1,0 +1,20 @@
+{
+    "CommandId": "26b85791-dc35-4547-935c-dc1c492f435b",
+    "InstanceId": "i-0defaf8a335f362fd",
+    "Comment": "explicit Bash wrapper repaired tests source unchanged",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": -1,
+    "ExecutionEndDateTime": "",
+    "Status": "InProgress",
+    "StatusDetails": "InProgress",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

@@ -1,0 +1,4 @@
+    Finished `test` profile [unoptimized] target(s) in 3m 17s
+rust-test-build status=0 elapsed_seconds=198 jobs=2
+started_at=2026-10-11T09:23:05Z
+finished_at=2026-10-11T09:26:23Z
