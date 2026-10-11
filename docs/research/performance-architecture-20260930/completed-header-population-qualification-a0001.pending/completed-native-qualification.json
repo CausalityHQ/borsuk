@@ -1,0 +1,106 @@
+{
+  "schema": "borsuk-population-boundary-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "2a7b7dd19eeeb88439f79a73e256eb5c0ad6adaf",
+  "source_file_count": 463,
+  "native_file_count": 430,
+  "native_source_map_sha256": "4beb5c5af2f3651a88e981619506e38b4756ca7c8bf67cd62f5533ccbec9cc9f",
+  "example_source_sha256": "87a4e54aeed45c003153259a25e72201dc8b5b016133453ef934b576cd7c7eac",
+  "instance_id": "i-0201e0ae0f8d5d0ed",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_id": "vol-010d8a2d41aa3ba44",
+  "root_volume_absent": true,
+  "stages": [
+    {
+      "name": "compile-green",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 874102784,
+      "body_manifest_sha256": "dfc7dd2dda32dbde31f42c98efdb979858e31dedbf329a8aa213d4ff654b811c"
+    },
+    {
+      "name": "population-boundary-green",
+      "command": "./target/debug/examples/compare_native_replay-f0e199fb7cd664dd completed_header_binding_tests::bind_completed_scale_authenticates_population_sized_result_tail --exact --test-threads=1",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 71815168,
+      "body_manifest_sha256": "f539c693a321bc240adebce40c214a1e332cc5d937f3d1f2069e1e6d926e3391"
+    },
+    {
+      "name": "full94-example-tests",
+      "command": "./target/debug/examples/compare_native_replay-f0e199fb7cd664dd --test-threads=1",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 214986752,
+      "body_manifest_sha256": "9c2c8b8c7f5b21ce5bbba6590c7cff6ce8dfdc7ba019147bc1f1fef33186d23c"
+    },
+    {
+      "name": "release-reducer",
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 5266808832,
+      "body_manifest_sha256": "ee1dcd7d413b12b17b2a9e52b331ec20c68cd48eb9740bd0d71a2bb343118847"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 6248546304,
+      "body_manifest_sha256": "15fcbfae23993babd3e2ec2b9c295581fe79984e67b756c1d1bbe41f9e1588f1"
+    },
+    {
+      "name": "real-workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+      "native_exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "source_before_after_equal": true,
+      "oom_kill": 0,
+      "swap_peak": 0,
+      "memory_peak_bytes": 8589934592,
+      "body_manifest_sha256": "954dd925006c43a447de2877ac3c54493896e4de092549303dabf66f2fb987b5"
+    }
+  ],
+  "expected_negative": {
+    "source_commit": "18f36c212f5590ed628dd5a7299ff467b074adaf",
+    "native_exit": 101,
+    "manager_exit": 101,
+    "exact_named_failed_count": 1,
+    "error": "bounded header artifact pin"
+  },
+  "exact_green_passed_count": 1,
+  "full_example_passed_count": 94,
+  "ignored_count": 0,
+  "release": {
+    "bytes": 1998456,
+    "sha256": "4cd7cd24d33e66f3504d42c2b2191a312f471a2a2c8a6b5f6b6d0c8e0e0938a9",
+    "s3_key": "research/semantic-router/20261011/completed-header-population-qualification-a0001/stages/release-reducer/compare_native_replay"
+  },
+  "claims_ann_quality": false,
+  "claims_performance": false,
+  "claims_vendor_win": false
+}
