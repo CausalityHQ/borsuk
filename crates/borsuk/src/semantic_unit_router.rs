@@ -1023,6 +1023,8 @@ impl SemanticUnitRouter {
     /// Rank every authenticated leaf by an explicit metric, with leaf-ID ties.
     /// Supports squared Euclidean and cosine distance. Cosine accepts finite,
     /// nonzero queries; a zero prototype has zero similarity (distance one).
+    /// This routing convention differs from `VectorMetric::distance` for zero
+    /// and very small norms; it must not inherit that scorer's norm threshold.
     /// The caller chooses an admitted leaf count through `nominate_selected`.
     /// This does not change the persisted selection rule used by serving.
     /// Caller-owned ranking payload is at most 24 bytes per leaf (scores + IDs).
@@ -1513,6 +1515,26 @@ mod tests {
                 .is_err()
         );
         assert_eq!(router.manifest().encode().unwrap(), artifacts.manifest);
+
+        // Authenticate a nondegenerate root whose metric orders differ.
+        let mut manifest = router.manifest().clone();
+        manifest.leaves[0].prototype = vec![0.125, 0.0];
+        for leaf in &mut manifest.leaves[1..] {
+            leaf.prototype = vec![1.0, 0.5];
+        }
+        let mut angular_artifacts = artifacts;
+        angular_artifacts.manifest = manifest.encode().unwrap();
+        let angular_router = open(&angular_artifacts, &input);
+        let l2 = angular_router
+            .rank_leaves_by_metric(&[1.0, 0.0], &VectorMetric::SquaredEuclidean)
+            .unwrap();
+        let cosine = angular_router
+            .rank_leaves_by_metric(&[1.0, 0.0], &VectorMetric::Cosine)
+            .unwrap();
+        assert_eq!(l2, (1..49).chain([0]).collect::<Vec<_>>());
+        assert_eq!(cosine, (0..49).collect::<Vec<_>>());
+        let nominated = angular_router.nominate_selected(&cosine[..16]).unwrap();
+        assert_eq!(nominated.leaf_ids, cosine[..16]);
     }
 
     #[test]
