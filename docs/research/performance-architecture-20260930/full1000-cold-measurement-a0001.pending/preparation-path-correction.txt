@@ -1,0 +1,1 @@
+First source-only preparation scope exited127 because rtk is absent from the scope PATH, before any upload/launch/native run. Plain jq replaces the unnecessary proxy; no tool installed or upgraded.

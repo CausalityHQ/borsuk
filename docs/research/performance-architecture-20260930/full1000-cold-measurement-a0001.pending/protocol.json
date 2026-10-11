@@ -1,0 +1,75 @@
+{
+  "schema": "borsuk-full1000-native-cold-preregistration-v1",
+  "status": "ROOT_STAGING_PHASE_FROZEN_MEASUREMENT_PENDING",
+  "source_commit": "254f60c8b3e826f4ce665f2d71ecc3629b33c9b9",
+  "config_sha256": "25a9c74bcafa604bf919e0eba786568eab3a59cb97a0701eee4109a3bbbc65a9",
+  "dataset": {
+    "rows": 1000000,
+    "queries": 1000,
+    "dimensions": 1024,
+    "k": 10,
+    "metric": "cosine",
+    "corpus": "unchanged frozen disjoint Cohere intervals",
+    "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "generation_root_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+  },
+  "payloads": {
+    "setup": "501d86f55169452ba839ec568a87c8fb0041c6d64a3216c5ceda843fbcf43078",
+    "local_archive": "2f0674528ba2f3898d77f040a21419a72a6da08256e17826fd8f81b735bffe98",
+    "updated_reducer_smoke": "f3bdd3cf71018a66f45f026149a9be47e3285385d4c7a9e54215b74bc2964ecf",
+    "full_query_pending": "2812c0635923063618ab56a8370daa77e5eba94fe8e2353a310e10131a2be9bc"
+  },
+  "resources": {
+    "profile": "causality",
+    "region": "eu-central-1",
+    "market": "spot",
+    "instance_type": "c7i.2xlarge",
+    "root_gib": 40,
+    "allowed_cpu": "0",
+    "cpu_percent": 100,
+    "swap_bytes": 0,
+    "pids": 128,
+    "transport_metadata_memory_bytes": 1073741824,
+    "query_memory_bytes": 536870912,
+    "scratch_cap_bytes": 8589934592,
+    "transport_seconds": 600,
+    "query_seconds": 1800,
+    "other_native_seconds": 120,
+    "host_stop_seconds": 7200,
+    "external_stop_seconds": 7800
+  },
+  "cost": {
+    "spot_quote_usd_per_hour": 0.2034,
+    "max_bid_usd_per_hour": 0.5,
+    "compute_ceiling_usd": 1.10,
+    "ancillary_ceiling_usd": 0.20,
+    "total_ceiling_usd": 1.30,
+    "actual_billing_measured": false
+  },
+  "method": {
+    "query_concurrency": 1,
+    "fetch_parallelism": 16,
+    "payload_cache": "off",
+    "router": "resident",
+    "sdk_connections": "reused within native run",
+    "provider_cache": "uncontrolled",
+    "population_percentiles": "nearest rank over all1000 complete native queries",
+    "sequential_qps": "1000/sum native query wall seconds, not concurrent capacity",
+    "native_logical_charges_not_physical_billing": true
+  },
+  "gates": {
+    "actual_input_admission": "reuse closed a0003 and canary unchanged baseline binary/input validator/all1000 request+truth rows; scope detailed in decision",
+    "disposable_staging": "reuse original closed canary for unchanged native producer/SDK/query/seal; updated reducer actual closed-result smoke must pass before new query",
+    "compiler_qualification": "closed native94/release/workspaceClippy/REAL test-build at254f60c8",
+    "measured_launch_allowed": false
+  },
+  "claims": {
+    "vendor_win": false,
+    "physical_billing": false,
+    "concurrent_capacity": false
+  },
+  "interruption": "INVALID preserve original attempt no automatic retry",
+  "compiler_installed": false,
+  "corpus_or_index_rebuild": false
+}
