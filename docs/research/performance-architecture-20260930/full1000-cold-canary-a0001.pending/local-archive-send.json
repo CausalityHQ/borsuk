@@ -1,0 +1,49 @@
+{
+    "Command": {
+        "CommandId": "b2fedd7c-9cf5-4b65-a2c1-2c899a4698f5",
+        "DocumentName": "AWS-RunShellScript",
+        "DocumentVersion": "$DEFAULT",
+        "Comment": "Original Rust archive admission before cold canary",
+        "ExpiresAfter": "2026-10-11T02:39:42.354000+00:00",
+        "Parameters": {
+            "commands": [
+                "#!/usr/bin/env bash\nset -euo pipefail\nroot=/mnt/borsuk-scale1m\nev=\"$root/evidence/local-archive-admission\"\nmkdir \"$ev\"\nexport AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1\nleft=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))\n(( left > 30 )) || exit 124\n(( left <= 120 )) || left=120\nset +e\nsystemd-run --expand-environment=no --unit=borsuk-rust-replay-local-archive-admission --wait --pipe -p WorkingDirectory=\"$root\" -p CPUQuota=100% -p CPUQuotaPeriodSec=100ms -p AllowedCPUs=0 -p MemoryMax=1G -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStopSec=30 -p RuntimeMaxSec=\"$(( left + 120 ))\" --setenv=RUSTUP_HOME=\"$root/.rustup\" --setenv=CARGO_HOME=\"$root/.cargo\" --setenv=PATH=\"$root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\" /bin/bash -c 'set -euo pipefail\ntrap '\\''exit 97'\\'' TERM HUP INT\nroot=/mnt/borsuk-scale1m\nev=\"$root/evidence/local-archive-admission\"\ncg=$(awk -F: '\\''$1==0 {print $3}'\\'' /proc/self/cgroup)\nprintf \"%s\\n\" \"$cg\" > \"$ev/cgroup-path.txt\"\nfor f in cpu.max cpuset.cpus.effective memory.max memory.swap.max pids.max; do cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.before\"; done\ntest \"$(cat \"$ev/cpu.max.before\")\" = \"100000 100000\"\ntest \"$(cat \"$ev/cpuset.cpus.effective.before\")\" = 0\ntest \"$(cat \"$ev/memory.max.before\")\" = 1073741824\ntest \"$(cat \"$ev/memory.swap.max.before\")\" = 0\ntest \"$(cat \"$ev/pids.max.before\")\" = 128\nleft=$(( $(cat \"$root/gate-deadline.epoch\") - $(date +%s) ))\n(( left > 30 )) || exit 124\n(( left <= 120 )) || left=120\nprintf \"%s\\n\" '\\''/mnt/borsuk-scale1m/bin/extract_closed_native_replay /mnt/borsuk-scale1m/closed/local/authority.json 12cb5f16b91ed22ca3855b7a63028c32049b8bf6c56e4a9ab28f5ad5116121c0 /mnt/borsuk-scale1m/replay-local'\\'' > \"$ev/native-command.txt\"\nprintf \"%s  %s\\n\" 2525dfcedfb8b13b553e83466d96aa04b90f0f3a5fda78e19784a282a98f40f5 \"$root/bin/extract_closed_native_replay\" | sha256sum -c - > \"$ev/release-before.log\"\ndate -u +%FT%TZ > \"$ev/native-started.txt\"\nset +e\n/usr/bin/time -v -o \"$ev/native-time.txt\" timeout --kill-after=30 \"$left\" /mnt/borsuk-scale1m/bin/extract_closed_native_replay /mnt/borsuk-scale1m/closed/local/authority.json 12cb5f16b91ed22ca3855b7a63028c32049b8bf6c56e4a9ab28f5ad5116121c0 /mnt/borsuk-scale1m/replay-local > \"$ev/native.log\" 2>&1\nstatus=$?\nset -e\nprintf \"%s\\n\" \"$status\" > \"$ev/native-exit.txt\"\ndate -u +%FT%TZ > \"$ev/native-finished.txt\"\nfor f in memory.peak memory.events memory.swap.peak pids.peak cpu.stat; do if test -f \"/sys/fs/cgroup$cg/$f\"; then cat \"/sys/fs/cgroup$cg/$f\" > \"$ev/$f.after\"; fi; done\nexit \"$status\"' > \"$ev/systemd-run.log\" 2>&1\nmanager=$?\nset -e\nprintf \"%s\\n\" \"$manager\" > \"$ev/manager-exit.txt\"\nset +e\ntimeout --kill-after=2 10 systemctl show borsuk-rust-replay-local-archive-admission.service -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ControlGroup > \"$ev/systemd-after.txt\" 2> \"$ev/systemd-after.stderr\"\nshow_status=$?\nset -e\nprintf \"%s\\n\" \"$show_status\" > \"$ev/systemd-show-exit.txt\"\ndrained=false\nif test -s \"$ev/cgroup-path.txt\"; then cg=$(cat \"$ev/cgroup-path.txt\"); if [[ \"$cg\" == \"/system.slice/borsuk-rust-replay-local-archive-admission.service\" ]]; then if test ! -d \"/sys/fs/cgroup$cg\"; then drained=true; elif grep -qx \"populated 0\" \"/sys/fs/cgroup$cg/cgroup.events\"; then drained=true; fi; fi; fi\nnative=null; if test -s \"$ev/native-exit.txt\"; then native=$(cat \"$ev/native-exit.txt\"); [[ \"$native\" =~ ^[0-9]+$ ]] || native=null; fi\njq -n --arg schema borsuk-full1000-rust-replay-stage-v1 --arg stage 'local-archive-admission' --arg source 5660b97d7c153e265cd96688113217717d61bd61 --argjson manager \"$manager\" --argjson native \"$native\" --argjson drained \"$drained\" '{schema:$schema,stage:$stage,source_commit:$source,manager_exit:$manager,native_exit:$native,owned_cgroup_drained:$drained,performance_claim:false}' > \"$ev/terminal.json\"\n(cd \"$ev\" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum) > \"$ev/SHA256SUMS\"\npublication_deadline=$(( $(date +%s) + 120 ))\nfor file in \"$ev\"/*; do remaining=$(( publication_deadline - $(date +%s) - 2 )); (( remaining > 0 )) || exit 124; (( remaining <= 90 )) || remaining=90; timeout --kill-after=2 \"$remaining\" aws s3api put-object --bucket borsuk-bench-453182569524-euc1 --key research/semantic-router/20261011/full1000-cold-canary-a0001/stages/local-archive-admission/\"$(basename \"$file\")\" --body \"$file\" --if-none-match \"*\" > /dev/null; done\ncat \"$ev/terminal.json\"\n[[ \"$native\" == 0 && \"$manager\" == 0 && \"$drained\" == true ]]\n"
+            ],
+            "executionTimeout": [
+                "1800"
+            ]
+        },
+        "InstanceIds": [
+            "i-09badae56dde771e2"
+        ],
+        "Targets": [],
+        "RequestedDateTime": "2026-10-11T02:04:42.354000+00:00",
+        "Status": "Pending",
+        "StatusDetails": "Pending",
+        "OutputS3Region": "eu-central-1",
+        "OutputS3BucketName": "",
+        "OutputS3KeyPrefix": "",
+        "MaxConcurrency": "50",
+        "MaxErrors": "0",
+        "TargetCount": 1,
+        "CompletedCount": 0,
+        "ErrorCount": 0,
+        "DeliveryTimedOutCount": 0,
+        "ServiceRole": "",
+        "NotificationConfig": {
+            "NotificationArn": "",
+            "NotificationEvents": [],
+            "NotificationType": ""
+        },
+        "CloudWatchOutputConfig": {
+            "CloudWatchLogGroupName": "",
+            "CloudWatchOutputEnabled": false
+        },
+        "TimeoutSeconds": 300,
+        "AlarmConfiguration": {
+            "IgnorePollAlarmFailure": false,
+            "Alarms": []
+        },
+        "TriggeredAlarms": []
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "CommandId": "18a06be0-815a-458c-ba4f-8aa6f1a4ff0b",
+    "InstanceId": "i-09badae56dde771e2",
+    "Comment": "Original qualified Rust completed reduction for one-query staging canary",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T02:12:58.948Z",
+    "ExecutionElapsedTime": "PT14.792S",
+    "ExecutionEndDateTime": "2026-10-11T02:13:12.948Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-full1000-rust-replay-stage-v1\",\n  \"stage\": \"canary-completed-reduction\",\n  \"source_commit\": \"d077a54f456af30242753ed1e2e397a9416191f7\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
