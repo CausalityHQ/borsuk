@@ -610,13 +610,17 @@ fn publish_blob(
     )?);
     let created = file_identity(&file)?;
     file.write_all(body)?;
-    sync(&file, false)?;
     let identity = file_identity(&file)?;
     require(
         identity.dev == created.dev
             && identity.ino == created.ino
             && identity.len == body.len() as u64,
         "construction output descriptor",
+    )?;
+    sync(&file, false)?;
+    require(
+        file_identity(&file)? == identity,
+        "construction output changed during file sync",
     )?;
     let mut snapshot = HeaderSnapshot {
         file,
@@ -733,9 +737,17 @@ fn publish_with_sync(
         &receipt,
         &inputs,
         |file, is_dir| {
-            sync(file, is_dir)?;
             if is_dir {
+                sync(file, true)?;
                 sync(&parent_dir, true)?;
+            } else {
+                let identity = file_identity(file).map_err(io::Error::other)?;
+                sync(file, false)?;
+                require(
+                    file_identity(file).map_err(io::Error::other)? == identity,
+                    "construction receipt changed during file sync",
+                )
+                .map_err(io::Error::other)?;
             }
             recheck_directory().map_err(io::Error::other)?;
             if let Some(p) = parity {
@@ -1632,6 +1644,52 @@ mod tests {
                     )
                     .unwrap();
                     assert_eq!(v["complete"], false, "stage {stage} sync {failed_call}");
+                }
+            }
+            for (index, (_, _, is_dir)) in roster.iter().enumerate() {
+                if *is_dir {
+                    continue;
+                }
+                let rewrite_call = index + 1;
+                let output = f
+                    .dir
+                    .path()
+                    .join(format!("stage-{stage}-rewrite-{rewrite_call}"));
+                let target = output.join(expected_paths[index].0.file_name().unwrap());
+                let mut calls = 0;
+                let mut rewritten = false;
+                let result = publish_with_sync(&output, &a, &r, parity, &binary, |file, is_dir| {
+                    calls += 1;
+                    file.sync_all()?;
+                    if calls == rewrite_call {
+                        assert!(!is_dir);
+                        let synced = file_identity(file).map_err(io::Error::other)?;
+                        let bytes = std::fs::read(&target)?;
+                        let mut rewrite = file.try_clone()?;
+                        rewrite.set_len(0)?;
+                        rewrite.rewind()?;
+                        rewrite.write_all(&bytes)?;
+                        // A distinct mtime keeps coarse filesystem clocks from hiding this rewrite.
+                        rewrite.set_modified(std::time::UNIX_EPOCH)?;
+                        assert_eq!(std::fs::read(&target)?, bytes);
+                        assert_ne!(file_identity(file).map_err(io::Error::other)?, synced);
+                        rewritten = true;
+                    }
+                    Ok(())
+                });
+                assert!(rewritten, "stage {stage} file sync {rewrite_call}");
+                let error = result.expect_err("identical unsynced rewrite must refuse publication");
+                assert!(
+                    error.to_string().contains("changed during file sync"),
+                    "{error}"
+                );
+                assert_eq!(calls, rewrite_call);
+                if output.join("receipt.json").exists() {
+                    let v: Value = serde_json::from_slice(
+                        &std::fs::read(output.join("receipt.json")).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(v["complete"], false, "stage {stage} rewrite {rewrite_call}");
                 }
             }
         }
