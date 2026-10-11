@@ -4977,12 +4977,608 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
     )
 }
 
+const COVERAGE_SCHEMA: &str = "borsuk-leaf-metric-coverage-v1";
+const SELECTION_CAP: u64 = 4 * 1024 * 1024;
+const COVERAGE_LEAVES: usize = 48;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoverageConfig {
+    schema: String,
+    completed: CompletedConfig,
+    generation_manifest: CompletedInput,
+    plane_manifest: CompletedInput,
+    router_root: CompletedInput,
+    membership: CompletedInput,
+    requests: CompletedInput,
+    sq8: CompletedInput,
+    truth: CompletedInput,
+    max_payload_bytes: u64,
+}
+
+// This is metadata-bound diagnostic admission, not full serving-generation open.
+// The root pins an already qualified immutable generation; no payload is loaded here.
+fn coverage_router(
+    c: &CoverageConfig,
+    i: &Inputs,
+) -> Result<(
+    borsuk::semantic_unit_router::SemanticUnitRouter,
+    Vec<HeaderSnapshot>,
+)> {
+    use borsuk::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
+    require(
+        c.generation_manifest.sha256 == i.generation_root_sha256,
+        "coverage generation binding",
+    )?;
+    let (g, gs) = header_json(&c.generation_manifest)?;
+    fields(
+        &g,
+        "schema generation base_epoch plane_manifest_sha256 page_manifest_sha256 discovery sq8_object_sha256 sq8_object_key sq8_etag canonical low step",
+    )?;
+    require(
+        g["schema"] == "borsuk-two-bit-generation-v8"
+            && g["generation"].as_u64().is_some_and(|n| n > 0)
+            && g["base_epoch"].as_u64().is_some()
+            && g["plane_manifest_sha256"] == c.plane_manifest.sha256
+            && g["sq8_object_sha256"] == i.native_sq8_sha256,
+        "coverage generation descriptor",
+    )?;
+    if c.completed.expected_bound_inputs["backend"]["kind"] == "s3" {
+        let backend = &c.completed.expected_bound_inputs["backend"];
+        require(
+            g["sq8_object_key"] == backend["sq8_object_key"]
+                && g["sq8_etag"] == backend["sq8_etag"],
+            "coverage serving object binding",
+        )?;
+    }
+    let d = &g["discovery"];
+    fields(
+        d,
+        "mode profile root_sha256 root_bytes membership_sha256 membership_bytes leaves_sha256 leaves_bytes input_schema input_root_sha256 centroids_sha256 source_sha256 source_order_sha256 mean_sha256 records_sha256 sq8_sha256",
+    )?;
+    require(
+        d["mode"] == "semantic"
+            && d["profile"] == "scale1m"
+            && d["root_sha256"] == c.router_root.sha256
+            && d["root_bytes"] == c.router_root.bytes
+            && d["membership_sha256"] == c.membership.sha256
+            && d["membership_bytes"] == c.membership.bytes,
+        "coverage router descriptors",
+    )?;
+    let (p, ps) = header_json(&c.plane_manifest)?;
+    let plane: borsuk::two_bit_source::SourcePlaneReceipt = serde_json::from_value(p)?;
+    require(
+        plane.schema == "borsuk-two-bit-plane-v3"
+            && plane.rows == i.rows
+            && plane.dimensions == i.dimensions
+            && plane.seed == 20260923
+            && plane.page_rows == 32
+            && !plane.query_or_truth_used
+            && plane.record_bytes == source_record_bytes(i.dimensions)?
+            && plane.source_sha256 == i.native_source_sha256
+            && plane.sq8_sha256 == i.native_sq8_sha256
+            && plane.source_order_sha256 == i.native_order_sha256,
+        "coverage plane inputs/geometry",
+    )?;
+    for (name, sha) in [
+        ("source_sha256", &plane.source_sha256),
+        ("source_order_sha256", &plane.source_order_sha256),
+        ("mean_sha256", &plane.mean_sha256),
+        ("records_sha256", &plane.records_sha256),
+        ("sq8_sha256", &plane.sq8_sha256),
+    ] {
+        require(
+            valid_sha(sha) && d[name] == *sha,
+            "coverage discovery/plane binding",
+        )?;
+    }
+    require(
+        valid_sha(&plane.page_digest_sha256),
+        "coverage plane digest",
+    )?;
+    fields(&g["canonical"], "object_key sha256 bytes rows dimensions")?;
+    // canonical bytes identify original f32+ID storage, not the normalized-source digest.
+    require(
+        g["canonical"]["rows"] == i.rows
+            && g["canonical"]["dimensions"] == i.dimensions
+            && g["canonical"]["bytes"] == (i.rows as u64) * (8 + 4 * i.dimensions as u64)
+            && g["canonical"]["sha256"].as_str().is_some_and(valid_sha),
+        "coverage canonical geometry",
+    )?;
+    let low: Vec<f32> = serde_json::from_value(g["low"].clone())?;
+    let step: Vec<f32> = serde_json::from_value(g["step"].clone())?;
+    require(
+        low.len() == i.dimensions
+            && step.len() == i.dimensions
+            && low.iter().all(|n| n.is_finite())
+            && step.iter().all(|n| n.is_finite() && *n > 0.),
+        "coverage calibration",
+    )?;
+    let identity = SourceIdentity {
+        profile: SemanticProfile::Scale1m,
+        schema: d["input_schema"].as_str().ok_or("coverage input schema")?,
+        root_sha256: d["input_root_sha256"]
+            .as_str()
+            .ok_or("coverage input root")?,
+        centroids_sha256: d["centroids_sha256"].as_str().ok_or("coverage centroids")?,
+        rows: i.rows,
+        dimensions: i.dimensions,
+    };
+    let (root, rs) = loss_binary(&c.router_root, c.router_root.bytes)?;
+    let (membership, ms) = loss_binary(&c.membership, (i.rows.div_ceil(32) * 4) as u64)?;
+    let router = SemanticUnitRouter::open(
+        &root,
+        &membership,
+        &c.router_root.sha256,
+        &identity,
+        SemanticProfile::Scale1m.root_cap(),
+    )?;
+    require(
+        d["leaves_bytes"] == i.rows.div_ceil(32) * (4 + 2 * i.dimensions)
+            && router.manifest().leaf_payload.sha256 == d["leaves_sha256"]
+            && router.manifest().leaf_payload.bytes as u64
+                == d["leaves_bytes"].as_u64().ok_or("coverage leaf bytes")?,
+        "coverage leaf descriptor",
+    )?;
+    Ok((router, vec![gs, ps, rs, ms]))
+}
+
+struct CoverageArm {
+    nomination: borsuk::semantic_unit_router::Nomination,
+    ranges: Vec<std::ops::Range<usize>>,
+    bytes: usize,
+}
+
+fn coverage_arm(
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    query: &[f32],
+    metric: &borsuk::VectorMetric,
+    rows: usize,
+    dimensions: usize,
+) -> Result<CoverageArm> {
+    let ranked = router.rank_leaves_by_metric(query, metric)?;
+    require(
+        ranked.len() >= COVERAGE_LEAVES,
+        "coverage needs exactly 48 leaves",
+    )?;
+    let nomination = router.nominate_selected(&ranked[..COVERAGE_LEAVES])?;
+    let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+        &nomination.page_closure,
+        rows,
+        source_record_bytes(dimensions)?,
+        128,
+        64 * 1024 * 1024,
+    )?;
+    Ok(CoverageArm {
+        nomination,
+        ranges,
+        bytes,
+    })
+}
+
+fn coverage_arm_value(a: &CoverageArm) -> Value {
+    let n = &a.nomination;
+    json!({"leaves":n.leaf_ids,"units":n.units,"seed_page":n.seed_page,
+        "walk_units":n.walk_units,"seed_additions":n.seed_additions,"original_pages":n.page_closure,
+        "cover_ranges":a.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
+        "planned_gets":a.ranges.len(),"planned_bytes":a.bytes})
+}
+
+fn coverage_control(line: &[u8], q: &Query, i: &Inputs, arm: &CoverageArm) -> Result<LossCoverage> {
+    let cov = loss_coverage(line, q, i)?;
+    let raw: Value = serde_json::from_slice(line)?;
+    let t: SourceTrace = serde_json::from_value(raw["trace"].clone())?;
+    let n = &arm.nomination;
+    let pages = t
+        .ranked_candidate_pages
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let completed = n
+        .page_closure
+        .iter()
+        .flat_map(|p| p * 8..((p + 1) * 8).min(i.rows.div_ceil(32)))
+        .collect::<Vec<_>>();
+    require(
+        t.semantic_leaves == n.leaf_ids
+            && t.semantic_units == n.units.iter().copied().collect::<Vec<_>>()
+            && t.semantic_seed_additions == n.seed_additions
+            && pages == n.page_closure
+            && cov.scored_units == completed
+            && q.charges.source.submitted_gets == arm.ranges.len() as u64
+            && q.charges.source.verified_bytes == arm.bytes as u64,
+        "coverage exact historical L2 control parity",
+    )?;
+    // primary_page is chosen after SOURCE scoring, not the lowest semantic seed page.
+    Ok(cov)
+}
+
+fn publish_selection_seal(
+    output: &Path,
+    value: &Value,
+    inputs: &[&HeaderSnapshot],
+) -> Result<(HeaderSnapshot, String)> {
+    publish_selection_seal_with_sync(output, value, inputs, |file, _| file.sync_all())
+}
+
+fn publish_selection_seal_with_sync(
+    output: &Path,
+    value: &Value,
+    inputs: &[&HeaderSnapshot],
+    mut sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<(HeaderSnapshot, String)> {
+    header_path(output)?;
+    for input in inputs {
+        input.recheck()?;
+    }
+    let dir = parent(output)?;
+    let file = File::from(openat(
+        &dir,
+        output.file_name().ok_or("selection filename")?,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK
+            | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?);
+    finish_selection_publication(output, value, inputs, dir, file, &mut sync)
+}
+
+fn finish_selection_publication(
+    output: &Path,
+    value: &Value,
+    inputs: &[&HeaderSnapshot],
+    dir: File,
+    mut file: File,
+    mut sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<(HeaderSnapshot, String)> {
+    let mut expected = serde_json::to_vec(value)?;
+    expected.push(b'\n');
+    require(
+        expected.len() as u64 <= SELECTION_CAP,
+        "paired selection seal cap",
+    )?;
+    let parent_identity = dir.metadata()?;
+    let created = file_identity(&file)?;
+    file.write_all(&expected)?;
+    sync(&file, false)?;
+    let mut readback = header_file(output)?;
+    let published = file_identity(&readback)?;
+    require(
+        published.dev == created.dev
+            && published.ino == created.ino
+            && published.len == expected.len() as u64
+            && file_identity(&file)? == published,
+        "selection descriptor identity",
+    )?;
+    let mut actual = Vec::with_capacity(expected.len());
+    Read::take(&mut readback, SELECTION_CAP + 1).read_to_end(&mut actual)?;
+    require(actual == expected, "selection exact readback")?;
+    for input in inputs {
+        input.recheck()?;
+    }
+    sync(&dir, true)?;
+    let snapshot = HeaderSnapshot {
+        file: readback,
+        path: output.to_owned(),
+        identity: published,
+    };
+    snapshot.recheck()?;
+    require(
+        file.metadata()?.nlink() == 1 && file_identity(&file)? == snapshot.identity,
+        "selection final write descriptor",
+    )?;
+    let current_parent = parent(output)?.metadata()?;
+    require(
+        parent_identity.dev() == current_parent.dev()
+            && parent_identity.ino() == current_parent.ino(),
+        "selection parent identity",
+    )?;
+    for input in inputs {
+        input.recheck()?;
+    }
+    Ok((snapshot, format!("{:x}", Sha256::digest(&expected))))
+}
+
+fn coverage_slot(a: &CoverageArm, physical: usize, width: usize) -> (bool, bool) {
+    (
+        a.nomination.page_closure.contains(&(physical / 256)),
+        a.ranges.iter().any(|r| r.contains(&(physical * width))),
+    )
+}
+
+fn coverage_survives(control: usize, candidate: usize, gained: usize, lost: usize) -> bool {
+    control == 314 && candidate >= 315 && candidate + lost == control + gained && gained > lost
+}
+
+fn reduce_leaf_coverage(
+    config_path: &Path,
+    config_sha: &str,
+    selection_path: &Path,
+) -> Result<(Value, Vec<HeaderSnapshot>)> {
+    let (c, config_bytes): (CoverageConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == "borsuk-leaf-metric-coverage-config-v1"
+            && c.completed.schema == SCALE_CONFIG_SCHEMA,
+        "coverage config/schema",
+    )?;
+    let config_file = header_file(config_path)?;
+    let config_snapshot = HeaderSnapshot {
+        identity: file_identity(&config_file)?,
+        file: config_file,
+        path: config_path.to_owned(),
+    };
+    read_config::<CoverageConfig>(config_path, config_sha)?;
+    let i: Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
+    validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+    let ordinals = scale_ordinals(&c.completed.expected_bound_inputs, i.count)?;
+    require(
+        i.rows == 1_000_000
+            && i.count == 1000
+            && i.profile == "scale1m"
+            && c.completed.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel"
+            && ordinals
+                == [
+                    69, 83, 114, 149, 151, 159, 188, 189, 211, 237, 257, 296, 321, 351, 388, 408,
+                    413, 513, 537, 587, 626, 667, 669, 731, 742, 821, 823, 849, 851, 890, 956, 991,
+                ]
+            && c.requests.sha256 == i.requests_sha256
+            && c.requests.bytes == i.requests_bytes
+            && c.truth.sha256 == i.truth_sha256
+            && c.truth.bytes == i.truth_bytes
+            && c.sq8.sha256 == i.native_sq8_sha256
+            && c.sq8.bytes == i.rows as u64 * (i.dimensions as u64 + 12),
+        "coverage fixed consumed panel/input binding",
+    )?;
+    // Covers router construction copies, both retained nominations, producer parsing,
+    // requests/truth, SQ8 streaming scratch and bounded seal serialization/readback.
+    // Allocator/runtime overhead is measured separately by the remote resource gate.
+    let modeled = plus(
+        c.router_root
+            .bytes
+            .checked_mul(32)
+            .ok_or("coverage model overflow")?,
+        64 * 1024 * 1024,
+    )?;
+    require(
+        c.router_root.bytes <= 4 * 1024 * 1024
+            && c.membership.bytes == i.rows.div_ceil(32) as u64 * 4
+            && modeled <= c.max_payload_bytes
+            && c.max_payload_bytes <= 256 * 1024 * 1024,
+        "coverage modeled payload admission",
+    )?;
+    let (router, metadata_snapshots) = coverage_router(&c, &i)?;
+    let (requests, requests_snapshot) = loss_binary(&c.requests, i.requests_bytes)?;
+    let mut arms = Vec::with_capacity(ordinals.len());
+    for &ordinal in &ordinals {
+        let width = i.dimensions * 4;
+        let raw = requests[ordinal * width..(ordinal + 1) * width]
+            .chunks_exact(4)
+            .map(|w| f32::from_le_bytes(w.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let normalized = borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&raw)?;
+        arms.push([
+            coverage_arm(
+                &router,
+                &normalized,
+                &borsuk::VectorMetric::SquaredEuclidean,
+                i.rows,
+                i.dimensions,
+            )?,
+            coverage_arm(
+                &router,
+                &normalized,
+                &borsuk::VectorMetric::Cosine,
+                i.rows,
+                i.dimensions,
+            )?,
+        ]);
+    }
+    let producer_file = header_file(&c.completed.input.path)?;
+    let producer_snapshot = HeaderSnapshot {
+        identity: file_identity(&producer_file)?,
+        file: producer_file,
+        path: c.completed.input.path.clone(),
+    };
+    let mut slot = 0;
+    let run = read_run_observed(
+        &c.completed.input.path,
+        &c.completed.input.sha256,
+        Some(&c.completed),
+        |line, q, inputs| {
+            require(
+                slot < ordinals.len() && q.ordinal == ordinals[slot],
+                "coverage producer panel order",
+            )?;
+            coverage_control(line, q, inputs, &arms[slot][0])?;
+            slot += 1;
+            Ok(())
+        },
+    )?;
+    require(
+        slot == ordinals.len()
+            && run.samples.len() == slot
+            && run.file_identity == producer_snapshot.identity,
+        "coverage complete producer parity",
+    )?;
+    let mut snapshots = metadata_snapshots.iter().collect::<Vec<_>>();
+    snapshots.extend([&config_snapshot, &requests_snapshot, &producer_snapshot]);
+    let selections = arms
+        .iter()
+        .enumerate()
+        .map(|(s, a)| {
+            json!({"ordinal":ordinals[s],
+        "l2":coverage_arm_value(&a[0]),"cosine":coverage_arm_value(&a[1])})
+        })
+        .collect::<Vec<_>>();
+    let seal = json!({"schema":"borsuk-leaf-metric-selection-seal-v1","status":"SEALED",
+        "config_sha256":config_sha,"implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs"))),
+        "router_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/semantic_unit_router.rs"))),
+        "generation_implementation_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/two_bit_generation.rs"))),
+        "producer_sha256":c.completed.input.sha256,"generation_sha256":c.generation_manifest.sha256,
+        "plane_sha256":c.plane_manifest.sha256,"router_sha256":c.router_root.sha256,
+        "membership_sha256":c.membership.sha256,"requests_sha256":c.requests.sha256,
+        "truth_sha256":c.truth.sha256,"sq8_sha256":c.sq8.sha256,"order_sha256":i.native_order_sha256,
+        "source_sha256":i.native_source_sha256,"normalization":"normalize_two_bit_diagnostic_query",
+        "leaf_count":48,"source_get_cap":128,"source_byte_cap":64*1024*1024,
+        "truth_opened":false,"control_trace_parity":true,"selections":selections});
+    let (selection_snapshot, selection_sha) =
+        publish_selection_seal(selection_path, &seal, &snapshots)?;
+    // FIRST truth open: both complete arm selections have passed file and directory sync.
+    let (truth, truth_snapshot) = loss_binary(&c.truth, i.truth_bytes)?;
+    let mut truth_rows = Vec::with_capacity(ordinals.len());
+    let mut wanted = BTreeSet::new();
+    wanted.extend(
+        run.samples
+            .iter()
+            .flat_map(|s| s.returned.iter().map(|h| h.id)),
+    );
+    for &ordinal in &ordinals {
+        let ids = truth[ordinal * K * 8..(ordinal + 1) * K * 8]
+            .chunks_exact(8)
+            .map(|w| u64::from_le_bytes(w.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        require(
+            ids.iter().all(|id| *id < i.rows as u64)
+                && ids.iter().copied().collect::<BTreeSet<_>>().len() == K,
+            "coverage truth IDs",
+        )?;
+        wanted.extend(ids.iter().copied());
+        truth_rows.push(ids);
+    }
+    let (positions, sq8_snapshot) = loss_positions(
+        &c.sq8,
+        i.rows,
+        i.dimensions,
+        &i.native_order_sha256,
+        &wanted,
+    )?;
+    let mut totals = [0usize; 2];
+    let mut original_hits = 0_u64;
+    let record_width = source_record_bytes(i.dimensions)?;
+    let (mut gained, mut lost) = (0usize, 0usize);
+    let mut queries = Vec::with_capacity(slot);
+    for (s, ids) in truth_rows.iter().enumerate() {
+        let sample = &run.samples[s];
+        let hits = ids
+            .iter()
+            .filter(|id| sample.returned.iter().any(|h| h.id == **id))
+            .count();
+        require(
+            hits as u64 == sample.hits10,
+            "coverage original truth/recall parity",
+        )?;
+        original_hits = plus(original_hits, hits as u64)?;
+        let mut entries = Vec::with_capacity(K);
+        for id in ids {
+            let physical = positions[id];
+            let state = arms[s]
+                .each_ref()
+                .map(|a| coverage_slot(a, physical, record_width));
+            for a in 0..2 {
+                totals[a] += usize::from(state[a].0);
+            }
+            gained += usize::from(!state[0].0 && state[1].0);
+            lost += usize::from(state[0].0 && !state[1].0);
+            entries.push(json!({"id":id,"physical_row":physical,
+                "l2_scored":state[0].0,"cosine_scored":state[1].0,
+                "l2_fetched":state[0].1,"cosine_fetched":state[1].1,
+                "l2_bridge_only":state[0].1&&!state[0].0,"cosine_bridge_only":state[1].1&&!state[1].0}));
+        }
+        queries.push(json!({"ordinal":ordinals[s],"truth_slots":entries}));
+    }
+    require(
+        original_hits == 313
+            && original_hits == run.terminal.total_hits10
+            && totals[0] == 314
+            && totals[1] + lost == totals[0] + gained,
+        "coverage historical total/paired decomposition",
+    )?;
+    for snapshot in snapshots {
+        snapshot.recheck()?;
+    }
+    selection_snapshot.recheck()?;
+    sq8_snapshot.recheck()?;
+    truth_snapshot.recheck()?;
+    read_config::<CoverageConfig>(config_path, config_sha)?;
+    let report = json!({"schema":COVERAGE_SCHEMA,"status":"MEASURED","complete":true,
+        "config_sha256":config_sha,"config_bytes":config_bytes,"selection_seal_sha256":selection_sha,
+        "selection_seal_bytes":selection_snapshot.identity.len,"selection_seal_path":selection_path,
+        "l2_coverage":totals[0],"cosine_coverage":totals[1],"truth_slots":slot*K,
+        "gained_slots":gained,"lost_slots":lost,"queries":queries,
+        "coverage_gate_passed":coverage_survives(totals[0],totals[1],gained,lost),
+        "original_returned_hits10":run.terminal.total_hits10,"original_returned_gate":"FAIL",
+        "modeled_payload_bytes":modeled,"truth_opened_after_durable_paired_selection":true,
+        "consumed_panel":true,"planner_only":true,"source_payload_read":false,"native_ann_called":false,
+        "cold_s3_claim":false,"vendor_or_scientific_win_claim":false,"qualified":false});
+    let mut retained = metadata_snapshots;
+    retained.extend([
+        config_snapshot,
+        requests_snapshot,
+        producer_snapshot,
+        selection_snapshot,
+        sq8_snapshot,
+        truth_snapshot,
+    ]);
+    Ok((report, retained))
+}
+
+fn execute_leaf_coverage(config: &Path, sha: &str, seal: &Path, output: &Path) -> Result<bool> {
+    // Reserve the report before opening any input. Keep its containing directory live.
+    header_path(output)?;
+    let dir = parent(output)?;
+    let file = File::from(openat(
+        &dir,
+        output.file_name().ok_or("coverage report filename")?,
+        OFlags::WRONLY
+            | OFlags::CREATE
+            | OFlags::EXCL
+            | OFlags::NOFOLLOW
+            | OFlags::NONBLOCK
+            | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?);
+    let (report, retained) = match reduce_leaf_coverage(config, sha, seal) {
+        Ok(reduced) => reduced,
+        Err(e) => (
+            json!({"schema":COVERAGE_SCHEMA,"status":"INVALID","complete":false,
+            "error":e.to_string().chars().take(512).collect::<String>(),"qualified":false}),
+            vec![],
+        ),
+    };
+    require(
+        serde_json::to_vec(&report)?.len() as u64 + 1 <= REPORT_CAP,
+        "coverage report cap",
+    )?;
+    let references = retained.iter().collect::<Vec<_>>();
+    finish_selection_publication(output, &report, &references, dir, file, |file, _| {
+        file.sync_all()
+    })?;
+    Ok(report["status"] == "MEASURED")
+}
+
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let binding = args
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--leaf-metric-coverage")
+        {
+            require(
+                args.len() == 6,
+                "usage: compare_native_replay --leaf-metric-coverage CONFIG CONFIG_SHA NEW_SELECTION_SEAL NEW_REPORT",
+            )?;
+            return execute_leaf_coverage(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("coverage config SHA encoding")?,
+                Path::new(&args[4]),
+                Path::new(&args[5]),
+            );
+        }
         if args.get(1).is_some_and(|arg| arg == "--sealed-scale-loss") {
             require(
                 args.len() == 5,
@@ -5177,6 +5773,436 @@ mod tests {
         q["charges"]["sq8"] = json!({"submitted_gets":1,"verified_bytes":bytes,"failed_gets":0});
         q["plan"] = json!({"selected_pages":[0,2],"ranges":[[0,bytes]],"planned_bytes":bytes});
         (i, q)
+    }
+
+    #[test]
+    fn leaf_coverage_real_source_plan_excludes_fetched_bridge_and_keeps_tail() {
+        use borsuk::{
+            rotated_two_bit::RotatedTwoBitCodec,
+            semantic_unit_router::{Nomination, SemanticProfile},
+            two_bit_generation::{TwoBitPlanTrace, plan_two_bit_source_walks},
+        };
+        let rows = 513;
+        let codec = RotatedTwoBitCodec::new(&[0., 0.], 20260923).unwrap();
+        let records = (0..rows)
+            .map(|_| codec.encode(&[1., 0.]).unwrap())
+            .collect::<Vec<_>>();
+        let prepared = codec
+            .prepare_query(
+                &[1., 0.],
+                RotatedTwoBitCodec::required_query_scratch_bytes(2).unwrap(),
+            )
+            .unwrap();
+        let closure = BTreeSet::from([0, 2]);
+        let width = codec.record_bytes();
+        let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+            &closure,
+            rows,
+            width,
+            1,
+            rows * width,
+        )
+        .unwrap();
+        assert_eq!(ranges, [0..rows * width]);
+        let mut trace = TwoBitPlanTrace {
+            ranked_candidate_pages: vec![],
+            nomination_evaluated_units: vec![],
+            primary_page: 0,
+            discoveries: vec![],
+            semantic_leaves: vec![],
+            semantic_units: vec![],
+            semantic_seed_additions: vec![],
+        };
+        plan_two_bit_source_walks(
+            rows,
+            2,
+            2,
+            Some(SemanticProfile::Scale1m),
+            &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
+            &prepared,
+            |row| records.get(row).map(Vec::as_slice),
+            32,
+            1 << 20,
+            Some(&mut trace),
+        )
+        .unwrap();
+        assert_eq!(
+            trace
+                .nomination_evaluated_units
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            (0..8).chain([16]).collect()
+        );
+        assert_eq!(
+            trace
+                .ranked_candidate_pages
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            closure
+        );
+        let arm = CoverageArm {
+            nomination: Nomination {
+                leaf_ids: vec![0],
+                units: BTreeSet::from([0, 16]),
+                seed_page: 0,
+                walk_units: vec![0, 1, 2, 3, 4, 5, 6, 7, 16],
+                seed_additions: vec![1, 2, 3, 4, 5, 6, 7],
+                page_closure: closure,
+            },
+            ranges,
+            bytes,
+        };
+        assert_eq!(coverage_slot(&arm, 256, width), (false, true));
+        assert_eq!(coverage_slot(&arm, 512, width), (true, true));
+        assert!(
+            borsuk::two_bit_generation::plan_two_bit_source_cover(
+                &arm.nomination.page_closure,
+                rows,
+                width,
+                1,
+                bytes - 1
+            )
+            .is_err()
+        );
+    }
+
+    fn leaf_coverage_metadata_fixture(dir: &Path) -> (CoverageConfig, Inputs) {
+        use borsuk::semantic_unit_router::{
+            Manifest, SemanticProfile, SemanticUnitRouter, SourceIdentity, build,
+        };
+        let rows: usize = 100352; // 49 full leaves, with one leaf dropped at the fixed48 boundary.
+        let mut blob = b"BORSUCP1".to_vec();
+        blob.extend_from_slice(&(rows as u64).to_le_bytes());
+        for word in [2_u32, 32, 256, 0] {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob.resize(32 + rows.div_ceil(32) * 4, 0);
+        let centroids = sha(&blob);
+        let root_identity = "1".repeat(64);
+        let input = SourceIdentity {
+            profile: SemanticProfile::Scale1m,
+            schema: "coverage-fixture",
+            root_sha256: &root_identity,
+            centroids_sha256: &centroids,
+            rows,
+            dimensions: 2,
+        };
+        let artifacts = build(&blob, &input, 64 * 1024 * 1024).unwrap();
+        let router = SemanticUnitRouter::open(
+            &artifacts.manifest,
+            &artifacts.membership,
+            &sha(&artifacts.manifest),
+            &input,
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+        let mut manifest: Manifest = router.manifest().clone();
+        assert_eq!(manifest.leaves.len(), 49);
+        // Independently declared authenticated prototypes: L2 includes0; cosine excludes0.
+        // This tests metadata routing, not full publication of matching leaf means.
+        for leaf in &mut manifest.leaves {
+            leaf.prototype = vec![2., 0.];
+        }
+        manifest.leaves[0].prototype = vec![0.25, 0.25];
+        let root = manifest.encode().unwrap();
+        let (mut i, _) = sealed_loss_fixture();
+        i.rows = rows;
+        i.dimensions = 2;
+        i.profile = "scale1m".into();
+        let plane = json!({"schema":"borsuk-two-bit-plane-v3","rows":rows,"dimensions":2,
+            "seed":20260923,"record_bytes":9,"source_sha256":i.native_source_sha256,
+            "sq8_sha256":i.native_sq8_sha256,"source_order_sha256":i.native_order_sha256,
+            "mean_sha256":"2".repeat(64),"records_sha256":"3".repeat(64),
+            "page_rows":32,"page_digest_sha256":"4".repeat(64),"query_or_truth_used":false});
+        let put = |name: &str, body: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            CompletedInput {
+                path,
+                bytes: body.len() as u64,
+                sha256: sha(body),
+            }
+        };
+        let plane_pin = put("plane", &serde_json::to_vec(&plane).unwrap());
+        let root_pin = put("root", &root);
+        let membership_pin = put("membership", &artifacts.membership);
+        let generation = json!({"schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "plane_manifest_sha256":plane_pin.sha256,"page_manifest_sha256":"5".repeat(64),
+            "discovery":{"mode":"semantic","profile":"scale1m","root_sha256":root_pin.sha256,
+                "root_bytes":root_pin.bytes,"membership_sha256":membership_pin.sha256,
+                "membership_bytes":membership_pin.bytes,"leaves_sha256":manifest.leaf_payload.sha256,
+                "leaves_bytes":manifest.leaf_payload.bytes,"input_schema":input.schema,
+                "input_root_sha256":input.root_sha256,"centroids_sha256":input.centroids_sha256,
+                "source_sha256":plane["source_sha256"],"source_order_sha256":plane["source_order_sha256"],
+                "mean_sha256":plane["mean_sha256"],"records_sha256":plane["records_sha256"],
+                "sq8_sha256":plane["sq8_sha256"]},
+            "sq8_object_sha256":i.native_sq8_sha256,"sq8_object_key":format!("semantic/objects/{}",i.native_sq8_sha256),
+            "sq8_etag":"fixture","canonical":{"rows":rows,"dimensions":2,"bytes":rows*16,
+                "sha256":"6".repeat(64),"object_key":format!("semantic/objects/{}","6".repeat(64))},
+            "low":[-1.,-1.],"step":[0.125,0.125]});
+        let generation_pin = put("generation", &serde_json::to_vec(&generation).unwrap());
+        i.generation_root_sha256 = generation_pin.sha256.clone();
+        let dummy = || CompletedInput {
+            path: dir.join("unopened-truth"),
+            bytes: 1,
+            sha256: "7".repeat(64),
+        };
+        (
+            CoverageConfig {
+                schema: "borsuk-leaf-metric-coverage-config-v1".into(),
+                completed: CompletedConfig {
+                    schema: SCALE_CONFIG_SCHEMA.into(),
+                    input: dummy(),
+                    expected_identity: json!({}),
+                    expected_bound_inputs: json!({}),
+                },
+                generation_manifest: generation_pin,
+                plane_manifest: plane_pin,
+                router_root: root_pin,
+                membership: membership_pin,
+                requests: dummy(),
+                sq8: dummy(),
+                truth: dummy(),
+                max_payload_bytes: 256 * 1024 * 1024,
+            },
+            i,
+        )
+    }
+
+    #[test]
+    fn leaf_coverage_authenticated_metadata_and_fixed48_metric_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut c, mut i) = leaf_coverage_metadata_fixture(dir.path());
+        let (router, _) = coverage_router(&c, &i).unwrap();
+        let query =
+            borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&[3., 0.]).unwrap();
+        let l2 = coverage_arm(
+            &router,
+            &query,
+            &borsuk::VectorMetric::SquaredEuclidean,
+            i.rows,
+            i.dimensions,
+        )
+        .unwrap();
+        let cosine = coverage_arm(
+            &router,
+            &query,
+            &borsuk::VectorMetric::Cosine,
+            i.rows,
+            i.dimensions,
+        )
+        .unwrap();
+        assert_eq!(l2.nomination.leaf_ids, (0..48).collect::<Vec<_>>());
+        assert_eq!(cosine.nomination.leaf_ids, (1..49).collect::<Vec<_>>());
+        assert_ne!(l2.nomination.page_closure, cosine.nomination.page_closure);
+        assert!(
+            coverage_arm(&router, &[0., 0.], &borsuk::VectorMetric::Cosine, i.rows, 2).is_err()
+        );
+        assert!(
+            coverage_arm(
+                &router,
+                &[f32::NAN, 0.],
+                &borsuk::VectorMetric::Cosine,
+                i.rows,
+                2
+            )
+            .is_err()
+        );
+        let original = std::fs::read(&c.generation_manifest.path).unwrap();
+        for field in [
+            "source_sha256",
+            "source_order_sha256",
+            "sq8_sha256",
+            "mean_sha256",
+            "records_sha256",
+        ] {
+            let mut g: Value = serde_json::from_slice(&original).unwrap();
+            g["discovery"][field] = json!("8".repeat(64));
+            let body = serde_json::to_vec(&g).unwrap();
+            std::fs::write(&c.generation_manifest.path, &body).unwrap();
+            c.generation_manifest.bytes = body.len() as u64;
+            c.generation_manifest.sha256 = sha(&body);
+            i.generation_root_sha256 = c.generation_manifest.sha256.clone();
+            assert!(coverage_router(&c, &i).is_err(), "rehash {field}");
+        }
+        assert!(!c.truth.path.exists());
+    }
+
+    #[test]
+    fn leaf_coverage_seal_sync_mutation_and_occupied_path_refuse_before_truth() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("input");
+        std::fs::write(&input, b"input").unwrap();
+        let file = header_file(&input).unwrap();
+        let snapshot = HeaderSnapshot {
+            identity: file_identity(&file).unwrap(),
+            file,
+            path: input.clone(),
+        };
+        for directory_failure in [false, true] {
+            let output = dir.path().join(format!("sync-{directory_failure}"));
+            let mut truth_opened = false;
+            let result = publish_selection_seal_with_sync(
+                &output,
+                &json!({"both_arms":["l2","cosine"]}),
+                &[&snapshot],
+                |file, is_directory| {
+                    if is_directory == directory_failure {
+                        Err(io::Error::other("injected sync failure"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+            )
+            .map(|_| truth_opened = true);
+            assert!(result.is_err());
+            assert!(!truth_opened);
+        }
+        let output = dir.path().join("good");
+        let (sealed, sha) =
+            publish_selection_seal(&output, &json!({"both_arms":[1,2]}), &[&snapshot]).unwrap();
+        assert_eq!(
+            sha,
+            format!("{:x}", Sha256::digest(std::fs::read(&output).unwrap()))
+        );
+        assert!(publish_selection_seal(&output, &json!({}), &[&snapshot]).is_err());
+        std::fs::write(&output, b"replacement").unwrap();
+        assert!(sealed.recheck().is_err());
+        let changed = dir.path().join("changed");
+        let result = publish_selection_seal_with_sync(
+            &changed,
+            &json!({}),
+            &[&snapshot],
+            |file, dir_sync| {
+                file.sync_all()?;
+                if dir_sync {
+                    std::fs::write(&input, b"changed")?;
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn leaf_coverage_requests_and_whole_sq8_mapping_refuse_rehashed_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let requests = dir.path().join("requests");
+        let bytes = 3_f32.to_le_bytes();
+        std::fs::write(&requests, bytes).unwrap();
+        let request_pin = CompletedInput {
+            path: requests.clone(),
+            bytes: 4,
+            sha256: sha(&bytes),
+        };
+        assert!(loss_binary(&request_pin, 4).is_ok());
+        std::fs::write(&requests, 5_f32.to_le_bytes()).unwrap();
+        assert!(loss_binary(&request_pin, 4).is_err());
+        let path = dir.path().join("sq8");
+        let mut original = Vec::new();
+        for id in [2_i64, 0, 1] {
+            original.extend_from_slice(&id.to_le_bytes());
+            original.extend_from_slice(&1_f32.to_le_bytes());
+            original.extend_from_slice(&[0, 1]);
+        }
+        let order = [2_i64, 0, 1]
+            .into_iter()
+            .flat_map(i64::to_le_bytes)
+            .collect::<Vec<_>>();
+        let wanted = BTreeSet::from([0, 1, 2]);
+        for case in 0..4 {
+            let mut body = original.clone();
+            if case == 1 {
+                body[14..22].copy_from_slice(&2_i64.to_le_bytes());
+            }
+            if case == 2 {
+                body[8..12].copy_from_slice(&0_f32.to_le_bytes());
+            }
+            if case == 3 {
+                body[..8].copy_from_slice(&0_i64.to_le_bytes());
+                body[14..22].copy_from_slice(&2_i64.to_le_bytes());
+            }
+            std::fs::write(&path, &body).unwrap();
+            let pin = CompletedInput {
+                path: path.clone(),
+                bytes: body.len() as u64,
+                sha256: sha(&body),
+            };
+            let result = loss_positions(&pin, 3, 2, &sha(&order), &wanted);
+            if case == 0 {
+                assert_eq!(
+                    result.unwrap().0,
+                    std::collections::BTreeMap::from([(0, 1), (1, 2), (2, 0)])
+                );
+            } else {
+                assert!(result.is_err(), "rehashed mapping case {case}");
+            }
+        }
+    }
+
+    #[test]
+    fn leaf_coverage_exact_control_and_gain_loss_gate_refuse_mutations() {
+        use borsuk::semantic_unit_router::Nomination;
+        let (i, q) = sealed_loss_fixture();
+        let units = BTreeSet::from([0, 16, 24]);
+        let closure = BTreeSet::from([0, 2, 3]);
+        let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+            &closure,
+            i.rows,
+            source_record_bytes(i.dimensions).unwrap(),
+            128,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        let arm = CoverageArm {
+            nomination: Nomination {
+                leaf_ids: vec![0],
+                units,
+                seed_page: 0,
+                walk_units: vec![0, 1, 2, 3, 4, 5, 6, 7, 16, 24],
+                seed_additions: vec![1, 2, 3, 4, 5, 6, 7],
+                page_closure: closure,
+            },
+            ranges,
+            bytes,
+        };
+        assert!(
+            coverage_control(
+                &serde_json::to_vec(&q).unwrap(),
+                &serde_json::from_value(q.clone()).unwrap(),
+                &i,
+                &arm
+            )
+            .is_ok()
+        );
+        for (field, replacement) in [
+            ("semantic_leaves", json!([1])),
+            ("semantic_units", json!([0, 16, 25])),
+            ("semantic_seed_additions", json!([1, 2, 3, 4, 5, 6])),
+            (
+                "nomination_evaluated_units",
+                json!([0, 1, 2, 3, 4, 5, 6, 7, 16]),
+            ),
+        ] {
+            let mut bad = q.clone();
+            bad["trace"][field] = replacement;
+            assert!(
+                coverage_control(
+                    &serde_json::to_vec(&bad).unwrap(),
+                    &serde_json::from_value(bad).unwrap(),
+                    &i,
+                    &arm
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        assert!(!coverage_survives(314, 314, 1, 1));
+        assert!(coverage_survives(314, 315, 2, 1));
+        assert!(!coverage_survives(314, 315, 1, 1));
+        assert!(!coverage_survives(313, 315, 2, 0));
     }
 
     #[test]
