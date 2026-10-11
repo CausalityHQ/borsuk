@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-closed-native-replay-extraction-authority-v1",
+  "arm": "local",
+  "archive": {
+    "path": "/mnt/borsuk-scale1m/closed/local/evidence.tar.gz",
+    "bytes": 596125,
+    "sha256": "84e8538cd79bc4f14afdaed449c5d2de8f3ea571a1e1ae1c1b4b8f9023ed8062"
+  },
+  "manifest": {
+    "path": "/mnt/borsuk-scale1m/closed/local/artifacts.sha256",
+    "bytes": 100396,
+    "sha256": "5795dcd4de77ce712839be11fa41fd849cbdea53bcd553a55fe5e8c09adb88aa"
+  }
+}
