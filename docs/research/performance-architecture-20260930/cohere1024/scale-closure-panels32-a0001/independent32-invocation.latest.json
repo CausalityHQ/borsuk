@@ -1,0 +1,22 @@
+{
+    "CommandId": "cb059e26-6383-4478-8546-03acef3c5df5",
+    "InstanceId": "i-046ec78ba4d73c540",
+    "Comment": "borsuk-independent32-frozen-unchanged-native-limits",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-11T05:20:53.097Z",
+    "ExecutionElapsedTime": "PT14.137S",
+    "ExecutionEndDateTime": "2026-10-11T05:21:07.097Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-independent32-rust-replay-stage-v1\",\n  \"stage\": \"independent32\",\n  \"source_commit\": \"6e78d393b4d7dadf19befeeabe3dc20a77319a26\",\n  \"manager_exit\": 2,\n  \"native_exit\": 2,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

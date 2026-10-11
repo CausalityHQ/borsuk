@@ -1,0 +1,22 @@
+{
+    "CommandId": "c952ab56-2f83-4b6f-8270-7c01a545af74",
+    "InstanceId": "i-046ec78ba4d73c540",
+    "Comment": "borsuk-preserve-original-independent32-native-terminal",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T05:22:51.239Z",
+    "ExecutionElapsedTime": "PT3.406S",
+    "ExecutionEndDateTime": "2026-10-11T05:22:54.239Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n    \"ETag\": \"\\\"6e1e4aa005927864d51f64bfc08c1e22\\\"\",\n    \"ChecksumCRC64NVME\": \"SzctMKREf28=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\n    \"ETag\": \"\\\"0078c28bf39d29885f475fd55e9f339f\\\"\",\n    \"ChecksumCRC64NVME\": \"Ka+ITAfern4=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\n    \"ETag\": \"\\\"3a5e9b91d0d889197351cc92865194dd\\\"\",\n    \"ChecksumCRC64NVME\": \"EZm+Frrigwo=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\n    \"ETag\": \"\\\"adfedb914c84e5473032032dbebbfee7\\\"\",\n    \"ChecksumCRC64NVME\": \"ZJ7714i63z0=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\n    \"ETag\": \"\\\"a44470c1a61de4c3793fbe1c07fda35a\\\"\",\n    \"ChecksumCRC64NVME\": \"kqHSgTn2CsU=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\n    \"ETag\": \"\\\"74d9a83219cabaab06a69fd318873f33\\\"\",\n    \"ChecksumCRC64NVME\": \"s827Pj1SV54=\",\n    \"ChecksumType\": \"FULL_OBJECT\",\n    \"ServerSideEncryption\": \"AES256\"\n}\n{\"phase\":\"terminal\",\"summary\":{\"all_queries_sealed\":false,\"binding_charge\":{\"failed_gets\":0,\"submitted_gets\":0,\"verified_bytes\":0},\"charges\":{\"router\":{\"failed_gets\":0,\"submitted_gets\":0,\"verified_bytes\":0},\"source\":{\"failed_gets\":0,\"submitted_gets\":0,\"verified_bytes\":0},\"sq8\":{\"failed_gets\":0,\"submitted_gets\":0,\"verified_bytes\":0}},\"complete\":false,\"completed_queries\":0,\"error\":\"diagnostic panel needs 1..=128 sorted unique original ordinals below count\",\"external_gate_required\":true,\"observed_process_peak_bytes\":7454720,\"physical_s3_measured\":false,\"process_cpu_ns\":12243585,\"process_wall_ns\":12251540,\"stage\":\"config\",\"status\":\"INVALID\",\"sum\":{\"failed_gets\":0,\"submitted_gets\":0,\"verified_bytes\":0},\"transport_last_boundary\":{\"after\":null,\"before\":null,\"billed_bytes\":null,\"billed_requests\":null,\"ordinal\":null,\"scope\":\"cumulative_process_native_transport\",\"stage\":\"\",\"status_counts_omitted_from_terminal\":true,\"unread_bytes\":null,\"wire_bytes\":null},\"truth_opened\":false}}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
