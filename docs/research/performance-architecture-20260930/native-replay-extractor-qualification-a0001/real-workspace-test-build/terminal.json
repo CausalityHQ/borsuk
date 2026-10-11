@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-native-replay-extractor-stage-v1",
+  "stage": "real-workspace-test-build",
+  "source_commit": "5660b97d7c153e265cd96688113217717d61bd61",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

@@ -1,0 +1,15 @@
+{
+  "name": "local-archive-admission",
+  "command_id": "c0d90a8a-557f-404d-ad3d-343f8aa5ebb0",
+  "command": "/mnt/borsuk-extractor-qualification/evidence/extractor-release/extract_closed_native_replay /mnt/borsuk-extractor-qualification/closed/local/authority.json 4447c2a8dd685f13d79b8156bacd5b7cdcf9b45d67993603b56479ac2cfe467c /mnt/borsuk-extractor-qualification/replay-local",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "eba62cac523af012b2c1a71c5f462ae3bb635d596dfcf20821556e1d1aeb0d3b",
+  "body_count": 26,
+  "memory_peak_bytes": 3166208,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}

@@ -1,0 +1,1 @@
+/mnt/borsuk-extractor-qualification/evidence/extractor-release/extract_closed_native_replay /mnt/borsuk-extractor-qualification/closed/local/authority.json 4447c2a8dd685f13d79b8156bacd5b7cdcf9b45d67993603b56479ac2cfe467c /mnt/borsuk-extractor-qualification/replay-local

@@ -1,0 +1,15 @@
+{
+  "name": "real-workspace-test-build",
+  "command_id": "8e3b742b-6839-4b2c-aeff-367aba949de9",
+  "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "b1d668f51349d77fef71fbbd65153243630fbe3414c1139b6c5a43cedb18174d",
+  "body_count": 25,
+  "memory_peak_bytes": 8589934592,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}

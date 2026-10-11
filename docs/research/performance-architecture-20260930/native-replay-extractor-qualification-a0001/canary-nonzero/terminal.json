@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-native-replay-extractor-platform-canary-v1",
+  "stage": "canary-nonzero",
+  "source_commit": "5660b97d7c153e265cd96688113217717d61bd61",
+  "manager_exit": 1,
+  "native_exit": 1,
+  "owned_cgroup_drained": true,
+  "native_ann_executed": false,
+  "performance_claim": false
+}

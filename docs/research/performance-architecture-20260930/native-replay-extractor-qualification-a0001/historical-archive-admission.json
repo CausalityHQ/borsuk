@@ -1,0 +1,15 @@
+{
+  "name": "historical-archive-admission",
+  "command_id": "4c9fe3fe-2ffe-4b9e-a1f4-3ffa25829097",
+  "command": "/mnt/borsuk-extractor-qualification/evidence/extractor-release/extract_closed_native_replay /mnt/borsuk-extractor-qualification/closed/historical/authority.json 6d50c54c5ed58ccabab1f8c7278d059cbc0fbc364dde45c8d27e6a2a8fc04967 /mnt/borsuk-extractor-qualification/replay-historical",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "a4b33c18c3874fc1f7351b2cff2051ee65ecf7fabfa7f34efb19c7a4c77c151e",
+  "body_count": 26,
+  "memory_peak_bytes": 3104768,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}

@@ -1,0 +1,15 @@
+{
+  "name": "extractor-release",
+  "command_id": "6e5c7ff0-ec18-4ef8-aac1-1a10389bc93c",
+  "command": "cargo build --release --locked -p borsuk --example extract_closed_native_replay",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "ce39764559e82ba1ef0b9fc27d478b77b658bcfe5fbd7bc8677a36f615949b66",
+  "body_count": 29,
+  "memory_peak_bytes": 5048098816,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}

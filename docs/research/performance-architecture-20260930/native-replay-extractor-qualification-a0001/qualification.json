@@ -1,0 +1,153 @@
+{
+  "schema": "borsuk-native-replay-extractor-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "scope": "compiler_platform_and_closed_archive_inventory_only",
+  "source_commit": "5660b97d7c153e265cd96688113217717d61bd61",
+  "source_file_count": 463,
+  "native_source_file_count": 436,
+  "native_source_identity_sha256": "42b46a2cb2565f241709df0316025d3cac97c1740d10dc53a80e249499957607",
+  "full_source_before_after_root_match": true,
+  "instance_id": "i-04944188da589804a",
+  "root_volume_id": "vol-0255887ef805bf359",
+  "terminated": true,
+  "termination_wait_exit": 0,
+  "root_volume_deleted": true,
+  "stages": [
+    {
+      "name": "extractor-tests",
+      "command_id": "21b25d89-151e-4c4d-bf2b-538a9bd1f36d",
+      "command": "cargo test --locked -p borsuk --example extract_closed_native_replay -- --test-threads=1",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "792dd19a901d6a1fa0f84b2b70020e7ccc6a2fdb983c49dac79b523555f333d3",
+      "body_count": 29,
+      "memory_peak_bytes": 5493964800,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    },
+    {
+      "name": "extractor-release",
+      "command_id": "6e5c7ff0-ec18-4ef8-aac1-1a10389bc93c",
+      "command": "cargo build --release --locked -p borsuk --example extract_closed_native_replay",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "ce39764559e82ba1ef0b9fc27d478b77b658bcfe5fbd7bc8677a36f615949b66",
+      "body_count": 29,
+      "memory_peak_bytes": 5048098816,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    },
+    {
+      "name": "workspace-clippy",
+      "command_id": "ce59ae8f-bb51-499c-ad81-6a871997b328",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "0230b8e799775487a743b0656739974a1f54d518a463e9e85811d21e9c919bc7",
+      "body_count": 25,
+      "memory_peak_bytes": 4549255168,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    },
+    {
+      "name": "real-workspace-test-build",
+      "command_id": "8e3b742b-6839-4b2c-aeff-367aba949de9",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "b1d668f51349d77fef71fbbd65153243630fbe3414c1139b6c5a43cedb18174d",
+      "body_count": 25,
+      "memory_peak_bytes": 8589934592,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    },
+    {
+      "name": "historical-archive-admission",
+      "command_id": "4c9fe3fe-2ffe-4b9e-a1f4-3ffa25829097",
+      "command": "/mnt/borsuk-extractor-qualification/evidence/extractor-release/extract_closed_native_replay /mnt/borsuk-extractor-qualification/closed/historical/authority.json 6d50c54c5ed58ccabab1f8c7278d059cbc0fbc364dde45c8d27e6a2a8fc04967 /mnt/borsuk-extractor-qualification/replay-historical",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "a4b33c18c3874fc1f7351b2cff2051ee65ecf7fabfa7f34efb19c7a4c77c151e",
+      "body_count": 26,
+      "memory_peak_bytes": 3104768,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    },
+    {
+      "name": "local-archive-admission",
+      "command_id": "c0d90a8a-557f-404d-ad3d-343f8aa5ebb0",
+      "command": "/mnt/borsuk-extractor-qualification/evidence/extractor-release/extract_closed_native_replay /mnt/borsuk-extractor-qualification/closed/local/authority.json 4447c2a8dd685f13d79b8156bacd5b7cdcf9b45d67993603b56479ac2cfe467c /mnt/borsuk-extractor-qualification/replay-local",
+      "exit": 0,
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "body_manifest_sha256": "eba62cac523af012b2c1a71c5f462ae3bb635d596dfcf20821556e1d1aeb0d3b",
+      "body_count": 26,
+      "memory_peak_bytes": 3166208,
+      "source463_before_after_setup_equal": true,
+      "oom": 0,
+      "oom_kill": 0,
+      "swap_peak_bytes": 0
+    }
+  ],
+  "platform_canaries": {
+    "success": {
+      "native": 0,
+      "manager": 0
+    },
+    "nonzero": {
+      "native": 1,
+      "manager": 1
+    },
+    "timeout": {
+      "native": 124,
+      "manager": 124
+    },
+    "all_drained": true,
+    "all_body_authenticated": true
+  },
+  "extractor_tests": {
+    "compiled_and_executed_exact_names": 7,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 0
+  },
+  "release": {
+    "bytes": 944544,
+    "sha256": "2525dfcedfb8b13b553e83466d96aa04b90f0f3a5fda78e19784a282a98f40f5"
+  },
+  "archives": {
+    "historical": {
+      "inventory_files": 758,
+      "selected": 12
+    },
+    "local": {
+      "inventory_files": 806,
+      "selected": 12
+    }
+  },
+  "test_build_memory_max_events": 2284,
+  "evidence_s3_bucket": "borsuk-bench-453182569524-euc1",
+  "evidence_s3_prefix": "research/semantic-router/20261010/native-replay-extractor-qualification-a0001",
+  "claims": {
+    "original_semantic_closure": false,
+    "ann_correctness": false,
+    "recall": false,
+    "cold_performance": false,
+    "vendor_win": false
+  }
+}

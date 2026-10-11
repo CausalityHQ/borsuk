@@ -1,0 +1,15 @@
+{
+  "name": "extractor-tests",
+  "command_id": "21b25d89-151e-4c4d-bf2b-538a9bd1f36d",
+  "command": "cargo test --locked -p borsuk --example extract_closed_native_replay -- --test-threads=1",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "792dd19a901d6a1fa0f84b2b70020e7ccc6a2fdb983c49dac79b523555f333d3",
+  "body_count": 29,
+  "memory_peak_bytes": 5493964800,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}

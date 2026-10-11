@@ -1,0 +1,15 @@
+{
+  "name": "workspace-clippy",
+  "command_id": "ce59ae8f-bb51-499c-ad81-6a871997b328",
+  "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+  "exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "body_manifest_sha256": "0230b8e799775487a743b0656739974a1f54d518a463e9e85811d21e9c919bc7",
+  "body_count": 25,
+  "memory_peak_bytes": 4549255168,
+  "source463_before_after_setup_equal": true,
+  "oom": 0,
+  "oom_kill": 0,
+  "swap_peak_bytes": 0
+}
