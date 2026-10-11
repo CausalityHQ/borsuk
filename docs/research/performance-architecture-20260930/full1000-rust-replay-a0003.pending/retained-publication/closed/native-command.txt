@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/publish_two_bit_generation --retained /mnt/borsuk-scale1m/closed/s3/retained-config.json 8e486f9dfbf27be231aaf15d37d88a8ca2f1977a36d70d5d249e6cf37d4b92e0 /mnt/borsuk-scale1m/closed/s3/publication-receipt.json

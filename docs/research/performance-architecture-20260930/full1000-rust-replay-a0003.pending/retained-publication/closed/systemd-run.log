@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-retained-s3-publication.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1min 14.689s
+CPU time consumed: 9.270s
+Memory peak: 2.7M
+Memory swap peak: 0B
