@@ -1,0 +1,22 @@
+{
+    "CommandId": "37294349-5b90-4f80-a051-4a743dacd247",
+    "InstanceId": "i-02c6b2cffd9000982",
+    "Comment": "borsuk-staging0-original-closure-verification",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 2,
+    "ExecutionStartDateTime": "2026-10-11T05:04:36.744Z",
+    "ExecutionElapsedTime": "PT0.002S",
+    "ExecutionEndDateTime": "2026-10-11T05:04:36.744Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "/var/lib/amazon/ssm/i-02c6b2cffd9000982/document/orchestration/37294349-5b90-4f80-a051-4a743dacd247/awsrunShellScript/0.awsrunShellScript/_script.sh: 1: set: Illegal option -o pipefail\nfailed to run commands: exit status 2",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

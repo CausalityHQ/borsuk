@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-staging0.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1.956s
+CPU time consumed: 240ms
+Memory peak: 3.0M
+Memory swap peak: 0B

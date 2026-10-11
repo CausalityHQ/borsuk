@@ -1,0 +1,22 @@
+{
+    "CommandId": "9f8f7292-c986-4afe-8516-de38f7a54fc5",
+    "InstanceId": "i-02c6b2cffd9000982",
+    "Comment": "borsuk-staging0-closure-bash-correction",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T05:04:52.722Z",
+    "ExecutionElapsedTime": "PT0.023S",
+    "ExecutionEndDateTime": "2026-10-11T05:04:52.722Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "true\n72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0  /mnt/borsuk-scale1m/bin/check_cohere_native_baseline\n{\n  \"schema\": \"borsuk-staging0-rust-replay-stage-v1\",\n  \"stage\": \"staging0\",\n  \"source_commit\": \"6e78d393b4d7dadf19befeeabe3dc20a77319a26\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\nlow 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n0\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

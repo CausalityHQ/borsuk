@@ -1,0 +1,1 @@
+/mnt/borsuk-scale1m/bin/check_cohere_native_baseline /mnt/borsuk-scale1m/closed/s3/canary-one-query-config.json b3bc10dd04c6fbb76ed5336b6a9fd1cd04d530741ed55ad5ac627963fd3583c8 /mnt/borsuk-scale1m/closed/s3/staging0-result.jsonl

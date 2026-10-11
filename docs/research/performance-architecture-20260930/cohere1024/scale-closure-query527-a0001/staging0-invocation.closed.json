@@ -1,0 +1,22 @@
+{
+    "CommandId": "5930c02d-1e23-47c1-b331-d24719dd3583",
+    "InstanceId": "i-02c6b2cffd9000982",
+    "Comment": "borsuk-scale-closure-query527-a0001-staging0",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-11T05:02:07.448Z",
+    "ExecutionElapsedTime": "PT16.683S",
+    "ExecutionEndDateTime": "2026-10-11T05:02:23.448Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\n  \"schema\": \"borsuk-staging0-rust-replay-stage-v1\",\n  \"stage\": \"staging0\",\n  \"source_commit\": \"6e78d393b4d7dadf19befeeabe3dc20a77319a26\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\ncp: warning: behavior of -n is non-portable and may change in future; use --update=none instead\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

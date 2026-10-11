@@ -1,0 +1,7 @@
+Running as unit: borsuk-rust-replay-local-archive-admission.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 88ms
+CPU time consumed: 39ms
+Memory peak: 3.5M
+Memory swap peak: 0B

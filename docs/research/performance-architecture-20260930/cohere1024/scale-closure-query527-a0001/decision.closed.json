@@ -1,0 +1,46 @@
+{
+  "schema": "borsuk-scale-closure-query527-closed-v1",
+  "status": "DIAGNOSTIC_CLOSED",
+  "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+  "instance_id": "i-02c6b2cffd9000982",
+  "terminated": true,
+  "root_volume_deleted": true,
+  "external_timer_inactive": true,
+  "stages": [
+    "local-archive-admission",
+    "staging0",
+    "query527",
+    "query527-reduction"
+  ],
+  "all_stage_native_and_manager_exits_zero": true,
+  "all_stage_cgroups_drained": true,
+  "all_original_stage_manifests_verified": true,
+  "query527": {
+    "recall_hits": 9,
+    "k": 10,
+    "underfilled": 0,
+    "wall_ns": 668135573,
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 128,
+        "verified_bytes": 35008512
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 32,
+        "verified_bytes": 16708608
+      }
+    },
+    "process_reported_peak_bytes": 59445248,
+    "cgroup_charged_peak_bytes": 51679232
+  },
+  "population_performance_claim": false,
+  "vendor_win": false,
+  "product_complete": false
+}
