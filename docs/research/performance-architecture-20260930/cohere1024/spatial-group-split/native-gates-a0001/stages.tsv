@@ -1,0 +1,9 @@
+spatial-router-debug	cargo test --locked -p borsuk --lib semantic_unit_router:: -- --test-threads=1
+spatial-router-release	cargo test --locked --release -p borsuk --lib semantic_unit_router:: -- --test-threads=1
+spatial-build-adapter	cargo test --locked -p borsuk --lib two_bit_build:: -- --test-threads=1
+spatial-publication	cargo test --locked -p borsuk --lib two_bit_store:: -- --test-threads=1
+spatial-builder-bin	cargo test --locked -p borsuk --bin build_semantic_unit_router -- --test-threads=1
+spatial-generation	cargo test --locked -p borsuk --test two_bit_generation -- --test-threads=1
+spatial-release	cargo build --locked --release -p borsuk --bin build_semantic_unit_router --bin check_cohere_native_baseline --example compare_native_replay
+spatial-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+spatial-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

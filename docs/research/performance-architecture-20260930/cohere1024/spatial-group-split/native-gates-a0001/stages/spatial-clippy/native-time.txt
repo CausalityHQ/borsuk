@@ -1,0 +1,23 @@
+	Command being timed: "timeout --kill-after=30 7029 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious"
+	User time (seconds): 186.58
+	System time (seconds): 22.68
+	Percent of CPU this job got: 87%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:58.41
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3883196
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1601
+	Minor (reclaiming a frame) page faults: 12316793
+	Voluntary context switches: 30085
+	Involuntary context switches: 1815
+	Swaps: 0
+	File system inputs: 120
+	File system outputs: 2231160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
