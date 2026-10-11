@@ -1710,7 +1710,7 @@ fn control(
                 "paired exact producer order",
             )?;
             cov.push(coverage_control(line, q, i, &radial[slot])?);
-            traces.push(json!({"ordinal":q.ordinal,"trace_sha256":hex_digest(&trace_fingerprint(line)?),
+            traces.push(json!({"ordinal":q.ordinal,
             "returned":q.returned.iter().map(|h| json!({"id":h.id,"score_bits":h.score_bits})).collect::<Vec<_>>(),
             "observed_source":q.charges.source}));
             slot += 1;
@@ -1721,6 +1721,10 @@ fn control(
         slot == ordinals.len() && run.samples.len() == slot,
         "paired complete producer controls",
     )?;
+    for (trace, sample) in traces.iter_mut().zip(&run.samples) {
+        // V7 puts transport after trace; reuse the authenticated native parser's canonical trace hash.
+        trace["trace_sha256"] = json!(hex_digest(&sample.trace_sha256));
+    }
     Ok((run, cov, traces))
 }
 
@@ -2095,10 +2099,36 @@ pub(super) fn execute(
     selection: &Path,
     report: &Path,
 ) -> Result<bool> {
+    let (a, _): (ScreenApproval, _) = small(approval, approval_sha)?;
+    frozen_producer(&a.producer)?;
+    drop(a);
+    screen_with(
+        config,
+        sha,
+        approval,
+        approval_sha,
+        selection,
+        report,
+        &CoverageScope::consumed32(),
+        |file, _| file.sync_all(),
+        binary,
+    )
+}
+
+fn screen_with(
+    config: &Path,
+    sha: &str,
+    approval: &Path,
+    approval_sha: &str,
+    selection: &Path,
+    report: &Path,
+    scope: &CoverageScope,
+    mut sync: impl FnMut(&File, bool) -> io::Result<()>,
+    open_truth: impl FnMut(&CompletedInput, u64) -> Result<(Vec<u8>, HeaderSnapshot)>,
+) -> Result<bool> {
     // Validate lexical output roles before reserving any output (including an absent truth path).
     let (c, _): (ScreenConfig, _) = small(config, sha)?;
     let (a, _): (ScreenApproval, _) = small(approval, approval_sha)?;
-    frozen_producer(&a.producer)?;
     output_roles(&c, &a, selection, report)?;
     require(
         config != selection && config != report && approval != selection && approval != report,
@@ -2124,9 +2154,9 @@ pub(super) fn execute(
         approval_sha,
         selection,
         report,
-        &CoverageScope::consumed32(),
-        |f, _| f.sync_all(),
-        binary,
+        scope,
+        &mut sync,
+        open_truth,
     ) {
         Ok(value) => value,
         Err(error) => (failure(error.as_ref()), vec![]),
@@ -2137,7 +2167,7 @@ pub(super) fn execute(
             require(f.metadata()?.len() <= REPORT_CAP, "paired report cap")
                 .map_err(io::Error::other)?;
         }
-        checked_sync(f, is_dir, &mut |file, _| file.sync_all())
+        checked_sync(f, is_dir, &mut sync)
     })?;
     Ok(value["status"] == "PASS")
 }
@@ -2201,6 +2231,9 @@ mod tests {
     }
     impl Fixture {
         fn new(rows: usize, d: usize) -> Self {
+            Self::with_sq8(rows, d, &"3".repeat(64), &"4".repeat(64))
+        }
+        fn with_sq8(rows: usize, d: usize, sq8_sha: &str, order_sha: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let b = blob(rows, d);
             let centroid_sha = digest(&b);
@@ -2236,7 +2269,7 @@ mod tests {
             let old_sha = digest(&old_root);
             let plane = json!({"schema":"borsuk-two-bit-plane-v3","rows":rows,"dimensions":d,"seed":20260923,
                 "record_bytes":source_record_bytes(d).unwrap(),"source_sha256":"2".repeat(64),
-                "sq8_sha256":"3".repeat(64),"source_order_sha256":"4".repeat(64),"mean_sha256":"5".repeat(64),
+                "sq8_sha256":sq8_sha,"source_order_sha256":order_sha,"mean_sha256":"5".repeat(64),
                 "records_sha256":"6".repeat(64),"page_rows":32,"page_digest_sha256":"7".repeat(64),"query_or_truth_used":false});
             let plane_pin = put_json(&dir.path().join("plane"), &plane);
             let source = json!({"source_sha256":plane["source_sha256"],"source_order_sha256":plane["source_order_sha256"],
@@ -2249,7 +2282,7 @@ mod tests {
                 "mean_sha256":source["mean_sha256"],"records_sha256":source["records_sha256"],"sq8_sha256":source["sq8_sha256"]});
             let generation = json!({"schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
                 "plane_manifest_sha256":plane_pin.sha256,"page_manifest_sha256":"8".repeat(64),"discovery":discovery,
-                "sq8_object_sha256":plane["sq8_sha256"],"sq8_object_key":format!("semantic/objects/{}","3".repeat(64)),
+                "sq8_object_sha256":plane["sq8_sha256"],"sq8_object_key":format!("semantic/objects/{sq8_sha}"),
                 "sq8_etag":"fixture","canonical":{"object_key":format!("semantic/objects/{}","9".repeat(64)),
                 "sha256":"9".repeat(64),"bytes":rows*(8+4*d),"rows":rows,"dimensions":d},
                 "low":vec![-1_f32;d],"step":vec![0.125_f32;d]});
@@ -2422,8 +2455,7 @@ mod tests {
 
     #[test]
     fn paired_real_d1024_public_build_tail_prepare_independent_reopen() {
-        let f = Fixture::new(100353, 1024);
-        assert!(f.prepare(|file, _| file.sync_all()).unwrap());
+        let (f, c, a, records, scope, _assets) = full_screen_fixture();
         let receipt: Value = serde_json::from_slice(
             &std::fs::read(f.c.output_directory.join("receipt.json")).unwrap(),
         )
@@ -2511,6 +2543,171 @@ mod tests {
             nominations[0].nomination.page_closure,
             nominations[1].nomination.page_closure
         );
+        let config = put_json(
+            &f.dir.path().join("full-screen-config"),
+            &serde_json::to_value(&c).unwrap(),
+        );
+        let approval = put_json(
+            &f.dir.path().join("full-screen-authority"),
+            &serde_json::to_value(&a).unwrap(),
+        );
+        let selection = f.dir.path().join("full-screen-selection");
+        let report = f.dir.path().join("full-screen-report");
+        let opened = std::cell::Cell::new(0);
+        let syncs = std::cell::Cell::new(0);
+        assert!(
+            !screen_with(
+                &config.path,
+                &config.sha256,
+                &approval.path,
+                &approval.sha256,
+                &selection,
+                &report,
+                &scope,
+                |file, _| {
+                    file.sync_all()?;
+                    syncs.set(syncs.get() + 1);
+                    Ok(())
+                },
+                |pin, bytes| {
+                    assert!(syncs.get() >= 2);
+                    let bytes_sealed = std::fs::read(&selection).unwrap();
+                    let sealed: Value = serde_json::from_slice(&bytes_sealed).unwrap();
+                    assert_eq!(sealed["status"], "SEALED");
+                    assert_eq!(sealed["selections"].as_array().unwrap().len(), 1);
+                    assert!(sealed["selections"][0]["radial"]["units"].is_array());
+                    assert!(sealed["selections"][0]["spatial"]["units"].is_array());
+                    opened.set(opened.get() + 1);
+                    binary(pin, bytes)
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(opened.get(), 1);
+        let value: Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
+        assert_eq!(value["status"], "FAIL");
+        assert_eq!(value["complete"], true);
+        assert_eq!(value["original_returned_hits"], 9);
+        assert_eq!(value["radial_source_coverage"], 10);
+        assert_eq!(value["spatial_source_coverage"], 9);
+        assert_eq!(value["gained_slots"], 0);
+        assert_eq!(value["displaced_lost_slots"], 1);
+        assert_eq!(value["radial_bridge_only_slots"], 0);
+        assert_eq!(value["spatial_bridge_only_slots"], 0);
+        assert_eq!(value["truth_opened_after_durable_paired_selection"], true);
+        assert_eq!(value["queries"][0]["truth_slots"][0]["physical_row"], 11);
+        assert_eq!(value["queries"][0]["truth_slots"][9]["physical_row"], 97000);
+        assert_eq!(
+            value["queries"][0]["radial_physical_closure"]["planned_bytes"],
+            25952256
+        );
+        assert_eq!(
+            value["queries"][0]["spatial_physical_closure"]["planned_bytes"],
+            25479168
+        );
+        let seal_bytes = std::fs::read(&selection).unwrap();
+        assert_eq!(value["selection_seal_sha256"], digest(&seal_bytes));
+        let sealed: Value = serde_json::from_slice(&seal_bytes).unwrap();
+        let query = records.iter().find(|v| v["phase"] == "query").unwrap();
+        assert_eq!(sealed["producer_traces"][0]["returned"], query["returned"]);
+        assert_eq!(
+            sealed["producer_traces"][0]["trace_sha256"],
+            digest(&serde_json::to_vec(&query["trace"]).unwrap())
+        );
+        for mutation in 0..6 {
+            let mut changed: ScreenApproval =
+                serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+            let mut changed_rows = records.clone();
+            match mutation {
+                0 => {
+                    changed_rows
+                        .iter_mut()
+                        .find(|v| v["phase"] == "query")
+                        .unwrap()["trace"]["semantic_leaves"]
+                        .as_array_mut()
+                        .unwrap()
+                        .swap(0, 1);
+                }
+                1 => {
+                    changed_rows
+                        .iter_mut()
+                        .find(|v| v["phase"] == "query")
+                        .unwrap()["trace"]["semantic_units"][0] = json!(1);
+                }
+                2 => {
+                    changed.producer.expected_config["rows"] = json!(100354);
+                    changed.producer.config = put_json(
+                        &f.dir.path().join("rehashed-full-config"),
+                        &changed.producer.expected_config,
+                    );
+                    changed.producer.expected_identity["config_sha256"] =
+                        json!(changed.producer.config.sha256);
+                    changed_rows[0]["config_sha256"] = json!(changed.producer.config.sha256);
+                }
+                3 => {
+                    changed.producer.source_bundle.overlays[0].body = put(
+                        &f.dir.path().join("rehashed-full-overlay"),
+                        b"changed overlay",
+                    );
+                }
+                4 => {
+                    changed.producer.binary =
+                        put(&f.dir.path().join("rehashed-full-elf"), b"changed ELF");
+                    changed.producer.expected_identity["binary_sha256"] =
+                        json!(changed.producer.binary.sha256);
+                    changed_rows[0]["binary_sha256"] = json!(changed.producer.binary.sha256);
+                }
+                _ => {
+                    let q = changed_rows
+                        .iter_mut()
+                        .find(|v| v["phase"] == "query")
+                        .unwrap();
+                    q["ordinal"] = json!(1);
+                }
+            }
+            changed.producer.result = put(
+                &f.dir
+                    .path()
+                    .join(format!("rehashed-full-result-{mutation}")),
+                &sealed_rows(&mut changed_rows),
+            );
+            let ap = put_json(
+                &f.dir
+                    .path()
+                    .join(format!("full-mutation-authority-{mutation}")),
+                &serde_json::to_value(&changed).unwrap(),
+            );
+            let selection = f
+                .dir
+                .path()
+                .join(format!("full-mutation-selection-{mutation}"));
+            let report = f
+                .dir
+                .path()
+                .join(format!("full-mutation-report-{mutation}"));
+            let opened = std::cell::Cell::new(0);
+            assert!(
+                !screen_with(
+                    &config.path,
+                    &config.sha256,
+                    &ap.path,
+                    &ap.sha256,
+                    &selection,
+                    &report,
+                    &scope,
+                    |file, _| file.sync_all(),
+                    |pin, bytes| {
+                        opened.set(opened.get() + 1);
+                        binary(pin, bytes)
+                    }
+                )
+                .unwrap()
+            );
+            assert_eq!(opened.get(), 0);
+            assert!(!selection.exists());
+            let value: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+            assert_eq!(value["status"], "INVALID");
+        }
     }
 
     #[test]
@@ -3253,6 +3450,12 @@ mod tests {
             b"whole producer body fixture; deliberately not a qualifying native run",
         );
         let mut i = inputs(f.a.original.rows, 1024);
+        i.requests_sha256 = c.requests.sha256.clone();
+        i.native_sq8_sha256 = c.sq8.sha256.clone();
+        let plane: Value =
+            serde_json::from_slice(&std::fs::read(&f.c.inputs.plane_manifest.path).unwrap())
+                .unwrap();
+        i.native_order_sha256 = plane["source_order_sha256"].as_str().unwrap().into();
         i.truth_sha256 = c.truth.sha256.clone();
         let mut bound = serde_json::to_value(&i).unwrap();
         bound.as_object_mut().unwrap().remove("store_root");
@@ -3678,5 +3881,198 @@ mod tests {
         assert_eq!(ledger.phases["reused phase"], 60);
         assert_eq!(ledger.retained, 30);
         assert!(ledger.phase("cumulative overflow", &[61]).is_err());
+    }
+
+    fn row_bytes(rows: &[Value]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for row in rows {
+            serde_json::to_writer(&mut body, row).unwrap();
+            body.push(b'\n');
+        }
+        body
+    }
+    fn sealed_rows(rows: &mut [Value]) -> Vec<u8> {
+        let seal = rows
+            .iter()
+            .position(|v| v["phase"] == "all_queries_sealed")
+            .unwrap();
+        let prefix = row_bytes(&rows[..seal]);
+        rows[seal]["prefix_bytes"] = json!(prefix.len());
+        rows[seal]["prefix_sha256"] = json!(digest(&prefix));
+        let sealed = row_bytes(&rows[..seal + 1]);
+        let t = &mut rows.last_mut().unwrap()["summary"];
+        t["prefix_bytes"] = json!(prefix.len());
+        t["prefix_sha256"] = json!(digest(&prefix));
+        t["sealed_bytes"] = json!(sealed.len());
+        t["sealed_sha256"] = json!(digest(&sealed));
+        row_bytes(rows)
+    }
+
+    fn full_screen_fixture() -> (
+        Fixture,
+        ScreenConfig,
+        ScreenApproval,
+        Vec<Value>,
+        CoverageScope,
+        tempfile::TempDir,
+    ) {
+        // Real tiny native envelope/IDs/scores; expand only diagnostic geometry/control metadata.
+        // Public-builder prototypes/FP16 publications remain untouched; this is not ANN qualification.
+        let (native_dir, native_result) =
+            scale_native_runner::scale_reducer_native_fixture(true, true).unwrap();
+        let mut rows = std::fs::read_to_string(native_result)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let native_sq8 = std::fs::read(native_dir.path().join("sq8")).unwrap();
+        assert_eq!(native_sq8.len(), 32 * 1036);
+        let assets = tempfile::tempdir().unwrap();
+        let sq8_path = assets.path().join("sq8");
+        let mut output = std::io::BufWriter::new(File::create(&sq8_path).unwrap());
+        let mut payload_hash = Sha256::new();
+        let mut order_hash = Sha256::new();
+        output.write_all(&native_sq8).unwrap();
+        payload_hash.update(&native_sq8);
+        for record in native_sq8.chunks_exact(1036) {
+            order_hash.update(&record[..8]);
+        }
+        let mut record = vec![0_u8; 1036];
+        record[8..12].copy_from_slice(&1_f32.to_le_bytes());
+        for id in 32..100353_u64 {
+            record[..8].copy_from_slice(&id.to_le_bytes());
+            output.write_all(&record).unwrap();
+            payload_hash.update(&record);
+            order_hash.update(&record[..8]);
+        }
+        output.flush().unwrap();
+        output.get_ref().sync_all().unwrap();
+        drop(output);
+        let sq8_sha = format!("{:x}", payload_hash.finalize());
+        let order_sha = format!("{:x}", order_hash.finalize());
+        let f = Fixture::with_sq8(100353, 1024, &sq8_sha, &order_sha);
+        let mut c = screen_config(&f);
+        c.sq8 = CompletedInput {
+            path: sq8_path,
+            bytes: 100353 * 1036,
+            sha256: sq8_sha,
+        };
+        c.requests = put(
+            &assets.path().join("requests"),
+            &std::fs::read(native_dir.path().join("requests.f32")).unwrap(),
+        );
+        c.truth = put(
+            &assets.path().join("truth"),
+            &[20_u64, 0, 1, 2, 3, 4, 5, 6, 7, 97000]
+                .into_iter()
+                .flat_map(u64::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let mut a = source_authority(&f, &mut c);
+        rows[0] = a.producer.expected_identity.clone();
+        rows[1] = a.producer.expected_bound_inputs.clone();
+        let execution = rows[1]["execution"].clone();
+        let admission = rows
+            .iter_mut()
+            .find(|v| v["phase"] == "diagnostic_admission")
+            .unwrap();
+        admission["execution"] = execution.clone();
+        admission["selected_count"] = json!(1);
+        admission["population_count"] = json!(1);
+        let (root, _) = binary(&f.radial.root, f.radial.root.bytes).unwrap();
+        let (membership, _) = binary(&f.radial.membership, f.radial.membership.bytes).unwrap();
+        let router = SemanticUnitRouter::open(
+            &root,
+            &membership,
+            &f.radial.root.sha256,
+            &f.a.original.identity(),
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+        let request = std::fs::read(&c.requests.path)
+            .unwrap()
+            .chunks_exact(4)
+            .map(|w| f32::from_le_bytes(w.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        let normalized =
+            borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&request).unwrap();
+        let arm = coverage_arm(
+            &router,
+            &normalized,
+            &borsuk::VectorMetric::SquaredEuclidean,
+            100353,
+            1024,
+        )
+        .unwrap();
+        assert_eq!(arm.nomination.leaf_ids, (0..48).collect::<Vec<_>>());
+        assert_eq!(arm.nomination.page_closure.len(), 384);
+        let query = rows.iter_mut().find(|v| v["phase"] == "query").unwrap();
+        assert_eq!(
+            query["returned"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![20, 0, 1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        assert_eq!(
+            query["returned"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h["score_bits"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                0x3d800000, 0x3f000000, 0x3f000000, 0x3f000000, 0x3f000000, 0x3f000000, 0x3f000000,
+                0x3f000000, 0x3f000000, 0x3f800000
+            ]
+        );
+        query["trace"] = json!({"ranked_candidate_pages":arm.nomination.page_closure,"primary_page":0,"discoveries":[],
+            "semantic_leaves":arm.nomination.leaf_ids,"semantic_units":arm.nomination.units,"semantic_seed_additions":arm.nomination.seed_additions,
+            "nomination_evaluated_units":(0..3072).collect::<Vec<_>>()});
+        query["charges"]["source"] =
+            json!({"submitted_gets":1,"verified_bytes":25952256,"failed_gets":0});
+        query["charges"]["sq8"] =
+            json!({"submitted_gets":1,"verified_bytes":265216,"failed_gets":0});
+        query["plan"] = json!({"selected_pages":[0],"ranges":[[0,265216]],"planned_bytes":265216,"target_pages":1,
+            "target_shortfall":0,"primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
+        let charges: Charges = serde_json::from_value(query["charges"].clone()).unwrap();
+        query["sum"] = serde_json::to_value(charges.sum().unwrap()).unwrap();
+        let sum = query["sum"].clone();
+        let seal = rows
+            .iter_mut()
+            .find(|v| v["phase"] == "all_queries_sealed")
+            .unwrap();
+        seal["generation_root_sha256"] = json!(c.inputs.generation_manifest.sha256);
+        seal["requests_sha256"] = json!(c.requests.sha256);
+        seal["reserved_query_count"] = json!(1);
+        let recall = rows.iter_mut().find(|v| v["phase"] == "recall").unwrap();
+        recall["hits10"] = json!(9);
+        recall["recall10"] = json!(0.9);
+        let t = &mut rows.last_mut().unwrap()["summary"];
+        t["generation_root_sha256"] = json!(c.inputs.generation_manifest.sha256);
+        t["requests_sha256"] = json!(c.requests.sha256);
+        t["truth_sha256"] = json!(c.truth.sha256);
+        t["reserved_query_count"] = json!(1);
+        t["diagnostic_prefix"] = json!(false);
+        t["execution"] = execution;
+        t["charges"] = serde_json::to_value(charges).unwrap();
+        t["sum"] = sum;
+        t["total_hits10"] = json!(9);
+        t["recall_numerator"] = json!(9);
+        t["mean_recall10"] = json!(0.9);
+        a.producer.result = put(
+            &f.dir.path().join("complete-fixture-producer"),
+            &sealed_rows(&mut rows),
+        );
+        let scope = CoverageScope {
+            rows: 100353,
+            count: 1,
+            ordinals: vec![0],
+            original_hits: 9,
+            original_coverage: 10,
+        };
+        (f, c, a, rows, scope, assets)
     }
 }
