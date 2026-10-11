@@ -645,7 +645,7 @@ pub struct TwoBitDiscoveryTrace {
 #[doc(hidden)]
 #[derive(Debug, Default, serde::Serialize)]
 pub struct TwoBitPlanTrace {
-    /// Source nomination order: up to318 graph pages or512 Fresh1m closure pages.
+    /// Source nomination order bounded by the selected discovery profile.
     pub ranked_candidate_pages: Vec<usize>,
     /// Globally distinct32-row units source-scored, including bounded completion.
     pub nomination_evaluated_units: Vec<usize>,
@@ -670,11 +670,29 @@ impl TwoBitPlanTrace {
         let graph_ids = 2 * rows.div_ceil(256).min(159)
             + 2 * (units.min(128) + units.min(1272))
             + units.min(2544);
-        let semantic_ids = rows.div_ceil(256).min(512) + units.min(4096) + 48 + units.min(3072) + 8;
+        let scale = SemanticProfile::Scale1m;
+        let semantic_ids = rows.div_ceil(256).min(scale.closure_page_limit())
+            + units.min(scale.source_unit_limit())
+            + scale.selected_leaf_limit()
+            + units.min(scale.walk_unit_limit() - 7)
+            + 8;
         let graph_bytes = graph_ids * std::mem::size_of::<usize>()
             + 4 * std::mem::size_of::<TwoBitDiscoveryTrace>();
         let semantic_bytes = semantic_ids * std::mem::size_of::<usize>();
         graph_bytes.max(semantic_bytes) + std::mem::size_of::<Self>()
+    }
+}
+
+// Conservative simultaneous planner payload, excluding separately admitted
+// codec scratch, trace, directory ranking and fetched response buffers. At
+// Scale's maxima: eight walk vectors (3079*8), four score vectors (24576*16),
+// eight page vectors (3072*16), two BTreeSets (3072*64), plus 64KiB controls
+// total 2,621,888B < 3MiB. The reservations include temporary sorts/clones;
+// actual native RSS remains an independent host gate.
+const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
+    match profile {
+        Some(SemanticProfile::Scale1m) => 3 * 1024 * 1024,
+        _ => 1024 * 1024,
     }
 }
 /// Offline source nomination and SQ8 page admission using the production planner.
@@ -882,6 +900,20 @@ fn rank_walked_source_with_limit(
         page_capacity,
     );
     let walked_count = memo.len();
+    let complete_units = if semantic_profile == Some(SemanticProfile::Scale1m) {
+        let count = global.iter().try_fold(0_usize, |total, &(page, _)| {
+            total.checked_add((rows.div_ceil(32) - page * 8).min(8))
+        });
+        let count = count.ok_or(TwoBitGenerationError::Invalid("source completion geometry"))?;
+        if count > source_unit_limit {
+            return Err(TwoBitGenerationError::Invalid(
+                "incomplete semantic source allowance",
+            ));
+        }
+        Some(count)
+    } else {
+        None
+    };
     let mut completion = global.clone();
     completion.sort_unstable_by(|&(lp, l), &(rp, r)| r.total_cmp(&l).then(lp.cmp(&rp)));
     'complete: for (page, _) in completion {
@@ -901,6 +933,11 @@ fn rank_walked_source_with_limit(
             }
             memo.push((unit, value));
         }
+    }
+    if complete_units.is_some_and(|count| memo.len() != count) {
+        return Err(TwoBitGenerationError::Invalid(
+            "incomplete semantic source scoring",
+        ));
     }
     global = page_maxima(
         memo.iter()
@@ -1342,11 +1379,11 @@ impl TwoBitGeneration {
         {
             return Err(bad("plane file geometry"));
         }
-        // Three copies cover reads/decoding, plus graph towers. Per-query 1MiB
-        // covers sequential discovery/planner vectors through Fresh1m's3079 walk
-        // and4096 SOURCE units. Retained diagnostic arrays use their own scratch charge.
+        // Scale reserves 3MiB for its full closure/scoring geometry; historical
+        // profiles retain 1MiB. Retained diagnostic arrays are charged separately.
+        let planner_reserve = query_planner_reserve(manifest.discovery.semantic_profile());
         let planner_bytes = (limits.max_query_scratch_bytes as u64)
-            .checked_add(1024 * 1024)
+            .checked_add(planner_reserve)
             .ok_or(bad("query memory"))?;
         let query_memory = crate::returned_sq8::query_payload_bytes(
             crate::exact_sq8_nominee::Sq8Geometry {
@@ -2434,7 +2471,7 @@ impl TwoBitGeneration {
         }
         let rows = self.rows();
         let dimensions = self.pages.dimensions();
-        let planner = (1024 * 1024_u64)
+        let planner = query_planner_reserve(self.semantic_profile())
             .checked_add(TwoBitPlanTrace::scratch_bytes(rows) as u64)
             .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
             .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
@@ -6749,6 +6786,25 @@ mod source_walk_tests {
                 .is_err()
             );
         }
+        let pages = 513;
+        let rows = (pages - 1) * 256 + 1;
+        let mut walk = (0..8).collect::<Vec<_>>();
+        walk.extend((1..pages).map(|page| page * 8));
+        let mut seen = BTreeSet::new();
+        let ranked = rank_walked_source_with_limit(
+            rows,
+            &[(0, walk)],
+            pages,
+            Some(SemanticProfile::Scale1m),
+            |unit| {
+                assert!(seen.insert(unit));
+                Ok(unit as f64)
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, (0..4097).collect());
+        assert_eq!(ranked[0], (512, 4096.0));
+        assert_eq!(ranked.len(), 513);
     }
 
     #[test]

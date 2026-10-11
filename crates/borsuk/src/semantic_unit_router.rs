@@ -81,13 +81,17 @@ impl SemanticProfile {
     pub(crate) const fn closure_page_limit(self) -> usize {
         match self {
             Self::Native100k => 1024,
-            Self::Fresh1m | Self::Scale1m => 512,
+            Self::Fresh1m => 512,
+            // Every nominated unit can occupy a distinct physical page. Payload
+            // admission separately bounds the cover's actual bytes and GETs.
+            Self::Scale1m => self.selected_leaf_limit() * LEAF_UNITS,
         }
     }
     pub(crate) const fn source_unit_limit(self) -> usize {
         match self {
             Self::Native100k => 2544,
-            Self::Fresh1m | Self::Scale1m => 4096,
+            Self::Fresh1m => 4096,
+            Self::Scale1m => self.closure_page_limit() * 8,
         }
     }
     fn code(self) -> u32 {
