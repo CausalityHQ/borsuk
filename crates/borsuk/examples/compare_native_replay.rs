@@ -4626,7 +4626,7 @@ const LOSS_SCHEMA: &str = "borsuk-sealed-scale-loss-v1";
 struct LossConfig {
     schema: String,
     completed: CompletedConfig,
-    source_order: CompletedInput,
+    sq8: CompletedInput,
     truth: CompletedInput,
     max_payload_bytes: u64,
 }
@@ -4767,31 +4767,46 @@ fn loss_binary(pin: &CompletedInput, bytes: u64) -> Result<(Vec<u8>, HeaderSnaps
     Ok((body, snapshot))
 }
 
-// Validate the complete permutation while retaining positions only for selected IDs.
+// Authenticate the actual ranked payload and its physical ID order in one bounded pass.
+// This diagnostic accepts logical ordinals only, not arbitrary application IDs.
 fn loss_positions(
     pin: &CompletedInput,
     rows: usize,
+    dimensions: usize,
+    order_sha256: &str,
     wanted: &BTreeSet<u64>,
 ) -> Result<(std::collections::BTreeMap<u64, usize>, HeaderSnapshot)> {
-    let bytes = (rows as u64).checked_mul(8).ok_or("loss order bytes")?;
+    require(
+        rows > 0 && dimensions > 0 && dimensions <= 1024,
+        "loss SQ8 shape",
+    )?;
+    let width = dimensions.checked_add(12).ok_or("loss SQ8 width")?;
+    let bytes = (rows as u64)
+        .checked_mul(width as u64)
+        .ok_or("loss SQ8 bytes")?;
     header_pin(pin, bytes)?;
-    require(pin.bytes == bytes, "loss order exact geometry")?;
+    require(pin.bytes == bytes, "loss SQ8 exact geometry")?;
     let file = header_file(&pin.path)?;
     let identity = file_identity(&file)?;
-    require(identity.len == bytes, "loss order exact length")?;
+    require(identity.len == bytes, "loss SQ8 exact length")?;
     let mut input = BufReader::with_capacity(8192, file);
     let mut seen = vec![0_u8; rows.div_ceil(8)];
     let mut digest = Sha256::new();
+    let mut order_digest = Sha256::new();
+    let mut record = vec![0_u8; width];
     let mut positions = std::collections::BTreeMap::new();
     for physical in 0..rows {
-        let mut word = [0_u8; 8];
-        input.read_exact(&mut word)?;
-        digest.update(word);
-        let id = u64::from_le_bytes(word);
-        require(id < rows as u64, "loss order ordinal")?;
+        input.read_exact(&mut record)?;
+        digest.update(&record);
+        order_digest.update(&record[..8]);
+        let id = i64::from_le_bytes(record[..8].try_into().unwrap());
+        let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+        require(norm.is_finite() && norm > 0., "loss SQ8 norm")?;
+        require(id >= 0 && (id as u64) < rows as u64, "loss SQ8 ordinal")?;
+        let id = id as u64;
         let index = id as usize;
         let mask = 1 << (index % 8);
-        require(seen[index / 8] & mask == 0, "loss order duplicate")?;
+        require(seen[index / 8] & mask == 0, "loss SQ8 duplicate")?;
         seen[index / 8] |= mask;
         if wanted.contains(&id) {
             positions.insert(id, physical);
@@ -4800,8 +4815,9 @@ fn loss_positions(
     require(
         input.read(&mut [0])? == 0
             && format!("{:x}", digest.finalize()) == pin.sha256
+            && format!("{:x}", order_digest.finalize()) == order_sha256
             && positions.len() == wanted.len(),
-        "loss order complete SHA/EOF/mapping",
+        "loss SQ8 complete SHA/EOF/order/mapping",
     )?;
     let snapshot = HeaderSnapshot {
         file: input.into_inner(),
@@ -4844,11 +4860,11 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
             && !ordinals.is_empty()
             && ordinals.len() <= 128
             && i.profile == "scale1m"
-            && c.source_order.sha256 == i.native_order_sha256
-            && c.source_order.bytes == (i.rows as u64) * 8
+            && c.sq8.sha256 == i.native_sq8_sha256
+            && c.sq8.bytes == (i.rows as u64) * (i.dimensions as u64 + 12)
             && c.truth.sha256 == i.truth_sha256
             && c.truth.bytes == i.truth_bytes,
-        "loss baseline panel/order/truth binding",
+        "loss baseline panel/SQ8/truth binding",
     )?;
     // Retained unit lists plus parser/set/report working payload, excluding allocator overhead.
     let modeled = plus(
@@ -4893,7 +4909,13 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
         wanted.extend(truth_rows[ordinal].iter().copied());
         wanted.extend(run.samples[slot].returned.iter().map(|h| h.id));
     }
-    let (positions, order_snapshot) = loss_positions(&c.source_order, i.rows, &wanted)?;
+    let (positions, sq8_snapshot) = loss_positions(
+        &c.sq8,
+        i.rows,
+        i.dimensions,
+        &i.native_order_sha256,
+        &wanted,
+    )?;
     let mut totals = std::collections::BTreeMap::<&str, u64>::new();
     let mut queries = Vec::with_capacity(coverage.len());
     let mut hits = 0_u64;
@@ -4929,7 +4951,7 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
             && totals.values().sum::<u64>() == (coverage.len() * K) as u64,
         "loss disjoint totals/original hits",
     )?;
-    order_snapshot.recheck()?;
+    sq8_snapshot.recheck()?;
     truth_snapshot.recheck()?;
     require(
         file_identity(&open_input(&c.completed.input.path)?)? == run.file_identity,
@@ -4939,12 +4961,13 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
     Ok(
         json!({"schema":LOSS_SCHEMA,"status":"MEASURED","complete":true,
         "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
-        "producer_result_sha256":c.completed.input.sha256,"source_order_sha256":c.source_order.sha256,
+        "producer_result_sha256":c.completed.input.sha256,"sq8_sha256":c.sq8.sha256,
+        "source_order_sha256":i.native_order_sha256,"mapping_authenticated_from_ranked_sq8":true,
         "truth_sha256":c.truth.sha256,"query_count":coverage.len(),"hits10":hits,
         "misses10":coverage.len()*K-hits as usize,"totals":totals,"queries":queries,
         "modeled_payload_bytes":modeled,"truth_opened_after_complete_producer_validation":true,
         "native_ann_called":false,"diagnostic_only":true,"cold_s3_claim":false,
-        "quantization_attribution":false,"producer_mapping_provenance_external_gate_required":true,
+        "quantization_attribution":false,"producer_mapping_provenance_external_gate_required":false,
         "vendor_or_scientific_win_claim":false,"qualified":false}),
     )
 }
@@ -5245,11 +5268,23 @@ mod tests {
     #[test]
     fn sealed_loss_authenticates_nonidentity_order_bijection_and_file_identity() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("order.u64");
-        let body = (0..64_u64)
-            .rev()
-            .flat_map(u64::to_le_bytes)
-            .collect::<Vec<_>>();
+        let path = dir.path().join("sq8");
+        let pack = |ids: &[u64]| {
+            ids.iter()
+                .flat_map(|id| {
+                    let mut record = id.to_le_bytes().to_vec();
+                    record.extend_from_slice(&1_f32.to_le_bytes());
+                    record.extend_from_slice(&[0, 1, 2, 3]);
+                    record
+                })
+                .collect::<Vec<_>>()
+        };
+        let ids = (0..64_u64).rev().collect::<Vec<_>>();
+        let order_sha = sha(&ids
+            .iter()
+            .flat_map(|id| id.to_le_bytes())
+            .collect::<Vec<_>>());
+        let body = pack(&ids);
         std::fs::write(&path, &body).unwrap();
         let mut pin = CompletedInput {
             path: path.clone(),
@@ -5257,29 +5292,44 @@ mod tests {
             sha256: sha(&body),
         };
         let wanted = BTreeSet::from([3, 44]);
-        let (positions, snapshot) = loss_positions(&pin, 64, &wanted).unwrap();
+        let (positions, snapshot) = loss_positions(&pin, 64, 4, &order_sha, &wanted).unwrap();
         assert_eq!(positions[&3], 60);
         assert_eq!(positions[&44], 19);
         std::fs::rename(&path, dir.path().join("old")).unwrap();
         std::fs::write(&path, &body).unwrap();
         assert!(snapshot.recheck().is_err());
         for values in [vec![0_u64; 64], (0..63_u64).chain([64]).collect()] {
-            let bad = values
-                .into_iter()
-                .flat_map(u64::to_le_bytes)
-                .collect::<Vec<_>>();
+            let bad = pack(&values);
             std::fs::write(&path, &bad).unwrap();
             pin.sha256 = sha(&bad);
-            assert!(loss_positions(&pin, 64, &wanted).is_err());
+            assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
         }
+        for norm in [0_f32, -1., f32::NAN, f32::INFINITY] {
+            let mut bad = body.clone();
+            bad[8..12].copy_from_slice(&norm.to_le_bytes());
+            std::fs::write(&path, &bad).unwrap();
+            pin.sha256 = sha(&bad);
+            assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
+        }
+        std::fs::write(&path, &body).unwrap();
+        pin.sha256 = sha(&body);
+        assert!(loss_positions(&pin, 64, 4, &"0".repeat(64), &wanted).is_err());
+        let mut changed_codes = body.clone();
+        changed_codes[12] ^= 1;
+        std::fs::write(&path, &changed_codes).unwrap();
+        assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
         pin.sha256 = sha(&body);
         std::fs::write(&path, &body[..body.len() - 1]).unwrap();
-        assert!(loss_positions(&pin, 64, &wanted).is_err());
+        assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
+        let mut grown = body.clone();
+        grown.push(0);
+        std::fs::write(&path, &grown).unwrap();
+        assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
         std::fs::write(&path, &body).unwrap();
         let link = dir.path().join("link");
         symlink(&path, &link).unwrap();
         pin.path = link;
-        assert!(loss_positions(&pin, 64, &wanted).is_err());
+        assert!(loss_positions(&pin, 64, 4, &order_sha, &wanted).is_err());
     }
 
     #[test]
@@ -5293,22 +5343,15 @@ mod tests {
         let (completed_path, completed_sha) = scale_config(dir.path(), &result, &rows);
         let (completed, _): (CompletedConfig, _) =
             read_config(&completed_path, &completed_sha).unwrap();
-        let mut order = (0..32_u64).rev().collect::<Vec<_>>();
-        let eight = order.iter().position(|id| *id == 8).unwrap();
-        order.swap(eight, 31);
-        let order = order
-            .into_iter()
-            .flat_map(u64::to_le_bytes)
-            .collect::<Vec<_>>();
-        let order_path = dir.path().join("loss-order.u64");
-        std::fs::write(&order_path, &order).unwrap();
+        let sq8_path = dir.path().join("sq8");
+        let sq8 = std::fs::read(&sq8_path).unwrap();
         let truth = std::fs::read(dir.path().join("truth.u64")).unwrap();
         let mut config = json!({"schema":"borsuk-sealed-scale-loss-config-v1",
             "completed":{"schema":completed.schema,"input":{"path":completed.input.path,
                 "bytes":completed.input.bytes,"sha256":completed.input.sha256},
                 "expected_identity":completed.expected_identity,
                 "expected_bound_inputs":completed.expected_bound_inputs},
-            "source_order":{"path":order_path,"bytes":order.len(),"sha256":sha(&order)},
+            "sq8":{"path":sq8_path,"bytes":sq8.len(),"sha256":sha(&sq8)},
             "truth":{"path":dir.path().join("truth.u64"),"bytes":truth.len(),"sha256":sha(&truth)},
             "max_payload_bytes":64*1024*1024});
         let path = dir.path().join("loss.json");
@@ -5316,9 +5359,17 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let report = reduce_loss(&path, &sha(&bytes)).unwrap();
         assert_eq!(report["query_count"], 1);
-        assert_eq!(
-            report["hits10"].as_u64().unwrap() + report["misses10"].as_u64().unwrap(),
-            10
+        assert_eq!(report["hits10"], 10);
+        assert_eq!(report["misses10"], 0);
+        assert_eq!(report["totals"], json!({"source_covered_hit": 10}));
+        let entries = report["queries"][0]["truth_entries"].as_array().unwrap();
+        let entry = |id: u64| entries.iter().find(|entry| entry["id"] == id).unwrap();
+        assert_eq!(entry(21)["physical_row"], 10);
+        assert_eq!(entry(8)["physical_row"], 31);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry["source_scored"] == true && entry["sq8_ranked"] == true)
         );
         assert_eq!(
             report["truth_opened_after_complete_producer_validation"],
