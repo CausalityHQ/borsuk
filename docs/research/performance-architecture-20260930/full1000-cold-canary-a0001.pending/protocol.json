@@ -1,0 +1,84 @@
+{
+  "schema": "borsuk-full1000-cold-canary-v1",
+  "status": "ROOT_AUTHORIZED_CANARY_INITIAL_PHASE_FROZEN",
+  "purpose": "Separate disposable staging/canary before full1000 cold measurement",
+  "source_base": "c22f5bdafab72477d0d8a0b5a6cd8ae0ba2b3ea8",
+  "native_sources": {
+    "baseline": "c3e52c8bbf0fcc985c0a8a06d2abeec5d7442d38",
+    "extractor": "5660b97d7c153e265cd96688113217717d61bd61",
+    "reducer": "d077a54f456af30242753ed1e2e397a9416191f7"
+  },
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "capacity": "EC2 Spot",
+  "instance_type": "c7i.2xlarge",
+  "dataset": {
+    "rows": 1000000,
+    "dimensions": 1024,
+    "population_queries": 1000,
+    "executed_ordinals": [
+      0
+    ],
+    "metric": "cosine",
+    "k": 10
+  },
+  "native_changes": false,
+  "compiler": false,
+  "corpus_or_truth_rebuild": false,
+  "stages": [
+    "setup",
+    "local-archive-admission",
+    "native-one-query",
+    "header-binding",
+    "completed-reduction"
+  ],
+  "resources": {
+    "allowed_cpus": "0",
+    "cpu_percent": 100,
+    "swap_bytes": 0,
+    "pids": 128,
+    "transport_and_metadata_memory_bytes": 1073741824,
+    "query_memory_bytes": 536870912,
+    "query_seconds": 300,
+    "other_native_seconds": 120,
+    "transport_seconds": 600,
+    "host_stop_seconds": 7200,
+    "external_stop_seconds": 7800,
+    "cleanup_grace_seconds": 120
+  },
+  "acceptance": [
+    "Actual ELF and full input SHA/length authentication",
+    "Native archive all-member inventory",
+    "Native source/receipt/request/query/truth validation",
+    "One selected query sealed before truth with no underfill",
+    "Independent header authority and completed reduction",
+    "Original native and manager exit0; exact owned cgroup drained; OOM/swap0",
+    "Terminate same instance and waiter0; root volume absent"
+  ],
+  "stop_rule": "First failed prerequisite stops all further native stages; preserve original failure and cleanup",
+  "spot_interruption": "INVALID; no automatic repeat or acceptance of partial output",
+  "claims": {
+    "population_recall": false,
+    "population_percentiles": false,
+    "cold_performance": false,
+    "vendor_win": false
+  },
+  "full_run_remaining_gate": "Resolve projected 1000-query result size vs HEADER_RESULT_CAP32MiB before measured launch",
+  "cold_definition_for_future": "Source cache off, no local payload cache; resident routing and reused SDK connections explicit; provider cache uncontrolled; sequential query concurrency1",
+  "spot_quote": {
+    "AvailabilityZone": "eu-central-1c",
+    "AvailabilityZoneId": "euc1-az1",
+    "InstanceType": "c7i.2xlarge",
+    "ProductDescription": "Linux/UNIX",
+    "SpotPrice": "0.203800",
+    "Timestamp": "2026-10-10T19:00:00+00:00"
+  },
+  "cost": {
+    "max_bid_usd_per_hour": 0.5,
+    "compute_ceiling_usd": 1.10,
+    "ancillary_reservation_usd": 0.20,
+    "total_ceiling_usd": 1.30,
+    "billing_claim": false
+  },
+  "header_and_reduction_authority": "Freeze after original canary closes and opaque result SHA/length is known; no raw row interpretation in local glue"
+}
