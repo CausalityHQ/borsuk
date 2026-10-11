@@ -1,0 +1,348 @@
+{
+  "id": "3ce26f1a08d94f05",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "effort": "",
+  "fallbacks": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "agent": "borsuk/prod-ready-v9",
+  "cwd": "/home/rb/worktrees/borsuk-prod-ready-v9",
+  "status": "completed",
+  "runner_started": true,
+  "started_at": 1791716317,
+  "timeout_seconds": 1200,
+  "deadline_at": 1791717517,
+  "budget_usd": null,
+  "prompt_preview": "Act as the independent adversarial engineering and release critic. Inspect correctness, failure modes, security, operability, tests, and UX. Prioritize concrete findings with evidence. Do not edit files.\n\nMaterial to critique:\nRead-only hard-design review, no edits/native/Cargo/data parsing/network/cloud/children. Repo /home/rb/worktrees/borsuk-prod-ready-v9 physical checkout stale dirty: use Git objects origin/main=3b70a8e3b863cca220ce1c15df5ac363f9e0aec3. Read completed plan /data/target/borsuk-boundary-adjacency-plan.pending/planning-answer.md (job04b2d7cf56634a36), committed leaf-metric-coverage-screen-a0001 decision/layer-reconciliation/human-summary and historical docs/research/next-route-research-20260928/fable-result.md. Root has NOT accepted plan. Decide go/no-go implementation for ONE sampled SQ8-row cut-edge LEAF adjacency nomination arm, without repeating rejected centroid design/report bloat. Concern: proposed centroid_hnsw::build_hnsw_adjacency uses diverse=false, implicated historical discoveryloss; diverse sibling exists. Reconcile whether nearest-neighbor-count edges require nondiverse vs diversity without assuming either improves. Plan31250 sampled actual rows D1024, sample min(32u+16,N-1), decode authenticatedSQ8 low/step+normalize, fixedm16/m032/ef64, crossleaf counttop16, nomination40L2+8vote, preserve48/scoring/layout/cover. Inspect logical-ID/order/membership/generation identity, sampling/vote bias, disconnected graph, deterministic ties, construction time/RSS/allocation model, resident budget, genericlibrary vs exampleIO and smallest files/APIs. Inventory has SQ8/calibration/order but no qualifiedFP32 graph; don't treat missinginventory as globalabsence. Gate candidate>=315/320,gained>lost existing screen; plan adds zero-loss rule—evaluate justification, no GTtuning. Sixmisses proved firstleafnomination, coveredq537quantizationunproved. Never qualify fullFP32-kNN/Fablelayout/vendorwin from sampledarm. Return explicit must-fixes, go/no-go, smallest sound修repair, actualnative falsifier/resource envelope. All future nativecausalityEC2, no localbuilds, narrow source reads/no cache scans; bounded design review, not open-ended new arm search.",
+  "prompt_sha256": "7d4aa4499d231775f4a4898b3cf983bfb61fa3d58dc3e3ab9073314d40062338",
+  "prompt_bytes": 2393,
+  "fingerprint": "7388eb1712ccd71eb5c76176abb73b61793c3fc64c7254e730e062fbaaf81b1e",
+  "evidence": {
+    "git_commit": "793a0699c097a9f48ce1416d35bd639b78feff0a",
+    "git_branch": "devbox/prod-ready-v9",
+    "git_dirty": true,
+    "git_status_sha256": "806a393ed7a8d79ab1a12dffdcaff3fd75f55a1b19cc9da68a829738b629cb81",
+    "worktree_sha256": "9447b6bab83df873177ab8af2a00acbc8eb82cc377414b1c8e7fdea51ec1dc9f",
+    "worktree_evidence_truncated": true,
+    "active_goal": {
+      "id": "goal-1790540483-1790540483843307105-2322852",
+      "agent": "borsuk/prod-ready-v9",
+      "objective": "Ship a production-ready, self-contained Rust BORSUK ANN library on S3/blob storage that beats BOTH S3 Vectors and Turbopuffer at equal or better recall on matched end-to-end p90/p95 latency and throughput per total dollar. This is a product goal, not a report. Support incremental insert/update/delete, authenticated generation-pinned publication and reads, bounded RAM/cache/concurrency, restart/recovery, and in-process automatic or callable compaction/GC; require no separate maintenance instance. Preserve current V282 on-demand SQ8 work and live jobs; do not duplicate consultations or paid runs. Opus 5.5 estimates the current PQ64 plus f32 summary/unit router at 184 resident bytes per row, or about 18.4 GB at 100M D768, before old-generation pinning. This is a projection, not a measurement. Reconcile prior V139/V146/V149/V150 centroid-page failures and the completed Fable review before choosing any new arm; do not repeat a known failure. Predeclare a feasible 100M RAM, GET, byte, p90 and cost envelope. Prefer a small resident router and one parallel S3 fetch wave, but choose memory versus quality from a measured Pareto curve, not an arbitrary 2 GB cap. Candidate design: balanced hierarchical semantic cells with physical locality and boundary coverage; scan small SQ8 leaves, split skewed/diffuse leaves, use local compressed indexing only where measured cell-specific gains justify it. Avoid S3 graph pointer chasing and full-vector/full-graph hydration. First run the cheapest distinct paired 100k D768 cosine k100 falsifier on ReLAION and CoHere against unchanged V282, decomposing exact-GT loss into router, selected-cell coverage, local index and SQ8 quantization and counting GETs, bytes, RAM and route CPU. Use V282 98% mean recall@100, p05 95, 32 GET and 16 MiB caps unless a redesign is predeclared; kill weak arms early. Freeze a winner for fresh 1M cold HTTP, then 10M and 100M scale. Measure p50/p90/p95/p99, QPS, RSS including generation swap, physical S3 requests/bytes/retries/errors, build and incremental-maintenance cost, total lifecycle cost and failure recovery. Compare competitors on identical corpus, query split, metric, k, filters, cache state, region and concurrency; if only published targets are available, cite date/configuration and label mismatches, never claim a measured win. When a gate fails, redesign routing, layout, quantization or fetch schedule with one causal change per experiment. Unreleased formats need no backward compatibility. Push code, tests, receipts and a concise decision table to BORSUK main. Within 24 hours deliver one substantive object-native library increment and a falsifiable next gate, then continue until the product works.",
+      "status": "queued",
+      "revision": 4,
+      "actor": "devbox",
+      "note": "re-apply delivery failed; prior goal state restored",
+      "created_at": 1790540483,
+      "updated_at": 1790781535
+    }
+  },
+  "previous_fingerprint": "ad692a49aa7f6d1a81f14ae1429a9fa6c0bb736a04a6bd27cbedeacca59ebf3c",
+  "reused": false,
+  "critique_id": "de63b45acc5340a3",
+  "critique_role": "engineering_critic",
+  "systemd_unit": "devbox-consult-3ce26f1a08d94f05.service",
+  "pid": 344933,
+  "pgid": 344933,
+  "attempt": 1,
+  "attempts": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    }
+  ],
+  "attempt_history": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-astra",
+      "budget_usd": null,
+      "timeout_seconds": 1200,
+      "started_at": 1791716317
+    }
+  ],
+  "exit_code": 0,
+  "finished_at": 1791716666,
+  "event_cursor": 45,
+  "events": [
+    {
+      "seq": 22,
+      "at": 1791716388,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 23,
+      "at": 1791716395,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 24,
+      "at": 1791716396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 25,
+      "at": 1791716396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 26,
+      "at": 1791716396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 27,
+      "at": 1791716396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 28,
+      "at": 1791716396,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 29,
+      "at": 1791716405,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 30,
+      "at": 1791716405,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 31,
+      "at": 1791716405,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 32,
+      "at": 1791716406,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 33,
+      "at": 1791716429,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 34,
+      "at": 1791716429,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 35,
+      "at": 1791716429,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 36,
+      "at": 1791716429,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 37,
+      "at": 1791716482,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 38,
+      "at": 1791716487,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 39,
+      "at": 1791716487,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 40,
+      "at": 1791716488,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 41,
+      "at": 1791716515,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 42,
+      "at": 1791716553,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command started"
+    },
+    {
+      "seq": 43,
+      "at": 1791716553,
+      "provider": "codex",
+      "kind": "tool",
+      "label": "Shell command completed",
+      "detail": "exit 0"
+    },
+    {
+      "seq": 44,
+      "at": 1791716660,
+      "provider": "codex",
+      "kind": "partial",
+      "label": "Answer available"
+    },
+    {
+      "seq": 45,
+      "at": 1791716666,
+      "provider": "codex",
+      "kind": "phase",
+      "label": "Consultation completed",
+      "detail": "exit 0"
+    }
+  ],
+  "events_truncated": true,
+  "provider_events": {
+    "codex": [
+      {
+        "seq": 38,
+        "at": 1791716487,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 39,
+        "at": 1791716487,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 40,
+        "at": 1791716488,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 41,
+        "at": 1791716515,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 42,
+        "at": 1791716553,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command started"
+      },
+      {
+        "seq": 43,
+        "at": 1791716553,
+        "provider": "codex",
+        "kind": "tool",
+        "label": "Shell command completed",
+        "detail": "exit 0"
+      },
+      {
+        "seq": 44,
+        "at": 1791716660,
+        "provider": "codex",
+        "kind": "partial",
+        "label": "Answer available"
+      },
+      {
+        "seq": 45,
+        "at": 1791716666,
+        "provider": "codex",
+        "kind": "phase",
+        "label": "Consultation completed",
+        "detail": "exit 0"
+      }
+    ]
+  },
+  "partial_result": "**NO-GO for implementing the plan unchanged.** The sampled-row nomination arm is reasonable to falsify, but its edge semantics, gate, and resource admission need correction first.\n\nI reviewed the [completed plan](/data/target/borsuk-boundary-adjacency-plan.pending/planning-answer.md), the committed screen evidence, and source objects at `3b70a8e3b863cca220ce1c15df5ac363f9e0aec3`. Source line references below refer to that revision, not the stale checkout.\n\n**Must fix:**\n\n1. **Remove the unsupported zero-loss requirement.**  \n   Plan line 19 rejects any lost slot. The frozen screen requires candidate coverage ≥315/320 and `gained > lost`; `compare_native_replay.rs:5315` implements that rule. A candidate gaining two slots and losing one passes the existing gate but fails the proposed gate.\n\n   Zero loss could be a separately justified prospective policy, but neither the layer attribution nor preserving 48 leaves establishes its necessity. Smallest repair: retain the existing gate, report gains/losses, and leave returned-recall qualification separate.\n\n2. **Preserve the precise coverage metric.**  \n   Plan line 19 says “owning nominated units,” but the historical 314/320 counts **SOURCE-scored page closure**. `coverage_slot` tests `page_closure.contains(physical / 256)` at `compare_native_replay.rs:5308`; `loss_coverage` requires every unit in that closure to be scored at lines 4674–4681.\n\n   These differ: selecting unit 0 brings physical page 0 into closure, so unit 1 is SOURCE-scored even if its owning leaf was not selected. A fetched gap-bridge page is a third category.\n\n   Smallest repair: retain the historical closure-based gate and distinguish direct owning-unit nomination only where needed to explain recovered slots. Do not reuse 314 as the baseline for a different metric. This distinction does **not** invalidate the established contrapositive proof that the six unscored targets’ leaves were absent.\n\n3. **Freeze what an edge count means before choosing diversity.**  \n   `build_hnsw_adjacency` explicitly selects `diverse=false` at `centroid_hnsw.rs:419–426`. Its result is a pruned insertion graph, **not each sampled row’s final nearest-32 list**. Reciprocal insertions are pruned independently at lines 1381–1417, so the graph is directed.\n\n   The diverse sibling deliberately retains some farther candidates; its test selects nodes `[1,3]` over the nearer pair `[1,2]` at lines 1547–1568. Counting its stored edges measures a different prior. Conversely, nondiverse pruning does not guarantee accurate neighbor discovery or connectivity. Historical Fable evidence implicates the old discovery path; it does not establish that changing this flag improves this Cohere arm.\n\n   **Smallest sound choice:** retain the proposed nondiverse builder for this single arm, but define weights as **counts of retained directed cross-leaf base arcs**. Extract base arcs from `tower.last()`, not index zero—tower storage is reversed (`:1216–1223`). Count each stored directed arc once, exclude same-leaf arcs, then retain top 16 by count/leaf ID.\n\n   Disconnected components are a recall limitation here, not automatically an invalid artifact: every node’s adjacency can still be projected. Freeze empty-adjacency fallback to L2 and test it. Do not silently use `build_reachable_*`: its repair adds ordinal-cycle and physical-order edges (`:838–875`), which would contaminate geometric votes.\n\n   Nearest-neighbor counts do not intrinsically require nondiverse navigation: diverse discovery followed by distance-ranked neighbor extraction is possible, but that is additional work and a different arm. Neither shortcut should be presented as qualified kNN.\n\n4. **Make authentication and decoding an explicit pre-query boundary.**  \n   Reusing the named functions is insufficient without changing their sequencing. `coverage_router` validates calibration but discards it (`compare_native_replay.rs:5088–5123`); the existing `loss_positions` runs **after truth opens** (`:5492–5519`).\n\n   Construction must first authenticate the entire SQ8 stream and physical-ID order. Its records are `[i64 logical ID][f32 squared norm][D code bytes]`, not just codes (`sq8_source.rs:258–281`). Sample index `u` must map to physical unit `u`; never use logical ID divided by 32 as membership.\n\n   Require exact length/EOF, duplicate/range checks under the example’s ordinal-ID contract, finite calibration and reconstructed coordinates, nonzero normalization, dimension agreement, and final file-identity checks before publishing adjacency. Bind its version and digest to generation, calibration, router, membership, SQ8, order, sampling rule, and algorithm parameters; include that digest in the paired selection seal.\n\n   Keep ordinal-only IDs and filesystem/manifest handling in the example. The library should operate on admitted geometry and unit membership, without imposing benchmark ID or dataset conventions.\n\n5. **Replace the resource estimate with an enforceable allocation model.**  \n   The 122 MiB sample-vector payload is correct. “Graph and edge-count scratch should keep construction below 256 MiB” is not yet admission evidence.\n\n   The builder uses nested vectors with spare capacities, levels, insertion order, visited marks, heaps, and pruning scratch (`centroid_hnsw.rs:113–175,440–450,1294–1337`). Projection, decoded-row copies, authenticated metadata, and serialization also need accounting. Search width 64 bounds retained results, not all traversal work or total distance evaluations.\n\n   The current screen already reports a conservative modeled payload of **164,435,968 bytes**. Adding samples to that unchanged model exceeds 256 MiB; this does not prove actual RSS failure, but it requires explicit stage lifetimes and a replacement model. Drop samples and the row graph before retaining query selections.\n\n   Also distinguish serialized adjacency bytes from resident capacity. `128 × leaf_count` describes 16 `(u32 ID,u32 weight)` entries; offsets, containers, query scratch, and simultaneous generation pins remain additional costs.\n\n**Sampling and voting risks should remain disclosed, not trigger another arm search.** One fixed midpoint per unit can systematically miss a boundary elsewhere in that unit. Larger leaves contribute more sampled rows; raw cut counts therefore favor larger or denser leaves. The short final unit receives one sample too. Rank weights provide no distance-margin information.\n\nFreeze these choices unchanged for the falsifier. Specify zero-based seed ranks giving weights 40…1, exclude the first 40 leaves from replacement candidates, deduplicate voted leaves, and fill shortages in original L2 order. The 640-link bound applies only to adjacency expansion; full L2 ranking and nomination still run.\n\nThe smallest implementation remains two files: generic adjacency construction/selection and tests in `semantic_unit_router.rs`; bounded authenticated IO, the distinct candidate entrypoint, and existing seal/control/cover orchestration in `compare_native_replay.rs`. Keep the HNSW helper private. No centroid hierarchy, new diagnostic framework, graph-repair mechanism, or serving-generation integration is needed for this screen.\n\n**Required native falsifier and provisional envelope:**\n\n| Stage | Required boundary |\n|---|---|\n| Remote build/tests | Causality EC2; two compiler jobs, 16 GiB RAM, 64 GiB build disk |\n| Adjacency construction | One CPU, 512 MiB enforced memory ceiling, swap zero, 900-second deadline; checked allocation model before allocation |\n| Staging | 2 GiB only after accounting for every staged file; SQ8 alone is 1,036,000,000 bytes |\n| Query screen | Existing 48-leaf, SOURCE 128-GET/64-MiB and SQ8 limits; preserve separate screen resource controls |\n| Lifecycle | Spot, exact instance/source/config receipts, terminal artifact sync, interrupted cells discarded, immediate compute cleanup |\n\nBefore measurement:\n\n- Run affected library/example tests on EC2, including nonidentity order, cross-generation substitution, corrupt records, short tails, zero/nonfinite vectors, D1024 acceptance/D1025 rejection, reversed tower indexing, directed-edge counting, ties, isolated components, and exactly 48 distinct selections.\n- Pass source-bound admission on authenticated real inputs and a separate disposable CLI/publication/cleanup smoke. Synthetic fixtures alone are insufficient.\n- Run required workspace Clippy and `scripts/check_rust_test_build.sh` on the exact delivered revision.\n- Construct and seal adjacency with requests/truth unopened. Then seal paired nominations before truth access. Reproduce original returned313/320 and SOURCE coverage314/320; apply candidate≥315 and gained>lost.\n- A survivor proceeds to actual native returned-recall qualification with unchanged scoring and fetch limits. The coverage reducer explicitly does not call native ANN. Setup/protocol failures remain INVALID, distinct from a completed weak candidate or a demonstrated construction-resource limit.\n\nThe inspected inventory’s missing qualified FP32 graph does not establish global absence; the generation metadata even describes a canonical FP32 object. Its availability and qualification were not checked.\n\nThe six nomination misses justify testing this mechanism. They do not predict success; q537 remains an unexplained covered ranking loss. Neither outcome qualifies full-FP32 kNN, Fable’s layout proposal, cold performance, or a vendor win.\n\nNo files changed. No builds, data parsing, network/cloud actions, or child agents were used. Runtime correctness and the proposed resource envelope remain unverified.",
+  "partial_result_truncated": false,
+  "provider_partials": {
+    "codex": "**NO-GO for implementing the plan unchanged.** The sampled-row nomination arm is reasonable to falsify, but its edge semantics, gate, and resource admission need correction first.\n\nI reviewed the [completed plan](/data/target/borsuk-boundary-adjacency-plan.pending/planning-answer.md), the committed screen evidence, and source objects at `3b70a8e3b863cca220ce1c15df5ac363f9e0aec3`. Source line references below refer to that revision, not the stale checkout.\n\n**Must fix:**\n\n1. **Remove the unsupported zero-loss requirement.**  \n   Plan line 19 rejects any lost slot. The frozen screen requires candidate coverage ≥315/320 and `gained > lost`; `compare_native_replay.rs:5315` implements that rule. A candidate gaining two slots and losing one passes the existing gate but fails the proposed gate.\n\n   Zero loss could be a separately justified prospective policy, but neither the layer attribution nor preserving 48 leaves establishes its necessity. Smallest repair: retain the existing gate, report gains/losses, and leave returned-recall qualification separate.\n\n2. **Preserve the precise coverage metric.**  \n   Plan line 19 says “owning nominated units,” but the historical 314/320 counts **SOURCE-scored page closure**. `coverage_slot` tests `page_closure.contains(physical / 256)` at `compare_native_replay.rs:5308`; `loss_coverage` requires every unit in that closure to be scored at lines 4674–4681.\n\n   These differ: selecting unit 0 brings physical page 0 into closure, so unit 1 is SOURCE-scored even if its owning leaf was not selected. A fetched gap-bridge page is a third category.\n\n   Smallest repair: retain the historical closure-based gate and distinguish direct owning-unit nomination only where needed to explain recovered slots. Do not reuse 314 as the baseline for a different metric. This distinction does **not** invalidate the established contrapositive proof that the six unscored targets’ leaves were absent.\n\n3. **Freeze what an edge count means before choosing diversity.**  \n   `build_hnsw_adjacency` explicitly selects `diverse=false` at `centroid_hnsw.rs:419–426`. Its result is a pruned insertion graph, **not each sampled row’s final nearest-32 list**. Reciprocal insertions are pruned independently at lines 1381–1417, so the graph is directed.\n\n   The diverse sibling deliberately retains some farther candidates; its test selects nodes `[1,3]` over the nearer pair `[1,2]` at lines 1547–1568. Counting its stored edges measures a different prior. Conversely, nondiverse pruning does not guarantee accurate neighbor discovery or connectivity. Historical Fable evidence implicates the old discovery path; it does not establish that changing this flag improves this Cohere arm.\n\n   **Smallest sound choice:** retain the proposed nondiverse builder for this single arm, but define weights as **counts of retained directed cross-leaf base arcs**. Extract base arcs from `tower.last()`, not index zero—tower storage is reversed (`:1216–1223`). Count each stored directed arc once, exclude same-leaf arcs, then retain top 16 by count/leaf ID.\n\n   Disconnected components are a recall limitation here, not automatically an invalid artifact: every node’s adjacency can still be projected. Freeze empty-adjacency fallback to L2 and test it. Do not silently use `build_reachable_*`: its repair adds ordinal-cycle and physical-order edges (`:838–875`), which would contaminate geometric votes.\n\n   Nearest-neighbor counts do not intrinsically require nondiverse navigation: diverse discovery followed by distance-ranked neighbor extraction is possible, but that is additional work and a different arm. Neither shortcut should be presented as qualified kNN.\n\n4. **Make authentication and decoding an explicit pre-query boundary.**  \n   Reusing the named functions is insufficient without changing their sequencing. `coverage_router` validates calibration but discards it (`compare_native_replay.rs:5088–5123`); the existing `loss_positions` runs **after truth opens** (`:5492–5519`).\n\n   Construction must first authenticate the entire SQ8 stream and physical-ID order. Its records are `[i64 logical ID][f32 squared norm][D code bytes]`, not just codes (`sq8_source.rs:258–281`). Sample index `u` must map to physical unit `u`; never use logical ID divided by 32 as membership.\n\n   Require exact length/EOF, duplicate/range checks under the example’s ordinal-ID contract, finite calibration and reconstructed coordinates, nonzero normalization, dimension agreement, and final file-identity checks before publishing adjacency. Bind its version and digest to generation, calibration, router, membership, SQ8, order, sampling rule, and algorithm parameters; include that digest in the paired selection seal.\n\n   Keep ordinal-only IDs and filesystem/manifest handling in the example. The library should operate on admitted geometry and unit membership, without imposing benchmark ID or dataset conventions.\n\n5. **Replace the resource estimate with an enforceable allocation model.**  \n   The 122 MiB sample-vector payload is correct. “Graph and edge-count scratch should keep construction below 256 MiB” is not yet admission evidence.\n\n   The builder uses nested vectors with spare capacities, levels, insertion order, visited marks, heaps, and pruning scratch (`centroid_hnsw.rs:113–175,440–450,1294–1337`). Projection, decoded-row copies, authenticated metadata, and serialization also need accounting. Search width 64 bounds retained results, not all traversal work or total distance evaluations.\n\n   The current screen already reports a conservative modeled payload of **164,435,968 bytes**. Adding samples to that unchanged model exceeds 256 MiB; this does not prove actual RSS failure, but it requires explicit stage lifetimes and a replacement model. Drop samples and the row graph before retaining query selections.\n\n   Also distinguish serialized adjacency bytes from resident capacity. `128 × leaf_count` describes 16 `(u32 ID,u32 weight)` entries; offsets, containers, query scratch, and simultaneous generation pins remain additional costs.\n\n**Sampling and voting risks should remain disclosed, not trigger another arm search.** One fixed midpoint per unit can systematically miss a boundary elsewhere in that unit. Larger leaves contribute more sampled rows; raw cut counts therefore favor larger or denser leaves. The short final unit receives one sample too. Rank weights provide no distance-margin information.\n\nFreeze these choices unchanged for the falsifier. Specify zero-based seed ranks giving weights 40…1, exclude the first 40 leaves from replacement candidates, deduplicate voted leaves, and fill shortages in original L2 order. The 640-link bound applies only to adjacency expansion; full L2 ranking and nomination still run.\n\nThe smallest implementation remains two files: generic adjacency construction/selection and tests in `semantic_unit_router.rs`; bounded authenticated IO, the distinct candidate entrypoint, and existing seal/control/cover orchestration in `compare_native_replay.rs`. Keep the HNSW helper private. No centroid hierarchy, new diagnostic framework, graph-repair mechanism, or serving-generation integration is needed for this screen.\n\n**Required native falsifier and provisional envelope:**\n\n| Stage | Required boundary |\n|---|---|\n| Remote build/tests | Causality EC2; two compiler jobs, 16 GiB RAM, 64 GiB build disk |\n| Adjacency construction | One CPU, 512 MiB enforced memory ceiling, swap zero, 900-second deadline; checked allocation model before allocation |\n| Staging | 2 GiB only after accounting for every staged file; SQ8 alone is 1,036,000,000 bytes |\n| Query screen | Existing 48-leaf, SOURCE 128-GET/64-MiB and SQ8 limits; preserve separate screen resource controls |\n| Lifecycle | Spot, exact instance/source/config receipts, terminal artifact sync, interrupted cells discarded, immediate compute cleanup |\n\nBefore measurement:\n\n- Run affected library/example tests on EC2, including nonidentity order, cross-generation substitution, corrupt records, short tails, zero/nonfinite vectors, D1024 acceptance/D1025 rejection, reversed tower indexing, directed-edge counting, ties, isolated components, and exactly 48 distinct selections.\n- Pass source-bound admission on authenticated real inputs and a separate disposable CLI/publication/cleanup smoke. Synthetic fixtures alone are insufficient.\n- Run required workspace Clippy and `scripts/check_rust_test_build.sh` on the exact delivered revision.\n- Construct and seal adjacency with requests/truth unopened. Then seal paired nominations before truth access. Reproduce original returned313/320 and SOURCE coverage314/320; apply candidate≥315 and gained>lost.\n- A survivor proceeds to actual native returned-recall qualification with unchanged scoring and fetch limits. The coverage reducer explicitly does not call native ANN. Setup/protocol failures remain INVALID, distinct from a completed weak candidate or a demonstrated construction-resource limit.\n\nThe inspected inventory’s missing qualified FP32 graph does not establish global absence; the generation metadata even describes a canonical FP32 object. Its availability and qualification were not checked.\n\nThe six nomination misses justify testing this mechanism. They do not predict success; q537 remains an unexplained covered ranking loss. Neither outcome qualifies full-FP32 kNN, Fable’s layout proposal, cold performance, or a vendor win.\n\nNo files changed. No builds, data parsing, network/cloud actions, or child agents were used. Runtime correctness and the proposed resource envelope remain unverified."
+  },
+  "providers_used": [
+    "codex"
+  ],
+  "active_provider": "codex",
+  "phase": "Consultation completed",
+  "input_bytes": 2393,
+  "output_bytes": 9657,
+  "elapsed_seconds": 349,
+  "progress": "Reading additional input from stdin...\ndevbox-ask: codex consult still running (0m 30s)\ndevbox-ask: codex consult still running (1m 00s)\ndevbox-ask: codex consult still running (1m 30s)\ndevbox-ask: codex consult still running (2m 00s)\ndevbox-ask: codex consult still running (2m 30s)\ndevbox-ask: codex consult still running (3m 00s)\ndevbox-ask: codex consult still running (3m 30s)\ndevbox-ask: codex consult still running (4m 00s)\ndevbox-ask: codex consult still running (4m 30s)\ndevbox-ask: codex consult still running (5m 00s)\ndevbox-ask: codex consult still running (5m 30s)",
+  "progress_truncated": false,
+  "result": "**NO-GO for implementing the plan unchanged.** The sampled-row nomination arm is reasonable to falsify, but its edge semantics, gate, and resource admission need correction first.\n\nI reviewed the [completed plan](/data/target/borsuk-boundary-adjacency-plan.pending/planning-answer.md), the committed screen evidence, and source objects at `3b70a8e3b863cca220ce1c15df5ac363f9e0aec3`. Source line references below refer to that revision, not the stale checkout.\n\n**Must fix:**\n\n1. **Remove the unsupported zero-loss requirement.**  \n   Plan line 19 rejects any lost slot. The frozen screen requires candidate coverage ≥315/320 and `gained > lost`; `compare_native_replay.rs:5315` implements that rule. A candidate gaining two slots and losing one passes the existing gate but fails the proposed gate.\n\n   Zero loss could be a separately justified prospective policy, but neither the layer attribution nor preserving 48 leaves establishes its necessity. Smallest repair: retain the existing gate, report gains/losses, and leave returned-recall qualification separate.\n\n2. **Preserve the precise coverage metric.**  \n   Plan line 19 says “owning nominated units,” but the historical 314/320 counts **SOURCE-scored page closure**. `coverage_slot` tests `page_closure.contains(physical / 256)` at `compare_native_replay.rs:5308`; `loss_coverage` requires every unit in that closure to be scored at lines 4674–4681.\n\n   These differ: selecting unit 0 brings physical page 0 into closure, so unit 1 is SOURCE-scored even if its owning leaf was not selected. A fetched gap-bridge page is a third category.\n\n   Smallest repair: retain the historical closure-based gate and distinguish direct owning-unit nomination only where needed to explain recovered slots. Do not reuse 314 as the baseline for a different metric. This distinction does **not** invalidate the established contrapositive proof that the six unscored targets’ leaves were absent.\n\n3. **Freeze what an edge count means before choosing diversity.**  \n   `build_hnsw_adjacency` explicitly selects `diverse=false` at `centroid_hnsw.rs:419–426`. Its result is a pruned insertion graph, **not each sampled row’s final nearest-32 list**. Reciprocal insertions are pruned independently at lines 1381–1417, so the graph is directed.\n\n   The diverse sibling deliberately retains some farther candidates; its test selects nodes `[1,3]` over the nearer pair `[1,2]` at lines 1547–1568. Counting its stored edges measures a different prior. Conversely, nondiverse pruning does not guarantee accurate neighbor discovery or connectivity. Historical Fable evidence implicates the old discovery path; it does not establish that changing this flag improves this Cohere arm.\n\n   **Smallest sound choice:** retain the proposed nondiverse builder for this single arm, but define weights as **counts of retained directed cross-leaf base arcs**. Extract base arcs from `tower.last()`, not index zero—tower storage is reversed (`:1216–1223`). Count each stored directed arc once, exclude same-leaf arcs, then retain top 16 by count/leaf ID.\n\n   Disconnected components are a recall limitation here, not automatically an invalid artifact: every node’s adjacency can still be projected. Freeze empty-adjacency fallback to L2 and test it. Do not silently use `build_reachable_*`: its repair adds ordinal-cycle and physical-order edges (`:838–875`), which would contaminate geometric votes.\n\n   Nearest-neighbor counts do not intrinsically require nondiverse navigation: diverse discovery followed by distance-ranked neighbor extraction is possible, but that is additional work and a different arm. Neither shortcut should be presented as qualified kNN.\n\n4. **Make authentication and decoding an explicit pre-query boundary.**  \n   Reusing the named functions is insufficient without changing their sequencing. `coverage_router` validates calibration but discards it (`compare_native_replay.rs:5088–5123`); the existing `loss_positions` runs **after truth opens** (`:5492–5519`).\n\n   Construction must first authenticate the entire SQ8 stream and physical-ID order. Its records are `[i64 logical ID][f32 squared norm][D code bytes]`, not just codes (`sq8_source.rs:258–281`). Sample index `u` must map to physical unit `u`; never use logical ID divided by 32 as membership.\n\n   Require exact length/EOF, duplicate/range checks under the example’s ordinal-ID contract, finite calibration and reconstructed coordinates, nonzero normalization, dimension agreement, and final file-identity checks before publishing adjacency. Bind its version and digest to generation, calibration, router, membership, SQ8, order, sampling rule, and algorithm parameters; include that digest in the paired selection seal.\n\n   Keep ordinal-only IDs and filesystem/manifest handling in the example. The library should operate on admitted geometry and unit membership, without imposing benchmark ID or dataset conventions.\n\n5. **Replace the resource estimate with an enforceable allocation model.**  \n   The 122 MiB sample-vector payload is correct. “Graph and edge-count scratch should keep construction below 256 MiB” is not yet admission evidence.\n\n   The builder uses nested vectors with spare capacities, levels, insertion order, visited marks, heaps, and pruning scratch (`centroid_hnsw.rs:113–175,440–450,1294–1337`). Projection, decoded-row copies, authenticated metadata, and serialization also need accounting. Search width 64 bounds retained results, not all traversal work or total distance evaluations.\n\n   The current screen already reports a conservative modeled payload of **164,435,968 bytes**. Adding samples to that unchanged model exceeds 256 MiB; this does not prove actual RSS failure, but it requires explicit stage lifetimes and a replacement model. Drop samples and the row graph before retaining query selections.\n\n   Also distinguish serialized adjacency bytes from resident capacity. `128 × leaf_count` describes 16 `(u32 ID,u32 weight)` entries; offsets, containers, query scratch, and simultaneous generation pins remain additional costs.\n\n**Sampling and voting risks should remain disclosed, not trigger another arm search.** One fixed midpoint per unit can systematically miss a boundary elsewhere in that unit. Larger leaves contribute more sampled rows; raw cut counts therefore favor larger or denser leaves. The short final unit receives one sample too. Rank weights provide no distance-margin information.\n\nFreeze these choices unchanged for the falsifier. Specify zero-based seed ranks giving weights 40…1, exclude the first 40 leaves from replacement candidates, deduplicate voted leaves, and fill shortages in original L2 order. The 640-link bound applies only to adjacency expansion; full L2 ranking and nomination still run.\n\nThe smallest implementation remains two files: generic adjacency construction/selection and tests in `semantic_unit_router.rs`; bounded authenticated IO, the distinct candidate entrypoint, and existing seal/control/cover orchestration in `compare_native_replay.rs`. Keep the HNSW helper private. No centroid hierarchy, new diagnostic framework, graph-repair mechanism, or serving-generation integration is needed for this screen.\n\n**Required native falsifier and provisional envelope:**\n\n| Stage | Required boundary |\n|---|---|\n| Remote build/tests | Causality EC2; two compiler jobs, 16 GiB RAM, 64 GiB build disk |\n| Adjacency construction | One CPU, 512 MiB enforced memory ceiling, swap zero, 900-second deadline; checked allocation model before allocation |\n| Staging | 2 GiB only after accounting for every staged file; SQ8 alone is 1,036,000,000 bytes |\n| Query screen | Existing 48-leaf, SOURCE 128-GET/64-MiB and SQ8 limits; preserve separate screen resource controls |\n| Lifecycle | Spot, exact instance/source/config receipts, terminal artifact sync, interrupted cells discarded, immediate compute cleanup |\n\nBefore measurement:\n\n- Run affected library/example tests on EC2, including nonidentity order, cross-generation substitution, corrupt records, short tails, zero/nonfinite vectors, D1024 acceptance/D1025 rejection, reversed tower indexing, directed-edge counting, ties, isolated components, and exactly 48 distinct selections.\n- Pass source-bound admission on authenticated real inputs and a separate disposable CLI/publication/cleanup smoke. Synthetic fixtures alone are insufficient.\n- Run required workspace Clippy and `scripts/check_rust_test_build.sh` on the exact delivered revision.\n- Construct and seal adjacency with requests/truth unopened. Then seal paired nominations before truth access. Reproduce original returned313/320 and SOURCE coverage314/320; apply candidate≥315 and gained>lost.\n- A survivor proceeds to actual native returned-recall qualification with unchanged scoring and fetch limits. The coverage reducer explicitly does not call native ANN. Setup/protocol failures remain INVALID, distinct from a completed weak candidate or a demonstrated construction-resource limit.\n\nThe inspected inventory’s missing qualified FP32 graph does not establish global absence; the generation metadata even describes a canonical FP32 object. Its availability and qualification were not checked.\n\nThe six nomination misses justify testing this mechanism. They do not predict success; q537 remains an unexplained covered ranking loss. Neither outcome qualifies full-FP32 kNN, Fable’s layout proposal, cold performance, or a vendor win.\n\nNo files changed. No builds, data parsing, network/cloud actions, or child agents were used. Runtime correctness and the proposed resource envelope remain unverified.",
+  "result_truncated": false
+}
