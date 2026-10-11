@@ -2222,6 +2222,9 @@ mod tests {
         let spatial_selection = s
             .validate_selected(&s_ids, &parts(&s, &spatial.leaves, &s_ids))
             .unwrap();
+        assert_eq!(r.nominate_selected(&r_ids).unwrap(), radial_selection);
+        assert_eq!(s.nominate_selected(&s_ids).unwrap(), spatial_selection);
+        // Closure grows 384->392 pages (16 gained/8 lost); equal units do not imply equal fetch work.
         assert_eq!(radial_selection.page_closure, (16..400).collect());
         assert_eq!(spatial_selection.page_closure, (0..392).collect());
         assert_eq!(
@@ -2306,6 +2309,7 @@ mod tests {
                 let nomination = router
                     .validate_selected(&ids, &parts(&router, &a.leaves, &ids))
                     .unwrap();
+                assert_eq!(router.nominate_selected(&ids).unwrap(), nomination);
                 assert_eq!(nomination.units.len(), rows.div_ceil(32));
                 assert_eq!(nomination.page_closure, (0..rows.div_ceil(256)).collect());
             }
