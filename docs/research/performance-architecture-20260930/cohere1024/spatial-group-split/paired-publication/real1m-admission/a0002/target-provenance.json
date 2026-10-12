@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-paired-target-provenance-v1",
+  "status": "RECORDED_TARGET_PROVENANCE",
+  "tracer": {
+    "path": "/usr/bin/strace",
+    "sha256": "28f957c227012de0b18d1bd7fff2d396cb693ea60ed8013be68de071e84b5001",
+    "version": "strace -- version 6.8\nCopyright (c) 1991-2024 The strace developers <https://strace.io>.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\nOptional features enabled: stack-trace=libunwind stack-demangle m32-mpers mx32-mpers\n",
+    "package": "strace\t6.8-0ubuntu2\tamd64\n",
+    "owner": "strace: /usr/bin/strace\n",
+    "package_verify_exit": 0,
+    "package_verify_stdout": "",
+    "package_verify_stderr": "",
+    "regular_executable_elf": true
+  },
+  "transport_inventory": {
+    "rows": 30,
+    "sha256": "1169ffe439eb877e9a6036c2ccb909e31ecaa4a71b638c47acbd46db2636880b"
+  },
+  "host_memtotal": "MemTotal:        7962196 kB\n",
+  "aws_version": "aws-cli/2.36.11 Python/3.14.6 Linux/7.0.0-1013-aws exe/x86_64.ubuntu.24\n",
+  "requests_truth_sq8_absent": true,
+  "native_executed": false,
+  "performance_claim": false
+}

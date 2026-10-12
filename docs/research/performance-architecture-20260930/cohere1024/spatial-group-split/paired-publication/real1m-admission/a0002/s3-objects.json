@@ -1,0 +1,1469 @@
+{
+    "Contents": [
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/SHA256SUMS",
+            "LastModified": "2026-10-12T03:21:50+00:00",
+            "ETag": "\"2c3380c5c2b022cc095a707b7207e5b6\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 3446,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/aws.version",
+            "LastModified": "2026-10-12T03:21:51+00:00",
+            "ETag": "\"d67027a668a26c08615960749709e2a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 72,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/cgroup-path.txt",
+            "LastModified": "2026-10-12T03:21:51+00:00",
+            "ETag": "\"284e57c4e153782cc4c6904a6335fe2a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 53,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/cpu.max.before",
+            "LastModified": "2026-10-12T03:21:52+00:00",
+            "ETag": "\"4c53c5c32ba8164f2822c28719e12654\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/cpu.stat.after",
+            "LastModified": "2026-10-12T03:21:52+00:00",
+            "ETag": "\"502de25d94edb002bd052910b66a9575\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 164,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/cpuset.cpus.effective.before",
+            "LastModified": "2026-10-12T03:21:53+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/inputs-full-authentication.log",
+            "LastModified": "2026-10-12T03:21:53+00:00",
+            "ETag": "\"b2db5fb0910bf3cd96a9dedca00cb8f0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2037,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/manager-exit.txt",
+            "LastModified": "2026-10-12T03:21:54+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/memory.events.after",
+            "LastModified": "2026-10-12T03:21:54+00:00",
+            "ETag": "\"8cf9c4033a416c2f57bb114110d0c5f5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 70,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/memory.max.before",
+            "LastModified": "2026-10-12T03:21:55+00:00",
+            "ETag": "\"9c3cfbf5ba3598aebfac240deb178313\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/memory.peak.after",
+            "LastModified": "2026-10-12T03:21:56+00:00",
+            "ETag": "\"06d1827a368d1f72f3861b6b4f040d10\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 8,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/memory.swap.max.before",
+            "LastModified": "2026-10-12T03:21:56+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/memory.swap.peak.after",
+            "LastModified": "2026-10-12T03:21:57+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native-command.txt",
+            "LastModified": "2026-10-12T03:21:57+00:00",
+            "ETag": "\"7bd1ec197c3c2469307d5b67d4623e6b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 571,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native-exit.txt",
+            "LastModified": "2026-10-12T03:21:58+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native-finished.txt",
+            "LastModified": "2026-10-12T03:21:58+00:00",
+            "ETag": "\"e4af56af3b45006191117bddf76daba5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native-started.txt",
+            "LastModified": "2026-10-12T03:21:59+00:00",
+            "ETag": "\"e4af56af3b45006191117bddf76daba5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native-time.txt",
+            "LastModified": "2026-10-12T03:21:59+00:00",
+            "ETag": "\"bd71f08d965db4d794b3749d00085497\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1342,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native.stderr",
+            "LastModified": "2026-10-12T03:22:00+00:00",
+            "ETag": "\"1b90ec0c0d58592351ee4e16f15f80b7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 61,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native.stdout",
+            "LastModified": "2026-10-12T03:22:01+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/native.trace",
+            "LastModified": "2026-10-12T03:22:01+00:00",
+            "ETag": "\"ab226872e5806c0f946a8be3797cd15c\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 7840,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/package-check.log",
+            "LastModified": "2026-10-12T03:22:02+00:00",
+            "ETag": "\"33312be46a6b04ed8e65132bd486070f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 388,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/pids.max.before",
+            "LastModified": "2026-10-12T03:22:02+00:00",
+            "ETag": "\"26b4cb0930a3e3be4da8e9d738607427\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/pids.peak.after",
+            "LastModified": "2026-10-12T03:22:03+00:00",
+            "ETag": "\"1dcca23355272056f04fe8bf20edfce0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/refusal-witness.txt",
+            "LastModified": "2026-10-12T03:22:03+00:00",
+            "ETag": "\"1b90ec0c0d58592351ee4e16f15f80b7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 61,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/request-witness.txt",
+            "LastModified": "2026-10-12T03:22:04+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/runtime-pins.log",
+            "LastModified": "2026-10-12T03:22:04+00:00",
+            "ETag": "\"c48a973fb366625b62fcce5b2ebb2146\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/systemd-after.stderr",
+            "LastModified": "2026-10-12T03:22:05+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/systemd-after.txt",
+            "LastModified": "2026-10-12T03:22:06+00:00",
+            "ETag": "\"2d5ae8838bb496126c9dcab04e1355a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 96,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/systemd-run.log",
+            "LastModified": "2026-10-12T03:22:06+00:00",
+            "ETag": "\"120500d784d1ef6f8274acc03b199759\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 226,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/terminal.json",
+            "LastModified": "2026-10-12T03:22:12+00:00",
+            "ETag": "\"c210bf7951e7fb55e72b49384002e0a8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1072,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/traced-command-exit.txt",
+            "LastModified": "2026-10-12T03:22:07+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.owner",
+            "LastModified": "2026-10-12T03:22:07+00:00",
+            "ETag": "\"c02918fb72653cc88e8abb69aff758ef\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 24,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.package",
+            "LastModified": "2026-10-12T03:22:08+00:00",
+            "ETag": "\"10b00c80c9e55f1104fab4adf419dd98\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 26,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.realpath",
+            "LastModified": "2026-10-12T03:22:08+00:00",
+            "ETag": "\"3acf2aef2e7c371d955455b3a849a2cd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 16,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.sha256",
+            "LastModified": "2026-10-12T03:22:09+00:00",
+            "ETag": "\"f3d40d8067d947e43b9529f39b7acbbf\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 82,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.verify.exit",
+            "LastModified": "2026-10-12T03:22:09+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.verify.stderr",
+            "LastModified": "2026-10-12T03:22:10+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.verify.stdout",
+            "LastModified": "2026-10-12T03:22:11+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/tracer.version",
+            "LastModified": "2026-10-12T03:22:11+00:00",
+            "ETag": "\"964b16b9e070e8312844f70927a97267\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 326,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/canary/wrapper-prefix-gate.txt",
+            "LastModified": "2026-10-12T03:22:12+00:00",
+            "ETag": "\"fe2142c1028ac6e5b7726a6b578a6c4a\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 28,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/SHA256SUMS",
+            "LastModified": "2026-10-12T03:22:39+00:00",
+            "ETag": "\"d5f0d1561a34514762c07fb05a518d47\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4165,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/aws.version",
+            "LastModified": "2026-10-12T03:22:40+00:00",
+            "ETag": "\"d67027a668a26c08615960749709e2a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 72,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/backup-authentication.log",
+            "LastModified": "2026-10-12T03:22:40+00:00",
+            "ETag": "\"f21c949564dd67a9b45c0aa9d80a2e24\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 85,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/cgroup-path.txt",
+            "LastModified": "2026-10-12T03:22:41+00:00",
+            "ETag": "\"acafe8a88790ff71ec700ca6136bf4f1\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 54,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/corrupted-byte.txt",
+            "LastModified": "2026-10-12T03:22:42+00:00",
+            "ETag": "\"852899514096252b3fefd74a2e176d96\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 15,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/corrupted-membership.sha256",
+            "LastModified": "2026-10-12T03:22:42+00:00",
+            "ETag": "\"2cf9640d6e529683966eaec59bf57ed8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 129,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/cpu.max.before",
+            "LastModified": "2026-10-12T03:22:43+00:00",
+            "ETag": "\"4c53c5c32ba8164f2822c28719e12654\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/cpu.stat.after",
+            "LastModified": "2026-10-12T03:22:43+00:00",
+            "ETag": "\"9a23b7aa717047a4a48ef1c305cc5b45\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 165,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/cpuset.cpus.effective.before",
+            "LastModified": "2026-10-12T03:22:44+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/inputs-full-authentication.log",
+            "LastModified": "2026-10-12T03:22:44+00:00",
+            "ETag": "\"b2db5fb0910bf3cd96a9dedca00cb8f0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2037,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/manager-exit.txt",
+            "LastModified": "2026-10-12T03:22:45+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/manager-restoration.log",
+            "LastModified": "2026-10-12T03:22:45+00:00",
+            "ETag": "\"5143538fb0fe2adfc70a81c3b86d4063\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 67,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/memory.events.after",
+            "LastModified": "2026-10-12T03:22:46+00:00",
+            "ETag": "\"8cf9c4033a416c2f57bb114110d0c5f5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 70,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/memory.max.before",
+            "LastModified": "2026-10-12T03:22:47+00:00",
+            "ETag": "\"9c3cfbf5ba3598aebfac240deb178313\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/memory.peak.after",
+            "LastModified": "2026-10-12T03:22:47+00:00",
+            "ETag": "\"7db3f042513c70c3f872bd46b5273292\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/memory.swap.max.before",
+            "LastModified": "2026-10-12T03:22:48+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/memory.swap.peak.after",
+            "LastModified": "2026-10-12T03:22:48+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-command.txt",
+            "LastModified": "2026-10-12T03:22:49+00:00",
+            "ETag": "\"98c6ba97f37abfc627a98f8e0254c302\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 574,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-exit.txt",
+            "LastModified": "2026-10-12T03:22:49+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-finished.txt",
+            "LastModified": "2026-10-12T03:22:50+00:00",
+            "ETag": "\"6d144ee526af70b1aadc077b6bfe86df\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-invalid-check.log",
+            "LastModified": "2026-10-12T03:22:50+00:00",
+            "ETag": "\"9affc2d2337e64a9e73023e38a7c8153\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-started.txt",
+            "LastModified": "2026-10-12T03:22:51+00:00",
+            "ETag": "\"0529e18d3aa65f9f620ecbfd7b2ac8b3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-status.stderr",
+            "LastModified": "2026-10-12T03:22:52+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native-time.txt",
+            "LastModified": "2026-10-12T03:22:52+00:00",
+            "ETag": "\"84ea2d0b97a5a24a4d236e8ceaef46ee\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1353,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native.stderr",
+            "LastModified": "2026-10-12T03:22:53+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native.stdout",
+            "LastModified": "2026-10-12T03:22:53+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/native.trace",
+            "LastModified": "2026-10-12T03:22:54+00:00",
+            "ETag": "\"08fc358cae32628ee9fb192ff9bbede3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 325649,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/original-membership.log",
+            "LastModified": "2026-10-12T03:22:54+00:00",
+            "ETag": "\"5143538fb0fe2adfc70a81c3b86d4063\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 67,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/package-check.log",
+            "LastModified": "2026-10-12T03:22:55+00:00",
+            "ETag": "\"33312be46a6b04ed8e65132bd486070f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 388,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/pids.max.before",
+            "LastModified": "2026-10-12T03:22:55+00:00",
+            "ETag": "\"26b4cb0930a3e3be4da8e9d738607427\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/pids.peak.after",
+            "LastModified": "2026-10-12T03:22:56+00:00",
+            "ETag": "\"1dcca23355272056f04fe8bf20edfce0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/report.json",
+            "LastModified": "2026-10-12T03:22:57+00:00",
+            "ETag": "\"c53436c85448989a19c6a4efb9257042\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 275,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/request-witness.txt",
+            "LastModified": "2026-10-12T03:22:57+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/restoration.log",
+            "LastModified": "2026-10-12T03:22:58+00:00",
+            "ETag": "\"5143538fb0fe2adfc70a81c3b86d4063\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 67,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/runtime-pins.log",
+            "LastModified": "2026-10-12T03:22:58+00:00",
+            "ETag": "\"c48a973fb366625b62fcce5b2ebb2146\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/systemd-after.stderr",
+            "LastModified": "2026-10-12T03:22:59+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/systemd-after.txt",
+            "LastModified": "2026-10-12T03:22:59+00:00",
+            "ETag": "\"2d5ae8838bb496126c9dcab04e1355a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 96,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/systemd-run.log",
+            "LastModified": "2026-10-12T03:23:00+00:00",
+            "ETag": "\"8674c77a978784979612059c532576f8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 227,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/terminal.json",
+            "LastModified": "2026-10-12T03:23:06+00:00",
+            "ETag": "\"c734b3aac6de41c849f8ff3eb5dec78e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1080,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/traced-command-exit.txt",
+            "LastModified": "2026-10-12T03:23:01+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.owner",
+            "LastModified": "2026-10-12T03:23:01+00:00",
+            "ETag": "\"c02918fb72653cc88e8abb69aff758ef\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 24,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.package",
+            "LastModified": "2026-10-12T03:23:02+00:00",
+            "ETag": "\"10b00c80c9e55f1104fab4adf419dd98\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 26,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.realpath",
+            "LastModified": "2026-10-12T03:23:02+00:00",
+            "ETag": "\"3acf2aef2e7c371d955455b3a849a2cd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 16,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.sha256",
+            "LastModified": "2026-10-12T03:23:03+00:00",
+            "ETag": "\"f3d40d8067d947e43b9529f39b7acbbf\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 82,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.verify.exit",
+            "LastModified": "2026-10-12T03:23:03+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.verify.stderr",
+            "LastModified": "2026-10-12T03:23:04+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.verify.stdout",
+            "LastModified": "2026-10-12T03:23:04+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/tracer.version",
+            "LastModified": "2026-10-12T03:23:05+00:00",
+            "ETag": "\"964b16b9e070e8312844f70927a97267\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 326,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/corrupt/wrapper-prefix-gate.txt",
+            "LastModified": "2026-10-12T03:23:06+00:00",
+            "ETag": "\"c47c592099aa01e7dbdd6f8044f908da\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 35,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/SHA256SUMS",
+            "LastModified": "2026-10-12T03:22:14+00:00",
+            "ETag": "\"a732982f64460d9ba452ca6ced3bc0f8\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 3620,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/aws.version",
+            "LastModified": "2026-10-12T03:22:15+00:00",
+            "ETag": "\"d67027a668a26c08615960749709e2a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 72,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/cgroup-path.txt",
+            "LastModified": "2026-10-12T03:22:15+00:00",
+            "ETag": "\"732000d1fddfc3219b4552001f47d36b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 53,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/cpu.max.before",
+            "LastModified": "2026-10-12T03:22:16+00:00",
+            "ETag": "\"4c53c5c32ba8164f2822c28719e12654\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 14,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/cpu.stat.after",
+            "LastModified": "2026-10-12T03:22:16+00:00",
+            "ETag": "\"221804b35e2fbd305658272ccb97f34e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 170,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/cpuset.cpus.effective.before",
+            "LastModified": "2026-10-12T03:22:17+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/inputs-full-authentication.log",
+            "LastModified": "2026-10-12T03:22:18+00:00",
+            "ETag": "\"b2db5fb0910bf3cd96a9dedca00cb8f0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2037,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/manager-exit.txt",
+            "LastModified": "2026-10-12T03:22:18+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/memory.events.after",
+            "LastModified": "2026-10-12T03:22:19+00:00",
+            "ETag": "\"8cf9c4033a416c2f57bb114110d0c5f5\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 70,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/memory.max.before",
+            "LastModified": "2026-10-12T03:22:19+00:00",
+            "ETag": "\"9c3cfbf5ba3598aebfac240deb178313\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 11,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/memory.peak.after",
+            "LastModified": "2026-10-12T03:22:20+00:00",
+            "ETag": "\"53b97d7dab76ee590fced58909560528\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/memory.swap.max.before",
+            "LastModified": "2026-10-12T03:22:20+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/memory.swap.peak.after",
+            "LastModified": "2026-10-12T03:22:21+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-command.txt",
+            "LastModified": "2026-10-12T03:22:21+00:00",
+            "ETag": "\"052fcaebcf135170f9b43785d48473a0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 571,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-exit.txt",
+            "LastModified": "2026-10-12T03:22:22+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-finished.txt",
+            "LastModified": "2026-10-12T03:22:23+00:00",
+            "ETag": "\"ab6695cd115ceeb167ddeaece84fd3ae\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-invalid-check.log",
+            "LastModified": "2026-10-12T03:22:23+00:00",
+            "ETag": "\"9affc2d2337e64a9e73023e38a7c8153\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 10,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-started.txt",
+            "LastModified": "2026-10-12T03:22:24+00:00",
+            "ETag": "\"7fa9f9abbdf182f387e4e2d127d0856f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 21,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-status.stderr",
+            "LastModified": "2026-10-12T03:22:24+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native-time.txt",
+            "LastModified": "2026-10-12T03:22:25+00:00",
+            "ETag": "\"afae7207626fa126f09dfd684064fd21\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1351,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native.stderr",
+            "LastModified": "2026-10-12T03:22:25+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native.stdout",
+            "LastModified": "2026-10-12T03:22:26+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/native.trace",
+            "LastModified": "2026-10-12T03:22:26+00:00",
+            "ETag": "\"c95bff2190d09144297ce86fefc96833\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 388084,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/package-check.log",
+            "LastModified": "2026-10-12T03:22:27+00:00",
+            "ETag": "\"33312be46a6b04ed8e65132bd486070f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 388,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/pids.max.before",
+            "LastModified": "2026-10-12T03:22:28+00:00",
+            "ETag": "\"26b4cb0930a3e3be4da8e9d738607427\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 4,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/pids.peak.after",
+            "LastModified": "2026-10-12T03:22:28+00:00",
+            "ETag": "\"1dcca23355272056f04fe8bf20edfce0\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/report.json",
+            "LastModified": "2026-10-12T03:22:29+00:00",
+            "ETag": "\"9d927332afa482288993dc0631ab7fca\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 292,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/request-witness.txt",
+            "LastModified": "2026-10-12T03:22:29+00:00",
+            "ETag": "\"c78df17cebac7a87150a4912c2b46c2b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 167,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/runtime-pins.log",
+            "LastModified": "2026-10-12T03:22:30+00:00",
+            "ETag": "\"c48a973fb366625b62fcce5b2ebb2146\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 198,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/systemd-after.stderr",
+            "LastModified": "2026-10-12T03:22:30+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/systemd-after.txt",
+            "LastModified": "2026-10-12T03:22:31+00:00",
+            "ETag": "\"2d5ae8838bb496126c9dcab04e1355a3\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 96,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/systemd-run.log",
+            "LastModified": "2026-10-12T03:22:32+00:00",
+            "ETag": "\"a93c8179173ee51de1ed564f5fad40d7\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 277,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/terminal.json",
+            "LastModified": "2026-10-12T03:22:38+00:00",
+            "ETag": "\"2d046c5341211bf6cbd4a662b5c5168f\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 1080,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/traced-command-exit.txt",
+            "LastModified": "2026-10-12T03:22:32+00:00",
+            "ETag": "\"26ab0db90d72e28ad0ba1e22ee510510\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.owner",
+            "LastModified": "2026-10-12T03:22:33+00:00",
+            "ETag": "\"c02918fb72653cc88e8abb69aff758ef\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 24,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.package",
+            "LastModified": "2026-10-12T03:22:33+00:00",
+            "ETag": "\"10b00c80c9e55f1104fab4adf419dd98\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 26,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.realpath",
+            "LastModified": "2026-10-12T03:22:34+00:00",
+            "ETag": "\"3acf2aef2e7c371d955455b3a849a2cd\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 16,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.sha256",
+            "LastModified": "2026-10-12T03:22:34+00:00",
+            "ETag": "\"f3d40d8067d947e43b9529f39b7acbbf\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 82,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.verify.exit",
+            "LastModified": "2026-10-12T03:22:35+00:00",
+            "ETag": "\"897316929176464ebc9ad085f31e7284\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 2,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.verify.stderr",
+            "LastModified": "2026-10-12T03:22:35+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.verify.stdout",
+            "LastModified": "2026-10-12T03:22:36+00:00",
+            "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 0,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/tracer.version",
+            "LastModified": "2026-10-12T03:22:37+00:00",
+            "ETag": "\"964b16b9e070e8312844f70927a97267\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 326,
+            "StorageClass": "STANDARD"
+        },
+        {
+            "Key": "research/semantic-router/20261012/paired-source-admission-a0002/prefix/wrapper-prefix-gate.txt",
+            "LastModified": "2026-10-12T03:22:37+00:00",
+            "ETag": "\"6d76cb043d1337d073624fb95677ee3b\"",
+            "ChecksumAlgorithm": [
+                "SHA256"
+            ],
+            "ChecksumType": "FULL_OBJECT",
+            "Size": 36,
+            "StorageClass": "STANDARD"
+        }
+    ],
+    "RequestCharged": null,
+    "Prefix": "research/semantic-router/20261012/paired-source-admission-a0002/"
+}

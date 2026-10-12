@@ -1,0 +1,4 @@
+/usr/bin/strace: OK
+/mnt/borsuk-paired-source-screen/paired.config.json: OK
+/mnt/borsuk-paired-source-screen/paired.authority.json: OK
+/mnt/borsuk-paired-source-screen/bin/compare_native_replay: OK

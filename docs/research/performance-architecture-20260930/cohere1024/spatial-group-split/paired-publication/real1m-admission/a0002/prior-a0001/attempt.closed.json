@@ -1,0 +1,42 @@
+{
+  "schema": "borsuk-paired-admission-attempt-closed-v1",
+  "attempt": "a0001",
+  "status": "INVALID_ENVIRONMENT_MEMORY_CLASSIFICATION",
+  "glue_source": "4a34513bb35974a72b4e6294db9bebd845c502e8",
+  "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "setup_command": "ec876228-d643-4105-bc5c-891c79cc28ef",
+  "setup_status": "Failed",
+  "setup_exit": 1,
+  "diagnostic_command": "51af53a0-62b0-4efd-8349-06a8c704d1b7",
+  "diagnostic_status": "Success",
+  "diagnostic_exit": 0,
+  "observed_memtotal_kb": 7962196,
+  "nominal_host_memory": [
+    {
+      "type": "c7i.xlarge",
+      "memory_mib": 8192
+    }
+  ],
+  "failing_guard": "setup MemTotal lower bound8000000kB; actual7962196; timeractive/swapempty/packagechecksPASS",
+  "native_exit": null,
+  "native_stages": "UNRUN",
+  "query_truth_sq8_staged": false,
+  "source_layout_admission": false,
+  "algorithm_disposition": null,
+  "scientific_measurement": false,
+  "performance_claim": false,
+  "instance": [
+    {
+      "id": "i-018801b7928ce1066",
+      "state": "terminated",
+      "type": "c7i.xlarge"
+    }
+  ],
+  "terminated": true,
+  "volume_id": "vol-03dbf06d809c24f89",
+  "volume_not_found": true,
+  "volume_observation_exit": 254,
+  "external_timer_stopped": true,
+  "bg_off": true,
+  "next": "distinct attempt after narrow environment guard repair; native source and stage/owned limits unchanged"
+}

@@ -1,0 +1,7 @@
+Running as unit: borsuk-paired-admission-prefix.service; invocation ID: 2d9efad200c243c6a44db17a5a6c48c8
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1.212s
+CPU time consumed: 1.206s
+Memory peak: 2.0M
+Memory swap peak: 0B

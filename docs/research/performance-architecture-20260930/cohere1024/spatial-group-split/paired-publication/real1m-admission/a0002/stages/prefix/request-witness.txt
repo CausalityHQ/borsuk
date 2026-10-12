@@ -1,0 +1,1 @@
+3771  openat(36</mnt/borsuk-paired-source-screen/inputs>, "queries.f32", O_RDONLY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW|O_CLOEXEC) = -1 ENOENT (No such file or directory)

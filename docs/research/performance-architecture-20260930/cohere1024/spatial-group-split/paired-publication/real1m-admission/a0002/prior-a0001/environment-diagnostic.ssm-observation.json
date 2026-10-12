@@ -1,0 +1,22 @@
+{
+    "CommandId": "51af53a0-62b0-4efd-8349-06a8c704d1b7",
+    "InstanceId": "i-018801b7928ce1066",
+    "Comment": "BORSUK original admission a0001 environment diagnosis then shutdown",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-12T03:07:31.128Z",
+    "ExecutionElapsedTime": "PT0.024S",
+    "ExecutionEndDateTime": "2026-10-12T03:07:31.128Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "MEMORY\nMemTotal:        7962196 kB\nTIMER\nActiveState=active\nSubState=waiting\nSWAP\nPACKAGE_CHECK\nadmission.env: OK\nmetadata-receipt.json: OK\ntyped-receipt.json: OK\ntransport.json: OK\nsetup-admission.sh: OK\nnative-admission-inner.sh: OK\nrun-admission-stage.sh: OK\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

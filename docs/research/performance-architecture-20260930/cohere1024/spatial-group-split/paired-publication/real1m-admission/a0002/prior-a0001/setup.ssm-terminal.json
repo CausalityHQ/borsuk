@@ -1,0 +1,22 @@
+{
+    "CommandId": "ec876228-d643-4105-bc5c-891c79cc28ef",
+    "InstanceId": "i-018801b7928ce1066",
+    "Comment": "BORSUK paired import admission a0001 setup only 4a34513b",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-12T03:06:22.869Z",
+    "ExecutionElapsedTime": "PT0.021S",
+    "ExecutionEndDateTime": "2026-10-12T03:06:22.869Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "admission.env: OK\nmetadata-receipt.json: OK\ntyped-receipt.json: OK\ntransport.json: OK\nsetup-admission.sh: OK\nnative-admission-inner.sh: OK\nrun-admission-stage.sh: OK\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
