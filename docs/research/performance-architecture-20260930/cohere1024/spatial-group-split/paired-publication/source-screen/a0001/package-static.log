@@ -1,0 +1,12 @@
+Running as unit: run-p543822-i826641571.scope; invocation ID: 6eb40f0476894b13bb5c38f245f8df7f
+admission.env: OK
+metadata-receipt.json: OK
+typed-receipt.json: OK
+transport.json: OK
+setup-admission.sh: OK
+native-admission-inner.sh: OK
+run-admission-stage.sh: OK
+source-inner.sh: OK
+source-run.sh: OK
+source-extra-transport.sh: OK
+source-transport.json: OK

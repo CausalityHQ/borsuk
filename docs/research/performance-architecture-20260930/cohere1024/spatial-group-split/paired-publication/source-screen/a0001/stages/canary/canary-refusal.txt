@@ -1,0 +1,1 @@
+INVALID: config SHA/length/identity; external gates required

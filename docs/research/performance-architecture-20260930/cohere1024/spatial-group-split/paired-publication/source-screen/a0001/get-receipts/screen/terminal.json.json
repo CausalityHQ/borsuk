@@ -1,0 +1,11 @@
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-12T03:58:18+00:00",
+    "ContentLength": 711,
+    "ETag": "\"cd41bd085d574d26af0799e515464c87\"",
+    "ChecksumSHA256": "eUkCzBAovA84BgyUvmQhYlGpEV9zgJONAD014BmniPo=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}

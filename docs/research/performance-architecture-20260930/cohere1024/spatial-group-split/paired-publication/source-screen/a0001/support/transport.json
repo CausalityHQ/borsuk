@@ -1,0 +1,260 @@
+{
+  "schema": "borsuk-paired-admission-transport-v1",
+  "authority_pending": true,
+  "paid_launch": false,
+  "performance_claim": false,
+  "consumer": {
+    "key": "research/semantic-router/20261012/paired-native-qualification-a0002/stages/release-elf/compare_native_replay",
+    "pin": {
+      "path": "/mnt/borsuk-paired-source-screen/bin/compare_native_replay",
+      "bytes": 8895544,
+      "sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748"
+    }
+  },
+  "roles": [
+    {
+      "role": "generation_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      }
+    },
+    {
+      "role": "plane_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      }
+    },
+    {
+      "role": "centroids",
+      "key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/centroids.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/centroids.bin",
+        "bytes": 64000032,
+        "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+      }
+    },
+    {
+      "role": "original_constructor_archive",
+      "key": "research/semantic-router/20261011/reconstruction-native-qualification-a0001/inputs/source.tar.gz",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-source.tar.gz",
+        "bytes": 4303661,
+        "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+      }
+    },
+    {
+      "role": "original_constructor_elf",
+      "key": "research/semantic-router/20261011/reconstruction-native-qualification-a0002/stages/reconstruction-release/compare_native_replay",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-elf",
+        "bytes": 8387384,
+        "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+      }
+    },
+    {
+      "role": "radial_root",
+      "key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-root.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-root.bin",
+        "bytes": 3041472,
+        "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+      }
+    },
+    {
+      "role": "radial_membership",
+      "key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-membership.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      }
+    },
+    {
+      "role": "radial_leaves",
+      "key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/radial-leaves.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+      }
+    },
+    {
+      "role": "spatial_root",
+      "key": "research/semantic-router/20261012/paired-real-preparation-a0003/retained-derived/spatial-root.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-root.bin",
+        "bytes": 3041472,
+        "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+      }
+    },
+    {
+      "role": "spatial_membership",
+      "key": "research/semantic-router/20261012/paired-real-preparation-a0003/retained-derived/spatial-membership.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-membership.bin",
+        "bytes": 125000,
+        "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+      }
+    },
+    {
+      "role": "spatial_leaves",
+      "key": "research/semantic-router/20261012/paired-real-preparation-a0003/retained-derived/spatial-leaves.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+      }
+    },
+    {
+      "role": "spatial_receipt",
+      "key": "research/semantic-router/20261012/paired-real-preparation-a0003/retained-derived/receipt.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-receipt.json",
+        "bytes": 3293,
+        "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc"
+      }
+    },
+    {
+      "role": "producer_result",
+      "key": "research/semantic-router/20261011/scale-closure-panels32-a0001/stages/independent32-r2/independent32-r2-result.jsonl",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-result.jsonl",
+        "bytes": 1220980,
+        "sha256": "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+      }
+    },
+    {
+      "role": "producer_config",
+      "key": "research/semantic-router/20261011/scale-closure-panels32-a0001/inputs/independent32-r2-config.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-config.json",
+        "bytes": 3416,
+        "sha256": "e597b90c6566d13488aede8d304982b6b22f9ccaba8c2412075a62e88e91fdff"
+      }
+    },
+    {
+      "role": "producer_elf",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/stages/release-baseline/check_cohere_native_baseline",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-elf",
+        "bytes": 17047872,
+        "sha256": "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0"
+      }
+    },
+    {
+      "role": "producer_base",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/inputs/source.tar.gz",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-base.tar.gz",
+        "bytes": 4226312,
+        "sha256": "992c5f0f37df782b153de66f3d18880b92ab0f15db67521804a486533c0e2ea4"
+      }
+    },
+    {
+      "role": "producer_source_map",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/green-inputs/source-files.candidate.sha256",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-source-files.sha256",
+        "bytes": 50571,
+        "sha256": "ab5ceffcc3b1dc99d8af75fb4bc86a7b2c5035c59ac9a163e40fc9316fafd2ea"
+      }
+    },
+    {
+      "role": "producer_native_map",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/green-inputs/native-source.candidate.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-native-source.json",
+        "bytes": 50078,
+        "sha256": "ce4671b10f92214be94f03a7ea24f7c46f713a19ed0685bfed7242bcae2418e5"
+      }
+    },
+    {
+      "role": "producer_overlay_0",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/green-inputs/semantic_unit_router.candidate.rs",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-router-overlay.rs",
+        "bytes": 81578,
+        "sha256": "4a580f2bb3afe2c0c30c5a11b6491b28d4165788d69bb39432b748e67fc68718"
+      }
+    },
+    {
+      "role": "producer_overlay_1",
+      "key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/green-inputs/two_bit_generation.candidate.rs",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-generation-overlay.rs",
+        "bytes": 395012,
+        "sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9"
+      }
+    }
+  ],
+  "root_staged_metadata": [
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/original-approval.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/original-approval.json",
+        "bytes": 658,
+        "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/constructor-config.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-config.json",
+        "bytes": 1225,
+        "sha256": "2d7887c0d367055a6500cac6031aaa74a7dce07e2fe8179744117d02b5cc9b9f"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/reconstruction.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/reconstruction.json",
+        "bytes": 3511,
+        "sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/radial-parity.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/radial-parity.json",
+        "bytes": 4895,
+        "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/qualification.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/qualification.json",
+        "bytes": 5131,
+        "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/corrected-closure.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/corrected-closure.json",
+        "bytes": 623,
+        "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+      }
+    },
+    {
+      "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/root-metadata/producer-qualification.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-qualification.json",
+        "bytes": 11498,
+        "sha256": "4c4819e2ea76da6d75bd2158dec314eac995f21753ceb8178a7afc490c3863d3"
+      }
+    }
+  ],
+  "unresolved": [
+    "exact frozen consumer config/authority",
+    "tracer admission and native boundary proof",
+    "disposable platform canary",
+    "resource/cost freeze"
+  ]
+}

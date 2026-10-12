@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-paired-source-screen-stage-v1",
+  "phase": "screen",
+  "execution_closed": true,
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "consumer_elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+  "configuration_sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8",
+  "authority_sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737",
+  "scope": "consumed32 SOURCE planner coverage only; native result remains authoritative",
+  "cold_s3_claim": false,
+  "performance_claim": false,
+  "candidate_returned_quality_claim": false
+}

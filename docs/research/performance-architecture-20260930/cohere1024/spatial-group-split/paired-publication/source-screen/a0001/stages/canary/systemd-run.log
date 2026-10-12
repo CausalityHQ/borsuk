@@ -1,0 +1,7 @@
+Running as unit: borsuk-paired-source-canary.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 877ms
+CPU time consumed: 875ms
+Memory peak: 1.5M
+Memory swap peak: 0B

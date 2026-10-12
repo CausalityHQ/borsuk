@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-paired-typed-input-transport-v1",
+  "status": "SIZE_SERVER_SHA_VERIFIED",
+  "native_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "consumer_elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+  "config": {
+    "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/paired.config.json",
+    "sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-12T02:36:46+00:00",
+      "ContentLength": 2774,
+      "ChecksumSHA256": "eMKdwziPmRxdsX/veIPKnuUD7StNqaFjK2zBkgDfsag=",
+      "ChecksumType": "FULL_OBJECT",
+      "ETag": "\"dd96acc9fd807d77765c00842b0e144d\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  "authority": {
+    "key": "research/semantic-router/20261012/paired-source-admission-a0001/inputs/paired.authority.json",
+    "sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737",
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-12T02:36:49+00:00",
+      "ContentLength": 51068,
+      "ChecksumSHA256": "6uZyyhKKzZ5n1sksk0IrJkV5dU69AJNL89kRhY5vVzc=",
+      "ChecksumType": "FULL_OBJECT",
+      "ETag": "\"4fd9e0ae1e0a23b5d0ffd53c6fb72b9e\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  "paid_launch": false,
+  "actual_input_runtime_admission": false,
+  "performance_claim": false
+}

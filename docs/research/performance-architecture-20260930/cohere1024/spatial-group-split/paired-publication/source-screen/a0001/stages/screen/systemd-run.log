@@ -1,0 +1,7 @@
+Running as unit: borsuk-paired-source-screen.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 2.655s
+CPU time consumed: 2.638s
+Memory peak: 1.7M
+Memory swap peak: 0B
