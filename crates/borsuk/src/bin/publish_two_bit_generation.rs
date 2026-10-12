@@ -1399,7 +1399,14 @@ mod tests {
             .unwrap();
         let (dir, good, approved) = runtime.block_on(replacement_cli_fixture());
         let receipt = dir.path().join("replacement-receipt.json");
-        let store = LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap();
+        // Remote serving requires streamed range bodies; keep the real local
+        // publication, adapting its file payloads like the integration fixture.
+        let store = object_store::chunked::ChunkedStore::new(
+            std::sync::Arc::new(
+                LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap(),
+            ),
+            8192,
+        );
         let destination = ObjectPath::from("replacement-cli/index");
         let source_proof_path = Path::new(
             good["router_replacement"]["proofs"]["source_qualification"]["path"]
