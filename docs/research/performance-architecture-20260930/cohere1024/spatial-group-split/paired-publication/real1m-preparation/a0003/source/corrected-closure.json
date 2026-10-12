@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-reconstruction-closed-parity-recovery-v1",
+  "status": "CLOSED_NATIVE_PARITY_VALIDATED",
+  "original_native_exit": 0,
+  "original_manager_exit": 1,
+  "original_stage_disposition": "INVALID_RECEIPT_VALIDATOR",
+  "original_disposition_preserved": true,
+  "native_reexecuted": false,
+  "original_receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771",
+  "descriptor_validation": "exact bytes and SHA; descriptor deliberately has no local path",
+  "derived_outputs_full_body_hash_verified": true,
+  "derived_outputs_retained_create_only": true,
+  "performance_claim": false
+}

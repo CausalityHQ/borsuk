@@ -1,0 +1,124 @@
+{
+  "schema": "borsuk-real1m-construction-qualified-v1",
+  "status": "REAL_RECONSTRUCTION_AND_HISTORICAL_RADIAL_PARITY_QUALIFIED",
+  "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+  "published_compiler_qualification_commit": "319f8c4bbac69f522fc25a0ecd93f2e9232e9b84",
+  "elf_sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52",
+  "original_generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+  "original_approval": {
+    "base_epoch": 0,
+    "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+    "dimensions": 1024,
+    "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+    "generation": 1,
+    "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+    "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+    "input_schema": "borsuk-two-bit-plane-v3",
+    "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+    "profile": "scale1m",
+    "rows": 1000000,
+    "schema": "borsuk-partition-reconstruction-approval-v1"
+  },
+  "admission": {
+    "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+    "stage": "admission",
+    "instance_id": "i-0e7ec79ad22db80d1",
+    "original_ssm_command_id": "0213fc5c-25fd-4e76-8bd4-f10c5ca8af70",
+    "terminal_sha256": "3fb0ff53bdfb8b83df57431b4e19e9d25157205cc427c6ae036bd1cd88980fc1",
+    "native_receipt_sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd",
+    "all_closed_body_hashes_verified": true,
+    "original_ssm_success": true,
+    "performance_claim": false
+  },
+  "canary": {
+    "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+    "stage": "smoke",
+    "instance_id": "i-0e7ec79ad22db80d1",
+    "original_ssm_command_id": "b9be10c6-a52c-4fca-9d82-0133f6caf537",
+    "terminal_sha256": "b60aebdacd8467f483d598ec59e6d1ff5b36c6a1c41c223c3e950b6664f861df",
+    "native_receipt_sha256": "3de8275b2334c967b5d11f7424fa3eabfcaa25774c16161ef0b5fa241b3e91e3",
+    "all_closed_body_hashes_verified": true,
+    "original_ssm_success": true,
+    "performance_claim": false
+  },
+  "original_parity": {
+    "ssm_command_id": "dd1c3fb4-157c-479e-a2ca-11feb3e758cd",
+    "ssm_status": "Failed",
+    "manager_exit": 1,
+    "native_exit": 0,
+    "disposition": "INVALID_RECEIPT_VALIDATOR",
+    "disposition_preserved": true,
+    "receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+  },
+  "closed_output_revalidation": {
+    "ssm_command_id": "c1f36a29-65a7-4927-980b-2fc0bef87922",
+    "status": "Success",
+    "exit": 0,
+    "native_reexecuted": false,
+    "all_recovery_body_checksums_verified": true
+  },
+  "historical_parity": {
+    "builder_peak_bytes": 506729928,
+    "experiment_charge_bytes": 513807432,
+    "old_allocation_limit_bytes": 506729928,
+    "old_leaves": {
+      "bytes": 64125000,
+      "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+    },
+    "old_membership": {
+      "bytes": 125000,
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+    },
+    "old_root": {
+      "bytes": 3041472,
+      "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+    },
+    "radial_leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+    "radial_membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+    "radial_root_sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+    "root_exceptions": [
+      {
+        "new": "BORSUSR3",
+        "offset": 0,
+        "old": "BORSUSR2"
+      },
+      {
+        "new_le_u32": 1,
+        "offset": 88,
+        "old_le_u32": 0
+      }
+    ]
+  },
+  "retained_derived_outputs": {
+    "leaves": {
+      "bytes": 64125000,
+      "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-leaves.bin",
+      "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+    },
+    "membership": {
+      "bytes": 125000,
+      "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-membership.bin",
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+    },
+    "root": {
+      "bytes": 3041472,
+      "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-root.bin",
+      "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+    }
+  },
+  "centroids": {
+    "bytes": 64000032,
+    "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/centroids.bin",
+    "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+  },
+  "retained_s3_prefix": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/",
+  "requests_opened": false,
+  "truth_opened": false,
+  "instance_id": "i-0e7ec79ad22db80d1",
+  "terminated": true,
+  "volume_id": "vol-09f6fcc3c4f757a36",
+  "volume_deleted": true,
+  "watchdog_stopped": true,
+  "performance_claim": false,
+  "product_ready": false
+}
