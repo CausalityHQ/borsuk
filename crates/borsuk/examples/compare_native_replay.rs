@@ -105,6 +105,7 @@ fn valid_sha(s: &str) -> bool {
 
 const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
 const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
+const SCALE_PAIRED_SCHEMA: &str = "borsuk-scale-paired-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
@@ -4067,14 +4068,28 @@ fn source_report_cap(report: &Value) -> Result<()> {
 }
 
 fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
+    reduce_paired_scope(config_path, config_sha, false)
+}
+
+fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Result<Value> {
     let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
     require(
-        c.schema == "borsuk-paired-native-reduction-config-v1",
+        c.schema
+            == if scale {
+                "borsuk-scale-paired-native-reduction-config-v1"
+            } else {
+                "borsuk-paired-native-reduction-config-v1"
+            },
         "paired config schema",
     )?;
     for (arm, parallelism) in c.arms.iter().zip([16, 32]) {
         require(
-            arm.schema == "borsuk-completed-native-reduction-config-v1"
+            arm.schema
+                == if scale {
+                    SCALE_CONFIG_SCHEMA
+                } else {
+                    "borsuk-completed-native-reduction-config-v1"
+                }
                 && arm.expected_identity["fetch_parallelism"] == parallelism
                 && arm.expected_bound_inputs["fetch_parallelism"] == parallelism,
             "paired arms must be ordered integer fetch_parallelism 16 then 32",
@@ -4083,30 +4098,65 @@ fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
         // arbitrary matching outputs. Admit its pins before either input opens;
         // the generic completed reducer and frozen historical mode stay separate.
         let i: Inputs = serde_json::from_value(arm.expected_bound_inputs.clone())?;
-        require(
-            i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
-                && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
-                && i.metric == "cosine"
-                && i.tie_rule == "corpus_ordinal_ascending"
-                && i.rows == 100000
-                && i.dimensions == 1024
-                && i.count == COUNT
-                && i.k == K
-                && i.corpus_source_first == 0
-                && i.query_source_first == 100000
-                && i.profile == "native100k"
-                && !i.truth_opened
-                && i.requests_bytes == 4096000
-                && i.truth_bytes == 80000
-                && [
-                    i.requests_sha256.as_str(),
-                    i.truth_sha256.as_str(),
-                    i.native_source_sha256.as_str(),
-                    i.native_sq8_sha256.as_str(),
-                    i.native_order_sha256.as_str(),
-                ] == INPUT_SHA256,
-            "paired production benchmark pins",
-        )?;
+        if scale {
+            validate_scale_inputs(&i, &arm.expected_bound_inputs)?;
+            require(
+                i.rows == 1_000_000
+                    && i.dimensions == 1024
+                    && i.count == COUNT
+                    && i.k == K
+                    && i.profile == "scale1m"
+                    && i.corpus_source_first == 0
+                    && i.query_source_first == 100_000
+                    && arm.expected_bound_inputs["corpus_intervals"]
+                        == json!([{"start":0,"end":100000},{"start":101000,"end":1001000}])
+                    && arm.expected_bound_inputs["reserved_query_interval"]
+                        == json!({"start":100000,"end":101000})
+                    && arm.expected_bound_inputs["reserved_queries_sha256"]
+                        == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+                    && arm.expected_identity["execution"] == json!({"mode":"full"})
+                    && arm.expected_bound_inputs["execution"] == json!({"mode":"full"})
+                    && [
+                        i.requests_sha256.as_str(),
+                        i.truth_sha256.as_str(),
+                        i.native_source_sha256.as_str(),
+                        i.native_sq8_sha256.as_str(),
+                        i.native_order_sha256.as_str(),
+                    ] == [
+                        "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+                        "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+                        "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+                        "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+                        "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+                    ],
+                "paired scale full1M production pins",
+            )?;
+        } else {
+            require(
+                i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
+                    && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
+                    && i.metric == "cosine"
+                    && i.tie_rule == "corpus_ordinal_ascending"
+                    && i.rows == 100000
+                    && i.dimensions == 1024
+                    && i.count == COUNT
+                    && i.k == K
+                    && i.corpus_source_first == 0
+                    && i.query_source_first == 100000
+                    && i.profile == "native100k"
+                    && !i.truth_opened
+                    && i.requests_bytes == 4096000
+                    && i.truth_bytes == 80000
+                    && [
+                        i.requests_sha256.as_str(),
+                        i.truth_sha256.as_str(),
+                        i.native_source_sha256.as_str(),
+                        i.native_sq8_sha256.as_str(),
+                        i.native_order_sha256.as_str(),
+                    ] == INPUT_SHA256,
+                "paired production benchmark pins",
+            )?;
+        }
     }
     let [a, b] = &c.arms;
     let mut identity = a.expected_identity.clone();
@@ -4144,12 +4194,16 @@ fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
         )?;
     }
     let mut reports = Vec::with_capacity(2);
-    for (arm, run) in c.arms.iter().zip(&runs) {
+    for ((arm, run), parallelism) in c.arms.iter().zip(&runs).zip([16, 32]) {
         // The maximum includes every query. Native100k selects at most16
         // leaves, so neither fetch width can admit a larger per-query peak.
         require(
-            run.stages.max_leaf_peak_inflight <= 16,
-            "paired Native100k query leaf_peak_inflight exceeds 16",
+            run.stages.max_leaf_peak_inflight <= if scale { parallelism } else { 16 },
+            if scale {
+                "paired Scale1m query leaf_peak_inflight exceeds selector"
+            } else {
+                "paired Native100k query leaf_peak_inflight exceeds 16"
+            },
         )?;
         let e = run.completed.as_ref().ok_or("missing paired evidence")?;
         let transport = &e.last.as_ref().ok_or("missing transport")?.after;
@@ -4194,7 +4248,7 @@ fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
         max_leaf_peak_inflight: a.max_leaf_peak_inflight.max(b.max_leaf_peak_inflight),
     };
     Ok(
-        json!({"schema":PAIRED_SCHEMA,"status":"MEASURED","complete":true,
+        json!({"schema":if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
         "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
         "semantic_parity":true,"trace_plan_parity":true,"logical_charge_parity":true,
         "arms":reports,"pooled_both_arms":{"statistics":pooled,"stage_wall_sums":stage_totals},
@@ -8182,6 +8236,19 @@ fn main() {
                 )
             });
         }
+        if args.get(1).is_some_and(|arg| arg == "--paired-scale") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --paired-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), SCALE_PAIRED_SCHEMA, || {
+                reduce_paired_scope(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA encoding")?,
+                    true,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--paired-v2") {
             require(
                 args.len() == 5,
@@ -11515,6 +11582,206 @@ mod tests {
             t["transport_last_boundary"]["after"]["consumed_payload_bytes"] = json!(300507);
         }
         rows
+    }
+
+    fn paired_scale_fixture(parallelism: u64) -> Vec<Value> {
+        let mut rows = paired_v2_fixture(parallelism);
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v7");
+        rows[0]["serving"] = json!({"mode":"baseline"});
+        rows[0]["execution"] = json!({"mode":"full"});
+        for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
+            rows[0][key] = json!("9".repeat(64));
+        }
+        let inputs = &mut rows[1];
+        inputs["rows"] = json!(1_000_000);
+        inputs["profile"] = json!("scale1m");
+        inputs["corpus_intervals"] =
+            json!([{"start":0,"end":100000},{"start":101000,"end":1001000}]);
+        inputs["reserved_query_interval"] = json!({"start":100000,"end":101000});
+        inputs["reserved_queries_sha256"] =
+            json!("8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e");
+        inputs["serving"] = json!({"mode":"baseline"});
+        inputs["execution"] = json!({"mode":"full"});
+        inputs["selected_count"] = json!(1000);
+        inputs["max_memory_bytes"] = json!(536870912);
+        inputs["cohort_receipt_sha256"] = json!("1".repeat(64));
+        inputs["derivation_receipt_sha256"] = json!("2".repeat(64));
+        inputs["producer_authority"] = json!({"source_commit":"4".repeat(40),"executable_sha256":"5".repeat(64),
+            "producer_source_sha256":"6".repeat(64),"sq8_source_sha256":"7".repeat(64),"source_order_source_sha256":"8".repeat(64)});
+        for (key, pin) in [
+            (
+                "truth_sha256",
+                "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+            ),
+            (
+                "native_source_sha256",
+                "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+            ),
+            (
+                "native_sq8_sha256",
+                "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+            ),
+            (
+                "native_order_sha256",
+                "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+            ),
+        ] {
+            inputs[key] = json!(pin);
+        }
+        inputs["backend"]["sq8_object_key"] = json!(format!(
+            "fixture/objects/{}",
+            inputs["native_sq8_sha256"].as_str().unwrap()
+        ));
+        let truth = inputs["truth_sha256"].clone();
+        for row in &mut rows {
+            match row["phase"].as_str().unwrap() {
+                "startup" => row["serving"] = json!({"mode":"baseline"}),
+                "query" => {
+                    row["serving"] = json!({"mode":"baseline"});
+                    row["source_nomination_skipped"] = json!(false);
+                    row["planning_scope"] = json!("source_nomination_and_cover");
+                    row["plan"] = json!({"selected_pages":[0],"ranges":[[0,100]],"planned_bytes":100,"target_pages":1,
+                        "target_shortfall":0,"primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
+                }
+                "all_queries_sealed" => {
+                    row["selected_count"] = json!(1000);
+                    row["population_count"] = json!(1000);
+                    row["reserved_query_count"] = json!(1000);
+                }
+                "terminal" => {
+                    let summary = &mut row["summary"];
+                    summary["truth_sha256"] = truth.clone();
+                    summary["serving"] = json!({"mode":"baseline"});
+                    summary["direct_memory"] = Value::Null;
+                    summary["execution"] = json!({"mode":"full"});
+                    for key in [
+                        "selected_count",
+                        "executed_count",
+                        "population_count",
+                        "reserved_query_count",
+                    ] {
+                        summary[key] = json!(1000);
+                    }
+                    summary["diagnostic_panel"] = json!(false);
+                    summary["diagnostic_prefix"] = json!(false);
+                    summary["population_percentiles_valid"] = json!(true);
+                    summary["full_cohort_qualification"] = json!(false);
+                }
+                _ => (),
+            }
+        }
+        for row in rows.iter_mut().filter(|r| r["phase"] == "query") {
+            row["stages"]["leaf_peak_inflight"] = json!(parallelism);
+        }
+        rows
+    }
+
+    fn paired_scale_config(dir: &Path, mut rows: [Vec<Value>; 2]) -> (PathBuf, String) {
+        for r in &mut rows {
+            authenticate(r);
+        }
+        let bytes = rows.each_ref().map(|r| encode(r));
+        let (path, _) = paired_v2_config(dir, [&bytes[0], &bytes[1]], [&rows[0], &rows[1]]);
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["schema"] = json!("borsuk-scale-paired-native-reduction-config-v1");
+        for arm in config["arms"].as_array_mut().unwrap() {
+            arm["schema"] = json!(SCALE_CONFIG_SCHEMA);
+        }
+        let body = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        (path, sha(&body))
+    }
+
+    #[test]
+    fn paired_scale_accepts_full_sealed_population_and_preserves_historical_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, pin) = paired_scale_config(
+            dir.path(),
+            [paired_scale_fixture(16), paired_scale_fixture(32)],
+        );
+        let report = reduce_paired_scope(&path, &pin, true).unwrap();
+        assert_eq!(report["schema"], SCALE_PAIRED_SCHEMA);
+        assert_eq!(report["semantic_parity"], true);
+        assert_eq!(report["trace_plan_parity"], true);
+        assert_eq!(report["logical_charge_parity"], true);
+        assert_eq!(report["pooled_both_arms"]["statistics"]["count"], 2000);
+        assert_eq!(report["performance_pass_claim"], false);
+        assert!(reduce_paired(&path, &pin).is_err());
+    }
+
+    #[test]
+    fn paired_scale_refuses_resealed_last_query_score_and_trace_mutations() {
+        for trace in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let a = paired_scale_fixture(16);
+            let mut b = paired_scale_fixture(32);
+            if trace {
+                b[1004]["trace"]["ranked_candidate_pages"] = json!([1, 0]);
+            } else {
+                let bits = b[1004]["returned"][0]["score_bits"].as_u64().unwrap();
+                b[1004]["returned"][0]["score_bits"] = json!(bits ^ 1);
+            }
+            let (path, pin) = paired_scale_config(dir.path(), [a, b]);
+            assert!(reduce_paired_scope(&path, &pin, true).is_err());
+        }
+    }
+
+    #[test]
+    fn paired_scale_wrong_population_cache_and_pins_refuse_before_input_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = paired_scale_config(
+            dir.path(),
+            [paired_scale_fixture(16), paired_scale_fixture(32)],
+        );
+        let original: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for (key, value) in [
+            ("rows", json!(100000)),
+            ("source_cache", json!("on")),
+            ("truth_sha256", json!("0".repeat(64))),
+            ("reserved_queries_sha256", json!("0".repeat(64))),
+            (
+                "execution",
+                json!({"mode":"diagnostic_panel","ordinals":[0],"trace":false}),
+            ),
+        ] {
+            let mut c = original.clone();
+            c["arms"][0]["expected_bound_inputs"][key] = value;
+            for arm in c["arms"].as_array_mut().unwrap() {
+                arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+            }
+            let body = serde_json::to_vec(&c).unwrap();
+            std::fs::write(&path, &body).unwrap();
+            let error = reduce_paired_scope(&path, &sha(&body), true).unwrap_err();
+            assert!(
+                error.downcast_ref::<std::io::Error>().is_none(),
+                "{key}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn paired_scale_refuses_selector_overrun_and_unsealed_tail_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = paired_scale_fixture(16);
+        let mut b = paired_scale_fixture(32);
+        b[1004]["stages"]["leaf_peak_inflight"] = json!(33);
+        let (path, pin) = paired_scale_config(dir.path(), [a, b]);
+        assert_eq!(
+            reduce_paired_scope(&path, &pin, true)
+                .unwrap_err()
+                .to_string(),
+            "paired Scale1m query leaf_peak_inflight exceeds selector"
+        );
+        let (path, pin) = paired_scale_config(
+            dir.path(),
+            [paired_scale_fixture(16), paired_scale_fixture(32)],
+        );
+        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let input = Path::new(config["arms"][1]["input"]["path"].as_str().unwrap());
+        let mut body = std::fs::read(input).unwrap();
+        *body.last_mut().unwrap() = b' ';
+        std::fs::write(input, body).unwrap();
+        assert!(reduce_paired_scope(&path, &pin, true).is_err());
     }
 
     fn paired_v2_config(
