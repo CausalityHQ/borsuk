@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-sealed-loss-native-stage-v1",
+  "stage": "compile-example",
+  "source_commit": "bb80700f546426d695d5b87879672fc2101fb4f9",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

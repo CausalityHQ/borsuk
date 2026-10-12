@@ -1,0 +1,16 @@
+{
+  "status": "NATIVE_BUILD_STAGE_VERIFIED",
+  "source_commit": "bb80700f546426d695d5b87879672fc2101fb4f9",
+  "stage": "workspace-clippy",
+  "tests": 0,
+  "source_files": 470,
+  "source_before_after_match": true,
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "memory_peak_bytes": 4565798912,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "native_qualification_complete": false,
+  "performance_claim": false
+}
