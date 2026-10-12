@@ -1,0 +1,34 @@
+{
+  "bin-debug": [
+    "tests::canonical_permuted_records_preserve_logical_ids_and_score_bits",
+    "tests::canonical_records_refuse_wrong_ids_sha_length_and_nonfinite_vectors",
+    "tests::scale_config_binds_exact_canonical_workload_and_operation_envelope",
+    "tests::scale_canary_labels_preserve_exact_service_identity_for_cleanup",
+    "tests::canary_query_prefix_authenticates_unselected_tail_before_copying",
+    "tests::scale_output_retains_thousand_maximum_accepted_query_bodies",
+    "tests::canonical_sdk_publication_readback_measurement_and_cleanup",
+    "tests::sdk_fixture_identity_recall_and_underfill",
+    "tests::corrupt_inputs_make_zero_api_calls",
+    "tests::sdk_503_is_one_attempt_and_truth_stays_unopened",
+    "tests::sdk_readback_drift_blocks_measurement",
+    "tests::seal_sync_tamper_and_partial_refused",
+    "tests::sdk_cleanup_checks_ownership_and_foreign_indexes",
+    "tests::response_shape_and_nearest_rank"
+  ],
+  "bin-release": [
+    "tests::canonical_permuted_records_preserve_logical_ids_and_score_bits",
+    "tests::canonical_records_refuse_wrong_ids_sha_length_and_nonfinite_vectors",
+    "tests::scale_config_binds_exact_canonical_workload_and_operation_envelope",
+    "tests::scale_canary_labels_preserve_exact_service_identity_for_cleanup",
+    "tests::canary_query_prefix_authenticates_unselected_tail_before_copying",
+    "tests::scale_output_retains_thousand_maximum_accepted_query_bodies",
+    "tests::canonical_sdk_publication_readback_measurement_and_cleanup",
+    "tests::sdk_fixture_identity_recall_and_underfill",
+    "tests::corrupt_inputs_make_zero_api_calls",
+    "tests::sdk_503_is_one_attempt_and_truth_stays_unopened",
+    "tests::sdk_readback_drift_blocks_measurement",
+    "tests::seal_sync_tamper_and_partial_refused",
+    "tests::sdk_cleanup_checks_ownership_and_foreign_indexes",
+    "tests::response_shape_and_nearest_rank"
+  ]
+}

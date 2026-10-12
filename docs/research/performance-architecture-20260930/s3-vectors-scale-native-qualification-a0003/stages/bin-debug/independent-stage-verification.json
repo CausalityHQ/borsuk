@@ -1,0 +1,16 @@
+{
+  "status": "FOCUSED_STAGE_VERIFIED",
+  "source_commit": "5e448bfafa96ed42982884c64c0005fe0e4664af",
+  "stage": "bin-debug",
+  "tests": 14,
+  "source_files": 470,
+  "source_before_after_match": true,
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "memory_peak_bytes": 151142400,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "native_qualification_complete": false,
+  "performance_claim": false
+}

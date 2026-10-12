@@ -65,6 +65,8 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 const CORPUS_SHA: &str = "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c";
 const QUERY_SHA: &str = "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e";
 const TRUTH_SHA: &str = "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c";
+const SCALE_CORPUS_SHA: &str = "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c";
+const SCALE_TRUTH_SHA: &str = "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +75,7 @@ struct Artifact {
     bytes: u64,
     sha256: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
     schema: String,
@@ -103,15 +105,60 @@ struct Context {
     c: Config,
     sha: String,
 }
+impl Config {
+    fn canonical(&self) -> bool {
+        self.mode == "scale-measurement" || self.mode == "scale-canary"
+    }
+    fn call_cap(&self) -> usize {
+        // 2000 puts + at most 8192 list pages + 10000 gets + 1000 queries,
+        // leaving 808 reservations for identity, ownership and cleanup.
+        if self.mode == "scale-measurement" {
+            22_000
+        } else {
+            CALL_CAP
+        }
+    }
+    fn list_page_cap(&self) -> usize {
+        if self.mode == "scale-measurement" {
+            8192
+        } else {
+            LIST_PAGE_CAP
+        }
+    }
+    fn ledger_cap(&self) -> u64 {
+        if self.mode == "scale-measurement" {
+            16 * 1024 * 1024
+        } else {
+            LEDGER_CAP
+        }
+    }
+    fn output_cap(&self) -> u64 {
+        // 1000 accepted rows plus header/completion/terminal, each <=128KiB,
+        // fit below128MiB even when32KiB bodies expand through JSON escaping.
+        if self.mode == "scale-measurement" {
+            128 * 1024 * 1024
+        } else {
+            OUTPUT_CAP
+        }
+    }
+    fn scan_corpus(&self) -> Result<Identity> {
+        if self.canonical() {
+            Ok(CanonicalCorpus::open(&self.corpus, self.rows)?.bound)
+        } else {
+            scan(&self.corpus, false, self.rows)
+        }
+    }
+}
 impl Context {
     fn path(&self, name: &str) -> PathBuf {
         self.c.state_dir.join(name)
     }
     fn save(&self, name: &str, data: Value) -> Result<()> {
-        atomic_json(
-            &self.path(name),
-            &json!({"schema":RECEIPT_SCHEMA,"config_sha256":self.sha,"kind":name,"data":data}),
-        )
+        let mut receipt =
+            json!({"schema":RECEIPT_SCHEMA,"config_sha256":self.sha,"kind":name,"data":data});
+        // Preserve exact service identity bodies for equality-based cleanup.
+        mark_scale_canary(&self.c, &mut receipt)?;
+        atomic_json(&self.path(name), &receipt)
     }
     fn receipt(&self, name: &str) -> Result<Value> {
         let bytes = read_small(&self.path(name), CONFIG_CAP)?;
@@ -124,6 +171,18 @@ impl Context {
         )?;
         Ok(value["data"].clone())
     }
+}
+fn mark_scale_canary(c: &Config, data: &mut Value) -> Result<()> {
+    if c.mode == "scale-canary" {
+        let object = data.as_object_mut().ok_or("canary receipt object")?;
+        object.insert(
+            "truth_kind".into(),
+            json!("synthetic ID-validation fixture; not exact GT"),
+        );
+        object.insert("claims_quality".into(), json!(false));
+        object.insert("claims_performance".into(), json!(false));
+    }
+    Ok(())
 }
 fn require(ok: bool, message: &str) -> Result<()> {
     if ok { Ok(()) } else { Err(message.into()) }
@@ -223,10 +282,18 @@ fn atomic_json(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 fn validate_config(c: &Config) -> Result<()> {
-    let full = c.mode == "measurement";
-    require(full || c.mode == "canary", "mode measurement/canary")?;
+    let full = c.mode == "measurement" || c.mode == "scale-measurement";
     require(
-        c.schema == CONFIG_SCHEMA
+        full || c.mode == "canary" || c.mode == "scale-canary",
+        "mode measurement/canary/scale-measurement/scale-canary",
+    )?;
+    require(
+        c.schema
+            == if c.canonical() {
+                "borsuk-s3-vectors-scale-config-v1"
+            } else {
+                CONFIG_SCHEMA
+            }
             && c.dataset == DATASET
             && c.revision == REVISION
             && c.dimensions == D
@@ -235,7 +302,14 @@ fn validate_config(c: &Config) -> Result<()> {
         "schema/dataset/metric/D/k",
     )?;
     require(
-        (c.rows, c.count) == if full { (100_000, 1000) } else { (257, 2) },
+        (c.rows, c.count)
+            == if c.mode == "scale-measurement" {
+                (1_000_000, 1000)
+            } else if full {
+                (100_000, 1000)
+            } else {
+                (257, 2)
+            },
         "frozen geometry",
     )?;
     require(
@@ -283,7 +357,10 @@ fn validate_config(c: &Config) -> Result<()> {
         "distinct artifact paths",
     )?;
     for (a, n) in [
-        (&c.corpus, c.rows * D * 4),
+        (
+            &c.corpus,
+            c.rows * (D * 4 + if c.canonical() { 8 } else { 0 }),
+        ),
         (&c.queries, c.count * D * 4),
         (&c.truth, c.count * K * 8),
     ] {
@@ -294,9 +371,19 @@ fn validate_config(c: &Config) -> Result<()> {
     }
     if full {
         require(
-            c.corpus.sha256 == CORPUS_SHA
+            c.corpus.sha256
+                == if c.canonical() {
+                    SCALE_CORPUS_SHA
+                } else {
+                    CORPUS_SHA
+                }
                 && c.queries.sha256 == QUERY_SHA
-                && c.truth.sha256 == TRUTH_SHA,
+                && c.truth.sha256
+                    == if c.canonical() {
+                        SCALE_TRUTH_SHA
+                    } else {
+                        TRUTH_SHA
+                    },
             "frozen original raw corpus/query/truth SHA",
         )?;
     }
@@ -333,6 +420,75 @@ fn read_vector(f: &mut File) -> Result<Vec<f32>> {
     let mut bytes = [0; D * 4];
     f.read_exact(&mut bytes)?;
     vector(&bytes)
+}
+// Canonical records retain logical IDs even when physical rows are permuted.
+// This map costs four bytes per ID; no corpus vector hydration is required.
+struct CanonicalCorpus {
+    file: File,
+    bound: Identity,
+    physical_rows: Vec<u32>,
+}
+impl CanonicalCorpus {
+    fn open(a: &Artifact, rows: usize) -> Result<Self> {
+        require(rows > 0 && rows <= 1_000_000, "canonical row domain")?;
+        let width = 8 + D * 4;
+        require(
+            a.bytes == (rows * width) as u64 && valid_sha(&a.sha256),
+            "canonical exact record length/SHA",
+        )?;
+        let mut file = open_artifact(a)?;
+        let bound = identity(&file)?;
+        let mut physical_rows = vec![u32::MAX; rows];
+        let mut digest = Sha256::new();
+        let mut record = [0u8; 8 + D * 4];
+        for physical in 0..rows {
+            file.read_exact(&mut record)?;
+            digest.update(record);
+            let signed = i64::from_le_bytes(record[..8].try_into().unwrap());
+            let id = usize::try_from(signed).map_err(|_| "negative canonical ID")?;
+            require(id < rows, "canonical ID range")?;
+            require(physical_rows[id] == u32::MAX, "duplicate canonical ID")?;
+            vector(&record[8..])?;
+            physical_rows[id] = u32::try_from(physical)?;
+        }
+        require(
+            file.read(&mut [0])? == 0
+                && identity(&file)? == bound
+                && format!("{:x}", digest.finalize()) == a.sha256,
+            "canonical SHA/EOF/identity",
+        )?;
+        require(
+            physical_rows.iter().all(|&p| p != u32::MAX),
+            "canonical complete logical ID domain",
+        )?;
+        file.seek(SeekFrom::Start(0))?;
+        Ok(Self {
+            file,
+            bound,
+            physical_rows,
+        })
+    }
+    fn vector(&mut self, id: usize) -> Result<Vec<f32>> {
+        let physical = *self.physical_rows.get(id).ok_or("canonical lookup ID")?;
+        require(
+            identity(&self.file)? == self.bound,
+            "canonical changed before readback",
+        )?;
+        self.file
+            .seek(SeekFrom::Start(u64::from(physical) * (8 + D * 4) as u64))?;
+        let mut bytes = [0u8; 8];
+        self.file.read_exact(&mut bytes)?;
+        require(
+            i64::from_le_bytes(bytes) == id as i64,
+            "canonical mapped ID changed",
+        )?;
+        let values = read_vector(&mut self.file)?;
+        require(
+            identity(&self.file)? == self.bound,
+            "canonical changed during readback",
+        )?;
+        Ok(values)
+    }
 }
 fn scan(a: &Artifact, truth: bool, rows: usize) -> Result<Identity> {
     let mut f = open_artifact(a)?;
@@ -371,7 +527,7 @@ fn truth_row(bytes: &[u8], rows: usize) -> Result<Vec<u64>> {
     Ok(ids)
 }
 fn input_identities(c: &Config, include_truth: bool) -> Result<Value> {
-    let corpus = scan(&c.corpus, false, c.rows)?;
+    let corpus = c.scan_corpus()?;
     let queries = scan(&c.queries, false, c.rows)?;
     require(
         (corpus.dev, corpus.ino) != (queries.dev, queries.ino),
@@ -394,6 +550,100 @@ fn input_identities(c: &Config, include_truth: bool) -> Result<Value> {
 fn admit(ctx: &Context) -> Result<()> {
     validate_config(&ctx.c)?;
     ctx.save("admission.json",json!({"inputs":input_identities(&ctx.c,true)?,"corpus_sha256":ctx.c.corpus.sha256,"queries_sha256":ctx.c.queries.sha256,"truth_sha256":ctx.c.truth.sha256,"truth_validated":true,"ordinal_keys":"six_digit_zero_based","at_ms":now_ms()?}))
+}
+fn prepare_scale_canary(ctx: &Context) -> Result<()> {
+    require(
+        ctx.c.mode == "scale-measurement",
+        "canary preparation needs exact scale measurement inputs",
+    )?;
+    admitted(ctx, true)?;
+    let root = ctx.path("scale-canary");
+    std::fs::create_dir(&root)?;
+    let mut corpus = CanonicalCorpus::open(&ctx.c.corpus, ctx.c.rows)?;
+    let mut records = Vec::with_capacity(257 * (8 + D * 4));
+    // Keep original logical IDs and values; reversed physical order exercises mapping.
+    for id in (0..257).rev() {
+        records.extend_from_slice(&(id as i64).to_le_bytes());
+        for value in corpus.vector(id)? {
+            records.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let selected_queries = authenticated_query_prefix(&ctx.c.queries, 2)?;
+    // This is an ID-validation fixture, never an exact-GT or quality measurement.
+    let truth: Vec<u8> = (0..2)
+        .flat_map(|_| (0..K as u64).flat_map(u64::to_le_bytes))
+        .collect();
+    let write = |name: &str, bytes: &[u8]| -> Result<Artifact> {
+        let path = root.join(name);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(flags())
+            .open(&path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(Artifact {
+            path,
+            bytes: bytes.len() as u64,
+            sha256: hash(bytes),
+        })
+    };
+    let mut c = ctx.c.clone();
+    c.mode = "scale-canary".into();
+    c.rows = 257;
+    c.count = 2;
+    c.idle_seconds = 0;
+    c.corpus = write("canonical.bin", &records)?;
+    c.queries = write("queries.f32", &selected_queries)?;
+    c.truth = write("validation-truth.u64", &truth)?;
+    c.state_dir = root.join("state");
+    std::fs::create_dir(&c.state_dir)?;
+    c.run_id = hash(format!("{}:scale-canary", ctx.sha).as_bytes())[..32].into();
+    require(c.run_id != ctx.c.run_id, "canary namespace collision")?;
+    c.bucket = format!("borsuk-s3v-{}", c.run_id);
+    c.index = format!("baseline-{}", c.run_id);
+    validate_config(&c)?;
+    // Reauthenticate all source inputs after extraction before publishing the config.
+    admitted(ctx, true)?;
+    atomic_json(&root.join("config.json"), &serde_json::to_value(&c)?)?;
+    directory(&root)?.sync_all()?;
+    directory(&ctx.c.state_dir)?.sync_all()?;
+    ctx.save(
+        "scale-canary-prepared.json",
+        json!({
+            "config":root.join("config.json"),
+            "config_sha256":hash(&read_small(&root.join("config.json"), CONFIG_CAP)?),
+            "source_config_sha256":ctx.sha,
+            "logical_ids_preserved":true,
+            "truth_kind":"synthetic ID-validation fixture; not exact GT",
+            "claims_quality":false,
+            "claims_performance":false
+        }),
+    )
+}
+fn authenticated_query_prefix(a: &Artifact, count: usize) -> Result<Vec<u8>> {
+    require(
+        a.bytes <= (1000 * D * 4) as u64
+            && a.bytes % (D * 4) as u64 == 0
+            && count > 0
+            && count <= 1000
+            && (count * D * 4) as u64 <= a.bytes
+            && valid_sha(&a.sha256),
+        "bounded canary query geometry/SHA",
+    )?;
+    // Authenticate the complete buffer read from this descriptor, then select.
+    // Independent path scans cannot authenticate bytes copied from another inode.
+    let mut bytes = read_small(&a.path, a.bytes)?;
+    require(
+        bytes.len() as u64 == a.bytes && hash(&bytes) == a.sha256,
+        "canary query full SHA/length",
+    )?;
+    for row in bytes.chunks_exact(D * 4) {
+        vector(row)?;
+    }
+    bytes.truncate(count * D * 4);
+    Ok(bytes)
 }
 fn admitted(ctx: &Context, truth: bool) -> Result<()> {
     validate_config(&ctx.c)?;
@@ -588,6 +838,9 @@ struct Calls {
     reserved: usize,
     observed: usize,
     pending: BTreeSet<usize>,
+    cap: usize,
+    byte_cap: u64,
+    output_cap: u64,
 }
 impl Calls {
     fn open(ctx: &Context) -> Result<Self> {
@@ -600,14 +853,20 @@ impl Calls {
             .open(ctx.path("calls.jsonl"))?;
         file.try_lock()
             .map_err(|e| format!("call ledger is locked: {e}"))?;
-        require(identity(&file)?.len <= LEDGER_CAP, "call ledger byte cap")?;
+        require(
+            identity(&file)?.len <= ctx.c.ledger_cap(),
+            "call ledger byte cap",
+        )?;
         let mut ledger = Self {
             file,
             reserved: 0,
             observed: 0,
             pending: BTreeSet::new(),
+            cap: ctx.c.call_cap(),
+            byte_cap: ctx.c.ledger_cap(),
+            output_cap: ctx.c.output_cap(),
         };
-        let header = json!({"schema":"borsuk-s3-vectors-calls-v1","config_sha256":ctx.sha,"max_reserved_calls":CALL_CAP});
+        let header = json!({"schema":"borsuk-s3-vectors-calls-v1","config_sha256":ctx.sha,"max_reserved_calls":ledger.cap});
         if identity(&ledger.file)?.len == 0 {
             ledger.append(&header)?;
             directory(&ctx.c.state_dir)?.sync_all()?;
@@ -622,7 +881,7 @@ impl Calls {
                 match row["phase"].as_str() {
                     Some("reserved") => {
                         require(
-                            id == ledger.reserved + 1 && id <= CALL_CAP,
+                            id == ledger.reserved + 1 && id <= ledger.cap,
                             "ledger reservation sequence/cap",
                         )?;
                         ledger.reserved = id;
@@ -647,7 +906,7 @@ impl Calls {
         let mut bytes = serde_json::to_vec(row)?;
         bytes.push(b'\n');
         require(
-            identity(&self.file)?.len + bytes.len() as u64 <= LEDGER_CAP,
+            identity(&self.file)?.len + bytes.len() as u64 <= self.byte_cap,
             "call ledger byte cap",
         )?;
         self.file.write_all(&bytes)?;
@@ -656,7 +915,7 @@ impl Calls {
     }
     fn reserve(&mut self, command: &str, operation: &str) -> Result<usize> {
         require(
-            self.reserved < CALL_CAP,
+            self.reserved < self.cap,
             "aggregate service reservation cap",
         )?;
         let id = self.reserved + 1;
@@ -678,7 +937,7 @@ impl Calls {
         Ok(())
     }
     fn summary(&self) -> Value {
-        json!({"scope":"all commands for this config","max_reserved_calls":CALL_CAP,"reserved_calls":self.reserved,
+        json!({"scope":"all commands for this config","max_reserved_calls":self.cap,"reserved_calls":self.reserved,
             "observed_transmit_attempts":self.observed,"unconfirmed_reservations":self.pending.len(),
             "accounting":"all reservations consume allowance; only captured transmits count as observed; credentials excluded"})
     }
@@ -727,7 +986,7 @@ impl Output {
         let mut bytes = serde_json::to_vec(v)?;
         bytes.push(b'\n');
         require(
-            bytes.len() <= LINE_CAP && self.bytes + bytes.len() as u64 <= OUTPUT_CAP,
+            bytes.len() <= LINE_CAP && self.bytes + bytes.len() as u64 <= self.calls.output_cap,
             "output line/total cap",
         )?;
         self.file.write_all(&bytes)?;
@@ -921,12 +1180,34 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     ctx.save("index-identity.json", index)?;
     let mut corpus = open_artifact(&c.corpus)?;
     let bound = identity(&corpus)?;
+    let mut canonical = if c.canonical() {
+        Some(CanonicalCorpus::open(&c.corpus, c.rows)?)
+    } else {
+        None
+    };
     let mut last_put: Option<Instant> = None;
     let mut put_calls = 0;
     for first in (0..c.rows).step_by(500) {
         let end = (first + 500).min(c.rows);
         let mut batch = Vec::with_capacity(end - first);
-        for id in first..end {
+        for physical in first..end {
+            let id = if c.canonical() {
+                let mut bytes = [0u8; 8];
+                corpus.read_exact(&mut bytes)?;
+                let id = usize::try_from(i64::from_le_bytes(bytes))?;
+                require(id < c.rows, "canonical upload ID range")?;
+                require(
+                    canonical
+                        .as_ref()
+                        .ok_or("canonical map absent")?
+                        .physical_rows[id] as usize
+                        == physical,
+                    "canonical upload ID/map disagreement",
+                )?;
+                id
+            } else {
+                physical
+            };
             batch.push(
                 PutInputVector::builder()
                     .key(key(id))
@@ -935,7 +1216,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
             );
         }
         require(identity(&corpus)? == bound, "corpus changed during publish")?;
-        if c.mode == "measurement" {
+        if c.mode == "measurement" || c.mode == "scale-measurement" {
             if let Some(last) = last_put {
                 tokio::time::sleep(Duration::from_secs(1).saturating_sub(last.elapsed())).await;
             }
@@ -960,7 +1241,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     let mut list_calls = 0;
     loop {
         // maxResults is a ceiling: S3 Vectors may stop after 1 MiB processed.
-        require(list_calls < LIST_PAGE_CAP, "enumeration page cap")?;
+        require(list_calls < c.list_page_cap(), "enumeration page cap")?;
         call!(
             s,
             out,
@@ -1026,8 +1307,12 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
             )?;
             let values: Vec<f32> = serde_json::from_value(v["data"]["float32"].clone())?;
             require(values.len() == D, "readback dimension")?;
-            corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
-            let original = read_vector(&mut corpus)?;
+            let original = if let Some(canonical) = canonical.as_mut() {
+                canonical.vector(id)?
+            } else {
+                corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
+                read_vector(&mut corpus)?
+            };
             require(
                 values
                     .iter()
@@ -1038,7 +1323,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
         }
     }
     require(
-        identity(&corpus)? == bound && scan(&c.corpus, false, c.rows)? == bound,
+        identity(&corpus)? == bound && c.scan_corpus()? == bound,
         "post-readback corpus binding",
     )?;
     require(
@@ -1047,7 +1332,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     )?;
     out.sync()?;
     ctx.save("published.json",json!({"index_arn":index_arn(c),"bucket_arn":bucket_arn(c),"rows":c.rows,
-        "put_calls":put_calls,"list_calls":list_calls,"list_page_cap":LIST_PAGE_CAP,"get_calls":get_calls,"calls":out.calls.summary(),
+        "put_calls":put_calls,"list_calls":list_calls,"list_page_cap":c.list_page_cap(),"get_calls":get_calls,"calls":out.calls.summary(),
         "enumerated_keys":c.rows,"bit_exact_readback_rows":c.rows,"verified_at_ms":now_ms()?,
         "corpus_sha256":c.corpus.sha256,"queries_sha256":c.queries.sha256,"truth_sha256":c.truth.sha256,
         "index_identity":ctx.receipt("index-identity.json")?,"bucket_identity":ctx.receipt("bucket-identity.json")?}))
@@ -1063,11 +1348,11 @@ fn published(ctx: &Context) -> Result<Value> {
             && p["bit_exact_readback_rows"] == c.rows
             && p["put_calls"] == c.rows.div_ceil(500)
             && p["get_calls"] == c.rows.div_ceil(100)
-            && p["list_page_cap"] == LIST_PAGE_CAP
+            && p["list_page_cap"] == c.list_page_cap()
             && p["list_calls"]
                 .as_u64()
-                .is_some_and(|n| n > 0 && n <= LIST_PAGE_CAP as u64)
-            && p["calls"]["max_reserved_calls"] == CALL_CAP
+                .is_some_and(|n| n > 0 && n <= c.list_page_cap() as u64)
+            && p["calls"]["max_reserved_calls"] == c.call_cap()
             && p["corpus_sha256"] == c.corpus.sha256
             && p["queries_sha256"] == c.queries.sha256
             && p["truth_sha256"] == c.truth.sha256,
@@ -1181,7 +1466,7 @@ async fn measure(ctx: &Context, s: &Service) -> Result<()> {
     // A partial stream can never be resumed by invoking measure again.
     let mut out = Output::create(ctx, "responses.jsonl")?;
     ctx.save("measure-started.json",json!({"index_arn":index_arn(&ctx.c),"at_ms":now_ms()?,"observed_inactivity_ms":idle_ms,"resume_allowed":false}))?;
-    out.emit(&json!({"schema":RECEIPT_SCHEMA,"phase":"measurement","config_sha256":ctx.sha,"index_arn":index_arn(&ctx.c),
+    let mut header = json!({"schema":RECEIPT_SCHEMA,"phase":"measurement","config_sha256":ctx.sha,"index_arn":index_arn(&ctx.c),
         "query_count":ctx.c.count,"queries_sha256":ctx.c.queries.sha256,"observed_inactivity_ms":idle_ms,"host_identity":ctx.c.host_identity,
         "mode":ctx.c.mode,"cache_conditions":"cache-uncontrolled first pass; inactivity is not proof of eviction",
         "inactivity_basis":"elapsed wall time since this run's full readback; external index activity is unobservable",
@@ -1190,7 +1475,9 @@ async fn measure(ctx: &Context, s: &Service) -> Result<()> {
         "required_external_memory_max_bytes":536870912_u64,"required_external_swap_max_bytes":0,
         "credential_setup":"explicit named profile; lazy SDK resolution included in first request",
         "latency_boundary":"request construction, signing, transport, deserialization and validation; excludes input staging and receipt writes",
-        "truth_opened":false}))?;
+        "truth_opened":false});
+    mark_scale_canary(&ctx.c, &mut header)?;
+    out.emit(&header)?;
     let result = measure_inner(ctx, s, &query_bytes, &mut out).await;
     if let Err(ref error) = result {
         out.terminal("INVALID", Some(error_text(error)))?;
@@ -1290,9 +1577,9 @@ fn authenticate_output(ctx: &Context, seal: &Value) -> Result<File> {
     )?;
     let bytes = seal["bytes"].as_u64().ok_or("seal length")?;
     let sha = seal["sha256"].as_str().ok_or("seal SHA")?;
-    require(valid_sha(sha) && bytes <= OUTPUT_CAP, "seal bounds")?;
+    require(valid_sha(sha) && bytes <= ctx.c.output_cap(), "seal bounds")?;
     let bound: Identity = serde_json::from_value(seal["file"].clone())?;
-    let mut file = regular(&ctx.path("responses.jsonl"), OUTPUT_CAP)?;
+    let mut file = regular(&ctx.path("responses.jsonl"), ctx.c.output_cap())?;
     let current = identity(&file)?;
     require(
         current.len == bytes && bound.len == bytes,
@@ -1428,7 +1715,7 @@ fn reduce(ctx: &Context) -> Result<Value> {
         let expected = truth_row(&truth[id * K * 8..(id + 1) * K * 8], ctx.c.rows)?;
         hits += found.iter().filter(|id| expected.contains(id)).count();
     }
-    let summary = json!({"schema":"borsuk-s3-vectors-reduction-v1","status":"VALID","mode":ctx.c.mode,"config_sha256":ctx.sha,
+    let mut summary = json!({"schema":"borsuk-s3-vectors-reduction-v1","status":"VALID","mode":ctx.c.mode,"config_sha256":ctx.sha,
         "index_arn":index_arn(&ctx.c),"response_sha256":seal["sha256"],"query_count":ctx.c.count,
         "hits":hits,"recall_denominator":ctx.c.count*K,"recall_at_10":hits as f64/(ctx.c.count*K) as f64,"underfilled_queries":underfills,
         "first_query_ns":samples[0],"pooled_condition":"cache-uncontrolled first pass; backend cache state unknown",
@@ -1437,6 +1724,39 @@ fn reduce(ctx: &Context) -> Result<Value> {
         "sum_query_ns":sum,"whole_pass_ns":wall_ns,"concurrent_service_capacity_claim":false,"guaranteed_cold_claim":false,
         "all_queries_sealed":true,"truth_opened_after_seal":true,"observed_inactivity_ms":head["observed_inactivity_ms"],
         "calls_at_measurement_seal":seal["calls"],"billed_requests":null,"billed_bytes":null,"cost_usd":null});
+    if ctx.c.mode == "scale-canary" {
+        let object = summary.as_object_mut().ok_or("canary summary object")?;
+        let mut diagnostics = serde_json::Map::new();
+        for (old, new) in [
+            ("hits", "fixture_overlap_hits"),
+            ("recall_denominator", "fixture_overlap_denominator"),
+            ("recall_at_10", "fixture_overlap_at_10"),
+            ("first_query_ns", "first_query_ns"),
+            ("pooled_p50_ns", "p50_ns"),
+            ("pooled_p90_ns", "p90_ns"),
+            ("pooled_p95_ns", "p95_ns"),
+            ("pooled_p99_ns", "p99_ns"),
+            ("serial_reciprocal_qps", "serial_reciprocal_qps"),
+            ("whole_pass_qps", "whole_pass_qps"),
+        ] {
+            diagnostics.insert(
+                new.into(),
+                object.remove(old).ok_or("canary diagnostic field")?,
+            );
+        }
+        object.insert("diagnostics".into(), Value::Object(diagnostics));
+        object.insert(
+            "schema".into(),
+            json!("borsuk-s3-vectors-canary-reduction-v1"),
+        );
+        object.insert("status".into(), json!("CANARY_VALID"));
+        object.insert(
+            "truth_kind".into(),
+            json!("synthetic ID-validation fixture; not exact GT"),
+        );
+        object.insert("claims_quality".into(), json!(false));
+        object.insert("claims_performance".into(), json!(false));
+    }
     ctx.save("reduction.json", summary.clone())?;
     Ok(summary)
 }
@@ -1608,19 +1928,20 @@ fn run() -> Result<()> {
     let args: Vec<_> = std::env::args_os().collect();
     require(
         args.len() == 4,
-        "usage: check_s3_vectors_baseline <admit|publish|measure|reduce|cleanup> CONFIG CONFIG_SHA256",
+        "usage: check_s3_vectors_baseline <admit|prepare-scale-canary|publish|measure|reduce|cleanup> CONFIG CONFIG_SHA256",
     )?;
     let command = args[1].to_str().ok_or("command UTF-8")?;
     require(
         matches!(
             command,
-            "admit" | "publish" | "measure" | "reduce" | "cleanup"
+            "admit" | "prepare-scale-canary" | "publish" | "measure" | "reduce" | "cleanup"
         ),
         "unknown command",
     )?;
     let ctx = load(Path::new(&args[2]), args[3].to_str().ok_or("SHA UTF-8")?)?;
     match command {
         "admit" => admit(&ctx),
+        "prepare-scale-canary" => prepare_scale_canary(&ctx),
         "reduce" => {
             println!("{}", reduce(&ctx)?);
             Ok(())
@@ -1652,6 +1973,95 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn canonical_fixture(root: &Path, ids: &[i64]) -> Artifact {
+        let mut bytes = Vec::new();
+        for &id in ids {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            for dimension in 0..D {
+                let value = if dimension == 0 { id as f32 + 1.0 } else { 0.0 };
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let path = root.join("canonical.bin");
+        std::fs::write(&path, &bytes).unwrap();
+        Artifact {
+            path,
+            bytes: bytes.len() as u64,
+            sha256: hash(&bytes),
+        }
+    }
+    #[test]
+    fn canonical_permuted_records_preserve_logical_ids_and_score_bits() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = canonical_fixture(dir.path(), &[2, 0, 1]);
+        let mut corpus = CanonicalCorpus::open(&a, 3).unwrap();
+        assert_eq!(corpus.physical_rows, [1, 2, 0]);
+        for id in [0, 2, 1] {
+            let values = corpus.vector(id).unwrap();
+            assert_eq!(values[0].to_bits(), (id as f32 + 1.0).to_bits());
+            assert!(values[1..].iter().all(|v| v.to_bits() == 0));
+        }
+        assert!(corpus.vector(3).is_err());
+    }
+    #[test]
+    fn canonical_records_refuse_wrong_ids_sha_length_and_nonfinite_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        for ids in [[0, 0, 2], [-1, 0, 2], [0, 1, 3]] {
+            let a = canonical_fixture(dir.path(), &ids);
+            assert!(CanonicalCorpus::open(&a, 3).is_err());
+        }
+        let mut a = canonical_fixture(dir.path(), &[2, 0, 1]);
+        a.sha256 = "0".repeat(64);
+        assert!(CanonicalCorpus::open(&a, 3).is_err());
+        a = canonical_fixture(dir.path(), &[2, 0, 1]);
+        a.bytes -= 1;
+        assert!(CanonicalCorpus::open(&a, 3).is_err());
+        a = canonical_fixture(dir.path(), &[2, 0, 1]);
+        let mut bytes = std::fs::read(&a.path).unwrap();
+        bytes[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+        std::fs::write(&a.path, &bytes).unwrap();
+        a.sha256 = hash(&bytes);
+        assert!(CanonicalCorpus::open(&a, 3).is_err());
+    }
+    #[test]
+    fn scale_config_binds_exact_canonical_workload_and_operation_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = fixture_config(dir.path());
+        c.mode = "scale-measurement".into();
+        c.schema = "borsuk-s3-vectors-scale-config-v1".into();
+        c.rows = 1_000_000;
+        c.count = 1000;
+        c.idle_seconds = 3600;
+        c.corpus.bytes = (1_000_000 * (8 + D * 4)) as u64;
+        c.corpus.sha256 = SCALE_CORPUS_SHA.into();
+        c.queries.bytes = (1000 * D * 4) as u64;
+        c.queries.sha256 = QUERY_SHA.into();
+        c.truth.bytes = (1000 * K * 8) as u64;
+        c.truth.sha256 = SCALE_TRUTH_SHA.into();
+        std::fs::create_dir(&c.state_dir).unwrap();
+        validate_config(&c).unwrap();
+        assert_eq!(c.call_cap(), 22_000);
+        assert_eq!(c.list_page_cap(), 8192);
+        assert_eq!(c.ledger_cap(), 16 * 1024 * 1024);
+        assert_eq!(c.output_cap(), 128 * 1024 * 1024);
+        assert!(
+            c.call_cap()
+                >= c.rows.div_ceil(500) + c.list_page_cap() + c.rows.div_ceil(100) + c.count + 32
+        );
+        c.schema = CONFIG_SCHEMA.into();
+        assert!(validate_config(&c).is_err());
+        c.schema = "borsuk-s3-vectors-scale-config-v1".into();
+        c.corpus.bytes = (c.rows * D * 4) as u64;
+        assert!(validate_config(&c).is_err());
+        c.corpus.bytes += (c.rows * 8) as u64;
+        c.truth.sha256 = TRUTH_SHA.into();
+        assert!(validate_config(&c).is_err());
+        let historical = fixture_config(dir.path());
+        assert_eq!(historical.call_cap(), CALL_CAP);
+        assert_eq!(historical.list_page_cap(), LIST_PAGE_CAP);
+        assert_eq!(historical.ledger_cap(), LEDGER_CAP);
+        assert_eq!(historical.output_cap(), OUTPUT_CAP);
+    }
     use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
     use std::{
         collections::BTreeMap,
@@ -1991,6 +2401,145 @@ mod tests {
     fn watch_truth(ctx: &Context) {
         WATCH_TRUTH.with(|v| *v.borrow_mut() = Some(ctx.c.truth.path.clone()));
         TRUTH_OPENS.with(|n| n.set(0));
+    }
+    #[test]
+    fn scale_canary_labels_preserve_exact_service_identity_for_cleanup() {
+        for mode in ["scale-canary", "canary"] {
+            let (_dir, mut ctx) = fixture();
+            ctx.c.mode = mode.into();
+            let identity = json!({"vectorBucketArn":bucket_arn(&ctx.c),"vectorBucketName":ctx.c.bucket,"creationTime":1700000000.0});
+            ctx.save("bucket-identity.json", identity.clone()).unwrap();
+            assert_eq!(ctx.receipt("bucket-identity.json").unwrap(), identity);
+            let receipt: Value = serde_json::from_slice(
+                &read_small(&ctx.path("bucket-identity.json"), CONFIG_CAP).unwrap(),
+            )
+            .unwrap();
+            if mode == "scale-canary" {
+                assert_eq!(receipt["claims_quality"], false);
+                assert_eq!(receipt["claims_performance"], false);
+            } else {
+                assert!(receipt.get("claims_quality").is_none());
+                assert!(receipt.get("claims_performance").is_none());
+            }
+        }
+    }
+    #[test]
+    fn canary_query_prefix_authenticates_unselected_tail_before_copying() {
+        let (_dir, ctx) = fixture();
+        let original = std::fs::read(&ctx.c.queries.path).unwrap();
+        assert_eq!(
+            authenticated_query_prefix(&ctx.c.queries, 1).unwrap(),
+            original[..D * 4]
+        );
+        let mut replacement = original.clone();
+        let last = replacement.len() - 1;
+        replacement[last] ^= 0x80;
+        std::fs::write(&ctx.c.queries.path, &replacement).unwrap();
+        let failure = authenticated_query_prefix(&ctx.c.queries, 1).unwrap_err();
+        assert!(failure.to_string().contains("canary query full SHA/length"));
+        std::fs::write(&ctx.c.queries.path, &original).unwrap();
+        scan(&ctx.c.queries, false, ctx.c.rows).unwrap();
+        assert_eq!(
+            authenticated_query_prefix(&ctx.c.queries, 2).unwrap(),
+            original
+        );
+    }
+    #[test]
+    fn scale_output_retains_thousand_maximum_accepted_query_bodies() {
+        let (_dir, mut ctx) = fixture();
+        ctx.c.mode = "scale-measurement".into();
+        ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
+        let mut output = Output::create(&ctx, "retention-test.jsonl").unwrap();
+        let vectors: Vec<_> = (0..K)
+            .map(|id| json!({"key":key(id),"distance":0.0}))
+            .collect();
+        let mut body =
+            serde_json::to_string(&json!({"vectors":vectors,"distanceMetric":"cosine"})).unwrap();
+        body.push_str(&"\n".repeat(32 * 1024 - body.len()));
+        assert_eq!(parse_hits(&body, 1_000_000).unwrap().len(), K);
+        for ordinal in 0..1000 {
+            output
+                .emit(&json!({"phase":"query","ordinal":ordinal,"capture":{"body":body}}))
+                .unwrap();
+        }
+        assert!(output.bytes > OUTPUT_CAP);
+        assert!(output.bytes <= ctx.c.output_cap());
+        output.sync().unwrap();
+    }
+    #[tokio::test]
+    async fn canonical_sdk_publication_readback_measurement_and_cleanup() {
+        let (_dir, mut ctx) = fixture();
+        let raw = std::fs::read(&ctx.c.corpus.path).unwrap();
+        let mut records = Vec::new();
+        for id in (0..ctx.c.rows).rev() {
+            records.extend_from_slice(&(id as i64).to_le_bytes());
+            records.extend_from_slice(&raw[id * D * 4..(id + 1) * D * 4]);
+        }
+        std::fs::write(&ctx.c.corpus.path, &records).unwrap();
+        ctx.c.corpus.bytes = records.len() as u64;
+        ctx.c.corpus.sha256 = hash(&records);
+        ctx.c.mode = "scale-canary".into();
+        ctx.c.schema = "borsuk-s3-vectors-scale-config-v1".into();
+        let validation_truth: Vec<u8> = (0..2)
+            .flat_map(|_| (0..K as u64).flat_map(u64::to_le_bytes))
+            .collect();
+        std::fs::write(&ctx.c.truth.path, &validation_truth).unwrap();
+        ctx.c.truth.sha256 = hash(&validation_truth);
+        ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
+        let mock = Arc::new(Mock::default());
+        let (service, server) = mock_service(mock.clone()).await;
+        admit(&ctx).unwrap();
+        publish(&ctx, &service).await.unwrap();
+        {
+            let stored = mock.corpus.lock().unwrap();
+            assert_eq!(stored.len(), ctx.c.rows);
+            for id in 0..ctx.c.rows {
+                let original = vector(&raw[id * D * 4..(id + 1) * D * 4]).unwrap();
+                assert_eq!(
+                    stored[&key(id)]
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect::<Vec<_>>(),
+                    original.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+            }
+        }
+        let published = ctx.receipt("published.json").unwrap();
+        assert_eq!(published["bit_exact_readback_rows"], 257);
+        assert_eq!(published["get_calls"], 3);
+        watch_truth(&ctx);
+        let hidden = ctx.c.truth.path.with_extension("hidden");
+        std::fs::rename(&ctx.c.truth.path, &hidden).unwrap();
+        measure(&ctx, &service).await.unwrap();
+        assert_eq!(TRUTH_OPENS.with(|n| n.get()), 0);
+        let mut response_reader = BufReader::new(File::open(ctx.path("responses.jsonl")).unwrap());
+        let header = line(&mut response_reader).unwrap().unwrap();
+        assert_eq!(header["claims_quality"], false);
+        assert_eq!(header["claims_performance"], false);
+        let seal_receipt: Value = serde_json::from_slice(
+            &read_small(&ctx.path("response-seal.json"), CONFIG_CAP).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(seal_receipt["claims_quality"], false);
+        assert_eq!(seal_receipt["claims_performance"], false);
+        std::fs::rename(hidden, &ctx.c.truth.path).unwrap();
+        let summary = reduce(&ctx).unwrap();
+        assert_eq!(summary["status"], "CANARY_VALID");
+        assert_eq!(summary["claims_quality"], false);
+        assert_eq!(summary["claims_performance"], false);
+        assert_eq!(summary["diagnostics"]["fixture_overlap_hits"], 19);
+        assert!(summary.get("recall_at_10").is_none());
+        assert!(summary.get("pooled_p95_ns").is_none());
+        assert!(summary.get("serial_reciprocal_qps").is_none());
+        assert!(measure(&ctx, &service).await.is_err());
+        cleanup(&ctx, &service).await.unwrap();
+        assert!(mock.index_deleted.load(Ordering::SeqCst));
+        assert!(mock.bucket_deleted.load(Ordering::SeqCst));
+        assert_eq!(
+            ctx.receipt("cleanup.json").unwrap()["calls"]["unconfirmed_reservations"],
+            0
+        );
+        server.abort();
     }
     #[tokio::test]
     async fn sdk_fixture_identity_recall_and_underfill() {
