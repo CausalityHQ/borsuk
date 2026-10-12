@@ -11751,6 +11751,28 @@ mod tests {
     }
 
     #[test]
+    fn paired_scheduler_scale_accepts_only_explicit_same_width_source_delta() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = paired_scale_fixture(32);
+        let mut b = paired_scale_fixture(32);
+        b[0]["config_sha256"] = json!("e".repeat(64));
+        b[0]["binary_sha256"] = json!("a".repeat(64));
+        b[0]["sq8_range_source_sha256"] = json!("b".repeat(64));
+        let (path, _) = paired_scale_config(dir.path(), [a, b]);
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["schema"] = json!("borsuk-scale-scheduler-native-reduction-config-v1");
+        let body = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        let report = reduce_paired_scope(&path, &sha(&body), true).unwrap();
+        assert_eq!(report["semantic_parity"], true);
+        assert_eq!(report["trace_plan_parity"], true);
+        assert_eq!(report["logical_charge_parity"], true);
+        assert_eq!(report["pooled_both_arms"]["statistics"]["count"], 2000);
+        assert_eq!(report["performance_pass_claim"], false);
+        assert!(reduce_paired(&path, &sha(&body)).is_err());
+    }
+
+    #[test]
     fn paired_scale_accepts_full_sealed_population_and_preserves_historical_refusal() {
         let dir = tempfile::tempdir().unwrap();
         let (path, pin) = paired_scale_config(
