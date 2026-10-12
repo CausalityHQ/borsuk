@@ -4089,7 +4089,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
     };
     let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
     let scheduler = scale && c.schema == "borsuk-scale-scheduler-native-reduction-config-v1";
-    let parallelisms: [usize; 2] = if scheduler { [32, 32] } else { [16, 32] };
+    let parallelisms: [u64; 2] = if scheduler { [32, 32] } else { [16, 32] };
     require(
         c.schema
             == if scheduler {
