@@ -220,6 +220,7 @@ pub struct Manifest {
 
 /// Authenticated source binding supplied by the enclosing generation or research CLI.
 /// `root_sha256` is an input identity, never the output router's own digest.
+#[derive(Clone, Copy)]
 pub struct SourceIdentity<'a> {
     /// Explicit admission profile authenticated by the enclosing generation.
     pub profile: SemanticProfile,
