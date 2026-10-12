@@ -681,7 +681,7 @@ mod tests {
                     json!({"mode":"diagnostic_panel","ordinals":ordinals,"trace":false});
                 let component = if arm == 0 { "1" } else { "2" }.repeat(64);
                 let identity = json!({"phase":"identity","schema":"borsuk-cohere-native-baseline-result-v7",
-                    "config_sha256":["6","7","8"][arm].repeat(64),"binary_sha256":provenance["binary_sha256"],
+                    "config_sha256":(["6","7","8"][arm].repeat(64)),"binary_sha256":provenance["binary_sha256"],
                     "runner_source_sha256":component,"generation_source_sha256":component,
                     "router_source_sha256":component,"codec_source_sha256":component,
                     "source_plane_source_sha256":component,"sq8_range_source_sha256":component,"returned_source_sha256":component,
