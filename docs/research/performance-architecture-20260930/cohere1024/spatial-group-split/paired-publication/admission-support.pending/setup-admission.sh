@@ -12,7 +12,9 @@ source "$support/admission.env"
 [[ $CONFIG_SHA256 =~ ^[0-9a-f]{64}$ && $AUTHORITY_SHA256 =~ ^[0-9a-f]{64}$ ]]
 [[ $EVIDENCE_PREFIX =~ ^research/semantic-router/20261012/paired-source-admission-a[0-9]{4}$ ]]
 systemctl is-active --quiet borsuk-paired-data-shutdown.timer
-awk '/MemTotal:/ {exit ($2 < 8000000 || $2 > 9000000)}' /proc/meminfo
+awk '/^MemTotal:/ {print}' /proc/meminfo | tee host-MemTotal.txt
+# Kernel reservations reduce MemTotal; the root separately pins the nominal 8 GiB instance type.
+awk '/^MemTotal:/ {found=1; bad=($2 < 7500000 || $2 > 9000000)} END {exit (!found || bad)}' host-MemTotal.txt
 test "$(swapon --show --noheadings | wc -l)" = 0
 timeout -k 5 120 apt-get -qq -o DPkg::Lock::Timeout=60 update
 timeout -k 5 180 apt-get -qq -y -o DPkg::Lock::Timeout=60 install curl unzip jq time strace
