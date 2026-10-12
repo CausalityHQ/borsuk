@@ -1,0 +1,216 @@
+{
+  "schema": "borsuk-full1000-spatial-independent-verification-v1",
+  "status": "FULL1000_MEASURED_SPATIAL_PARETO_CANDIDATE",
+  "source": "023e12a59d4cc99f1fae23351b8fa11960807696",
+  "qualified_native_source": "ddbcd91cf8e5e0388eaa15ab8d7a20032428936f",
+  "instance_id": "i-082ae65ec20d6a897",
+  "original_ssm_command": "c38a78e0-a26d-4c2f-9cd2-2117650e7ec3",
+  "original_ssm_exit": 0,
+  "elapsed_seconds": 667.497,
+  "stages": 12,
+  "native_exits_all_zero": true,
+  "manager_exits_all_zero": true,
+  "owned_cgroups_drained": true,
+  "query527_admissions_passed": true,
+  "distinct_canaries_passed": true,
+  "swap_zero": true,
+  "oom_zero": true,
+  "terminated": true,
+  "volume_id": "vol-0b8fe01d664551875",
+  "volume_absent": true,
+  "external_timer_inactive": true,
+  "cache_state": "payload_disabled_router_resident_sdk_connections_reused_provider_uncontrolled",
+  "radial": {
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 330.512697,
+      "p90_ms": 374.70191,
+      "p90_ns": 374701910,
+      "p95_ms": 396.489333,
+      "p95_ns": 396489333,
+      "p99_ms": 484.711688,
+      "query_wall_ns": 326921506290,
+      "sequential_qps": 3.058838224955861
+    },
+    "quality": {
+      "queries": 1000,
+      "total_hits10": 9776,
+      "recall_numerator": 9776,
+      "recall_denominator": 10000,
+      "mean_recall10": 0.9776,
+      "underfilled_queries": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.433785,
+        "p50_ns": 1433785,
+        "p90_ms": 1.460918,
+        "p90_ns": 1460918,
+        "p95_ms": 1.469686,
+        "p95_ns": 1469686,
+        "p99_ms": 1.483971,
+        "p99_ns": 1483971,
+        "total_ns": 1433924308
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 19.56796,
+        "p50_ns": 19567960,
+        "p90_ms": 21.622679,
+        "p90_ns": 21622679,
+        "p95_ms": 22.155656,
+        "p95_ns": 22155656,
+        "p99_ms": 23.363476,
+        "p99_ns": 23363476,
+        "total_ns": 19420167543
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 229.559785,
+        "p50_ns": 229559785,
+        "p90_ms": 261.923207,
+        "p90_ns": 261923207,
+        "p95_ms": 280.383541,
+        "p95_ns": 280383541,
+        "p99_ms": 359.823949,
+        "p99_ns": 359823949,
+        "total_ns": 225273430888
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 76.281079,
+        "p50_ns": 76281079,
+        "p90_ms": 95.435128,
+        "p90_ns": 95435128,
+        "p95_ms": 107.25034,
+        "p95_ns": 107250340,
+        "p99_ms": 146.05866,
+        "p99_ns": 146058660,
+        "total_ns": 80743393325
+      }
+    },
+    "cpu": {
+      "query_process_cpu_ns": 101511573413,
+      "process_cpu_ns": 106457181987,
+      "observed_process_peak_bytes": 63868928
+    },
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 109872,
+        "verified_bytes": 28967583744
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 29908,
+        "verified_bytes": 16708608000
+      }
+    }
+  },
+  "spatial": {
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 321.151124,
+      "p90_ms": 363.006262,
+      "p90_ns": 363006262,
+      "p95_ms": 377.894708,
+      "p95_ns": 377894708,
+      "p99_ms": 428.036909,
+      "query_wall_ns": 317698949346,
+      "sequential_qps": 3.1476339536487377
+    },
+    "quality": {
+      "queries": 1000,
+      "total_hits10": 9780,
+      "recall_numerator": 9780,
+      "recall_denominator": 10000,
+      "mean_recall10": 0.978,
+      "underfilled_queries": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.460793,
+        "p50_ns": 1460793,
+        "p90_ms": 1.516814,
+        "p90_ns": 1516814,
+        "p95_ms": 1.530466,
+        "p95_ns": 1530466,
+        "p99_ms": 1.546081,
+        "p99_ns": 1546081,
+        "total_ns": 1460205558
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 19.517718,
+        "p50_ns": 19517718,
+        "p90_ms": 21.820916,
+        "p90_ns": 21820916,
+        "p95_ms": 22.466903,
+        "p95_ns": 22466903,
+        "p99_ms": 23.769608,
+        "p99_ns": 23769608,
+        "total_ns": 19385298617
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 220.845842,
+        "p50_ns": 220845842,
+        "p90_ms": 256.14566,
+        "p90_ns": 256145660,
+        "p95_ms": 267.525681,
+        "p95_ns": 267525681,
+        "p99_ms": 305.03622,
+        "p99_ns": 305036220,
+        "total_ns": 217679120298
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 76.306951,
+        "p50_ns": 76306951,
+        "p90_ms": 91.743489,
+        "p90_ns": 91743489,
+        "p95_ms": 96.943379,
+        "p95_ns": 96943379,
+        "p99_ms": 112.974983,
+        "p99_ns": 112974983,
+        "total_ns": 79121602268
+      }
+    },
+    "cpu": {
+      "query_process_cpu_ns": 98819236341,
+      "process_cpu_ns": 103248227482,
+      "observed_process_peak_bytes": 68657152
+    },
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 107882,
+        "verified_bytes": 27428966400
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 29903,
+        "verified_bytes": 16708608000
+      }
+    }
+  },
+  "matched_s3_vectors_1m_measured": false,
+  "matched_turbopuffer_measured": false,
+  "repetition_or_order_effects_qualified": false,
+  "concurrent_qps_capacity_measured": false,
+  "total_lifecycle_cost_measured": false,
+  "vendor_win_claim": false,
+  "product_ready": false
+}

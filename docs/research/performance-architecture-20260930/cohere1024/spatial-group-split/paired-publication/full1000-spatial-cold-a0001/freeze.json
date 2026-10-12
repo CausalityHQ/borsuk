@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-full1000-spatial-freeze-v1",
+  "status": "FROZEN_FULL1000_SPATIAL",
+  "source": "023e12a59d4cc99f1fae23351b8fa11960807696",
+  "qualified_native_source": "ddbcd91cf8e5e0388eaa15ab8d7a20032428936f",
+  "transport_sha256": "217dcc87eb5d90cc232fdbadf12b36517b95900a8c5fa64293ec2121f84ef3c3",
+  "machine_seconds": 10800,
+  "root_watchdog_seconds": 10920,
+  "cost_ceiling_usd": 1.00,
+  "query_memory_bytes": 536870912,
+  "query_cpu": "0",
+  "query_parallelism": 16,
+  "query_concurrency": 1,
+  "query_pids": 128,
+  "spot_bid_usd_per_hour": 0.25,
+  "admission_ordinal": 527,
+  "canary_ordinal": 0,
+  "population_count": 1000,
+  "cache": "payload_off_router_resident_sdk_connections_reused_provider_uncontrolled",
+  "actual_execution": false,
+  "vendor_win_claim": false
+}

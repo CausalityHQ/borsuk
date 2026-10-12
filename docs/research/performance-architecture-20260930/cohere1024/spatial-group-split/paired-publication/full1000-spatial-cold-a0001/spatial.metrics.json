@@ -1,0 +1,93 @@
+{
+  "statistics": {
+    "count": 1000,
+    "p50_ms": 321.151124,
+    "p90_ms": 363.006262,
+    "p90_ns": 363006262,
+    "p95_ms": 377.894708,
+    "p95_ns": 377894708,
+    "p99_ms": 428.036909,
+    "query_wall_ns": 317698949346,
+    "sequential_qps": 3.1476339536487377
+  },
+  "quality": {
+    "queries": 1000,
+    "total_hits10": 9780,
+    "recall_numerator": 9780,
+    "recall_denominator": 10000,
+    "mean_recall10": 0.978,
+    "underfilled_queries": 0
+  },
+  "stage_statistics": {
+    "discovery": {
+      "count": 1000,
+      "p50_ms": 1.460793,
+      "p50_ns": 1460793,
+      "p90_ms": 1.516814,
+      "p90_ns": 1516814,
+      "p95_ms": 1.530466,
+      "p95_ns": 1530466,
+      "p99_ms": 1.546081,
+      "p99_ns": 1546081,
+      "total_ns": 1460205558
+    },
+    "planning": {
+      "count": 1000,
+      "p50_ms": 19.517718,
+      "p50_ns": 19517718,
+      "p90_ms": 21.820916,
+      "p90_ns": 21820916,
+      "p95_ms": 22.466903,
+      "p95_ns": 22466903,
+      "p99_ms": 23.769608,
+      "p99_ns": 23769608,
+      "total_ns": 19385298617
+    },
+    "source": {
+      "count": 1000,
+      "p50_ms": 220.845842,
+      "p50_ns": 220845842,
+      "p90_ms": 256.14566,
+      "p90_ns": 256145660,
+      "p95_ms": 267.525681,
+      "p95_ns": 267525681,
+      "p99_ms": 305.03622,
+      "p99_ns": 305036220,
+      "total_ns": 217679120298
+    },
+    "sq8": {
+      "count": 1000,
+      "p50_ms": 76.306951,
+      "p50_ns": 76306951,
+      "p90_ms": 91.743489,
+      "p90_ns": 91743489,
+      "p95_ms": 96.943379,
+      "p95_ns": 96943379,
+      "p99_ms": 112.974983,
+      "p99_ns": 112974983,
+      "total_ns": 79121602268
+    }
+  },
+  "cpu": {
+    "query_process_cpu_ns": 98819236341,
+    "process_cpu_ns": 103248227482,
+    "observed_process_peak_bytes": 68657152
+  },
+  "charges": {
+    "router": {
+      "failed_gets": 0,
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "source": {
+      "failed_gets": 0,
+      "submitted_gets": 107882,
+      "verified_bytes": 27428966400
+    },
+    "sq8": {
+      "failed_gets": 0,
+      "submitted_gets": 29903,
+      "verified_bytes": 16708608000
+    }
+  }
+}

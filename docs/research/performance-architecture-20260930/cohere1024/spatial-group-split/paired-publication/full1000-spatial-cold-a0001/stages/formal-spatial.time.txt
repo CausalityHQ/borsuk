@@ -1,0 +1,23 @@
+	Command being timed: "/usr/bin/timeout -k 20 1800 /mnt/borsuk-spatial-full1000/bin/check_cohere_native_baseline /mnt/borsuk-spatial-full1000/inputs/formal-spatial.config.json fe718df929c5149c7a13f47e5da1afdb1a9fbdbda03cf35c249a10528ccabe4a /mnt/borsuk-spatial-full1000/results/formal-spatial.jsonl"
+	User time (seconds): 86.72
+	System time (seconds): 16.53
+	Percent of CPU this job got: 32%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:22.40
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 67048
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 35421
+	Voluntary context switches: 433415
+	Involuntary context switches: 2989
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 77312
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
