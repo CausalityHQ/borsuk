@@ -1,0 +1,22 @@
+{
+    "CommandId": "3c45a093-16e7-42a2-8022-c466e3a61fd8",
+    "InstanceId": "i-06bf827db22295cda",
+    "Comment": "BORSUK ddbcd91c all-target compiler preflight and ten gates a0005",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-12T08:54:14.738Z",
+    "ExecutionElapsedTime": "PT46M42.369S",
+    "ExecutionEndDateTime": "2026-10-12T09:40:56.738Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/publisher-bin-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/publisher-integration-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/publisher-integration-release.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/publisher-bin-release.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/returned-panel-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/returned-panel-release.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/complete-example.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/release-elf.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-clippy.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-test-build.sh: OK\n{\n  \"schema\": \"borsuk-paired-native-batch-v1\",\n  \"source_commit\": \"ddbcd91cf8e5e0388eaa15ab8d7a20032428936f\",\n  \"batch_exit\": 0,\n  \"completed_stages\": 10,\n  \"required_stages\": 10,\n  \"gate_groups\": 6,\n  \"failed_stage\": \"\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

@@ -1,0 +1,22 @@
+{
+  "status": "FAILED_COMPILATION",
+  "source_commit": "e173175782e0873c2f4098c2ec17193d359b3c47",
+  "root_compile_repair": "0d1ffd68b6128d51c8751f080357647c144ed491",
+  "instance_id": "i-0bcf03ec95e1d26d1",
+  "volume_id": "vol-02a6d44498cbaac8c",
+  "compiler_exit": 101,
+  "native_exit": null,
+  "native_tests_run": false,
+  "remaining_stages": "UNRUN",
+  "source_before_after_equal": true,
+  "manifest_body_count": 31,
+  "compiler_log_sha256": "eb46de5c0e811a922dda379d675084628a229fa2fe931af0f2882f5f8100b972",
+  "memory_peak_bytes": 5419667456,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "owned_cgroup_drained": true,
+  "terminated_wait_exit": 0,
+  "volume_not_found": true,
+  "external_timer_inactive": true,
+  "performance_claim": false
+}

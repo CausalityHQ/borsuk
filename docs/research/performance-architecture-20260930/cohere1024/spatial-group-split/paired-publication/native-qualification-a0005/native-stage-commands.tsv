@@ -1,0 +1,10 @@
+publisher-bin-debug	cargo test --locked -p borsuk --bin publish_two_bit_generation retained_ -- --test-threads=1
+publisher-integration-debug	cargo test --locked -p borsuk --test two_bit_generation retained_semantic_ -- --test-threads=1
+publisher-integration-release	cargo test --release --locked -p borsuk --test two_bit_generation retained_semantic_ -- --test-threads=1
+publisher-bin-release	cargo test --release --locked -p borsuk --bin publish_two_bit_generation retained_ -- --test-threads=1
+returned-panel-debug	cargo test --locked -p borsuk --example compare_native_replay paired_returned_panel::tests:: -- --test-threads=1
+returned-panel-release	cargo test --release --locked -p borsuk --example compare_native_replay paired_returned_panel::tests:: -- --test-threads=1
+complete-example	cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --bin publish_two_bit_generation --bin check_cohere_native_baseline --example compare_native_replay
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
