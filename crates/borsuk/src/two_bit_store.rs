@@ -827,20 +827,25 @@ async fn recheck_retained_control(store: &dyn ObjectStore, retained: &TwoBitHead
     Ok(())
 }
 
-async fn retained_roster(
+async fn retained_roster<'a>(
     store: &dyn ObjectStore,
     prefix: &ObjectPath,
-    roster: &[(&str, &str, ObjectMeta)],
+    roster: impl Iterator<Item = &'a ObjectMeta> + Clone,
 ) -> Result<()> {
+    if roster.clone().count() != 10 {
+        return Err(TwoBitStoreError::Invalid("retained artifact roster"));
+    }
     let mut seen = [false; 10];
     let mut objects = store.list(Some(prefix));
     while let Some(meta) = objects.next().await {
         let meta = meta?;
+        // S3 LIST omits version IDs: names alone establish exact membership.
+        // Independent HEAD/conditional GET checks retain full object identity.
         let index = roster
-            .iter()
-            .position(|(_, _, pin)| pin.location == meta.location)
+            .clone()
+            .position(|pin| pin.location == meta.location)
             .ok_or(TwoBitStoreError::Invalid("retained artifact roster"))?;
-        if seen[index] || meta != roster[index].2 {
+        if seen[index] {
             return Err(TwoBitStoreError::Invalid("retained artifact roster"));
         }
         seen[index] = true;
@@ -1195,7 +1200,12 @@ pub async fn republish_retained_two_bit_generation(
             retained_meta(store, &metadata_location(&source_prefix, name), Some(size)).await?;
         roster.push((name, digest, meta));
     }
-    retained_roster(store, &source_prefix, &roster).await?;
+    retained_roster(
+        store,
+        &source_prefix,
+        roster.iter().map(|(_, _, meta)| meta),
+    )
+    .await?;
     if let Some(replacement) = approved.router_replacement {
         replacement.validate(&manifest, &plane, validation_budget)?;
     }
@@ -1417,7 +1427,13 @@ pub async fn republish_retained_two_bit_generation(
                 return Err(bad("retained object changed"));
             }
         }
-        retained_roster(store, &source_prefix, &roster).await?;
+        retained_roster(
+            store,
+            &source_prefix,
+            roster.iter().map(|(_, _, meta)| meta),
+        )
+        .await?;
+        retained_roster(store, &new_prefix, destination_pins.iter()).await?;
         recheck_retained_control(store, retained).await?;
         let control = HeadBody {
             schema: "borsuk-two-bit-head-v2".into(),

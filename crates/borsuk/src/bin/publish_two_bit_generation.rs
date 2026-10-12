@@ -664,12 +664,28 @@ fn replacement_inputs(
     Ok((a, bodies))
 }
 fn config_bytes(path: &Path, trusted_sha: &str) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take(CONFIG_CAP + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > CONFIG_CAP || sha_hex(&bytes) != trusted_sha {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let before = file.metadata()?;
+    if !is_sha(trusted_sha)
+        || path.as_os_str().len() > 4096
+        || !before.is_file()
+        || before.nlink() != 1
+        || !(1..=CONFIG_CAP).contains(&before.len())
+    {
         return Err("config identity or cap".into());
+    }
+    let mut bytes = vec![0_u8; before.len() as usize];
+    file.read_exact(&mut bytes)?;
+    let mut eof = [0_u8; 1];
+    if file.read(&mut eof)? != 0
+        || sha_hex(&bytes) != trusted_sha
+        || file_identity(&before) != file_identity(&file.metadata()?)
+        || file_identity(&before) != file_identity(&fs::symlink_metadata(path)?)
+    {
+        return Err("config SHA/length/EOF/identity".into());
     }
     Ok(bytes)
 }
@@ -965,12 +981,20 @@ mod tests {
 
     /// Real builder output plus the SQ8 object staged in a real LocalFileSystem store.
     async fn fixture(rows: usize, dimensions: usize) -> (tempfile::TempDir, Value) {
+        fixture_with_repeated_units(rows, dimensions, false).await
+    }
+    async fn fixture_with_repeated_units(
+        rows: usize,
+        dimensions: usize,
+        repeated_units: bool,
+    ) -> (tempfile::TempDir, Value) {
         let dir = tempfile::tempdir().unwrap();
         let store_root = dir.path().join("store");
         fs::create_dir(&store_root).unwrap();
         let (mut raw, mut sq8) = (Vec::new(), Vec::new());
         for row in 0..rows {
-            let value = (1 + row % 7) as u8;
+            let sample_row = if repeated_units { row % 32 } else { row };
+            let value = (1 + sample_row % 7) as u8;
             for _ in 0..dimensions {
                 raw.extend_from_slice(&(value as f32).to_le_bytes());
             }
@@ -1026,7 +1050,7 @@ mod tests {
                 "max_query_gets": 32,
                 "max_parallel_gets": 16,
                 "max_source_bytes": 64 * 1024 * 1024,
-                "max_source_gets": 128,
+                "max_source_gets": 128.max(rows.div_ceil(32)),
                 "max_parallel_source_gets": 16,
                 "max_query_scratch_bytes": prepare_bytes,
                 "already_pinned_bytes": 0,
@@ -1150,7 +1174,8 @@ mod tests {
     // Real native publications with independently sealed synthetic provenance
     // fixtures. These receipts exercise authorization, never claim qualification.
     async fn replacement_cli_fixture() -> (tempfile::TempDir, Value, Value) {
-        let (dir, fresh) = fixture(64, 1024).await;
+        let rows = 129 * 32;
+        let (dir, fresh) = fixture_with_repeated_units(rows, 1024, true).await;
         let (path, sha) = write_config(dir.path(), &fresh);
         publish(&path, &sha, &dir.path().join("fresh-receipt.json"))
             .await
@@ -1171,7 +1196,7 @@ mod tests {
             schema: root["discovery"]["input_schema"].as_str().unwrap(),
             root_sha256: root["discovery"]["input_root_sha256"].as_str().unwrap(),
             centroids_sha256: root["discovery"]["centroids_sha256"].as_str().unwrap(),
-            rows: 64,
+            rows,
             dimensions: 1024,
         };
         let spatial = borsuk::semantic_unit_router::build_with_partition(
@@ -1181,6 +1206,42 @@ mod tests {
             LeafPartition::WidestAxisQuotaV1,
         )
         .unwrap();
+        let radial_router = borsuk::semantic_unit_router::SemanticUnitRouter::open(
+            &radial_root,
+            &radial_membership,
+            &sha_hex(&radial_root),
+            &input,
+            input.profile.root_cap(),
+        )
+        .unwrap();
+        let spatial_router = borsuk::semantic_unit_router::SemanticUnitRouter::open(
+            &spatial.manifest,
+            &spatial.membership,
+            &sha_hex(&spatial.manifest),
+            &input,
+            input.profile.root_cap(),
+        )
+        .unwrap();
+        assert!(rows.div_ceil(32) > 64);
+        assert!(
+            radial_router.manifest().leaves.len() > 1 && spatial_router.manifest().leaves.len() > 1
+        );
+        assert_eq!(radial_router.manifest().algorithm.training_centers, 1);
+        assert_ne!(
+            radial_router.unit_membership(),
+            spatial_router.unit_membership()
+        );
+        for (&r, &s) in radial_router
+            .unit_membership()
+            .iter()
+            .zip(spatial_router.unit_membership())
+        {
+            assert_eq!(
+                radial_router.manifest().leaves[r].group_ordinal,
+                spatial_router.manifest().leaves[s].group_ordinal
+            );
+        }
+        drop((radial_router, spatial_router));
         let seal = |name: &str, bytes: &[u8]| {
             let path = dir.path().join(name);
             fs::write(&path, bytes).unwrap();
@@ -1226,7 +1287,7 @@ mod tests {
         let original = json!({"schema":"borsuk-partition-reconstruction-approval-v1","generation_sha256":root_sha,"generation":1,"base_epoch":0,
             "plane_sha256":root["plane_manifest_sha256"],"discovery_sha256":sha_hex(&serde_json::to_vec(&root["discovery"]).unwrap()),
             "input_schema":root["discovery"]["input_schema"],"input_root_sha256":root["discovery"]["input_root_sha256"],
-            "centroids_sha256":root["discovery"]["centroids_sha256"],"profile":"native100k","rows":64,"dimensions":1024});
+            "centroids_sha256":root["discovery"]["centroids_sha256"],"profile":"native100k","rows":rows,"dimensions":1024});
         let pin = |v: &Value| json!({"bytes":v["bytes"],"sha256":v["sha256"]});
         let router_pins = |v: &Value| json!({"root":pin(&v["root"]),"membership":pin(&v["membership"]),"leaves":pin(&v["leaves"])});
         let h = json!({"old_root":{"bytes":historical.len(),"sha256":sha_hex(&historical)},
@@ -1313,6 +1374,23 @@ mod tests {
         ]
     }
 
+    fn reseal_source_fixture(c: &mut Value, a: &mut Value, name: &str, value: &Value) {
+        let file = &mut c["router_replacement"]["proofs"][name];
+        let body = serde_json::to_vec(value).unwrap();
+        fs::write(file["path"].as_str().unwrap(), &body).unwrap();
+        let pin = json!({"bytes":body.len(),"sha256":sha_hex(&body)});
+        file["bytes"] = pin["bytes"].clone();
+        file["sha256"] = pin["sha256"].clone();
+        match name {
+            "source_authority" | "source_config" => a["proofs"][name] = pin,
+            "source_qualification" => {
+                a["proofs"][name]["pin"] = pin;
+                a["proofs"][name]["expected"] = value.clone();
+            }
+            _ => panic!("unexpected SOURCE fixture role"),
+        }
+    }
+
     #[test]
     fn retained_router_replacement_cli_requires_independent_pins_and_closed_provenance() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1329,6 +1407,15 @@ mod tests {
                 .unwrap(),
         );
         let source_proof = fs::read(source_proof_path).unwrap();
+        let source_inputs = ["source_authority", "source_config"].map(|name| {
+            let path = PathBuf::from(
+                good["router_replacement"]["proofs"][name]["path"]
+                    .as_str()
+                    .unwrap(),
+            );
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        });
         for fault in [
             "approval-sha",
             "config-only",
@@ -1336,6 +1423,7 @@ mod tests {
             "proof-pin",
             "provenance",
             "source-binding",
+            "source-binding-construction",
             "source-claim",
             "historical",
             "cap",
@@ -1354,8 +1442,27 @@ mod tests {
                     a["original"]["discovery_sha256"] =
                         sha_hex(&serde_json::to_vec(&a["original_discovery"]).unwrap()).into();
                 }
-                "source-binding" => {
-                    a["proofs"]["source_authority"]["sha256"] = "0".repeat(64).into()
+                "source-binding" | "source-binding-construction" => {
+                    let mut authority: Value = serde_json::from_slice(&source_inputs[0].1).unwrap();
+                    let mut screened: Value = serde_json::from_slice(&source_inputs[1].1).unwrap();
+                    if fault == "source-binding" {
+                        authority["radial"]["root"]["sha256"] = "0".repeat(64).into();
+                        screened["radial"]["root"]["sha256"] = "0".repeat(64).into();
+                    } else {
+                        authority["construction"]["original"]["input_root_sha256"] =
+                            "0".repeat(64).into();
+                        screened["inputs"]["plane_manifest"]["sha256"] = "0".repeat(64).into();
+                    }
+                    reseal_source_fixture(&mut c, &mut a, "source_authority", &authority);
+                    reseal_source_fixture(&mut c, &mut a, "source_config", &screened);
+                    let mut qualified = a["proofs"]["source_qualification"]["expected"].clone();
+                    for stage in qualified["stages"].as_array_mut().unwrap() {
+                        stage["authority_sha256"] =
+                            a["proofs"]["source_authority"]["sha256"].clone();
+                        stage["configuration_sha256"] =
+                            a["proofs"]["source_config"]["sha256"].clone();
+                    }
+                    reseal_source_fixture(&mut c, &mut a, "source_qualification", &qualified);
                 }
                 "source-claim" => {
                     a["proofs"]["source_qualification"]["expected"]["candidate_returned_quality_claim"] =
@@ -1382,8 +1489,18 @@ mod tests {
             if fault == "config-only" {
                 args = retained_args(Path::new(&args[2]), &args[3], &receipt);
             }
-            assert!(run(&args).is_err(), "{fault}");
+            let error = run(&args).unwrap_err();
+            if fault.starts_with("source-binding") {
+                assert_eq!(
+                    error.to_string(),
+                    "replacement screened publication provenance",
+                    "{fault}"
+                );
+            }
             fs::write(source_proof_path, &source_proof).unwrap();
+            for (path, body) in &source_inputs {
+                fs::write(path, body).unwrap();
+            }
             assert!(!receipt.exists());
             assert!(
                 runtime
@@ -1405,6 +1522,60 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(received["root_sha256"], head.root_sha256());
+        runtime.block_on(async {
+            for (name, pin) in [
+                ("root", "root.bin"),
+                ("membership", "membership.bin"),
+                ("leaves", "leaves.bin"),
+            ] {
+                let expected = fs::read(
+                    good["router_replacement"]["replacement"][name]["path"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                let staged = store
+                    .get(&head.metadata_prefix().join("router").join(pin))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap();
+                assert_eq!(staged.as_ref(), expected.as_slice(), "{name}");
+            }
+            let generation = borsuk::two_bit_generation::TwoBitGeneration::open_remote_from_head(
+                &store,
+                &head,
+                (&retained_config(Path::new(&args[2]), &args[3])
+                    .unwrap()
+                    .limits)
+                    .into(),
+                Path::new(good["scratch_parent"].as_str().unwrap()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(generation.rows(), 129 * 32);
+            let returned = generation
+                .search_with_store(&store, &vec![1.; 1024], 10, None)
+                .await
+                .unwrap();
+            assert_eq!(returned.ranked.candidates.len(), 10);
+            assert!(returned.ranked.candidates.iter().all(|h| {
+                h.ordinal < 129 * 32
+                    && h.id == (129 * 32 - h.ordinal + 1000) as i64
+                    && h.score.is_finite()
+            }));
+            assert_eq!(
+                returned
+                    .ranked
+                    .candidates
+                    .iter()
+                    .map(|h| h.id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
+                10
+            );
+        });
         assert!(run(&args).is_err());
     }
 
@@ -1442,9 +1613,100 @@ mod tests {
         assert!(replacement_body(&pin, &approved, 8).is_err());
         fs::remove_file(&hard).unwrap();
         fs::remove_file(&path).unwrap();
+        fs::write(&hard, b"approved").unwrap();
         std::os::unix::fs::symlink(&hard, &path).unwrap();
         assert!(replacement_body(&pin, &approved, 8).is_err());
         assert!(replacement_body(&pin, &approved, 7).is_err());
+    }
+
+    #[test]
+    fn retained_router_replacement_config_and_approval_refuse_unsafe_entrypoints() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (dir, c, a) = runtime.block_on(replacement_cli_fixture());
+        let args = replacement_args(dir.path(), &c, &a, &dir.path().join("unused-receipt.json"));
+        let config_path = PathBuf::from(&args[2]);
+        let config_sha = args[3].clone();
+        let approval_path = PathBuf::from(&args[4]);
+        let approval_sha = args[5].clone();
+        assert!(retained_config(&config_path, &config_sha).is_ok());
+        let config = retained_config(&config_path, &config_sha).unwrap();
+        assert!(
+            replacement_inputs(
+                &config,
+                &config_sha,
+                &approval_path,
+                &approval_sha,
+                &mut (&config.limits).into()
+            )
+            .is_ok()
+        );
+        for approval in [false, true] {
+            let target = if approval {
+                &approval_path
+            } else {
+                &config_path
+            };
+            let bytes = fs::read(target).unwrap();
+            for kind in ["symlink", "hardlink", "fifo"] {
+                let path = dir.path().join(format!("unsafe-{approval}-{kind}"));
+                match kind {
+                    "symlink" => std::os::unix::fs::symlink(target, &path).unwrap(),
+                    "hardlink" => fs::hard_link(target, &path).unwrap(),
+                    "fifo" => {
+                        use std::os::unix::ffi::OsStrExt;
+                        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                    }
+                    _ => unreachable!(),
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let candidate = path.clone();
+                let cp = config_path.clone();
+                let cs = config_sha.clone();
+                let aps = approval_sha.clone();
+                let worker = std::thread::spawn(move || {
+                    let refused = if approval {
+                        let config = retained_config(&cp, &cs).unwrap();
+                        replacement_inputs(
+                            &config,
+                            &cs,
+                            &candidate,
+                            &aps,
+                            &mut (&config.limits).into(),
+                        )
+                        .is_err()
+                    } else {
+                        retained_config(&candidate, &cs).is_err()
+                    };
+                    tx.send(refused).unwrap();
+                });
+                let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+                let prompt = result.is_ok();
+                // Release a regressed blocking FIFO open before reporting failure.
+                if !prompt && kind == "fifo" {
+                    if let Ok(mut writer) = OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&path)
+                    {
+                        let _ = writer.write_all(&bytes);
+                    }
+                }
+                let refused =
+                    result.or_else(|_| rx.recv_timeout(std::time::Duration::from_secs(2)));
+                if refused.is_ok() {
+                    worker.join().unwrap();
+                }
+                fs::remove_file(&path).unwrap();
+                assert!(
+                    prompt && refused == Ok(true),
+                    "{approval} {kind}: entrypoint must promptly refuse before store operations"
+                );
+            }
+        }
     }
 
     #[test]

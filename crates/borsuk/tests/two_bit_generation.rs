@@ -44,6 +44,27 @@ struct LostHeadResponse {
     competing_head: bool,
     stage_mutation: Option<(ObjectPath, bytes::Bytes)>,
     sq8_spy: Option<std::sync::Arc<RetainedSq8Spy>>,
+    versioned: Option<std::sync::Arc<RetainedVersions>>,
+    extra_destination: bool,
+}
+
+#[derive(Debug)]
+struct RetainedVersions {
+    source: ObjectPath,
+    current: std::sync::atomic::AtomicUsize,
+    change_on_stage: bool,
+}
+impl RetainedVersions {
+    fn version(&self, path: &ObjectPath) -> String {
+        format!(
+            "version-{}",
+            if path == &self.source {
+                self.current.load(std::sync::atomic::Ordering::SeqCst)
+            } else {
+                1
+            }
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +109,23 @@ impl object_store::ObjectStore for LostHeadResponse {
             if let Some((source, bytes)) = &self.stage_mutation {
                 self.inner.put(source, bytes.clone().into()).await?;
             }
+            if let Some(versioned) = &self.versioned {
+                if versioned.change_on_stage {
+                    versioned
+                        .current
+                        .store(2, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+        if self.extra_destination {
+            if let Some(prefix) = path.as_ref().strip_suffix("/router/root.bin") {
+                self.inner
+                    .put(
+                        &ObjectPath::from(format!("{prefix}/centroids.bin")),
+                        PutPayload::from("foreign-staged-object"),
+                    )
+                    .await?;
+            }
         }
         let lose_response =
             *path == self.head && matches!(&options.mode, object_store::PutMode::Create);
@@ -103,7 +141,10 @@ impl object_store::ObjectStore for LostHeadResponse {
                 )
                 .await?;
         }
-        let result = self.inner.put_opts(path, payload, options).await?;
+        let mut result = self.inner.put_opts(path, payload, options).await?;
+        if let Some(versioned) = &self.versioned {
+            result.version = Some(versioned.version(path));
+        }
         if lose_response {
             return Err(object_store::Error::Generic {
                 store: "LostHeadResponse",
@@ -125,6 +166,15 @@ impl object_store::ObjectStore for LostHeadResponse {
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
         use std::sync::atomic::Ordering;
+        let version = self.versioned.as_ref().map(|v| v.version(path));
+        if let Some(expected) = &options.version {
+            if version.as_ref().is_some_and(|actual| actual != expected) {
+                return Err(object_store::Error::Precondition {
+                    path: path.to_string(),
+                    source: std::io::Error::other("version changed").into(),
+                });
+            }
+        }
         let mut change_version = false;
         if let Some(spy) = &self.sq8_spy {
             if let Some(index) = spy.locations.iter().position(|location| location == path) {
@@ -137,6 +187,9 @@ impl object_store::ObjectStore for LostHeadResponse {
             }
         }
         let mut response = self.inner.get_opts(path, options).await?;
+        if let Some(version) = version {
+            response.meta.version = Some(version);
+        }
         // Same path/size/SHA/ETag, different current version: only full metadata
         // equality may deduplicate, and the conditional response must refuse it.
         if change_version {
@@ -214,6 +267,10 @@ impl RetainedFixture {
     }
 
     async fn with_rows(rows: usize) -> Self {
+        Self::with_source(rows, false).await
+    }
+
+    async fn with_source(rows: usize, repeated_units: bool) -> Self {
         use borsuk::semantic_unit_router::SemanticProfile;
         use object_store::{chunked::ChunkedStore, local::LocalFileSystem};
         use std::sync::Arc;
@@ -235,8 +292,9 @@ impl RetainedFixture {
         let mut raw = Vec::new();
         let mut sq8 = Vec::new();
         for row in 0..rows {
+            let sample_row = if repeated_units { row % 32 } else { row };
             let codes = (0..dimensions)
-                .map(|d| ((row * 37 + d * 19) % 251 + 1) as u8)
+                .map(|d| ((sample_row * 37 + d * 19) % 251 + 1) as u8)
                 .collect::<Vec<_>>();
             let values = codes.iter().map(|&v| v as f32 / 255.0).collect::<Vec<_>>();
             raw.extend(values.iter().flat_map(|v| v.to_le_bytes()));
@@ -294,8 +352,8 @@ impl RetainedFixture {
             max_query_bytes: 1_048_576,
             max_query_gets: 32,
             max_parallel_gets: 1,
-            max_source_bytes: 1_048_576,
-            max_source_gets: 128,
+            max_source_bytes: 1_048_576.max(rows * (dimensions.div_ceil(4) + 8)),
+            max_source_gets: 128.max(rows.div_ceil(32)),
             max_parallel_source_gets: 1,
             max_query_scratch_bytes: prepare_bytes,
             // Caller-owned fixture buffers and comparison pins are explicit.
@@ -575,7 +633,7 @@ impl ReplacementFixture {
 #[tokio::test]
 async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_search() {
     use borsuk::two_bit_store::republish_retained_two_bit_generation;
-    let mut f = RetainedFixture::new().await;
+    let mut f = RetainedFixture::with_source(129 * 32, true).await;
     let query = (0..1024)
         .map(|d| ((d * 19) % 251 + 1) as f32 / 255.0)
         .collect::<Vec<_>>();
@@ -592,6 +650,20 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
     .await
     .unwrap();
     let bits = |result: borsuk::two_bit_generation::TwoBitSearchResult| {
+        assert_eq!(result.ranked.candidates.len(), 10);
+        assert!(result.ranked.candidates.iter().all(|h| {
+            h.ordinal < 129 * 32 && h.id == 1000 + h.ordinal as i64 * 17 && h.score.is_finite()
+        }));
+        assert_eq!(
+            result
+                .ranked
+                .candidates
+                .iter()
+                .map(|h| h.id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            10
+        );
         result
             .ranked
             .candidates
@@ -608,6 +680,44 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
     drop(original);
     let before = f.historical().await;
     let replacement = ReplacementFixture::new(&f);
+    let input = replacement.borrowed().input;
+    let radial_router = borsuk::semantic_unit_router::SemanticUnitRouter::open(
+        &replacement.radial.manifest,
+        &replacement.radial.membership,
+        &replacement.pins[1].sha256,
+        &input,
+        input.profile.root_cap(),
+    )
+    .unwrap();
+    let spatial_router = borsuk::semantic_unit_router::SemanticUnitRouter::open(
+        &replacement.replacement.manifest,
+        &replacement.replacement.membership,
+        &replacement.pins[4].sha256,
+        &input,
+        input.profile.root_cap(),
+    )
+    .unwrap();
+    assert!(input.rows.div_ceil(32) > 64);
+    assert!(
+        radial_router.manifest().leaves.len() > 1 && spatial_router.manifest().leaves.len() > 1
+    );
+    assert_ne!(
+        radial_router.unit_membership(),
+        spatial_router.unit_membership()
+    );
+    // Repeated full units force one coarse group large enough to split.
+    assert_eq!(radial_router.manifest().algorithm.training_centers, 1);
+    for (&r, &s) in radial_router
+        .unit_membership()
+        .iter()
+        .zip(spatial_router.unit_membership())
+    {
+        assert_eq!(
+            radial_router.manifest().leaves[r].group_ordinal,
+            spatial_router.manifest().leaves[s].group_ordinal
+        );
+    }
+    drop((radial_router, spatial_router));
     let etag = before["sq8_etag"].as_str().unwrap();
     let retained = f.head().await;
     assert!(
@@ -640,6 +750,8 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
             competing_head: false,
             stage_mutation: None,
             sq8_spy: Some(spy.clone()),
+            versioned: None,
+            extra_destination: false,
         };
         let published = republish_retained_two_bit_generation(
             &observed,
@@ -662,6 +774,8 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
             competing_head: false,
             stage_mutation: None,
             sq8_spy: Some(changed_spy.clone()),
+            versioned: None,
+            extra_destination: false,
         };
         assert!(matches!(
             republish_retained_two_bit_generation(
@@ -777,15 +891,24 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
         )
         .await
         .unwrap();
-        assert_eq!(
-            bits(
-                generation
-                    .search_with_store(f.copied.as_ref(), &query, 10, None)
-                    .await
-                    .unwrap()
-            ),
-            expected
+        let returned = bits(
+            generation
+                .search_with_store(f.copied.as_ref(), &query, 10, None)
+                .await
+                .unwrap(),
         );
+        assert_eq!(returned.len(), 10);
+        assert_eq!(
+            returned
+                .iter()
+                .map(|(_, id, _)| *id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            10
+        );
+        if radial {
+            assert_eq!(returned, expected, "radial ID/score-bit parity");
+        }
         drop(generation);
         let lost_prefix = destination.clone().join("lost");
         let lost = LostHeadResponse {
@@ -794,6 +917,8 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
             competing_head: false,
             stage_mutation: None,
             sq8_spy: None,
+            versioned: None,
+            extra_destination: false,
         };
         assert!(matches!(
             republish_retained_two_bit_generation(
@@ -826,15 +951,16 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
         )
         .await
         .unwrap();
-        assert_eq!(
-            bits(
-                generation
-                    .search_with_store(f.copied.as_ref(), &query, 10, None)
-                    .await
-                    .unwrap()
-            ),
-            expected
+        let returned = bits(
+            generation
+                .search_with_store(f.copied.as_ref(), &query, 10, None)
+                .await
+                .unwrap(),
         );
+        assert_eq!(returned.len(), 10);
+        if radial {
+            assert_eq!(returned, expected, "reopened radial ID/score-bit parity");
+        }
     }
 }
 
@@ -1092,6 +1218,8 @@ async fn retained_semantic_router_replacement_rechecks_source_and_control_after_
             competing_head: false,
             stage_mutation: Some((source, bytes)),
             sq8_spy: None,
+            versioned: None,
+            extra_destination: false,
         };
         let mut approval = f.approval(before["sq8_etag"].as_str().unwrap());
         approval.sq8_object_key = f.old_sq8_key.as_ref();
@@ -1123,6 +1251,142 @@ async fn retained_semantic_router_replacement_rechecks_source_and_control_after_
         );
         assert!(f.copied.list(Some(&destination)).next().await.is_none());
     }
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_accepts_versioned_roster_and_refuses_version_change()
+{
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    for change_on_stage in [false, true] {
+        let mut f = RetainedFixture::new().await;
+        let before = f.historical().await;
+        let replacement = ReplacementFixture::new(&f);
+        let source =
+            retained_metadata_location(&f.head().await.metadata_prefix(), "plane/mean.bin");
+        let destination = ObjectPath::from(if change_on_stage {
+            "version-changed/index"
+        } else {
+            "versioned/index"
+        });
+        let store = LostHeadResponse {
+            inner: f.copied.clone(),
+            head: destination.clone().join("unused-head.json"),
+            competing_head: false,
+            stage_mutation: None,
+            sq8_spy: None,
+            extra_destination: false,
+            versioned: Some(std::sync::Arc::new(RetainedVersions {
+                source: source.clone(),
+                current: std::sync::atomic::AtomicUsize::new(1),
+                change_on_stage,
+            })),
+        };
+        assert!(store.head(&source).await.unwrap().version.is_some());
+        let retained = read_two_bit_head(&store, &f.prefix).await.unwrap().unwrap();
+        let mut list = store.list(Some(&retained.metadata_prefix()));
+        while let Some(meta) = list.next().await {
+            assert!(meta.unwrap().version.is_none());
+        }
+        let mut approval = f.approval(before["sq8_etag"].as_str().unwrap());
+        approval.sq8_object_key = f.old_sq8_key.as_ref();
+        approval.router_replacement = Some(replacement.borrowed());
+        let result = republish_retained_two_bit_generation(
+            &store,
+            &retained,
+            approval,
+            &destination,
+            f.limits,
+            &f.scratch(),
+            4_000_000,
+        )
+        .await;
+        if change_on_stage {
+            assert!(matches!(
+                result,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                    "retained object changed"
+                ))
+            ));
+            assert!(
+                read_two_bit_head(&store, &destination)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(store.list(Some(&destination)).next().await.is_none());
+        } else {
+            let published = result.unwrap();
+            let reopened = read_two_bit_head(&store, &destination)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(published.root_sha256(), reopened.root_sha256());
+            let generation =
+                TwoBitGeneration::open_remote_from_head(&store, &reopened, f.limits, &f.scratch())
+                    .await
+                    .unwrap();
+            assert_eq!(generation.rows(), 64);
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_refuses_extra_destination_without_deleting_foreign_object()
+ {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    let mut f = RetainedFixture::new().await;
+    let before = f.historical().await;
+    let replacement = ReplacementFixture::new(&f);
+    let retained = f.head().await;
+    let destination = ObjectPath::from("foreign-extra/index");
+    let store = LostHeadResponse {
+        inner: f.copied.clone(),
+        head: destination.clone().join("unused-head.json"),
+        competing_head: false,
+        stage_mutation: None,
+        sq8_spy: None,
+        versioned: None,
+        extra_destination: true,
+    };
+    let mut approval = f.approval(before["sq8_etag"].as_str().unwrap());
+    approval.sq8_object_key = f.old_sq8_key.as_ref();
+    approval.router_replacement = Some(replacement.borrowed());
+    assert!(matches!(
+        republish_retained_two_bit_generation(
+            &store,
+            &retained,
+            approval,
+            &destination,
+            f.limits,
+            &f.scratch(),
+            4_000_000
+        )
+        .await,
+        Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+            "retained artifact roster"
+        ))
+    ));
+    assert!(
+        read_two_bit_head(f.copied.as_ref(), &destination)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut objects = f.copied.list(Some(&destination));
+    let foreign = objects.next().await.unwrap().unwrap();
+    assert!(foreign.location.as_ref().ends_with("/centroids.bin"));
+    assert_eq!(
+        f.copied
+            .get(&foreign.location)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"foreign-staged-object"
+    );
+    assert!(objects.next().await.is_none());
 }
 
 #[tokio::test]
@@ -1214,6 +1478,8 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
         competing_head: false,
         stage_mutation: None,
         sq8_spy: Some(spy.clone()),
+        versioned: None,
+        extra_destination: false,
     };
     let rebound = republish_retained_two_bit_generation(
         &observed,
@@ -1417,6 +1683,8 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
             competing_head,
             stage_mutation: None,
             sq8_spy: None,
+            versioned: None,
+            extra_destination: false,
         };
         let result = republish_retained_two_bit_generation(
             &lost,
