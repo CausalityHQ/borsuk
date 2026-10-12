@@ -1,0 +1,15 @@
+# Real scale SDK canary a0001 — preregistration, NOT LAUNCHED
+
+Purpose: actual1M canonical/query/truth admission, source-bound257-row/2-query extraction, real S3 Vectors publish/readback/query/reduce/delete, resource closure. Synthetic validation truth means claims_quality=false and claims_performance=false. No1M measurement or ANN-arm change.
+
+Frozen prerequisite main5a4503c1 / native5e448bfa, seven gates qualified, retained release19516600B SHAe350154fe7edc63cf1e13674ac0886e63ebdbfd20edeef6a53d2cbac6a9c51ae. Transport exactly3 prior immutable objects in transport-pins.tsv; full length/SHA checked on EC2 before native admission.
+
+Compute: causality/eu-central-1c, one c7i.xlarge Spot, existing benchmark IAM profile/securitygroup/subnet, root24GiB encryptedgp3 DeleteOnTermination. Latest observed quote0.100500/h; bid ceiling0.125/h. Host shutdown1800s, externalterminate1920s; total lifecycle cap0.30USD (compute ceiling0.067USD, allowance for storage/service/requests and retention0.233USD). Refuse a higher quote. No local build/native/data processing; no Rust toolchain on canary host.
+
+Native: CPU0/100%,512MiB,swap0,pids128,LimitCORE0,900s includes actual admission+derive+canary operations; finite stop grace30s. Environment/SDK/credential/admission/resource failures INVALID, never performance failure. Any native failure stops later stages, tries only exact ownership-authenticated native cleanup, retains original exit+cleanup separately. A failed/incomplete cleanup is not accepted; root uses retained namespace/ownership receipts to close it. Canary pass requires admit/derive/canaryadmit/publish/measure/reduce/cleanup all0, CANARY_VALID+false claims, authenticated absent bucket/index receipts, source/binary/input pins, OOM/swap0 and drained owned unit.
+
+Spot interruption: INVALID canary, preserve terminal repetition; cleanup only exact owned service namespace. No automatic second instance or retry. Instance terminated immediately after terminal; verify root volume absent/timerinactive. Evidence archive explicitly includes only evidence, mainstate, derivedcanarystate/config/prepared receipt and small host/config metadata; excludes original inputs, derived raw fixture bytes, ELF,privatecredentials. Credential export copied from prior successful canary, expiration must exceed native deadline+grace; credentials never logged or archived.
+
+Before launch: freeze unique namespace and support hashes, exact final config after IMDS instance binding, finite launcher/external timer, literal commands and output roster. No authorization is implied by a pending script/config; root retains launch and scientific authority already assigned by operator.
+
+A0002 correction: original a0001 is preserved wrapperENVINVALID, native0/servicecleanupverified. Only closure decision changes: absent exact owned cgroup is alreadyclosed and needs no systemctlstop; existing cgroup still gets boundedstop and populated0 check. Unique namespace/configpins; same qualified ELF and native/resource protocol. Actual corrected wrapper runtime verification occurs in this single new canary, no local mocks or compiler.

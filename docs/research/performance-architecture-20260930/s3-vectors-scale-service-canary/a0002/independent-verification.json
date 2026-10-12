@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-s3v-scale-service-canary-independent-v1",
+  "status": "SERVICE_CANARY_VERIFIED",
+  "native_source_commit": "5e448bfafa96ed42982884c64c0005fe0e4664af",
+  "delivery_commit": "5a4503c1737a7e237b499b76616f9a93df4acb0d",
+  "instance_id": "i-02b2db235be2e5065",
+  "terminated": true,
+  "volume_absent": true,
+  "timer_inactive": true,
+  "actual_input_admission": true,
+  "config_sha256": "5001df36e455aa4059727aadd9f493c996c9f06e06b63244d7f9258d9a5169e8",
+  "canary_config_sha256": "ed4daa31a799eb76c36257ebccd7a017be04f7175997eae4bfb4047b9b0f6a93",
+  "native_stage_count": 7,
+  "native_exits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "wrapper_exit": 0,
+  "service_bucket_deleted": true,
+  "service_index_deleted": true,
+  "memory_peak_bytes": 16285696,
+  "swap_peak_bytes": 0,
+  "oom_kill": 0,
+  "claims_quality": false,
+  "claims_performance": false
+}

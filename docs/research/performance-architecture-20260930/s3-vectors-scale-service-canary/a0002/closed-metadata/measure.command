@@ -1,0 +1,1 @@
+check_s3_vectors_baseline measure /mnt/borsuk-s3v/state/scale-canary/config.json ed4daa31a799eb76c36257ebccd7a017be04f7175997eae4bfb4047b9b0f6a93

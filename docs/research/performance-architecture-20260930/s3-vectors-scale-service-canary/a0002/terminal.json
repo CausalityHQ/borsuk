@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-s3v-scale-service-canary-terminal-v1",
+  "original_exit": 0,
+  "exit": 0,
+  "owned_cgroup_drained": true,
+  "evidence": {
+    "sha256": "c4eb5402f251b4a2db87b36a585e40be95d19d4552843696bdfcef3c98b352ac",
+    "bytes": 12526
+  },
+  "claims_quality": false,
+  "claims_performance": false
+}
