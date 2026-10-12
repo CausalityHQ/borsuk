@@ -3928,6 +3928,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completion_driven_fetch_refills_before_earlier_body_finishes() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let key = "gen/objects/sq8";
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            deadline,
+        );
+        let location = Path::from(key);
+        // Range 0: clean EOF one byte short after the sibling failure; range 1: flipped
+        // final byte (digest failure) at once; range 2: a held, valid sibling.
+        let starts = [0, 3328, 6656];
+        fixture.arm(Some((1, starts)));
+        let mut trace = Sq8RangeTrace::new(3).unwrap();
+        trace.begin(Instant::now());
+        let work = rank_verified_sq8_pages_traced(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 0), (1, 1), (2, 2)],
+            ETAG,
+            &[1.0],
+            &[0.0],
+            &[1.0],
+            3,
+            3,
+            object.len(),
+            2,
+            &[],
+            Some(&mut trace),
+        );
+        let (result, refilled) = tokio::join!(work, async {
+            let refilled = tokio::time::timeout(
+                Duration::from_secs(2),
+                fixture.wait(|state| state.finished[1].contains(&starts[1]) && state.active[1] >= 2),
+            )
+            .await
+            .is_ok();
+            fixture.release_error();
+            fixture
+                .wait(|state| state.finished[1].contains(&starts[0]))
+                .await;
+            fixture.release_sibling();
+            refilled
+        });
+        let failure = result.unwrap_err();
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                verified_bytes: 1144,
+                failed_gets: 2
+            }
+        );
+        // The drain finished every GET, in the order the fixture released them.
+        let state = fixture.snapshot();
+        assert_eq!(state.finished[1], vec![starts[1], starts[0], starts[2]]);
+        assert_eq!(trace.outcome, "fetch_failed");
+        assert_eq!(trace.ranges.len(), 3);
+        let [stream, digest, sibling] = [trace.ranges[0], trace.ranges[1], trace.ranges[2]];
+        assert_eq!(stream.outcome, "store_body");
+        assert!(stream.headers_ns.is_some() && stream.metadata_ns.is_some());
+        assert!(stream.body_bytes < stream.end_byte - stream.start_byte);
+        assert_eq!(
+            (stream.eof_ns, stream.auth_start_ns, stream.auth_end_ns),
+            (None, None, None)
+        );
+        assert_eq!(digest.outcome, "page_auth");
+        assert!(digest.eof_ns.is_some() && digest.auth_end_ns.is_some());
+        assert_eq!(
+            digest.body_bytes,
+            digest.end_byte - digest.start_byte,
+            "the whole corrupt body was still received"
+        );
+        assert_eq!(sibling.outcome, "ok");
+        for span in &trace.ranges {
+            assert!(span.complete_ns.is_some());
+        }
+        let all = trace.all_ranges_complete_ns.unwrap();
+        assert!(
+            trace
+                .ranges
+                .iter()
+                .all(|span| span.complete_ns.unwrap() <= all)
+        );
+        // Failed fetch: ranking never started and the payload release is unreached.
+        assert_eq!(
+            (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
+            (None, None, None)
+        );
+        assert_eq!(state.active[1], 0);
+        assert!(state.peak[1] <= 2);
+        fixture.finish();
+        assert!(refilled, "completed request must refill its slot before earlier body finishes");
+    }
+
+    #[tokio::test]
     async fn bounded_query_reads_only_verified_pages_and_charges_failures() {
         let store = InMemory::new();
         let location = Path::from("sq8.bin");
