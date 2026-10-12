@@ -4113,13 +4113,13 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         // the generic completed reducer and frozen historical mode stay separate.
         let i: Inputs = serde_json::from_value(arm.expected_bound_inputs.clone())?;
         if scale {
-            validate_scale_inputs(&i, &arm.expected_bound_inputs)?;
             require(
                 i.rows == 1_000_000
                     && i.dimensions == 1024
                     && i.count == COUNT
                     && i.k == K
                     && i.profile == "scale1m"
+                    && arm.expected_bound_inputs["source_cache"] == "off"
                     && i.corpus_source_first == 0
                     && i.query_source_first == 100_000
                     && arm.expected_bound_inputs["corpus_intervals"]
@@ -4145,6 +4145,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
                     ],
                 "paired scale full1M production pins",
             )?;
+            validate_scale_inputs(&i, &arm.expected_bound_inputs)?;
         } else {
             require(
                 i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
@@ -4186,10 +4187,25 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         identity == b.expected_identity && inputs == b.expected_bound_inputs,
         "paired binary/source/benchmark/generation/backend/input/scoring pins differ",
     )?;
+    if scale {
+        require(
+            a.input.path != b.input.path,
+            "paired scale artifact role alias",
+        )?;
+    }
     let runs = [
         read_run_with(&a.input.path, &a.input.sha256, Some(a))?,
         read_run_with(&b.input.path, &b.input.sha256, Some(b))?,
     ];
+    if let Some(original) = &config_identity {
+        recheck_scale_pair(
+            config_path,
+            config_sha,
+            original,
+            &c,
+            [&runs[0].file_identity, &runs[1].file_identity],
+        )?;
+    }
     require(
         a.input.sha256 != b.input.sha256
             && (runs[0].file_identity.dev, runs[0].file_identity.ino)
@@ -4262,14 +4278,14 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         sq8_ns: plus(a.sq8_ns, b.sq8_ns)?,
         max_leaf_peak_inflight: a.max_leaf_peak_inflight.max(b.max_leaf_peak_inflight),
     };
-    if scale {
-        recheck_parity_path(&c.arms[0].input, &runs[0].file_identity)?;
-        recheck_parity_path(&c.arms[1].input, &runs[1].file_identity)?;
-        require(
-            Some(file_identity(&open_input(config_path)?)?) == config_identity,
-            "paired scale config pathname mutation",
+    if let Some(original) = &config_identity {
+        recheck_scale_pair(
+            config_path,
+            config_sha,
+            original,
+            &c,
+            [&runs[0].file_identity, &runs[1].file_identity],
         )?;
-        read_config::<PairedConfig>(config_path, config_sha)?;
     }
     Ok(
         json!({"schema":if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
@@ -4287,6 +4303,24 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false,
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null}),
     )
+}
+
+fn recheck_scale_pair(
+    config_path: &Path,
+    config_sha: &str,
+    original: &FileIdentity,
+    c: &PairedConfig,
+    inputs: [&FileIdentity; 2],
+) -> Result<()> {
+    for (arm, identity) in c.arms.iter().zip(inputs) {
+        recheck_parity_path(&arm.input, identity)?;
+    }
+    require(
+        file_identity(&open_input(config_path)?)? == *original,
+        "paired scale config pathname mutation",
+    )?;
+    read_config::<PairedConfig>(config_path, config_sha)?;
+    Ok(())
 }
 
 fn reduce_membership_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
@@ -11771,8 +11805,8 @@ mod tests {
             ),
         ] {
             let mut c = original.clone();
-            c["arms"][0]["expected_bound_inputs"][key] = value;
             for arm in c["arms"].as_array_mut().unwrap() {
+                arm["expected_bound_inputs"][key] = value.clone();
                 arm["input"]["path"] = json!(dir.path().join("must-not-open"));
             }
             let body = serde_json::to_vec(&c).unwrap();
@@ -11780,17 +11814,18 @@ mod tests {
             let error = reduce_paired_scope(&path, &sha(&body), true).unwrap_err();
             assert_eq!(
                 error.to_string(),
-                if matches!(key, "rows" | "source_cache") {
-                    "explicit scale input geometry/profile/cap"
-                } else {
-                    "paired scale full1M production pins"
-                },
+                "paired scale full1M production pins",
                 "{key}: {error}"
             );
         }
         let mut control = original;
-        for arm in control["arms"].as_array_mut().unwrap() {
-            arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+        for (ordinal, arm) in control["arms"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            arm["input"]["path"] = json!(dir.path().join(format!("must-not-open-{ordinal}")));
         }
         let body = serde_json::to_vec(&control).unwrap();
         std::fs::write(&path, &body).unwrap();
@@ -11831,12 +11866,63 @@ mod tests {
             dir.path(),
             [paired_scale_fixture(16), paired_scale_fixture(32)],
         );
-        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let input = Path::new(config["arms"][1]["input"]["path"].as_str().unwrap());
-        let mut body = std::fs::read(input).unwrap();
-        *body.last_mut().unwrap() = b' ';
-        std::fs::write(input, body).unwrap();
-        assert!(reduce_paired_scope(&path, &pin, true).is_err());
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let input = PathBuf::from(config["arms"][1]["input"]["path"].as_str().unwrap());
+        let mut body = std::fs::read(&input).unwrap();
+        let position = body.len() - 1;
+        assert_eq!(body[position], b'\n');
+        body.insert(position, b' ');
+        config["arms"][1]["input"]["sha256"] = json!(sha(&body));
+        config["arms"][1]["input"]["bytes"] = json!(body.len());
+        let config_body = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &config_body).unwrap();
+        std::fs::write(&input, &body).unwrap();
+        assert!(reduce_paired_scope(&path, &sha(&config_body), true).is_ok());
+        body[position] = b'\t';
+        std::fs::write(&input, body).unwrap();
+        assert_eq!(
+            reduce_paired_scope(&path, &sha(&config_body), true)
+                .unwrap_err()
+                .to_string(),
+            "full result SHA/EOF/identity"
+        );
+    }
+
+    #[test]
+    fn paired_scale_rechecks_both_artifacts_and_config_after_reading() {
+        for replaced in 0..3 {
+            let dir = tempfile::tempdir().unwrap();
+            let (path, pin) = paired_scale_config(
+                dir.path(),
+                [paired_scale_fixture(16), paired_scale_fixture(32)],
+            );
+            let (c, _): (PairedConfig, _) = read_config(&path, &pin).unwrap();
+            let original = file_identity(&open_input(&path).unwrap()).unwrap();
+            let runs = c
+                .arms
+                .each_ref()
+                .map(|a| read_run_with(&a.input.path, &a.input.sha256, Some(a)).unwrap());
+            let identities = [&runs[0].file_identity, &runs[1].file_identity];
+            recheck_scale_pair(&path, &pin, &original, &c, identities).unwrap();
+            let target = if replaced == 2 {
+                &path
+            } else {
+                &c.arms[replaced].input.path
+            };
+            let replacement = dir.path().join("replacement");
+            std::fs::copy(target, &replacement).unwrap();
+            std::fs::rename(replacement, target).unwrap();
+            assert_eq!(
+                recheck_scale_pair(&path, &pin, &original, &c, identities)
+                    .unwrap_err()
+                    .to_string(),
+                if replaced == 2 {
+                    "paired scale config pathname mutation"
+                } else {
+                    "authenticated parity pathname replacement"
+                }
+            );
+        }
     }
 
     fn paired_v2_config(
