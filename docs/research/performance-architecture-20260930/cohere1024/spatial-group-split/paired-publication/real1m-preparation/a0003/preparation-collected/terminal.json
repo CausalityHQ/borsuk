@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-paired-real-preparation-stage-v1",
+  "stage": "preparation",
+  "status": "GATE_ACCEPTED",
+  "source_commit": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+  "config_sha256": "3779326cba9d54a2da8bf98dd4e284011f87d5968448b87918a23434894c5908",
+  "authority_sha256": "8c672fbd059a71b0ba692cbbdbd4a2a4e9a9f01f4a43634ff5d1509d25fd5bcd",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "requests_staged": false,
+  "truth_staged": false,
+  "scientific_measurement": false,
+  "cold_s3_claim": false,
+  "performance_claim": false
+}

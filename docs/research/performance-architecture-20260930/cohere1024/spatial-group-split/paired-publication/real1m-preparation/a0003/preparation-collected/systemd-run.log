@@ -1,0 +1,9 @@
+Running as unit: borsuk-paired-preparation.service
+/mnt/borsuk-paired-source-screen/bin/compare_native_replay: OK
+true
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 15.191s
+CPU time consumed: 15.107s
+Memory peak: 2.3M
+Memory swap peak: 0B

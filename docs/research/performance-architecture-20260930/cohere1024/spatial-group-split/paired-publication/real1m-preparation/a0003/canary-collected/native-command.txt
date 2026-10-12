@@ -1,0 +1,1 @@
+compare_native_replay --prepare-spatial-publication /mnt/borsuk-paired-source-screen/preparation.config.json 0000000000000000000000000000000000000000000000000000000000000000 /mnt/borsuk-paired-source-screen/authority.json 8c672fbd059a71b0ba692cbbdbd4a2a4e9a9f01f4a43634ff5d1509d25fd5bcd

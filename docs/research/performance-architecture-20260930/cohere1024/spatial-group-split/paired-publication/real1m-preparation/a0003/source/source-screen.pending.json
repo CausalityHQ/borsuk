@@ -1,0 +1,1269 @@
+{
+  "schema": "borsuk-paired-real-source-screen-draft-v1",
+  "authority_pending": true,
+  "paid_launch": false,
+  "performance_claim": false,
+  "configuration": {
+    "schema": "borsuk-paired-source-coverage-config-v1",
+    "inputs": {
+      "generation_manifest": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      },
+      "plane_manifest": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      },
+      "centroids": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/centroids.bin",
+        "bytes": 64000032,
+        "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+      },
+      "max_owned_bytes": 1073741824
+    },
+    "radial": {
+      "root": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-root.bin",
+        "bytes": 3041472,
+        "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+      },
+      "membership": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      },
+      "leaves": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+      }
+    },
+    "spatial": {
+      "root": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-root.bin",
+        "bytes": 3041472,
+        "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+      },
+      "membership": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-membership.bin",
+        "bytes": 125000,
+        "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+      },
+      "leaves": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+      }
+    },
+    "spatial_receipt": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-receipt.json",
+      "bytes": 3293,
+      "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc"
+    },
+    "requests": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "sq8": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/sq8.bin",
+      "bytes": 1036000000,
+      "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+    },
+    "truth": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/truth.u64",
+      "bytes": 80000,
+      "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+    }
+  },
+  "authority": {
+    "schema": "borsuk-paired-source-authority-v1",
+    "construction": {
+      "schema": "borsuk-paired-construction-authority-v1",
+      "original": {
+        "schema": "borsuk-partition-reconstruction-approval-v1",
+        "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "generation": 1,
+        "base_epoch": 0,
+        "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+        "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+        "input_schema": "borsuk-two-bit-plane-v3",
+        "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+        "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+        "profile": "scale1m",
+        "rows": 1000000,
+        "dimensions": 1024
+      },
+      "original_approval": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/original-approval.json",
+        "bytes": 658,
+        "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+      },
+      "constructor": {
+        "config": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-config.json",
+          "bytes": 1225,
+          "sha256": "2d7887c0d367055a6500cac6031aaa74a7dce07e2fe8179744117d02b5cc9b9f"
+        },
+        "archive": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-source.tar.gz",
+          "bytes": 4303661,
+          "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+        },
+        "binary": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-elf",
+          "bytes": 8387384,
+          "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+        },
+        "implementation": {
+          "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+          "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+          "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+          "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+          "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+          "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+          "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+        }
+      },
+      "reconstruction": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/reconstruction.json",
+        "bytes": 3511,
+        "sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd"
+      },
+      "radial_parity": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/radial-parity.json",
+        "bytes": 4895,
+        "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+      },
+      "qualification": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/qualification.json",
+        "bytes": 5131,
+        "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+      },
+      "corrected_closure": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/corrected-closure.json",
+        "bytes": 623,
+        "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+      },
+      "expected_reconstruction": {
+        "approval": {
+          "bytes": 658,
+          "path": "/mnt/borsuk-reconstruction-real1m/approval.json",
+          "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+        },
+        "binary": {
+          "bytes": 8387384,
+          "path": "/mnt/borsuk-reconstruction-real1m/bin/compare_native_replay",
+          "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+        },
+        "centroids": {
+          "bytes": 64000032,
+          "path": "/mnt/borsuk-reconstruction-real1m/evidence/admission/published/centroids.bin",
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "centroids_bytes": 64000032,
+        "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+        "complete": true,
+        "config": {
+          "bytes": 820,
+          "path": "/mnt/borsuk-reconstruction-real1m/admission.config.json",
+          "sha256": "c27c81943b7eec931c9b474c121f5f88182a035fec0365a34a934a6e274ce88a"
+        },
+        "final_unit_rows": 32,
+        "generation": {
+          "bytes": 27501,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/generation.json",
+          "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+        },
+        "historical_membership_opened": false,
+        "historical_parity": null,
+        "historical_root_opened": false,
+        "implementation": {
+          "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+          "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+          "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+          "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+          "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+          "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+          "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+        },
+        "leaves": {
+          "bytes": 64125000,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/leaves.bin",
+          "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+        },
+        "max_payload_bytes": 536870912,
+        "metadata_charge_bytes": 7077504,
+        "original": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "page_rows": 256,
+        "plane": {
+          "bytes": 653,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/plane.json",
+          "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+        },
+        "radial_outputs": null,
+        "reconstruction_charge_bytes": 71083495,
+        "requests_opened": false,
+        "requires_original_successful_terminal_receipt": true,
+        "requires_successful_directory_sync": true,
+        "requires_successful_file_sync": true,
+        "schema": "borsuk-partition-reconstruction-receipt-v1",
+        "source": {
+          "mean_sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+          "records_sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "status": "RECONSTRUCTED",
+        "truth_opened": false,
+        "unit_count": 31250,
+        "unit_rows": 32
+      },
+      "expected_radial_parity": {
+        "approval": {
+          "bytes": 658,
+          "path": "/mnt/borsuk-reconstruction-real1m/approval.json",
+          "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+        },
+        "binary": {
+          "bytes": 8387384,
+          "path": "/mnt/borsuk-reconstruction-real1m/bin/compare_native_replay",
+          "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+        },
+        "centroids": {
+          "bytes": 64000032,
+          "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/centroids.bin",
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "centroids_bytes": 64000032,
+        "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+        "complete": true,
+        "config": {
+          "bytes": 1225,
+          "path": "/mnt/borsuk-reconstruction-real1m/parity.config.json",
+          "sha256": "2d7887c0d367055a6500cac6031aaa74a7dce07e2fe8179744117d02b5cc9b9f"
+        },
+        "final_unit_rows": 32,
+        "generation": {
+          "bytes": 27501,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/generation.json",
+          "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+        },
+        "historical_membership_opened": true,
+        "historical_parity": {
+          "builder_peak_bytes": 506729928,
+          "experiment_charge_bytes": 513807432,
+          "old_allocation_limit_bytes": 506729928,
+          "old_leaves": {
+            "bytes": 64125000,
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "old_membership": {
+            "bytes": 125000,
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "old_root": {
+            "bytes": 3041472,
+            "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+          },
+          "radial_leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+          "radial_membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+          "radial_root_sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+          "root_exceptions": [
+            {
+              "new": "BORSUSR3",
+              "offset": 0,
+              "old": "BORSUSR2"
+            },
+            {
+              "new_le_u32": 1,
+              "offset": 88,
+              "old_le_u32": 0
+            }
+          ]
+        },
+        "historical_root_opened": true,
+        "implementation": {
+          "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+          "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+          "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+          "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+          "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+          "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+          "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+        },
+        "leaves": {
+          "bytes": 64125000,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/leaves.bin",
+          "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+        },
+        "max_payload_bytes": 536870912,
+        "metadata_charge_bytes": 7077504,
+        "original": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "page_rows": 256,
+        "plane": {
+          "bytes": 653,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/plane.json",
+          "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+        },
+        "radial_outputs": {
+          "leaves": {
+            "bytes": 64125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-leaves.bin",
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "membership": {
+            "bytes": 125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-membership.bin",
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "root": {
+            "bytes": 3041472,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-root.bin",
+            "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+          }
+        },
+        "reconstruction_charge_bytes": 71083495,
+        "requests_opened": false,
+        "requires_original_successful_terminal_receipt": true,
+        "requires_successful_directory_sync": true,
+        "requires_successful_file_sync": true,
+        "schema": "borsuk-partition-reconstruction-receipt-v1",
+        "source": {
+          "mean_sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+          "records_sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "status": "HISTORICAL_RADIAL_PARITY",
+        "truth_opened": false,
+        "unit_count": 31250,
+        "unit_rows": 32
+      },
+      "expected_qualification": {
+        "schema": "borsuk-real1m-construction-qualified-v1",
+        "status": "REAL_RECONSTRUCTION_AND_HISTORICAL_RADIAL_PARITY_QUALIFIED",
+        "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+        "published_compiler_qualification_commit": "319f8c4bbac69f522fc25a0ecd93f2e9232e9b84",
+        "elf_sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52",
+        "original_generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "original_approval": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "admission": {
+          "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+          "stage": "admission",
+          "instance_id": "i-0e7ec79ad22db80d1",
+          "original_ssm_command_id": "0213fc5c-25fd-4e76-8bd4-f10c5ca8af70",
+          "terminal_sha256": "3fb0ff53bdfb8b83df57431b4e19e9d25157205cc427c6ae036bd1cd88980fc1",
+          "native_receipt_sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd",
+          "all_closed_body_hashes_verified": true,
+          "original_ssm_success": true,
+          "performance_claim": false
+        },
+        "canary": {
+          "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+          "stage": "smoke",
+          "instance_id": "i-0e7ec79ad22db80d1",
+          "original_ssm_command_id": "b9be10c6-a52c-4fca-9d82-0133f6caf537",
+          "terminal_sha256": "b60aebdacd8467f483d598ec59e6d1ff5b36c6a1c41c223c3e950b6664f861df",
+          "native_receipt_sha256": "3de8275b2334c967b5d11f7424fa3eabfcaa25774c16161ef0b5fa241b3e91e3",
+          "all_closed_body_hashes_verified": true,
+          "original_ssm_success": true,
+          "performance_claim": false
+        },
+        "original_parity": {
+          "ssm_command_id": "dd1c3fb4-157c-479e-a2ca-11feb3e758cd",
+          "ssm_status": "Failed",
+          "manager_exit": 1,
+          "native_exit": 0,
+          "disposition": "INVALID_RECEIPT_VALIDATOR",
+          "disposition_preserved": true,
+          "receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+        },
+        "closed_output_revalidation": {
+          "ssm_command_id": "c1f36a29-65a7-4927-980b-2fc0bef87922",
+          "status": "Success",
+          "exit": 0,
+          "native_reexecuted": false,
+          "all_recovery_body_checksums_verified": true
+        },
+        "historical_parity": {
+          "builder_peak_bytes": 506729928,
+          "experiment_charge_bytes": 513807432,
+          "old_allocation_limit_bytes": 506729928,
+          "old_leaves": {
+            "bytes": 64125000,
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "old_membership": {
+            "bytes": 125000,
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "old_root": {
+            "bytes": 3041472,
+            "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+          },
+          "radial_leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+          "radial_membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+          "radial_root_sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+          "root_exceptions": [
+            {
+              "new": "BORSUSR3",
+              "offset": 0,
+              "old": "BORSUSR2"
+            },
+            {
+              "new_le_u32": 1,
+              "offset": 88,
+              "old_le_u32": 0
+            }
+          ]
+        },
+        "retained_derived_outputs": {
+          "leaves": {
+            "bytes": 64125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-leaves.bin",
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "membership": {
+            "bytes": 125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-membership.bin",
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "root": {
+            "bytes": 3041472,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-root.bin",
+            "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+          }
+        },
+        "centroids": {
+          "bytes": 64000032,
+          "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/centroids.bin",
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "retained_s3_prefix": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/",
+        "requests_opened": false,
+        "truth_opened": false,
+        "instance_id": "i-0e7ec79ad22db80d1",
+        "terminated": true,
+        "volume_id": "vol-09f6fcc3c4f757a36",
+        "volume_deleted": true,
+        "watchdog_stopped": true,
+        "performance_claim": false,
+        "product_ready": false
+      },
+      "expected_corrected_closure": {
+        "schema": "borsuk-reconstruction-closed-parity-recovery-v1",
+        "status": "CLOSED_NATIVE_PARITY_VALIDATED",
+        "original_native_exit": 0,
+        "original_manager_exit": 1,
+        "original_stage_disposition": "INVALID_RECEIPT_VALIDATOR",
+        "original_disposition_preserved": true,
+        "native_reexecuted": false,
+        "original_receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771",
+        "descriptor_validation": "exact bytes and SHA; descriptor deliberately has no local path",
+        "derived_outputs_full_body_hash_verified": true,
+        "derived_outputs_retained_create_only": true,
+        "performance_claim": false
+      }
+    },
+    "radial": {
+      "root": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-root.bin",
+        "bytes": 3041472,
+        "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+      },
+      "membership": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-membership.bin",
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+      },
+      "leaves": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/radial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+      }
+    },
+    "spatial": {
+      "root": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-root.bin",
+        "bytes": 3041472,
+        "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+      },
+      "membership": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-membership.bin",
+        "bytes": 125000,
+        "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+      },
+      "leaves": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-leaves.bin",
+        "bytes": 64125000,
+        "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+      }
+    },
+    "spatial_receipt": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-receipt.json",
+      "bytes": 3293,
+      "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc"
+    },
+    "expected_spatial_receipt": {
+      "authority_sha256": "8c672fbd059a71b0ba692cbbdbd4a2a4e9a9f01f4a43634ff5d1509d25fd5bcd",
+      "centroids": {
+        "bytes": 64000032,
+        "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+      },
+      "complete": true,
+      "config_sha256": "3779326cba9d54a2da8bf98dd4e284011f87d5968448b87918a23434894c5908",
+      "constructor_archive": {
+        "bytes": 4303661,
+        "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+      },
+      "constructor_binary": {
+        "bytes": 8387384,
+        "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+      },
+      "constructor_implementation": {
+        "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+        "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+        "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+        "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+        "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+        "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+      },
+      "corrected_closure": {
+        "bytes": 623,
+        "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+      },
+      "generation": {
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      },
+      "original": {
+        "base_epoch": 0,
+        "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+        "dimensions": 1024,
+        "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+        "generation": 1,
+        "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+        "input_schema": "borsuk-two-bit-plane-v3",
+        "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+        "profile": "scale1m",
+        "rows": 1000000,
+        "schema": "borsuk-partition-reconstruction-approval-v1"
+      },
+      "ownership": {
+        "cap": 1073741824,
+        "metadata": 12298560,
+        "phases": {
+          "centroid authentication": 76298592,
+          "metadata": 12298560,
+          "spatial emission": 492960136,
+          "spatial output capacities": 599805736,
+          "spatial training": 583028520,
+          "spatial validation": 431144792
+        },
+        "retained": 0
+      },
+      "partition": "widest_axis_quota_v1",
+      "performance_claim": false,
+      "plane": {
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      },
+      "publication": {
+        "leaves": {
+          "bytes": 64125000,
+          "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+        },
+        "membership": {
+          "bytes": 125000,
+          "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+        },
+        "root": {
+          "bytes": 3041472,
+          "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+        }
+      },
+      "qualification": {
+        "bytes": 5131,
+        "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+      },
+      "qualified": false,
+      "radial_parity": {
+        "bytes": 4895,
+        "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+      },
+      "reconstruction": {
+        "bytes": 3511,
+        "sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd"
+      },
+      "requests_opened": false,
+      "requires_successful_directory_sync": true,
+      "requires_successful_file_sync": true,
+      "schema": "borsuk-spatial-publication-receipt-v1",
+      "source_payload_opened": false,
+      "status": "SPATIAL_PREPARED",
+      "truth_opened": false
+    },
+    "producer": {
+      "result": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-result.jsonl",
+        "bytes": 1220980,
+        "sha256": "80438eff54335de1e9db5bb66c6ef10c540435cc856a2b84a05b3ea57fbe7e39"
+      },
+      "config": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-config.json",
+        "bytes": 3416,
+        "sha256": "e597b90c6566d13488aede8d304982b6b22f9ccaba8c2412075a62e88e91fdff"
+      },
+      "binary": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/producer-elf",
+        "bytes": 17047872,
+        "sha256": "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0"
+      },
+      "expected_config": {
+        "schema": "borsuk-cohere-native-baseline-config-v7",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "metric": "cosine",
+        "tie_rule": "corpus_ordinal_ascending",
+        "corpus_intervals": [
+          {
+            "start": 0,
+            "end": 100000
+          },
+          {
+            "start": 101000,
+            "end": 1001000
+          }
+        ],
+        "reserved_query_interval": {
+          "start": 100000,
+          "end": 101000
+        },
+        "cohort_receipt": {
+          "path": "/mnt/borsuk-scale1m/replay-local/prepared-parent_cohort_complete.json",
+          "bytes": 6238,
+          "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+        },
+        "derivation_receipt": {
+          "path": "/mnt/borsuk-scale1m/replay-local/prepared-parent_derived_derivation.json",
+          "bytes": 23128,
+          "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+        },
+        "producer_authority": {
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+        },
+        "corpus_source_first": 0,
+        "query_source_first": 100000,
+        "rows": 1000000,
+        "dimensions": 1024,
+        "count": 1000,
+        "k": 10,
+        "profile": "scale1m",
+        "backend": {
+          "kind": "s3",
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "region": "eu-central-1",
+          "physical_prefix": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\""
+        },
+        "generation_prefix": "semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "generation_root_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "scratch_parent": "/mnt/borsuk-scale1m/closed/s3/independent32-r2-scratch",
+        "requests": {
+          "path": "/mnt/borsuk-scale1m/prepared/queries.f32",
+          "bytes": 4096000,
+          "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+        },
+        "truth": {
+          "path": "/mnt/borsuk-scale1m/prepared/truth.u64",
+          "bytes": 80000,
+          "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+        },
+        "native_source": {
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413"
+        },
+        "max_memory_bytes": 536870912,
+        "fetch_parallelism": 16,
+        "serving": {
+          "mode": "baseline"
+        },
+        "execution": {
+          "mode": "diagnostic_panel",
+          "ordinals": [
+            69,
+            83,
+            114,
+            149,
+            151,
+            159,
+            188,
+            189,
+            211,
+            237,
+            257,
+            296,
+            321,
+            351,
+            388,
+            408,
+            413,
+            513,
+            537,
+            587,
+            626,
+            667,
+            669,
+            731,
+            742,
+            821,
+            823,
+            849,
+            851,
+            890,
+            956,
+            991
+          ],
+          "trace": false
+        }
+      },
+      "expected_identity": {
+        "billed_bytes": null,
+        "billed_requests": null,
+        "binary_sha256": "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0",
+        "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+        "config_sha256": "e597b90c6566d13488aede8d304982b6b22f9ccaba8c2412075a62e88e91fdff",
+        "execution": {
+          "mode": "diagnostic_panel",
+          "ordinals": [
+            69,
+            83,
+            114,
+            149,
+            151,
+            159,
+            188,
+            189,
+            211,
+            237,
+            257,
+            296,
+            321,
+            351,
+            388,
+            408,
+            413,
+            513,
+            537,
+            587,
+            626,
+            667,
+            669,
+            731,
+            742,
+            821,
+            823,
+            849,
+            851,
+            890,
+            956,
+            991
+          ],
+          "trace": false
+        },
+        "external_gate_required": true,
+        "fetch_parallelism": 16,
+        "generation_source_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+        "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+        "phase": "identity",
+        "physical_s3_measured": false,
+        "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+        "router_source_sha256": "4a580f2bb3afe2c0c30c5a11b6491b28d4165788d69bb39432b748e67fc68718",
+        "runner_source_sha256": "d5e593e5f8e2aa02697b366cc3bcd8e6fa4160071ea0e2ac337063f9ff0023c4",
+        "s3_credential_source": "imds_instance_role_only",
+        "schema": "borsuk-cohere-native-baseline-result-v7",
+        "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "sq8_range_source_sha256": "3f6407664d5f2c1be817e4b32e6a9dce8d4bf8e66ca455e237d0e7b0716ad711",
+        "truth_opened": false,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "expected_bound_inputs": {
+        "backend": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "kind": "s3",
+          "physical_prefix": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+          "region": "eu-central-1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+        "corpus_intervals": [
+          {
+            "end": 100000,
+            "start": 0
+          },
+          {
+            "end": 1001000,
+            "start": 101000
+          }
+        ],
+        "corpus_source_first": 0,
+        "count": 1000,
+        "credential_source": "imds_instance_role_only",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+        "dimensions": 1024,
+        "execution": {
+          "mode": "diagnostic_panel",
+          "ordinals": [
+            69,
+            83,
+            114,
+            149,
+            151,
+            159,
+            188,
+            189,
+            211,
+            237,
+            257,
+            296,
+            321,
+            351,
+            388,
+            408,
+            413,
+            513,
+            537,
+            587,
+            626,
+            667,
+            669,
+            731,
+            742,
+            821,
+            823,
+            849,
+            851,
+            890,
+            956,
+            991
+          ],
+          "trace": false
+        },
+        "fetch_parallelism": 16,
+        "generation_prefix": "semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "generation_root_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "k": 10,
+        "max_memory_bytes": 536870912,
+        "metric": "cosine",
+        "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+        "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+        "phase": "bound_inputs",
+        "producer_authority": {
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+        },
+        "profile": "scale1m",
+        "query_source_first": 100000,
+        "requests_bytes": 4096000,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_interval": {
+          "end": 101000,
+          "start": 100000
+        },
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "rows": 1000000,
+        "selected_count": 32,
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_cache": "off",
+        "tie_rule": "corpus_ordinal_ascending",
+        "truth_bytes": 80000,
+        "truth_opened": false,
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+      },
+      "source_bundle": {
+        "schema": "borsuk-original-query-producer-source-bundle-v1",
+        "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+        "base_archive": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/producer-base.tar.gz",
+          "bytes": 4226312,
+          "sha256": "992c5f0f37df782b153de66f3d18880b92ab0f15db67521804a486533c0e2ea4"
+        },
+        "overlays": [
+          {
+            "repository_path": "crates/borsuk/src/semantic_unit_router.rs",
+            "body": {
+              "path": "/mnt/borsuk-paired-source-screen/inputs/producer-router-overlay.rs",
+              "bytes": 81578,
+              "sha256": "4a580f2bb3afe2c0c30c5a11b6491b28d4165788d69bb39432b748e67fc68718"
+            }
+          },
+          {
+            "repository_path": "crates/borsuk/src/two_bit_generation.rs",
+            "body": {
+              "path": "/mnt/borsuk-paired-source-screen/inputs/producer-generation-overlay.rs",
+              "bytes": 395012,
+              "sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9"
+            }
+          }
+        ],
+        "final_source_map": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/producer-source-files.sha256",
+          "bytes": 50571,
+          "sha256": "ab5ceffcc3b1dc99d8af75fb4bc86a7b2c5035c59ac9a163e40fc9316fafd2ea"
+        },
+        "final_native_map": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/producer-native-source.json",
+          "bytes": 50078,
+          "sha256": "ce4671b10f92214be94f03a7ea24f7c46f713a19ed0685bfed7242bcae2418e5"
+        },
+        "qualification": {
+          "path": "/mnt/borsuk-paired-source-screen/inputs/producer-qualification.json",
+          "bytes": 11498,
+          "sha256": "4c4819e2ea76da6d75bd2158dec314eac995f21753ceb8178a7afc490c3863d3"
+        },
+        "expected_qualification": {
+          "schema": "borsuk-scale-closure-native-qualification-v1-completed",
+          "status": "NATIVE_QUALIFIED",
+          "scope": "compiler and synthetic correctness only",
+          "candidate_source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+          "reviewed_production_delta": "e94ad0def2d48876133c1ecb2e6122331ae00238",
+          "review_group": "cb44cf12afe548a3",
+          "source_file_count": 463,
+          "native_file_count": 430,
+          "source_file_map_sha256": "ab5ceffcc3b1dc99d8af75fb4bc86a7b2c5035c59ac9a163e40fc9316fafd2ea",
+          "native_source_map_sha256": "ce4671b10f92214be94f03a7ea24f7c46f713a19ed0685bfed7242bcae2418e5",
+          "all_candidate_stage_source_before_after_match": true,
+          "stages": [
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "green-lib-recompile",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "green-lib-recompile",
+              "exit": 0,
+              "ssm_command_id": "4fded901-5f42-49d6-adbb-d8dc77d47770",
+              "command": "cargo test --locked -p borsuk --lib --no-run --message-format=json",
+              "test_executable": null,
+              "test_executable_sha256": null,
+              "cgroup_peak_bytes": 5832237056,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "green-nomination-r2",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "green-nomination-r2",
+              "exit": 0,
+              "ssm_command_id": "bd16e353-5a39-4e03-bfed-e06ff4eed563",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18 semantic_unit_router::tests::scale_nomination_preserves_scattered_closure_and_fresh_limits --exact --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18",
+              "test_executable_sha256": "5ac7d6456553621db8d8b8f48895de7b10edadb2cd800d7e5305a2ef0f092978",
+              "cgroup_peak_bytes": 6660096,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "green-scoring-r2",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "green-scoring-r2",
+              "exit": 0,
+              "ssm_command_id": "cdebde14-e83d-42d7-a123-70aadea2de3a",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18 two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once --exact --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18",
+              "test_executable_sha256": "5ac7d6456553621db8d8b8f48895de7b10edadb2cd800d7e5305a2ef0f092978",
+              "cgroup_peak_bytes": 7077888,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "green-codec-r2",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "green-codec-r2",
+              "exit": 0,
+              "ssm_command_id": "dd1a92de-84dc-48bb-afce-5b65df5165f8",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18 two_bit_generation::source_walk_tests::scale_scattered_codec_walk_covers_rows_and_partial_tail --exact --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18",
+              "test_executable_sha256": "5ac7d6456553621db8d8b8f48895de7b10edadb2cd800d7e5305a2ef0f092978",
+              "cgroup_peak_bytes": 6619136,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "affected-router-r2",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "affected-router-r2",
+              "exit": 0,
+              "ssm_command_id": "e7d14969-d199-472e-969b-51a9f56854cd",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18 semantic_unit_router::tests::  --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18",
+              "test_executable_sha256": "5ac7d6456553621db8d8b8f48895de7b10edadb2cd800d7e5305a2ef0f092978",
+              "cgroup_peak_bytes": 19730432,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "affected-source-walk-r2",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "affected-source-walk-r2",
+              "exit": 0,
+              "ssm_command_id": "4701459b-ed3a-4367-8d13-1b21cb2bda00",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18 two_bit_generation::source_walk_tests::  --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/borsuk-a25da2756a39dd18",
+              "test_executable_sha256": "5ac7d6456553621db8d8b8f48895de7b10edadb2cd800d7e5305a2ef0f092978",
+              "cgroup_peak_bytes": 348045312,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "baseline-bin-compile",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "baseline-bin-compile",
+              "exit": 0,
+              "ssm_command_id": "708b1c9a-d9af-4a64-a587-c02e2f5e059e",
+              "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline --no-run --message-format=json",
+              "test_executable": null,
+              "test_executable_sha256": null,
+              "cgroup_peak_bytes": 4145831936,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "baseline-bin-tests",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "baseline-bin-tests",
+              "exit": 0,
+              "ssm_command_id": "53d1cbb7-ad14-43c5-905e-1da0db537661",
+              "command": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/check_cohere_native_baseline-9c8148a864d88d03   --test-threads=1",
+              "test_executable": "/mnt/borsuk-scale-closure-qualification/source/target/debug/deps/check_cohere_native_baseline-9c8148a864d88d03",
+              "test_executable_sha256": "73c0342ef748350982429c4bf4a100590c1b3b3bf6e376b337ade3b928173b5d",
+              "cgroup_peak_bytes": 17387520,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "release-baseline",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "release-baseline",
+              "exit": 0,
+              "ssm_command_id": "5be3af83-da4a-4a71-bc45-2d539e0b7e8f",
+              "command": "cargo build --release --locked -p borsuk --bin check_cohere_native_baseline",
+              "test_executable": null,
+              "test_executable_sha256": null,
+              "cgroup_peak_bytes": 5210058752,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "workspace-clippy",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "workspace-clippy",
+              "exit": 0,
+              "ssm_command_id": "09640df8-c71c-4bc6-b5f3-0108bd2849aa",
+              "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+              "test_executable": null,
+              "test_executable_sha256": null,
+              "cgroup_peak_bytes": 6257688576,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            },
+            {
+              "schema": "borsuk-scale-closure-native-stage-v1",
+              "stage": "real-workspace-test-build",
+              "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+              "manager_exit": 0,
+              "native_exit": 0,
+              "owned_cgroup_drained": true,
+              "performance_claim": false,
+              "name": "real-workspace-test-build",
+              "exit": 0,
+              "ssm_command_id": "a200eed7-2caf-4eb4-9945-b605f7fb5528",
+              "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+              "test_executable": null,
+              "test_executable_sha256": null,
+              "cgroup_peak_bytes": 8589934592,
+              "source_file_count": 463,
+              "source_before_after_match": true,
+              "oom_kill": 0,
+              "swap_peak_bytes": 0
+            }
+          ],
+          "suite_counts": {
+            "router": 11,
+            "source_walk": 32,
+            "baseline": 42
+          },
+          "new_exact_regressions": 3,
+          "new_regressions_also_in_affected_suites": true,
+          "full_workspace_tests_executed": false,
+          "workspace_tests_compiled": true,
+          "release_binary": {
+            "bytes": 17047872,
+            "sha256": "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0",
+            "s3_key": "research/semantic-router/20261011/scale-closure-native-qualification-a0001/stages/release-baseline/check_cohere_native_baseline"
+          },
+          "instance_id": "i-01bdbd4b0e8b2dc95",
+          "terminated": true,
+          "termination_wait_exit": 0,
+          "root_volume_id": "vol-09108d31384f68dd7",
+          "root_volume_deleted": true,
+          "external_timer_inactive": true,
+          "swap_peak_bytes": 0,
+          "oom_kills": 0,
+          "real_corpus_gate_run": false,
+          "performance_claim": false,
+          "population_quality_claim": false,
+          "vendor_win_claim": false,
+          "product_goal_complete": false,
+          "preserved_execution_invalid": [
+            "green-lib-compile cached red ELF",
+            "green-nomination ran cached red ELF"
+          ],
+          "preserved_red_falsifiers": [
+            "red-nomination native101 semantic closure page cap",
+            "red-scoring native101 walked source geometry"
+          ]
+        }
+      }
+    }
+  },
+  "unresolved": [
+    "transport closure and exact-source actual-input admission",
+    "separate source experiment canary",
+    "preregistered SOURCE resource/quality protocol and paid authority"
+  ]
+}

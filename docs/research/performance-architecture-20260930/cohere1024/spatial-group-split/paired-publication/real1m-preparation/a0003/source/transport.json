@@ -1,0 +1,101 @@
+{
+  "schema": "borsuk-paired-real-transport-draft-v1",
+  "authority_pending": false,
+  "consumer_native_qualified": true,
+  "paid_launch": false,
+  "performance_claim": false,
+  "roles": [
+    {
+      "role": "generation_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/generation.json",
+        "bytes": 27501,
+        "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+      }
+    },
+    {
+      "role": "plane_manifest",
+      "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/plane.json",
+        "bytes": 653,
+        "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+      }
+    },
+    {
+      "role": "centroids",
+      "key": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/centroids.bin",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/centroids.bin",
+        "bytes": 64000032,
+        "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+      }
+    },
+    {
+      "role": "original_constructor_archive",
+      "key": "research/semantic-router/20261011/reconstruction-native-qualification-a0001/inputs/source.tar.gz",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-source.tar.gz",
+        "bytes": 4303661,
+        "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+      }
+    },
+    {
+      "role": "original_constructor_elf",
+      "key": "research/semantic-router/20261011/reconstruction-native-qualification-a0002/stages/reconstruction-release/compare_native_replay",
+      "pin": {
+        "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-elf",
+        "bytes": 8387384,
+        "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+      }
+    }
+  ],
+  "metadata_roles": [
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/original-approval.json",
+      "bytes": 658,
+      "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+    },
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/constructor-config.json",
+      "bytes": 1225,
+      "sha256": "2d7887c0d367055a6500cac6031aaa74a7dce07e2fe8179744117d02b5cc9b9f"
+    },
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/reconstruction.json",
+      "bytes": 3511,
+      "sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd"
+    },
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/radial-parity.json",
+      "bytes": 4895,
+      "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+    },
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/qualification.json",
+      "bytes": 5131,
+      "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+    },
+    {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/construction/corrected-closure.json",
+      "bytes": 623,
+      "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+    }
+  ],
+  "unresolved": [
+    "remote whole-body SHA authentication and exact runtime admission",
+    "separate native CLI canary",
+    "terminal evidence and closure"
+  ],
+  "consumer": {
+    "source_commit": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+    "qualification_sha256": "08c9db7cc27323e70054e6ae46fb683091c3abb46fd2dee5d6b4019298d2f2b5",
+    "key": "research/semantic-router/20261012/paired-native-qualification-a0002/stages/release-elf/compare_native_replay",
+    "pin": {
+      "path": "/mnt/borsuk-paired-source-screen/bin/compare_native_replay",
+      "bytes": 8895544,
+      "sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748"
+    }
+  }
+}

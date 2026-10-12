@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-paired-preparation-launch-disposition-v1",
+  "status": "NO_SPOT_CAPACITY",
+  "attempt": "a0001",
+  "zone": "eu-central-1c",
+  "aws_error": "InsufficientInstanceCapacity",
+  "launch_exit": 254,
+  "client_token": "borsuk-paired-real-preparation-a0001-043ee882",
+  "instance_id": null,
+  "client_token_lookup_empty": true,
+  "native_executed": false,
+  "scientific_claim": false
+}

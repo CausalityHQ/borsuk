@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-spatial-publication-config-v1",
+  "inputs": {
+    "generation_manifest": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/generation.json",
+      "bytes": 27501,
+      "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+    },
+    "plane_manifest": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/plane.json",
+      "bytes": 653,
+      "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+    },
+    "centroids": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/centroids.bin",
+      "bytes": 64000032,
+      "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+    },
+    "max_owned_bytes": 1073741824
+  },
+  "output_directory": "/mnt/borsuk-paired-source-screen/prepared-spatial"
+}

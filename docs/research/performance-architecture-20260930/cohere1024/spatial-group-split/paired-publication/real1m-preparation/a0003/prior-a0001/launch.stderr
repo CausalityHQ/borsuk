@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 0): We currently do not have sufficient c7i.xlarge capacity in the Availability Zone you requested (eu-central-1c). Our system will be working on provisioning additional capacity. You can currently get c7i.xlarge capacity by not specifying an Availability Zone in your request or choosing eu-central-1a, eu-central-1b.

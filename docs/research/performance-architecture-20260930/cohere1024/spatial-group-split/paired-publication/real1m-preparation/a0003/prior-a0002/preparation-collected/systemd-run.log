@@ -1,0 +1,13 @@
+Running as unit: borsuk-paired-preparation.service
+/mnt/borsuk-paired-source-screen/bin/compare_native_replay: OK
+true
+sha256sum: null: No such file or directory
+sha256sum: null: No such file or directory
+sha256sum: null: No such file or directory
+sha256sum: WARNING: 3 listed files could not be read
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=1
+Service runtime: 15.150s
+CPU time consumed: 15.054s
+Memory peak: 2.8M
+Memory swap peak: 0B

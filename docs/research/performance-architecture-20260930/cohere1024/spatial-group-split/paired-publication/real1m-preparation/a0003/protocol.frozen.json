@@ -1,0 +1,60 @@
+{
+  "schema": "borsuk-paired-real-preparation-protocol-v1",
+  "status": "FROZEN_QUERY_FREE_PREPARATION",
+  "paid_launch": false,
+  "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "delivered_main": "94882fc01cea8a5e34d3ad3061b47c72429374f7",
+  "consumer_elf": {
+    "bytes": 8895544,
+    "sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748"
+  },
+  "configuration_sha256": "3779326cba9d54a2da8bf98dd4e284011f87d5968448b87918a23434894c5908",
+  "authority_sha256": "8c672fbd059a71b0ba692cbbdbd4a2a4e9a9f01f4a43634ff5d1509d25fd5bcd",
+  "dataset": {
+    "rows": 1000000,
+    "dimensions": 1024,
+    "purpose": "query-free authenticated spatial publication; no ANN measurement"
+  },
+  "instance": {
+    "profile": "causality",
+    "region": "eu-central-1",
+    "zone": "eu-central-1b",
+    "purchase": "Spot",
+    "type": "c7i.xlarge",
+    "memory_mib": 8192,
+    "spot_max_usd_per_hour": "0.15"
+  },
+  "native": {
+    "cpu_quota_percent": 100,
+    "allowed_cpus": "0",
+    "memory_max_bytes": 4294967296,
+    "swap_max_bytes": 0,
+    "pids_max": 256,
+    "deadline_seconds": 1200,
+    "max_owned_bytes": 1073741824,
+    "library_construction_cap_unchanged": true
+  },
+  "machine_stop_seconds": 3600,
+  "root_watchdog_seconds": 3720,
+  "compute_ceiling_usd": "0.15",
+  "ancillary_allowance_usd": "0.10",
+  "total_ceiling_usd": "0.25",
+  "basis": "prior real1M native radial construction17.26s/~439MiB RSS; frozen mode-aware library training maximum506729928B, plus explicit metadata/retained charges. 4GiB stage on8GiB host provides host safety margin without reusing old512MiB arm limits as universal gates.",
+  "requests_and_truth": "neither staged nor opened during preparation",
+  "admission": "whole original constructor archive/ELF/metadata plus generation/plane/centroid bodies authenticated and validated through qualified Rust runtime",
+  "separate_canary": "disposable native CLI/asset/exit/cleanup smoke before paid SOURCE measurement; not scientific evidence",
+  "interruption": "preserve terminal synced evidence, classify interrupted execution INVALID, close original instance/volume before any separately frozen attempt",
+  "terminal": "native exit and actual original receipt retained; failed setup/resource enforcement INVALID, never algorithm KILL; terminate immediately after terminal publication",
+  "performance_claim": false,
+  "source_coverage_claim": false,
+  "product_ready": false,
+  "prior_attempt": {
+    "status": "INVALID_WRAPPER_DESCRIPTOR_PATH",
+    "native_exit": 0,
+    "manager_exit": 1,
+    "instance_closed": true,
+    "derived_bodies_not_retained": true
+  },
+  "entry_sha256": "c5a5c8aa35eabe8e24bcef72a965e3a3b37b92229b50236659d81cc302217e6d",
+  "causal_change": "bind metadata-only output descriptors to fixed names; retain native-success outputs even if wrapper INVALID; Rust unchanged"
+}

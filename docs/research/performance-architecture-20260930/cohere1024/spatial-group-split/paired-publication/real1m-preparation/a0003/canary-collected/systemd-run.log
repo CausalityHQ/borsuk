@@ -1,0 +1,9 @@
+Running as unit: borsuk-paired-canary.service
+/mnt/borsuk-paired-source-screen/bin/compare_native_replay: OK
+INVALID: config SHA/length/identity; external gates required
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 32ms
+CPU time consumed: 30ms
+Memory peak: 2.8M
+Memory swap peak: 0B
