@@ -72,7 +72,7 @@ zstd = "0.13"
 # sha2 0.10 requires this feature for runtime-detected ARM SHA instructions.
 sha2 = { version = "0.10", features = ["asm"] }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.186"
 
 [dev-dependencies]
