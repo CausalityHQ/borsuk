@@ -1,0 +1,51 @@
+{
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceType": "c7i.2xlarge",
+  "MinCount": 1,
+  "MaxCount": 1,
+  "SubnetId": "subnet-00243d923761c047c",
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 40,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "ClientToken": "borsuk-retained-publication-a0004-37dd2432",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-retained-publication-a0004"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "37dd24326840cb60dd058aa1dc12c73650e162df"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "retained-router-publication"
+        }
+      ]
+    }
+  ]
+}

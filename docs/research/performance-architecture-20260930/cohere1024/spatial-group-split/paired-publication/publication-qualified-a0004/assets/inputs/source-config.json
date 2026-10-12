@@ -1,0 +1,75 @@
+{
+  "schema": "borsuk-paired-source-coverage-config-v1",
+  "inputs": {
+    "generation_manifest": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/generation.json",
+      "bytes": 27501,
+      "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+    },
+    "plane_manifest": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/plane.json",
+      "bytes": 653,
+      "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+    },
+    "centroids": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/centroids.bin",
+      "bytes": 64000032,
+      "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+    },
+    "max_owned_bytes": 1073741824
+  },
+  "radial": {
+    "root": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/radial-root.bin",
+      "bytes": 3041472,
+      "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+    },
+    "membership": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/radial-membership.bin",
+      "bytes": 125000,
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+    },
+    "leaves": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/radial-leaves.bin",
+      "bytes": 64125000,
+      "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+    }
+  },
+  "spatial": {
+    "root": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-root.bin",
+      "bytes": 3041472,
+      "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+    },
+    "membership": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-membership.bin",
+      "bytes": 125000,
+      "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+    },
+    "leaves": {
+      "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-leaves.bin",
+      "bytes": 64125000,
+      "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+    }
+  },
+  "spatial_receipt": {
+    "path": "/mnt/borsuk-paired-source-screen/inputs/spatial-receipt.json",
+    "bytes": 3293,
+    "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc"
+  },
+  "requests": {
+    "path": "/mnt/borsuk-paired-source-screen/inputs/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "sq8": {
+    "path": "/mnt/borsuk-paired-source-screen/inputs/sq8.bin",
+    "bytes": 1036000000,
+    "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-paired-source-screen/inputs/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  }
+}

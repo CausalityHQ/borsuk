@@ -1,0 +1,109 @@
+{
+  "schema": "borsuk-two-bit-retained-publication-config-v3",
+  "backend": {
+    "kind": "S3",
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "region": "eu-central-1",
+    "namespace": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+    "request_timeout_seconds": 300
+  },
+  "retained_prefix": "semantic/rebound-full1000-a0001",
+  "original_root_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+  "original_generation": 1,
+  "original_control_epoch": 1,
+  "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+  "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+  "destination_prefix": "semantic/rebound-radial-returned-a0001",
+  "scratch_parent": "/mnt/borsuk-retained-returned-publication/scratch",
+  "max_scratch_bytes": 1073741824,
+  "limits": {
+    "max_memory_bytes": 2147483648,
+    "max_active_queries": 1,
+    "max_query_bytes": 16773120,
+    "max_query_gets": 32,
+    "max_parallel_gets": 16,
+    "max_source_bytes": 67108864,
+    "max_source_gets": 128,
+    "max_parallel_source_gets": 16,
+    "max_query_scratch_bytes": 16777216,
+    "already_pinned_bytes": 0
+  },
+  "router_replacement": {
+    "centroids": {
+      "bytes": 64000032,
+      "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+      "path": "/mnt/borsuk-retained-returned-publication/inputs/centroids.bin"
+    },
+    "radial": {
+      "root": {
+        "bytes": 3041472,
+        "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-root.bin"
+      },
+      "membership": {
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-membership.bin"
+      },
+      "leaves": {
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-leaves.bin"
+      }
+    },
+    "replacement": {
+      "root": {
+        "bytes": 3041472,
+        "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-root.bin"
+      },
+      "membership": {
+        "bytes": 125000,
+        "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-membership.bin"
+      },
+      "leaves": {
+        "bytes": 64125000,
+        "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-leaves.bin"
+      }
+    },
+    "proofs": {
+      "construction": {
+        "bytes": 5131,
+        "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/qualification.json"
+      },
+      "radial_parity": {
+        "bytes": 4895,
+        "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/radial-parity.json"
+      },
+      "corrected_closure": {
+        "bytes": 623,
+        "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/corrected-closure.json"
+      },
+      "spatial": {
+        "bytes": 3293,
+        "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/spatial-receipt.json"
+      },
+      "source_qualification": {
+        "bytes": 3700,
+        "sha256": "ed8a75e1493e0136bcfff8bf40ccaec657e0d3de872ced390468801e3707c21f",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/source-qualification.json"
+      },
+      "source_authority": {
+        "bytes": 51068,
+        "sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/source-authority.json"
+      },
+      "source_config": {
+        "bytes": 2774,
+        "sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8",
+        "path": "/mnt/borsuk-retained-returned-publication/inputs/source-config.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema": "borsuk-retained-publication-campaign-terminal-v1",
+  "original_campaign_exit": 0,
+  "terminal_exit": 0,
+  "closure_error": 0,
+  "forced_cleanup": false,
+  "compute_termination_pending": true,
+  "publication_accepted": false,
+  "performance_claim": false
+}

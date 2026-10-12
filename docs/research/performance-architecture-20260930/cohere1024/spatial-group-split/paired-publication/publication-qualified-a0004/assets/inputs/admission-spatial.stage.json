@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-retained-publication-stage-v1",
+  "phase": "admission-spatial",
+  "expected_exit": 0,
+  "expected_error": "",
+  "cap_seconds": 720,
+  "argv": [
+    "/mnt/borsuk-retained-returned-publication/bin/publish_two_bit_generation",
+    "--retained-router",
+    "/mnt/borsuk-retained-returned-publication/inputs/admission-spatial.config.json",
+    "eee73dc7fca2c9de0d43aed08f1d20abf8fa5ce31adf5119bc3d01018158ce2c",
+    "/mnt/borsuk-retained-returned-publication/inputs/admission-spatial.approval.json",
+    "42bfdaa58a1a1ecd3e1eef12728679f773ca3b3d47aac7fd2b43653b720551e0",
+    "/mnt/borsuk-retained-returned-publication/output/admission-spatial.receipt.json"
+  ]
+}

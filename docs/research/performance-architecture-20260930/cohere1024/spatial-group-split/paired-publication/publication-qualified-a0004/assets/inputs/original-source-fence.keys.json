@@ -1,0 +1,54 @@
+[
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+    "bytes": 4104000000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+    "bytes": 1036000000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/manifest.json",
+    "bytes": 27501
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/page_digests.bin",
+    "bytes": 125024
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/page_manifest.json",
+    "bytes": 281
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/manifest.json",
+    "bytes": 653
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/mean.bin",
+    "bytes": 4096
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/page_digests.bin",
+    "bytes": 1000000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/plane/records.bin",
+    "bytes": 264000000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/leaves.bin",
+    "bytes": 64125000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/membership.bin",
+    "bytes": 125000
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/generations/cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307/router/root.bin",
+    "bytes": 3041472
+  },
+  {
+    "key": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-full1000-a0001/head.json",
+    "bytes": 170
+  }
+]

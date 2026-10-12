@@ -1,0 +1,2 @@
+
+aws: [ERROR]: An error occurred (InsufficientInstanceCapacity) when calling the RunInstances operation (reached max retries: 0): There is no Spot capacity available that matches your request.

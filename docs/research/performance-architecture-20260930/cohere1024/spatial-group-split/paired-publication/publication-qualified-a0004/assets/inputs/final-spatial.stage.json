@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-retained-publication-stage-v1",
+  "phase": "final-spatial",
+  "expected_exit": 0,
+  "expected_error": "",
+  "cap_seconds": 720,
+  "argv": [
+    "/mnt/borsuk-retained-returned-publication/bin/publish_two_bit_generation",
+    "--retained-router",
+    "/mnt/borsuk-retained-returned-publication/inputs/final-spatial.config.json",
+    "5ce6f6a4408dc55ac1d40ce428b4802f23cca64f3c941377b13d4282e9dc96dd",
+    "/mnt/borsuk-retained-returned-publication/inputs/final-spatial.approval.json",
+    "0722d94871071ea3f15982dea527afa1a6472d2d8ad040e0fc3102c8b793da8c",
+    "/mnt/borsuk-retained-returned-publication/output/final-spatial.receipt.json"
+  ]
+}

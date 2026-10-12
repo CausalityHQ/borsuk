@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-retained-publication-stage-v1",
+  "phase": "negative-approval",
+  "expected_exit": 2,
+  "expected_error": "INVALID: config SHA/length/EOF/identity",
+  "cap_seconds": 30,
+  "argv": [
+    "/mnt/borsuk-retained-returned-publication/bin/publish_two_bit_generation",
+    "--retained-router",
+    "/mnt/borsuk-retained-returned-publication/inputs/admission-spatial.config.json",
+    "eee73dc7fca2c9de0d43aed08f1d20abf8fa5ce31adf5119bc3d01018158ce2c",
+    "/mnt/borsuk-retained-returned-publication/inputs/admission-spatial.approval.json",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "/mnt/borsuk-retained-returned-publication/output/negative-approval.receipt.json"
+  ]
+}

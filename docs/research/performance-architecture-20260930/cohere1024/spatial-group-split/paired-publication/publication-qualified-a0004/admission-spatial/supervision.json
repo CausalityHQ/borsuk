@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-retained-publication-stage-supervision-v1",
+  "phase": "admission-spatial",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "expected_native_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "publication_accepted": false,
+  "quality_claim": false,
+  "performance_claim": false
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-retained-publication-stage-v1",
+  "phase": "negative-membership",
+  "expected_exit": 2,
+  "expected_error": "INVALID: replacement file SHA/length/EOF/identity",
+  "cap_seconds": 30,
+  "argv": [
+    "/mnt/borsuk-retained-returned-publication/bin/publish_two_bit_generation",
+    "--retained-router",
+    "/mnt/borsuk-retained-returned-publication/inputs/negative-membership.config.json",
+    "7fe0a169c3fe323383718082d30d2cdc620107a64cb67a3adf62a2e492264ddd",
+    "/mnt/borsuk-retained-returned-publication/inputs/negative-membership.approval.json",
+    "2c91f60c2afb0c6d661f5fd43a7ef4ef44aa4d16b97e69a1a99aa95b467392d6",
+    "/mnt/borsuk-retained-returned-publication/output/negative-membership.receipt.json"
+  ]
+}

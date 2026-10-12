@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-retained-publication-stage-v1",
+  "phase": "final-radial",
+  "expected_exit": 0,
+  "expected_error": "",
+  "cap_seconds": 720,
+  "argv": [
+    "/mnt/borsuk-retained-returned-publication/bin/publish_two_bit_generation",
+    "--retained-router",
+    "/mnt/borsuk-retained-returned-publication/inputs/final-radial.config.json",
+    "ffd9114e7fd71223fd756d5a8b6aa0e4e2cb7f17748e6349535c77c236f98255",
+    "/mnt/borsuk-retained-returned-publication/inputs/final-radial.approval.json",
+    "6223664b2e348a35269788835d2a8cc78b73dcd86d5dd5c8f79209e7c62d6dd0",
+    "/mnt/borsuk-retained-returned-publication/output/final-radial.receipt.json"
+  ]
+}

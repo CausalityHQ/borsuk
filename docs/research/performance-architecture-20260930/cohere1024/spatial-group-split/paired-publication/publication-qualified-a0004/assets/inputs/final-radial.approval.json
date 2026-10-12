@@ -1,0 +1,580 @@
+{
+  "schema": "borsuk-retained-router-replacement-approval-v1",
+  "config_sha256": "ffd9114e7fd71223fd756d5a8b6aa0e4e2cb7f17748e6349535c77c236f98255",
+  "original": {
+    "schema": "borsuk-partition-reconstruction-approval-v1",
+    "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+    "generation": 1,
+    "base_epoch": 0,
+    "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+    "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+    "input_schema": "borsuk-two-bit-plane-v3",
+    "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+    "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+    "profile": "scale1m",
+    "rows": 1000000,
+    "dimensions": 1024
+  },
+  "original_discovery": {
+    "mode": "semantic",
+    "profile": "scale1m",
+    "root_sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492",
+    "root_bytes": 3041472,
+    "membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+    "membership_bytes": 125000,
+    "leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+    "leaves_bytes": 64125000,
+    "input_schema": "borsuk-two-bit-plane-v3",
+    "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+    "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+    "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+    "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+    "mean_sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+    "records_sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+    "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+  },
+  "centroids": {
+    "bytes": 64000032,
+    "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+  },
+  "radial": {
+    "root": {
+      "bytes": 3041472,
+      "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+    },
+    "membership": {
+      "bytes": 125000,
+      "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+    },
+    "leaves": {
+      "bytes": 64125000,
+      "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+    }
+  },
+  "spatial": {
+    "leaves": {
+      "bytes": 64125000,
+      "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+    },
+    "membership": {
+      "bytes": 125000,
+      "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+    },
+    "root": {
+      "bytes": 3041472,
+      "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+    }
+  },
+  "replacement_partition": "radial64_v1",
+  "proofs": {
+    "construction": {
+      "pin": {
+        "bytes": 5131,
+        "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+      },
+      "expected": {
+        "schema": "borsuk-real1m-construction-qualified-v1",
+        "status": "REAL_RECONSTRUCTION_AND_HISTORICAL_RADIAL_PARITY_QUALIFIED",
+        "source_commit": "91107713f6f7bd700b5b6d92a83e438febac8069",
+        "published_compiler_qualification_commit": "319f8c4bbac69f522fc25a0ecd93f2e9232e9b84",
+        "elf_sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52",
+        "original_generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+        "original_approval": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "admission": {
+          "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+          "stage": "admission",
+          "instance_id": "i-0e7ec79ad22db80d1",
+          "original_ssm_command_id": "0213fc5c-25fd-4e76-8bd4-f10c5ca8af70",
+          "terminal_sha256": "3fb0ff53bdfb8b83df57431b4e19e9d25157205cc427c6ae036bd1cd88980fc1",
+          "native_receipt_sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd",
+          "all_closed_body_hashes_verified": true,
+          "original_ssm_success": true,
+          "performance_claim": false
+        },
+        "canary": {
+          "schema": "borsuk-reconstruction-root-phase-acceptance-v1",
+          "stage": "smoke",
+          "instance_id": "i-0e7ec79ad22db80d1",
+          "original_ssm_command_id": "b9be10c6-a52c-4fca-9d82-0133f6caf537",
+          "terminal_sha256": "b60aebdacd8467f483d598ec59e6d1ff5b36c6a1c41c223c3e950b6664f861df",
+          "native_receipt_sha256": "3de8275b2334c967b5d11f7424fa3eabfcaa25774c16161ef0b5fa241b3e91e3",
+          "all_closed_body_hashes_verified": true,
+          "original_ssm_success": true,
+          "performance_claim": false
+        },
+        "original_parity": {
+          "ssm_command_id": "dd1c3fb4-157c-479e-a2ca-11feb3e758cd",
+          "ssm_status": "Failed",
+          "manager_exit": 1,
+          "native_exit": 0,
+          "disposition": "INVALID_RECEIPT_VALIDATOR",
+          "disposition_preserved": true,
+          "receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+        },
+        "closed_output_revalidation": {
+          "ssm_command_id": "c1f36a29-65a7-4927-980b-2fc0bef87922",
+          "status": "Success",
+          "exit": 0,
+          "native_reexecuted": false,
+          "all_recovery_body_checksums_verified": true
+        },
+        "historical_parity": {
+          "builder_peak_bytes": 506729928,
+          "experiment_charge_bytes": 513807432,
+          "old_allocation_limit_bytes": 506729928,
+          "old_leaves": {
+            "bytes": 64125000,
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "old_membership": {
+            "bytes": 125000,
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "old_root": {
+            "bytes": 3041472,
+            "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+          },
+          "radial_leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+          "radial_membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+          "radial_root_sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+          "root_exceptions": [
+            {
+              "new": "BORSUSR3",
+              "offset": 0,
+              "old": "BORSUSR2"
+            },
+            {
+              "new_le_u32": 1,
+              "offset": 88,
+              "old_le_u32": 0
+            }
+          ]
+        },
+        "retained_derived_outputs": {
+          "leaves": {
+            "bytes": 64125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-leaves.bin",
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "membership": {
+            "bytes": 125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-membership.bin",
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "root": {
+            "bytes": 3041472,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-root.bin",
+            "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+          }
+        },
+        "centroids": {
+          "bytes": 64000032,
+          "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/centroids.bin",
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "retained_s3_prefix": "research/semantic-router/20261011/reconstruction-real1m-a0001/retained-derived/",
+        "requests_opened": false,
+        "truth_opened": false,
+        "instance_id": "i-0e7ec79ad22db80d1",
+        "terminated": true,
+        "volume_id": "vol-09f6fcc3c4f757a36",
+        "volume_deleted": true,
+        "watchdog_stopped": true,
+        "performance_claim": false,
+        "product_ready": false
+      }
+    },
+    "radial_parity": {
+      "pin": {
+        "bytes": 4895,
+        "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+      },
+      "expected": {
+        "approval": {
+          "bytes": 658,
+          "path": "/mnt/borsuk-reconstruction-real1m/approval.json",
+          "sha256": "8f2b7bee0066cd0af9363566c5fb726486f883f4c36d0cdb1024d3fd382a73ff"
+        },
+        "binary": {
+          "bytes": 8387384,
+          "path": "/mnt/borsuk-reconstruction-real1m/bin/compare_native_replay",
+          "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+        },
+        "centroids": {
+          "bytes": 64000032,
+          "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/centroids.bin",
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "centroids_bytes": 64000032,
+        "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+        "complete": true,
+        "config": {
+          "bytes": 1225,
+          "path": "/mnt/borsuk-reconstruction-real1m/parity.config.json",
+          "sha256": "2d7887c0d367055a6500cac6031aaa74a7dce07e2fe8179744117d02b5cc9b9f"
+        },
+        "final_unit_rows": 32,
+        "generation": {
+          "bytes": 27501,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/generation.json",
+          "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+        },
+        "historical_membership_opened": true,
+        "historical_parity": {
+          "builder_peak_bytes": 506729928,
+          "experiment_charge_bytes": 513807432,
+          "old_allocation_limit_bytes": 506729928,
+          "old_leaves": {
+            "bytes": 64125000,
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "old_membership": {
+            "bytes": 125000,
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "old_root": {
+            "bytes": 3041472,
+            "sha256": "8fe6f7c690e454002ba7d319353b114d574d5f5cea7e1f8008c7288b41c41492"
+          },
+          "radial_leaves_sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6",
+          "radial_membership_sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463",
+          "radial_root_sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44",
+          "root_exceptions": [
+            {
+              "new": "BORSUSR3",
+              "offset": 0,
+              "old": "BORSUSR2"
+            },
+            {
+              "new_le_u32": 1,
+              "offset": 88,
+              "old_le_u32": 0
+            }
+          ]
+        },
+        "historical_root_opened": true,
+        "implementation": {
+          "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+          "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+          "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+          "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+          "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+          "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+          "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+        },
+        "leaves": {
+          "bytes": 64125000,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/leaves.bin",
+          "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+        },
+        "max_payload_bytes": 536870912,
+        "metadata_charge_bytes": 7077504,
+        "original": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "page_rows": 256,
+        "plane": {
+          "bytes": 653,
+          "path": "/mnt/borsuk-reconstruction-real1m/inputs/plane.json",
+          "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+        },
+        "radial_outputs": {
+          "leaves": {
+            "bytes": 64125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-leaves.bin",
+            "sha256": "2b302a08d2e583c6470c95f16b46f3db60b86dc782ae555365f201f74d5323c6"
+          },
+          "membership": {
+            "bytes": 125000,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-membership.bin",
+            "sha256": "9864f7c207430cda4b5f58798c3957aaf0b8bfa0553920e18f08315e5fe6c463"
+          },
+          "root": {
+            "bytes": 3041472,
+            "path": "/mnt/borsuk-reconstruction-real1m/evidence/parity/published/radial-root.bin",
+            "sha256": "e5c32d4c91b4e68fb8f960a1140020e378524346b25fdfc4969e036114e93c44"
+          }
+        },
+        "reconstruction_charge_bytes": 71083495,
+        "requests_opened": false,
+        "requires_original_successful_terminal_receipt": true,
+        "requires_successful_directory_sync": true,
+        "requires_successful_file_sync": true,
+        "schema": "borsuk-partition-reconstruction-receipt-v1",
+        "source": {
+          "mean_sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+          "records_sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "status": "HISTORICAL_RADIAL_PARITY",
+        "truth_opened": false,
+        "unit_count": 31250,
+        "unit_rows": 32
+      }
+    },
+    "corrected_closure": {
+      "pin": {
+        "bytes": 623,
+        "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+      },
+      "expected": {
+        "schema": "borsuk-reconstruction-closed-parity-recovery-v1",
+        "status": "CLOSED_NATIVE_PARITY_VALIDATED",
+        "original_native_exit": 0,
+        "original_manager_exit": 1,
+        "original_stage_disposition": "INVALID_RECEIPT_VALIDATOR",
+        "original_disposition_preserved": true,
+        "native_reexecuted": false,
+        "original_receipt_sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771",
+        "descriptor_validation": "exact bytes and SHA; descriptor deliberately has no local path",
+        "derived_outputs_full_body_hash_verified": true,
+        "derived_outputs_retained_create_only": true,
+        "performance_claim": false
+      }
+    },
+    "spatial": {
+      "pin": {
+        "bytes": 3293,
+        "sha256": "bf6e2076f1cf9cdd0b396a7e70a4238603022f1f1e6fa53eeb18bcffda22d4fc"
+      },
+      "expected": {
+        "authority_sha256": "8c672fbd059a71b0ba692cbbdbd4a2a4e9a9f01f4a43634ff5d1509d25fd5bcd",
+        "centroids": {
+          "bytes": 64000032,
+          "sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8"
+        },
+        "complete": true,
+        "config_sha256": "3779326cba9d54a2da8bf98dd4e284011f87d5968448b87918a23434894c5908",
+        "constructor_archive": {
+          "bytes": 4303661,
+          "sha256": "c8241fc08be7c7207e8a618a34225e660c7ccfcd635c8c5443fabfc68339d7fe"
+        },
+        "constructor_binary": {
+          "bytes": 8387384,
+          "sha256": "739e703efe1c6ac1364c4c1173a8c8bcba4929d7466a9a088ceb16d268e73f52"
+        },
+        "constructor_implementation": {
+          "centroid_sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307",
+          "example_sha256": "d71ba7717c57d498f3c68c7976a0d2c824ea26472c644c97cbfe676f6a0652cb",
+          "generation_sha256": "3cb8d291eeda39bb29f27884f898e34a4a7f444059d52599a36439aa8fe4a0a9",
+          "module_sha256": "715b8a1d028403a361f83bea0e70b1fe4a4f5aabcceae06512faa900d23547c5",
+          "plane_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+          "router_sha256": "60538073b26d5893d1d75e689ebe4b223e575875b5a4d45e5be02f56cd2a3e2f",
+          "trainer_sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+        },
+        "corrected_closure": {
+          "bytes": 623,
+          "sha256": "fa34308caa3871935f83039ab8d65230732b1af647ebbd14e003606587079e22"
+        },
+        "generation": {
+          "bytes": 27501,
+          "sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307"
+        },
+        "original": {
+          "base_epoch": 0,
+          "centroids_sha256": "720b98899031e1aeeeabe0fb2aa0d938485b43141c2438c251b3383a6f0315d8",
+          "dimensions": 1024,
+          "discovery_sha256": "5641146cd167de6be232a71fd54162a9863337d3bdbbda0d2e4857e88826c2da",
+          "generation": 1,
+          "generation_sha256": "cb9f3a64f6f709005b897aa1dad7352a93fba2f080aca43b31106613de622307",
+          "input_root_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "input_schema": "borsuk-two-bit-plane-v3",
+          "plane_sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+          "profile": "scale1m",
+          "rows": 1000000,
+          "schema": "borsuk-partition-reconstruction-approval-v1"
+        },
+        "ownership": {
+          "cap": 1073741824,
+          "metadata": 12298560,
+          "phases": {
+            "centroid authentication": 76298592,
+            "metadata": 12298560,
+            "spatial emission": 492960136,
+            "spatial output capacities": 599805736,
+            "spatial training": 583028520,
+            "spatial validation": 431144792
+          },
+          "retained": 0
+        },
+        "partition": "widest_axis_quota_v1",
+        "performance_claim": false,
+        "plane": {
+          "bytes": 653,
+          "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+        },
+        "publication": {
+          "leaves": {
+            "bytes": 64125000,
+            "sha256": "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766"
+          },
+          "membership": {
+            "bytes": 125000,
+            "sha256": "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446"
+          },
+          "root": {
+            "bytes": 3041472,
+            "sha256": "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f"
+          }
+        },
+        "qualification": {
+          "bytes": 5131,
+          "sha256": "22e37e16f6a90b75d5c18b9308c9b321773a6ef011ebc708f0dd6c71ab63ad34"
+        },
+        "qualified": false,
+        "radial_parity": {
+          "bytes": 4895,
+          "sha256": "a85b49fa008dc3feb699abb96d498dafb872de870cd804bc77aff38785a33771"
+        },
+        "reconstruction": {
+          "bytes": 3511,
+          "sha256": "eb8e8538822711b20e7a4038828b4fb634cff0cfaedd60d36ed60c88eb7d62cd"
+        },
+        "requests_opened": false,
+        "requires_successful_directory_sync": true,
+        "requires_successful_file_sync": true,
+        "schema": "borsuk-spatial-publication-receipt-v1",
+        "source_payload_opened": false,
+        "status": "SPATIAL_PREPARED",
+        "truth_opened": false
+      }
+    },
+    "source_qualification": {
+      "pin": {
+        "bytes": 3700,
+        "sha256": "ed8a75e1493e0136bcfff8bf40ccaec657e0d3de872ced390468801e3707c21f"
+      },
+      "expected": {
+        "schema": "borsuk-paired-source-screen-qualified-v1",
+        "status": "CONSUMED_SOURCE_SCREEN_PASS",
+        "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+        "consumer_elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+        "command_id": "ba342b5e-324d-4da2-88f6-88185dd80d8c",
+        "ssm_status": "Success",
+        "ssm_exit": 0,
+        "stages": [
+          {
+            "schema": "borsuk-paired-source-screen-stage-v1",
+            "phase": "canary",
+            "execution_closed": true,
+            "manager_exit": 0,
+            "native_exit": 2,
+            "owned_cgroup_drained": true,
+            "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+            "consumer_elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+            "configuration_sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8",
+            "authority_sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737",
+            "scope": "consumed32 SOURCE planner coverage only; native result remains authoritative",
+            "cold_s3_claim": false,
+            "performance_claim": false,
+            "candidate_returned_quality_claim": false
+          },
+          {
+            "schema": "borsuk-paired-source-screen-stage-v1",
+            "phase": "screen",
+            "execution_closed": true,
+            "manager_exit": 0,
+            "native_exit": 0,
+            "owned_cgroup_drained": true,
+            "consumer_source": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+            "consumer_elf_sha256": "fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748",
+            "configuration_sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8",
+            "authority_sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737",
+            "scope": "consumed32 SOURCE planner coverage only; native result remains authoritative",
+            "cold_s3_claim": false,
+            "performance_claim": false,
+            "candidate_returned_quality_claim": false
+          }
+        ],
+        "native_summary": {
+          "schema": "borsuk-paired-source-coverage-v1",
+          "status": "PASS",
+          "complete": true,
+          "error": null,
+          "resource_gate_failed": null,
+          "admission_refused": null,
+          "original_returned_hits": 313,
+          "radial_source_coverage": 314,
+          "spatial_source_coverage": 316,
+          "truth_slots": 320,
+          "gained_slots": 2,
+          "displaced_lost_slots": 0,
+          "radial_bridge_only_slots": 0,
+          "spatial_bridge_only_slots": 0,
+          "truth_opened_after_durable_paired_selection": true,
+          "consumed_panel": true,
+          "planner_only": true,
+          "source_payload_read": false,
+          "candidate_returned_ids_computed": false,
+          "cold_s3_claim": false,
+          "default_promotion": false,
+          "qualified": false,
+          "selection_seal_sha256": "a4aa0a66e398e1238f937729d6ecbf897ca0c97a71335ad62acf96cf72b19426"
+        },
+        "closed_object_count": 46,
+        "closed_object_bytes": 2315927,
+        "all_server_sha_and_bytes_verified": true,
+        "all_stage_manifests_verified": true,
+        "exact_manifest_rosters": true,
+        "selection_seal_hash_matches_native": true,
+        "elapsed_source_screen_seconds": 1.77,
+        "maximum_rss_kib": 262180,
+        "swap_oom_zero": true,
+        "scope": "32 consumed ordinals, SOURCE planner coverage only",
+        "candidate_returned_quality_claim": false,
+        "heldout_claim": false,
+        "cold_s3_claim": false,
+        "performance_claim": false,
+        "default_promotion": false,
+        "product_ready": false,
+        "instance": [
+          {
+            "id": "i-0633e3d6c0873440f",
+            "state": "terminated",
+            "type": "c7i.xlarge"
+          }
+        ],
+        "terminated": true,
+        "volume_id": "vol-094bd4508d139ebf4",
+        "volume_not_found": true,
+        "external_timer_stopped": true,
+        "bg_off": true,
+        "next": "actual returned top10 quality on spatial publication, then independent cold measurements"
+      }
+    },
+    "source_authority": {
+      "bytes": 51068,
+      "sha256": "eae672ca128acd9e67d6c92c93422b264579754ebd00934bf3d911858e6f5737"
+    },
+    "source_config": {
+      "bytes": 2774,
+      "sha256": "78c29dc3388f991c5db17fef7883ca9ee503ed2b4da9a1632b6cc19200dfb1a8"
+    }
+  }
+}

@@ -1,0 +1,1 @@
+Original close-compute.sh returned1 only because systemctl is-active returned4 after the transient timer unloaded. Original final text inactive preserved. Independent show proves LoadState=not-found/ActiveState=inactive/SubState=dead. Termination wait succeeded; exact owned volume NotFound254. No terminate or paid command repeated.
