@@ -32,6 +32,9 @@ mod partition_reconstruction;
 #[path = "compare_native_replay/paired_partition_coverage.rs"]
 mod paired_partition_coverage;
 
+#[path = "compare_native_replay/paired_returned_panel.rs"]
+mod paired_returned_panel;
+
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
 #[allow(dead_code)]
 #[path = "../src/budgeted_page_rank.rs"]
@@ -8010,6 +8013,22 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--paired-returned-panel")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --paired-returned-panel CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return paired_returned_panel::execute(
+                Path::new(&args[2]),
+                args[3]
+                    .to_str()
+                    .ok_or("paired returned config SHA encoding")?,
+                Path::new(&args[4]),
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--prepare-spatial-publication")
