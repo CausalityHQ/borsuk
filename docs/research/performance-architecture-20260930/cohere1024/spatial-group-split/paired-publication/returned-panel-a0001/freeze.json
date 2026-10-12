@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-paired-returned-freeze-v1",
+  "status": "FROZEN_PAIRED_RETURNED",
+  "source": "df0ffd518fa1b040e06be499ab417ca2859bb7d7",
+  "qualified_native_source": "ddbcd91cf8e5e0388eaa15ab8d7a20032428936f",
+  "transport_sha256": "f246bbea6ad2c4c8f59ced72781cf5b0bf9f7874e54fe41e8227b3c0162663b0",
+  "machine_seconds": 7200,
+  "root_watchdog_seconds": 7320,
+  "cost_ceiling_usd": 0.75,
+  "query_memory_bytes": 536870912,
+  "query_cpu": "0",
+  "query_parallelism": 16,
+  "query_concurrency": 1,
+  "query_pids": 128,
+  "spot_bid_usd_per_hour": 0.25,
+  "actual_execution": false,
+  "quality_gate": "spatial_hits>radial_hits AND lost_slots=0 AND radial_control_id_score_bits_parity",
+  "cold_performance_claim": false
+}

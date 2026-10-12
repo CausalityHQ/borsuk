@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-paired-returned-panel-v1",
+  "status": "ADVANCE",
+  "complete": true,
+  "query_count": 32,
+  "truth_slots": 320,
+  "original_control_hits10": 313,
+  "radial_hits10": 313,
+  "spatial_hits10": 315,
+  "gained": 2,
+  "lost": 0,
+  "radial_control_ordered_id_score_bits_parity": true,
+  "population_percentiles_valid": false,
+  "cold_latency_or_qps_claim": false,
+  "vendor_or_product_win_claim": false
+}

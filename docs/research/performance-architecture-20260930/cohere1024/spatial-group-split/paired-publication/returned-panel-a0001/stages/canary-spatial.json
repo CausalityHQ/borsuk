@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-paired-returned-stage-supervision-v1",
+  "phase": "canary-spatial",
+  "kind": "baseline",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "quality_decision_pending": true,
+  "performance_claim": false
+}

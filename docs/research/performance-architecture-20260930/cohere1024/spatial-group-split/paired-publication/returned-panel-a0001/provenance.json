@@ -1,0 +1,14 @@
+{
+  "current": {
+    "source_commit": "ddbcd91cf8e5e0388eaa15ab8d7a20032428936f",
+    "source_archive_sha256": "b06f15804f011f6b91858921d009f82e1bf27e29fa2b867327c1f6599fe15700",
+    "binary_sha256": "b1c12829989c75ed75de94d7c6824e361fceff59be5538d52899a7105b295be5"
+  },
+  "historical": {
+    "source_commit": "6e78d393b4d7dadf19befeeabe3dc20a77319a26",
+    "source_archive_sha256": "992c5f0f37df782b153de66f3d18880b92ab0f15db67521804a486533c0e2ea4",
+    "binary_sha256": "72ac92e78f0e12ada77f6f6dc8c48d66bc547067a8e12440b469424993fe21f0"
+  },
+  "historical_archive_scope": "original base archive; candidate overlays independently qualified by full final native/source maps and fresh rebuild; not a claim the base tar alone contains the final candidate",
+  "status": "PROVENANCE_LOCATED_NOT_RUNTIME_ADMISSION"
+}
