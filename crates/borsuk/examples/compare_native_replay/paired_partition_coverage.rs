@@ -1813,7 +1813,7 @@ fn output_roles(
     header_path(report)?;
     require(selection != report, "selection/report role alias")?;
     // No filesystem operation on the truth role occurs here.
-    let mut paths = vec![
+    let mut paths: Vec<&Path> = vec![
         &c.inputs.generation_manifest.path,
         &c.inputs.plane_manifest.path,
         &c.inputs.centroids.path,
@@ -1836,16 +1836,20 @@ fn output_roles(
         &a.producer.source_bundle.qualification.path,
         &a.producer.binary.path,
     ];
-    paths.extend([
-        &a.construction.original_approval.path,
-        &a.construction.constructor.config.path,
-        &a.construction.constructor.archive.path,
-        &a.construction.constructor.binary.path,
-        &a.construction.reconstruction.path,
-        &a.construction.radial_parity.path,
-        &a.construction.qualification.path,
-        &a.construction.corrected_closure.path,
-    ]);
+    paths.extend(
+        [
+            &a.construction.original_approval.path,
+            &a.construction.constructor.config.path,
+            &a.construction.constructor.archive.path,
+            &a.construction.constructor.binary.path,
+            &a.construction.reconstruction.path,
+            &a.construction.radial_parity.path,
+            &a.construction.qualification.path,
+            &a.construction.corrected_closure.path,
+        ]
+        .into_iter()
+        .map(PathBuf::as_path),
+    );
     paths.extend(bootstrap.iter().copied());
     // Bootstrap reads discover these role names; this guard precedes all subsequent role traversal.
     let normalized = |p: &Path| -> Result<PathBuf> {
