@@ -445,6 +445,252 @@ pub struct RetainedTwoBitApproval<'a> {
     pub sq8_object_key: &'a str,
     /// Strong current SQ8 ETag, independently approved by the caller.
     pub sq8_etag: &'a str,
+    /// Explicit independent router approval; `None` authorizes transport only.
+    pub router_replacement: Option<RetainedSemanticRouterReplacement<'a>>,
+}
+
+/// Immutable bytes and their independently approved length/digest, before decode.
+#[derive(Clone, Copy)]
+pub struct RetainedRouterBody<'a> {
+    /// Caller-owned immutable body; excess allocation capacity is a caller pin.
+    pub body: &'a [u8],
+    /// Independent authority; descriptor/string capacities are caller pins.
+    pub approved: &'a crate::semantic_unit_router::Artifact,
+}
+
+/// Exactly three current router bodies, with an explicitly approved partition.
+#[derive(Clone, Copy)]
+pub struct RetainedRouterPublication<'a> {
+    /// Approved current BORSUSR3 root.
+    pub root: RetainedRouterBody<'a>,
+    /// Approved physical-unit membership.
+    pub membership: RetainedRouterBody<'a>,
+    /// Approved original FP16 leaf records.
+    pub leaves: RetainedRouterBody<'a>,
+    /// Independently approved mode.
+    pub partition: crate::semantic_unit_router::LeafPartition,
+}
+
+/// Authenticated replacement over original construction/centroid authority.
+/// The caller authenticates closed provenance receipts independently; a copied
+/// head or replacement generation digest is never construction authority.
+#[derive(Clone, Copy)]
+pub struct RetainedSemanticRouterReplacement<'a> {
+    /// Original semantic descriptor digest, including historical artifact pins.
+    pub original_discovery_sha256: &'a str,
+    /// Original construction identity, compared to retained discovery and plane.
+    pub input: crate::semantic_unit_router::SourceIdentity<'a>,
+    /// Original centroids, kept outside the serving roster.
+    pub centroids: RetainedRouterBody<'a>,
+    /// Qualified current radial witness; historical BORSUSR2 is not decoded.
+    pub radial: RetainedRouterPublication<'a>,
+    /// Explicit radial or spatial publication to stage byte-for-byte.
+    pub replacement: RetainedRouterPublication<'a>,
+}
+
+impl RetainedSemanticRouterReplacement<'_> {
+    fn bodies(&self) -> [RetainedRouterBody<'_>; 7] {
+        [
+            self.centroids,
+            self.radial.root,
+            self.radial.membership,
+            self.radial.leaves,
+            self.replacement.root,
+            self.replacement.membership,
+            self.replacement.leaves,
+        ]
+    }
+
+    fn pinned_bytes(&self) -> Result<u64> {
+        let bad = TwoBitStoreError::Invalid;
+        if !self
+            .input
+            .profile
+            .valid_geometry(self.input.rows, self.input.dimensions)
+            || !valid_sha256(self.original_discovery_sha256)
+            || !(1..=256).contains(&self.input.schema.len())
+            || !valid_sha256(self.input.root_sha256)
+            || !valid_sha256(self.input.centroids_sha256)
+        {
+            return Err(bad("replacement construction identity"));
+        }
+        let units = self.input.rows.div_ceil(32);
+        let centroid_bytes = units
+            .checked_mul(self.input.dimensions)
+            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(32))
+            .ok_or(bad("replacement geometry"))?;
+        let membership_bytes = units.checked_mul(4).ok_or(bad("replacement geometry"))?;
+        let leaves_bytes = units
+            .checked_mul(4 + 2 * self.input.dimensions)
+            .ok_or(bad("replacement geometry"))?;
+        for (body, (cap, exact)) in self.bodies().into_iter().zip([
+            (centroid_bytes, true),
+            (self.input.profile.root_cap(), false),
+            (membership_bytes, true),
+            (leaves_bytes, true),
+            (self.input.profile.root_cap(), false),
+            (membership_bytes, true),
+            (leaves_bytes, true),
+        ]) {
+            if body.body.is_empty()
+                || body.body.len() > cap
+                || (exact && body.body.len() != cap)
+                || body.approved.bytes != body.body.len()
+                || !valid_sha256(&body.approved.sha256)
+            {
+                return Err(bad("replacement body admission"));
+            }
+        }
+        // Every borrowed body remains pinned during validation/serving. One
+        // largest create-only PutPayload copy is charged before staging too.
+        self.bodies()
+            .into_iter()
+            .try_fold(0_u64, |total, body| {
+                total.checked_add(body.body.len() as u64)
+            })
+            .and_then(|total| {
+                total.checked_add(
+                    [
+                        self.replacement.root,
+                        self.replacement.membership,
+                        self.replacement.leaves,
+                    ]
+                    .into_iter()
+                    .map(|b| b.body.len() as u64)
+                    .max()?,
+                )
+            })
+            .ok_or(bad("replacement cumulative body memory"))
+    }
+
+    fn validate(
+        &self,
+        manifest: &Manifest,
+        plane: &SourcePlaneReceipt,
+        available: usize,
+    ) -> Result<()> {
+        use crate::semantic_unit_router::{
+            LeafPartition, SemanticUnitRouter, admit_authenticated_root, validate_publication,
+        };
+        use sha2::{Digest, Sha256};
+        let bad = TwoBitStoreError::Invalid;
+        let discovery = serde_json::to_value(&manifest.discovery)
+            .and_then(|value| serde_json::to_vec(&value))
+            .map_err(|_| bad("replacement original discovery"))?;
+        if format!("{:x}", Sha256::digest(&discovery)) != self.original_discovery_sha256 {
+            return Err(bad("replacement original discovery identity"));
+        }
+        let Discovery::Semantic {
+            profile,
+            input_schema,
+            input_root_sha256,
+            centroids_sha256,
+            source_sha256,
+            source_order_sha256,
+            mean_sha256,
+            records_sha256,
+            sq8_sha256,
+            ..
+        } = &manifest.discovery
+        else {
+            return Err(bad("replacement semantic provenance"));
+        };
+        if self.input.profile != *profile
+            || self.input.schema != input_schema
+            || self.input.root_sha256 != input_root_sha256
+            || self.input.centroids_sha256 != centroids_sha256
+            || self.input.rows != manifest.canonical.rows
+            || self.input.dimensions != manifest.canonical.dimensions
+            || plane.schema != self.input.schema
+            || manifest.plane_manifest_sha256 != self.input.root_sha256
+            || source_sha256 != &plane.source_sha256
+            || source_order_sha256 != &plane.source_order_sha256
+            || mean_sha256 != &plane.mean_sha256
+            || records_sha256 != &plane.records_sha256
+            || sq8_sha256 != &manifest.sq8_object_sha256
+            || sq8_sha256 != &plane.sq8_sha256
+            || self.centroids.approved.sha256 != self.input.centroids_sha256
+            || self.radial.partition != LeafPartition::Radial64V1
+        {
+            return Err(bad("replacement construction provenance"));
+        }
+        // Authenticate ALL independently pinned bodies before any router/centroid decode.
+        for body in self.bodies() {
+            if format!("{:x}", Sha256::digest(body.body)) != body.approved.sha256 {
+                return Err(bad("replacement body SHA"));
+            }
+        }
+        let map_bytes = self
+            .input
+            .rows
+            .div_ceil(32)
+            .checked_mul(4)
+            .ok_or(bad("replacement group memory"))?;
+        let budget = available
+            .checked_sub(map_bytes)
+            .ok_or(bad("replacement group memory"))?;
+        // Admit both modes before allocating the map or either validator.
+        for p in [self.radial, self.replacement] {
+            let (partition, _) =
+                admit_authenticated_root(p.root.body, &p.root.approved.sha256, &self.input, budget)
+                    .map_err(|_| bad("replacement router admission"))?;
+            if partition != p.partition {
+                return Err(bad("replacement partition approval"));
+            }
+        }
+        validate_publication(
+            self.radial.root.body,
+            self.radial.membership.body,
+            self.radial.leaves.body,
+            &self.input,
+            self.centroids.body,
+        )
+        .map_err(|_| bad("replacement radial publication"))?;
+        let radial = SemanticUnitRouter::open(
+            self.radial.root.body,
+            self.radial.membership.body,
+            &self.radial.root.approved.sha256,
+            &self.input,
+            self.input.profile.root_cap(),
+        )
+        .map_err(|_| bad("replacement radial router"))?;
+        let mut groups = vec![0_u32; self.input.rows.div_ceil(32)];
+        for (group, &leaf) in groups.iter_mut().zip(radial.unit_membership()) {
+            *group = u32::try_from(radial.manifest().leaves[leaf].group_ordinal)
+                .map_err(|_| bad("replacement group ordinal"))?;
+        }
+        drop(radial);
+        validate_publication(
+            self.replacement.root.body,
+            self.replacement.membership.body,
+            self.replacement.leaves.body,
+            &self.input,
+            self.centroids.body,
+        )
+        .map_err(|_| bad("replacement publication"))?;
+        let replacement = SemanticUnitRouter::open(
+            self.replacement.root.body,
+            self.replacement.membership.body,
+            &self.replacement.root.approved.sha256,
+            &self.input,
+            self.input.profile.root_cap(),
+        )
+        .map_err(|_| bad("replacement router"))?;
+        if replacement.unit_membership().len() != groups.len()
+            || groups.capacity() != groups.len()
+            || replacement
+                .unit_membership()
+                .iter()
+                .zip(&groups)
+                .any(|(&leaf, &group)| {
+                    replacement.manifest().leaves[leaf].group_ordinal != group as usize
+                })
+        {
+            return Err(bad("replacement per-physical-unit group mismatch"));
+        }
+        Ok(())
+    }
 }
 
 fn retained_etag(tag: &str) -> bool {
@@ -581,9 +827,34 @@ async fn recheck_retained_control(store: &dyn ObjectStore, retained: &TwoBitHead
     Ok(())
 }
 
+async fn retained_roster(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    roster: &[(&str, &str, ObjectMeta)],
+) -> Result<()> {
+    let mut seen = [false; 10];
+    let mut objects = store.list(Some(prefix));
+    while let Some(meta) = objects.next().await {
+        let meta = meta?;
+        let index = roster
+            .iter()
+            .position(|(_, _, pin)| pin.location == meta.location)
+            .ok_or(TwoBitStoreError::Invalid("retained artifact roster"))?;
+        if seen[index] || meta != roster[index].2 {
+            return Err(TwoBitStoreError::Invalid("retained artifact roster"));
+        }
+        seen[index] = true;
+    }
+    if !seen.into_iter().all(|v| v) {
+        return Err(TwoBitStoreError::Invalid("retained artifact roster"));
+    }
+    Ok(())
+}
+
 /// Republish an independently approved initial semantic generation after copying.
 /// Authenticates every retained body, including canonical/source/leaves/SQ8, then
-/// changes only the SQ8 key/ETag. No centroids, rebuild, fitting or query changes.
+/// changes the approved SQ8 key/ETag and optional authenticated semantic router.
+/// Replacement preserves original construction authority; no rebuild or fitting.
 /// The destination must be fresh and disjoint; every object and the last head
 /// use create-only writes. Source control/objects remain immutable throughout.
 /// Native copies do not condition on a source version: the modeled scratch
@@ -629,9 +900,15 @@ pub async fn republish_retained_two_bit_generation(
     .try_fold(0_usize, usize::checked_add)
     .filter(|&n| n <= 65536)
     .ok_or(bad("retained namespace admission"))?;
+    let replacement_pins = approved
+        .router_replacement
+        .map(|r| r.pinned_bytes())
+        .transpose()?
+        .unwrap_or(0);
     let pinned = limits
         .already_pinned_bytes
         .checked_add(retained.retained_root_bytes())
+        .and_then(|n| n.checked_add(replacement_pins))
         .ok_or(bad("retained pin memory"))?;
     let root_bytes = retained.root.len();
     if root_bytes == 0 || root_bytes > 65536 {
@@ -697,6 +974,9 @@ pub async fn republish_retained_two_bit_generation(
         0,
     )?;
     let buffer_bytes = available.min(1024 * 1024);
+    let validation_budget = available
+        .checked_sub(buffer_bytes)
+        .ok_or(bad("retained transport memory"))?;
     if buffer_bytes == 0
         || max_scratch_bytes == 0
         || retained.empty
@@ -762,7 +1042,8 @@ pub async fn republish_retained_two_bit_generation(
         || !valid_object_key(&manifest.sq8_object_key, &manifest.sq8_object_sha256)
         || !valid_object_key(approved.sq8_object_key, &manifest.sq8_object_sha256)
         || (manifest.sq8_object_key == approved.sq8_object_key
-            && manifest.sq8_etag == approved.sq8_etag)
+            && manifest.sq8_etag == approved.sq8_etag
+            && approved.router_replacement.is_none())
         || [
             manifest.sq8_object_key.as_str(),
             approved.sq8_object_key,
@@ -914,6 +1195,10 @@ pub async fn republish_retained_two_bit_generation(
             retained_meta(store, &metadata_location(&source_prefix, name), Some(size)).await?;
         roster.push((name, digest, meta));
     }
+    retained_roster(store, &source_prefix, &roster).await?;
+    if let Some(replacement) = approved.router_replacement {
+        replacement.validate(&manifest, &plane, validation_budget)?;
+    }
     let sq8_meta = retained_meta(
         store,
         &ObjectPath::from(manifest.sq8_object_key.as_str()),
@@ -947,7 +1232,16 @@ pub async fn republish_retained_two_bit_generation(
             } else {
                 1 + u64::from(!["plane/records.bin", "router/leaves.bin"].contains(name))
             };
-            total.checked_add(meta.size.checked_mul(copies)?)
+            let size = approved
+                .router_replacement
+                .and_then(|r| match *name {
+                    "router/root.bin" => Some(r.replacement.root.body.len() as u64),
+                    "router/membership.bin" => Some(r.replacement.membership.body.len() as u64),
+                    "router/leaves.bin" => Some(r.replacement.leaves.body.len() as u64),
+                    _ => None,
+                })
+                .unwrap_or(meta.size);
+            total.checked_add(size.checked_mul(copies)?)
         })
         .filter(|&n| n <= max_scratch_bytes)
         .ok_or(bad("retained cumulative scratch"))?;
@@ -972,6 +1266,26 @@ pub async fn republish_retained_two_bit_generation(
             serde_json::from_slice(&root).map_err(|_| bad("retained root schema"))?;
         new_manifest.sq8_object_key = approved.sq8_object_key.to_owned();
         new_manifest.sq8_etag = approved.sq8_etag.to_owned();
+        if let Some(r) = approved.router_replacement {
+            let Discovery::Semantic {
+                root_sha256,
+                root_bytes,
+                membership_sha256,
+                membership_bytes,
+                leaves_sha256,
+                leaves_bytes,
+                ..
+            } = &mut new_manifest.discovery
+            else {
+                return Err(bad("replacement new discovery"));
+            };
+            *root_sha256 = r.replacement.root.approved.sha256.clone();
+            *root_bytes = r.replacement.root.approved.bytes;
+            *membership_sha256 = r.replacement.membership.approved.sha256.clone();
+            *membership_bytes = r.replacement.membership.approved.bytes;
+            *leaves_sha256 = r.replacement.leaves.approved.sha256.clone();
+            *leaves_bytes = r.replacement.leaves.approved.bytes;
+        }
         let new_root =
             serde_json::to_vec(&new_manifest).map_err(|_| bad("retained root serialization"))?;
         if new_root.is_empty() || new_root.len() > 65536 {
@@ -1006,15 +1320,37 @@ pub async fn republish_retained_two_bit_generation(
                 continue;
             }
             let location = metadata_location(&new_prefix, name);
-            store
-                .copy_opts(
-                    &meta.location,
-                    &location,
-                    CopyOptions::new().with_mode(CopyMode::Create),
-                )
-                .await?;
+            let replacement = approved.router_replacement.and_then(|r| match *name {
+                "router/root.bin" => Some(r.replacement.root),
+                "router/membership.bin" => Some(r.replacement.membership),
+                "router/leaves.bin" => Some(r.replacement.leaves),
+                _ => None,
+            });
+            if let Some(body) = replacement {
+                store
+                    .put_opts(
+                        &location,
+                        PutPayload::from(body.body.to_vec()),
+                        PutOptions {
+                            mode: PutMode::Create,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            } else {
+                store
+                    .copy_opts(
+                        &meta.location,
+                        &location,
+                        CopyOptions::new().with_mode(CopyMode::Create),
+                    )
+                    .await?;
+            }
             created.push(location.clone());
-            let copied = retained_meta(store, &location, Some(meta.size)).await?;
+            let (size, digest) = replacement.map_or((meta.size, *digest), |b| {
+                (b.body.len() as u64, b.approved.sha256.as_str())
+            });
+            let copied = retained_meta(store, &location, Some(size)).await?;
             authenticate_retained_body(store, &copied, digest, buffer_bytes, false).await?;
             destination_pins.push(copied);
         }
@@ -1034,7 +1370,7 @@ pub async fn republish_retained_two_bit_generation(
         authenticate_retained_body(store, &copied, &new_sha, buffer_bytes, false).await?;
         destination_pins.push(copied);
         // Validate the exact staged root/metadata that the head will publish.
-        // One serving pass, no centroids; caller bodies/rosters/pins are already
+        // One serving pass, no centroids; proof bodies/rosters/pins are already
         // subtracted from this budget. Its temporary scratch is RAII owned.
         drop(
             TwoBitGeneration::open_remote(
@@ -1042,7 +1378,7 @@ pub async fn republish_retained_two_bit_generation(
                 &new_prefix,
                 &new_sha,
                 TwoBitGenerationLimits {
-                    max_memory_bytes: available as u64,
+                    max_memory_bytes: validation_budget as u64,
                     already_pinned_bytes: 0,
                     ..limits
                 },
@@ -1060,6 +1396,7 @@ pub async fn republish_retained_two_bit_generation(
                 return Err(bad("retained object changed"));
             }
         }
+        retained_roster(store, &source_prefix, &roster).await?;
         recheck_retained_control(store, retained).await?;
         let control = HeadBody {
             schema: "borsuk-two-bit-head-v2".into(),

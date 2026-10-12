@@ -42,6 +42,7 @@ struct LostHeadResponse {
     inner: std::sync::Arc<dyn object_store::ObjectStore>,
     head: ObjectPath,
     competing_head: bool,
+    stage_mutation: Option<(ObjectPath, bytes::Bytes)>,
 }
 
 impl std::fmt::Display for LostHeadResponse {
@@ -59,6 +60,11 @@ impl object_store::ObjectStore for LostHeadResponse {
         payload: PutPayload,
         options: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
+        if *path != self.head {
+            if let Some((source, bytes)) = &self.stage_mutation {
+                self.inner.put(source, bytes.clone().into()).await?;
+            }
+        }
         let lose_response =
             *path == self.head && matches!(&options.mode, object_store::PutMode::Create);
         if lose_response && self.competing_head {
@@ -162,6 +168,10 @@ struct RetainedFixture {
 
 impl RetainedFixture {
     async fn new() -> Self {
+        Self::with_rows(64).await
+    }
+
+    async fn with_rows(rows: usize) -> Self {
         use borsuk::semantic_unit_router::SemanticProfile;
         use object_store::{chunked::ChunkedStore, local::LocalFileSystem};
         use std::sync::Arc;
@@ -178,7 +188,6 @@ impl RetainedFixture {
         let copied: Arc<dyn object_store::ObjectStore> =
             Arc::new(ChunkedStore::new(copied_files.clone(), 8192));
         let dimensions = 1024_usize;
-        let rows = 64;
         let low = vec![-0.0; dimensions];
         let step = vec![1.0 / 255.0; dimensions];
         let mut raw = Vec::new();
@@ -339,7 +348,690 @@ impl RetainedFixture {
             control_epoch: 1,
             sq8_object_key: self.new_sq8_key.as_ref(),
             sq8_etag: etag,
+            router_replacement: None,
         }
+    }
+
+    async fn historical(&mut self) -> serde_json::Value {
+        let head = self.head().await;
+        let old_prefix = head.metadata_prefix();
+        let mut root: serde_json::Value = serde_json::from_slice(
+            &self
+                .copied
+                .get(&old_prefix.join("manifest.json"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let mut router = fs::read(self.temp.path().join("build/router/root.bin")).unwrap();
+        router[..8].copy_from_slice(b"BORSUSR2");
+        router[88..92].copy_from_slice(&0_u32.to_le_bytes());
+        root["discovery"]["root_sha256"] = hash(&router).into();
+        // Model an unchanged strong transport identity in the retained source.
+        root["sq8_etag"] = self
+            .copied
+            .head(&self.old_sq8_key)
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap()
+            .into();
+        let body = serde_json::to_vec(&root).unwrap();
+        fs::write(self.temp.path().join("build/manifest.json"), &body).unwrap();
+        self.root_sha = hash(&body);
+        let new_prefix = self
+            .prefix
+            .clone()
+            .join("generations")
+            .join(self.root_sha.as_str());
+        for name in RETAINED_METADATA {
+            let bytes = match name {
+                "manifest.json" => bytes::Bytes::from(body.clone()),
+                "router/root.bin" => bytes::Bytes::from(router.clone()),
+                _ => self
+                    .copied
+                    .get(&retained_metadata_location(&old_prefix, name))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap(),
+            };
+            self.copied
+                .put(&retained_metadata_location(&new_prefix, name), bytes.into())
+                .await
+                .unwrap();
+        }
+        self.copied
+            .put(
+                &self.prefix.clone().join("head.json"),
+                PutPayload::from(
+                    serde_json::to_vec(
+                        &serde_json::json!({"schema":"borsuk-two-bit-head-v2","epoch":1,
+                "generation":7,"root_sha256":self.root_sha,"mutation":null,"fence":null}),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+        root
+    }
+}
+
+struct ReplacementFixture {
+    discovery_sha: String,
+    centroids: Vec<u8>,
+    radial: borsuk::semantic_unit_router::RouterArtifacts,
+    replacement: borsuk::semantic_unit_router::RouterArtifacts,
+    pins: [borsuk::semantic_unit_router::Artifact; 7],
+    plane_sha: String,
+    schema: String,
+    rows: usize,
+}
+impl ReplacementFixture {
+    fn new(f: &RetainedFixture) -> Self {
+        use borsuk::semantic_unit_router::{
+            Artifact, LeafPartition, RouterArtifacts, build_with_partition,
+        };
+        let root: serde_json::Value =
+            serde_json::from_slice(&fs::read(f.temp.path().join("build/manifest.json")).unwrap())
+                .unwrap();
+        let centroids = fs::read(f.temp.path().join("build/centroids.bin")).unwrap();
+        let plane_sha = root["discovery"]["input_root_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let schema = root["discovery"]["input_schema"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let rows = root["canonical"]["rows"].as_u64().unwrap() as usize;
+        let radial = RouterArtifacts {
+            manifest: fs::read(f.temp.path().join("build/router/root.bin")).unwrap(),
+            membership: fs::read(f.temp.path().join("build/router/membership.bin")).unwrap(),
+            leaves: fs::read(f.temp.path().join("build/router/leaves.bin")).unwrap(),
+        };
+        let centroid_sha = hash(&centroids);
+        let input = borsuk::semantic_unit_router::SourceIdentity {
+            profile: borsuk::semantic_unit_router::SemanticProfile::Native100k,
+            schema: &schema,
+            root_sha256: &plane_sha,
+            centroids_sha256: &centroid_sha,
+            rows,
+            dimensions: 1024,
+        };
+        let replacement = build_with_partition(
+            &centroids,
+            &input,
+            64_000_000,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let pins = [
+            &centroids,
+            &radial.manifest,
+            &radial.membership,
+            &radial.leaves,
+            &replacement.manifest,
+            &replacement.membership,
+            &replacement.leaves,
+        ]
+        .map(|b| Artifact {
+            bytes: b.len(),
+            sha256: hash(b),
+        });
+        Self {
+            discovery_sha: hash(&serde_json::to_vec(&root["discovery"]).unwrap()),
+            centroids,
+            radial,
+            replacement,
+            pins,
+            plane_sha,
+            schema,
+            rows,
+        }
+    }
+    fn borrowed<'a>(&'a self) -> borsuk::two_bit_store::RetainedSemanticRouterReplacement<'a> {
+        use borsuk::two_bit_store::{
+            RetainedRouterBody, RetainedRouterPublication, RetainedSemanticRouterReplacement,
+        };
+        let body = |body: &'a [u8], index: usize| RetainedRouterBody {
+            body,
+            approved: &self.pins[index],
+        };
+        RetainedSemanticRouterReplacement {
+            original_discovery_sha256: &self.discovery_sha,
+            input: borsuk::semantic_unit_router::SourceIdentity {
+                profile: borsuk::semantic_unit_router::SemanticProfile::Native100k,
+                schema: &self.schema,
+                root_sha256: &self.plane_sha,
+                centroids_sha256: &self.pins[0].sha256,
+                rows: self.rows,
+                dimensions: 1024,
+            },
+            centroids: body(&self.centroids, 0),
+            radial: RetainedRouterPublication {
+                root: body(&self.radial.manifest, 1),
+                membership: body(&self.radial.membership, 2),
+                leaves: body(&self.radial.leaves, 3),
+                partition: borsuk::semantic_unit_router::LeafPartition::Radial64V1,
+            },
+            replacement: RetainedRouterPublication {
+                root: body(&self.replacement.manifest, 4),
+                membership: body(&self.replacement.membership, 5),
+                leaves: body(&self.replacement.leaves, 6),
+                partition: borsuk::semantic_unit_router::LeafPartition::WidestAxisQuotaV1,
+            },
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_search() {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    let mut f = RetainedFixture::new().await;
+    let query = (0..1024)
+        .map(|d| ((d * 19) % 251 + 1) as f32 / 255.0)
+        .collect::<Vec<_>>();
+    let original_head = read_two_bit_head(f.original.as_ref(), &f.prefix)
+        .await
+        .unwrap()
+        .unwrap();
+    let original = TwoBitGeneration::open_remote_from_head(
+        f.original.as_ref(),
+        &original_head,
+        f.limits,
+        &f.scratch(),
+    )
+    .await
+    .unwrap();
+    let bits = |result: borsuk::two_bit_generation::TwoBitSearchResult| {
+        result
+            .ranked
+            .candidates
+            .into_iter()
+            .map(|h| (h.ordinal, h.id, h.score.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    let expected = bits(
+        original
+            .search_with_store(f.original.as_ref(), &query, 10, None)
+            .await
+            .unwrap(),
+    );
+    drop(original);
+    let before = f.historical().await;
+    let replacement = ReplacementFixture::new(&f);
+    let etag = before["sq8_etag"].as_str().unwrap();
+    let retained = f.head().await;
+    assert!(
+        TwoBitGeneration::open_remote_from_head(
+            f.copied.as_ref(),
+            &retained,
+            f.limits,
+            &f.scratch()
+        )
+        .await
+        .is_err()
+    );
+    for radial in [false, true] {
+        let mut router = replacement.borrowed();
+        if radial {
+            router.replacement = router.radial;
+        }
+        let mut approval = f.approval(etag);
+        approval.sq8_object_key = f.old_sq8_key.as_ref();
+        approval.router_replacement = Some(router);
+        let destination = ObjectPath::from(if radial {
+            "replacement-radial/index"
+        } else {
+            "replacement-spatial/index"
+        });
+        let published = republish_retained_two_bit_generation(
+            f.copied.as_ref(),
+            &retained,
+            approval,
+            &destination,
+            f.limits,
+            &f.scratch(),
+            4_000_000,
+        )
+        .await
+        .unwrap();
+        let mut after: serde_json::Value = serde_json::from_slice(
+            &f.copied
+                .get(&published.metadata_prefix().join("manifest.json"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after["sq8_object_key"], before["sq8_object_key"]);
+        assert_eq!(after["sq8_etag"], before["sq8_etag"]);
+        for field in ["low", "step"] {
+            let bits = |v: &serde_json::Value| {
+                v[field]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| (v.as_f64().unwrap() as f32).to_bits())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(bits(&before), bits(&after));
+            after[field] = before[field].clone();
+        }
+        for field in [
+            "root_sha256",
+            "root_bytes",
+            "membership_sha256",
+            "membership_bytes",
+            "leaves_sha256",
+            "leaves_bytes",
+        ] {
+            after["discovery"][field] = before["discovery"][field].clone();
+        }
+        assert_eq!(before, after);
+        let mut roster = f.copied.list(Some(&published.metadata_prefix()));
+        let mut count = 0;
+        while let Some(meta) = roster.next().await {
+            meta.unwrap();
+            count += 1;
+        }
+        assert_eq!(count, 10);
+        for name in RETAINED_METADATA
+            .into_iter()
+            .filter(|n| *n != "manifest.json")
+        {
+            let new = f
+                .copied
+                .get(&retained_metadata_location(
+                    &published.metadata_prefix(),
+                    name,
+                ))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let expected = match name {
+                "router/root.bin" => router.replacement.root.body,
+                "router/membership.bin" => router.replacement.membership.body,
+                "router/leaves.bin" => router.replacement.leaves.body,
+                _ => {
+                    let old = f
+                        .copied
+                        .get(&retained_metadata_location(
+                            &retained.metadata_prefix(),
+                            name,
+                        ))
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap();
+                    assert_eq!(old, new);
+                    continue;
+                }
+            };
+            assert_eq!(new.as_ref(), expected, "{name}");
+        }
+        let generation = TwoBitGeneration::open_remote_from_head(
+            f.copied.as_ref(),
+            &published,
+            f.limits,
+            &f.scratch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bits(
+                generation
+                    .search_with_store(f.copied.as_ref(), &query, 10, None)
+                    .await
+                    .unwrap()
+            ),
+            expected
+        );
+        drop(generation);
+        let lost_prefix = destination.clone().join("lost");
+        let lost = LostHeadResponse {
+            inner: f.copied.clone(),
+            head: lost_prefix.clone().join("head.json"),
+            competing_head: false,
+            stage_mutation: None,
+        };
+        assert!(matches!(
+            republish_retained_two_bit_generation(
+                &lost,
+                &retained,
+                approval,
+                &lost_prefix,
+                f.limits,
+                &f.scratch(),
+                4_000_000
+            )
+            .await,
+            Err(borsuk::two_bit_store::TwoBitStoreError::Store(
+                object_store::Error::Generic {
+                    store: "LostHeadResponse",
+                    ..
+                }
+            ))
+        ));
+        let committed = read_two_bit_head(f.copied.as_ref(), &lost_prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(committed.root_sha256(), published.root_sha256());
+        let generation = TwoBitGeneration::open_remote_from_head(
+            f.copied.as_ref(),
+            &committed,
+            f.limits,
+            &f.scratch(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bits(
+                generation
+                    .search_with_store(f.copied.as_ref(), &query, 10, None)
+                    .await
+                    .unwrap()
+            ),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_refuses_pins_provenance_roster_and_caps() {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    let mut f = RetainedFixture::new().await;
+    let before = f.historical().await;
+    let replacement = ReplacementFixture::new(&f);
+    let etag = before["sq8_etag"].as_str().unwrap();
+    let retained = f.head().await;
+    let wrong = "0".repeat(64);
+    let bad_pin = borsuk::semantic_unit_router::Artifact {
+        bytes: replacement.pins[4].bytes,
+        sha256: wrong.clone(),
+    };
+    let short_pin = borsuk::semantic_unit_router::Artifact {
+        bytes: 1,
+        sha256: replacement.pins[4].sha256.clone(),
+    };
+    let mut corrupted = replacement.replacement.leaves.clone();
+    corrupted[4] ^= 1;
+    let extra = retained.metadata_prefix().join("centroids.bin");
+    let historical_root =
+        retained_metadata_location(&retained.metadata_prefix(), "router/root.bin");
+    let original = f
+        .copied
+        .get(&historical_root)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    for fault in [
+        "pin",
+        "length",
+        "construction",
+        "schema",
+        "centroids",
+        "mode",
+        "corrupt",
+        "truncated",
+        "memory",
+        "pins",
+        "scratch",
+        "roster",
+        "occupied",
+        "source-corrupt",
+    ] {
+        let mut router = replacement.borrowed();
+        let mut limits = f.limits;
+        let mut scratch_cap = 4_000_000;
+        let destination = ObjectPath::from(format!("replacement-refused/{fault}"));
+        match fault {
+            "pin" => router.replacement.root.approved = &bad_pin,
+            "length" => router.replacement.root.approved = &short_pin,
+            "construction" => router.input.root_sha256 = &wrong,
+            "schema" => router.input.schema = "generation-is-not-construction-authority",
+            "centroids" => router.input.centroids_sha256 = &wrong,
+            "mode" => {
+                router.replacement.partition =
+                    borsuk::semantic_unit_router::LeafPartition::Radial64V1
+            }
+            "corrupt" => router.replacement.leaves.body = &corrupted,
+            "truncated" => router.replacement.leaves.body = &corrupted[..corrupted.len() - 1],
+            "memory" => limits.max_memory_bytes = 2_500_000,
+            "pins" => limits.already_pinned_bytes = limits.max_memory_bytes,
+            "scratch" => scratch_cap = 65536,
+            "roster" => {
+                f.copied
+                    .put(&extra, PutPayload::from("unapproved extra centroid"))
+                    .await
+                    .unwrap();
+            }
+            "occupied" => {
+                f.copied
+                    .put(
+                        &destination.clone().join("occupied"),
+                        PutPayload::from("occupied"),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "source-corrupt" => {
+                let mut body = original.to_vec();
+                body[100] ^= 1;
+                f.copied.put(&historical_root, body.into()).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let mut approval = f.approval(etag);
+        approval.sq8_object_key = f.old_sq8_key.as_ref();
+        approval.router_replacement = Some(router);
+        assert!(
+            republish_retained_two_bit_generation(
+                f.copied.as_ref(),
+                &retained,
+                approval,
+                &destination,
+                limits,
+                &f.scratch(),
+                scratch_cap
+            )
+            .await
+            .is_err(),
+            "{fault}"
+        );
+        assert!(
+            read_two_bit_head(f.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(f.scratch()).unwrap().count(), 0);
+        if fault == "roster" {
+            f.copied.delete(&extra).await.unwrap();
+        }
+        if fault == "source-corrupt" {
+            f.copied
+                .put(&historical_root, original.clone().into())
+                .await
+                .unwrap();
+        }
+        if fault != "occupied" {
+            assert!(
+                f.copied.list(Some(&destination)).next().await.is_none(),
+                "{fault}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_rejects_valid_publication_with_changed_groups() {
+    use borsuk::semantic_unit_router::{
+        Artifact, RouterArtifacts, SemanticUnitRouter, validate_publication,
+    };
+    use borsuk::two_bit_store::{TwoBitStoreError, republish_retained_two_bit_generation};
+    let mut f = RetainedFixture::with_rows(4097).await;
+    let before = f.historical().await;
+    let mut replacement = ReplacementFixture::new(&f);
+    let router = replacement.borrowed();
+    let radial = SemanticUnitRouter::open(
+        router.radial.root.body,
+        router.radial.membership.body,
+        &router.radial.root.approved.sha256,
+        &router.input,
+        router.input.profile.root_cap(),
+    )
+    .unwrap();
+    let mut changed = radial.manifest().clone();
+    assert!(changed.algorithm.training_centers > 1);
+    for leaf in &mut changed.leaves {
+        leaf.group_ordinal = (leaf.group_ordinal + 1) % changed.algorithm.training_centers;
+    }
+    changed
+        .leaves
+        .sort_by_key(|leaf| (leaf.group_ordinal, leaf.chunk_ordinal));
+    let mut payload = Vec::new();
+    let mut membership = vec![0_u8; replacement.rows.div_ceil(32) * 4];
+    for (id, leaf) in changed.leaves.iter_mut().enumerate() {
+        let bytes = &replacement.radial.leaves[leaf.offset..leaf.offset + leaf.bytes];
+        for record in bytes.chunks_exact(4 + 2048) {
+            let unit = u32::from_le_bytes(record[..4].try_into().unwrap()) as usize;
+            membership[unit * 4..unit * 4 + 4].copy_from_slice(&(id as u32).to_le_bytes());
+        }
+        leaf.leaf_id = id;
+        leaf.offset = payload.len();
+        payload.extend_from_slice(bytes);
+    }
+    changed.membership.sha256 = hash(&membership);
+    changed.leaf_payload.sha256 = hash(&payload);
+    let changed_root = changed.encode().unwrap();
+    // This is a completely valid original-FP16 radial publication. Full
+    // publication validation alone cannot establish original group assignment.
+    validate_publication(
+        &changed_root,
+        &membership,
+        &payload,
+        &router.input,
+        &replacement.centroids,
+    )
+    .unwrap();
+    drop(radial);
+    replacement.replacement = RouterArtifacts {
+        manifest: changed_root,
+        membership,
+        leaves: payload,
+    };
+    for (index, body) in [
+        &replacement.replacement.manifest,
+        &replacement.replacement.membership,
+        &replacement.replacement.leaves,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        replacement.pins[index + 4] = Artifact {
+            bytes: body.len(),
+            sha256: hash(body),
+        };
+    }
+    let mut router = replacement.borrowed();
+    router.replacement.partition = borsuk::semantic_unit_router::LeafPartition::Radial64V1;
+    let etag = before["sq8_etag"].as_str().unwrap();
+    let mut approval = f.approval(etag);
+    approval.sq8_object_key = f.old_sq8_key.as_ref();
+    approval.router_replacement = Some(router);
+    let destination = ObjectPath::from("changed-groups/index");
+    assert!(matches!(
+        republish_retained_two_bit_generation(
+            f.copied.as_ref(),
+            &f.head().await,
+            approval,
+            &destination,
+            f.limits,
+            &f.scratch(),
+            4_000_000
+        )
+        .await,
+        Err(TwoBitStoreError::Invalid(
+            "replacement per-physical-unit group mismatch"
+        ))
+    ));
+    assert!(f.copied.list(Some(&destination)).next().await.is_none());
+}
+
+#[tokio::test]
+async fn retained_semantic_router_replacement_rechecks_source_and_control_after_staging() {
+    use borsuk::two_bit_store::republish_retained_two_bit_generation;
+    for control in [true, false] {
+        let mut f = RetainedFixture::new().await;
+        let before = f.historical().await;
+        let replacement = ReplacementFixture::new(&f);
+        let retained = f.head().await;
+        let source = if control {
+            f.prefix.clone().join("head.json")
+        } else {
+            retained_metadata_location(&retained.metadata_prefix(), "plane/mean.bin")
+        };
+        let mut bytes = f.copied.get(&source).await.unwrap().bytes().await.unwrap();
+        if control {
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value["epoch"] = 2.into();
+            bytes = serde_json::to_vec(&value).unwrap().into();
+        }
+        let destination = ObjectPath::from(if control {
+            "replacement-control-race/index"
+        } else {
+            "replacement-object-race/index"
+        });
+        let race = LostHeadResponse {
+            inner: f.copied.clone(),
+            head: destination.clone().join("unused-head.json"),
+            competing_head: false,
+            stage_mutation: Some((source, bytes)),
+        };
+        let mut approval = f.approval(before["sq8_etag"].as_str().unwrap());
+        approval.sq8_object_key = f.old_sq8_key.as_ref();
+        approval.router_replacement = Some(replacement.borrowed());
+        let result = republish_retained_two_bit_generation(
+            &race,
+            &retained,
+            approval,
+            &destination,
+            f.limits,
+            &f.scratch(),
+            4_000_000,
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                    "retained control changed" | "retained object changed"
+                ))
+            ),
+            "{result:?}"
+        );
+        assert!(
+            read_two_bit_head(f.copied.as_ref(), &destination)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(f.copied.list(Some(&destination)).next().await.is_none());
     }
 }
 
@@ -616,6 +1308,7 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
             inner: fixture.copied.clone(),
             head: lost_prefix.clone().join("head.json"),
             competing_head,
+            stage_mutation: None,
         };
         let result = republish_retained_two_bit_generation(
             &lost,

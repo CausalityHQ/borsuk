@@ -1,8 +1,10 @@
 //! Publish a fresh local generation or rebind an authenticated retained generation to Local/S3.
 use borsuk::{
+    semantic_unit_router::{Artifact, LeafPartition, SemanticProfile, SourceIdentity},
     sq8_s3_range::OneAttemptS3,
     two_bit_generation::TwoBitGenerationLimits,
     two_bit_store::{
+        RetainedRouterBody, RetainedRouterPublication, RetainedSemanticRouterReplacement,
         RetainedTwoBitApproval, publish_two_bit_generation, read_two_bit_head,
         republish_retained_two_bit_generation,
     },
@@ -15,7 +17,7 @@ use std::{
     error::Error,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -23,8 +25,9 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CONFIG_CAP: u64 = 65_536;
 const CONFIG_SCHEMA: &str = "borsuk-two-bit-local-publication-config-v1";
 const RECEIPT_SCHEMA: &str = "borsuk-two-bit-local-publication-receipt-v1";
-const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-publication-config-v2";
-const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-publication-receipt-v2";
+const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-publication-config-v3";
+const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-publication-receipt-v3";
+const REPLACEMENT_APPROVAL_SCHEMA: &str = "borsuk-retained-router-replacement-approval-v1";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +59,113 @@ struct RetainedConfig {
     scratch_parent: PathBuf,
     max_scratch_bytes: u64,
     limits: Limits,
+    #[serde(deserialize_with = "Option::deserialize")]
+    router_replacement: Option<RouterReplacementConfig>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FilePin {
+    path: PathBuf,
+    bytes: usize,
+    sha256: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RouterFiles {
+    root: FilePin,
+    membership: FilePin,
+    leaves: FilePin,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RouterPins {
+    root: Artifact,
+    membership: Artifact,
+    leaves: Artifact,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProofFiles {
+    construction: FilePin,
+    radial_parity: FilePin,
+    corrected_closure: FilePin,
+    spatial: FilePin,
+    source_qualification: FilePin,
+    source_authority: FilePin,
+    source_config: FilePin,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ApprovedProof {
+    pin: Artifact,
+    expected: serde_json::Value,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProofApproval {
+    construction: ApprovedProof,
+    radial_parity: ApprovedProof,
+    corrected_closure: ApprovedProof,
+    spatial: ApprovedProof,
+    source_qualification: ApprovedProof,
+    source_authority: Artifact,
+    source_config: Artifact,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OriginalConstruction {
+    schema: String,
+    generation_sha256: String,
+    generation: u64,
+    base_epoch: u64,
+    plane_sha256: String,
+    discovery_sha256: String,
+    input_schema: String,
+    input_root_sha256: String,
+    centroids_sha256: String,
+    profile: SemanticProfile,
+    rows: usize,
+    dimensions: usize,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RouterReplacementConfig {
+    centroids: FilePin,
+    radial: RouterFiles,
+    replacement: RouterFiles,
+    proofs: ProofFiles,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReplacementApproval {
+    schema: String,
+    config_sha256: String,
+    original: OriginalConstruction,
+    original_discovery: serde_json::Value,
+    centroids: Artifact,
+    radial: RouterPins,
+    spatial: RouterPins,
+    replacement_partition: LeafPartition,
+    proofs: ProofApproval,
+}
+impl ReplacementApproval {
+    fn input(&self) -> SourceIdentity<'_> {
+        SourceIdentity {
+            profile: self.original.profile,
+            schema: &self.original.input_schema,
+            root_sha256: &self.original.input_root_sha256,
+            centroids_sha256: &self.original.centroids_sha256,
+            rows: self.original.rows,
+            dimensions: self.original.dimensions,
+        }
+    }
+    fn replacement(&self) -> &RouterPins {
+        match self.replacement_partition {
+            LeafPartition::Radial64V1 => &self.radial,
+            LeafPartition::WidestAxisQuotaV1 => &self.spatial,
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -107,6 +217,451 @@ fn sha_hex(bytes: &[u8]) -> String {
 }
 fn is_sha(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+// Receipt equality must not silently discard duplicate JSON fields.
+struct UniqueJson(serde_json::Value);
+impl<'de> Deserialize<'de> for UniqueJson {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("unique JSON")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut m: M,
+            ) -> std::result::Result<Self::Value, M::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = m.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom("duplicate JSON field"));
+                    }
+                    values.insert(key, m.next_value::<UniqueJson>()?.0);
+                }
+                Ok(UniqueJson(values.into()))
+            }
+            fn visit_seq<S: serde::de::SeqAccess<'de>>(
+                self,
+                mut s: S,
+            ) -> std::result::Result<Self::Value, S::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = s.next_element::<UniqueJson>()? {
+                    values.push(value.0);
+                }
+                Ok(UniqueJson(values.into()))
+            }
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                v: bool,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Self::Value, E> {
+                serde_json::Number::from_f64(v)
+                    .map(|n| UniqueJson(n.into()))
+                    .ok_or_else(|| E::custom("JSON number"))
+            }
+            fn visit_str<E: serde::de::Error>(
+                self,
+                v: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(v.into()))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(UniqueJson(serde_json::Value::Null))
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+fn unique_json(bytes: &[u8]) -> Result<serde_json::Value> {
+    Ok(serde_json::from_slice::<UniqueJson>(bytes)?.0)
+}
+
+fn descriptor(value: &serde_json::Value, pin: &Artifact) -> bool {
+    value["bytes"].as_u64() == Some(pin.bytes as u64) && value["sha256"] == pin.sha256
+}
+fn publication_descriptor(value: &serde_json::Value, pins: &RouterPins) -> bool {
+    descriptor(&value["root"], &pins.root)
+        && descriptor(&value["membership"], &pins.membership)
+        && descriptor(&value["leaves"], &pins.leaves)
+}
+fn file_pin(pin: &FilePin, approved: &Artifact, cap: usize) -> Result<()> {
+    if pin.bytes == 0
+        || pin.bytes > cap
+        || pin.bytes != approved.bytes
+        || pin.sha256 != approved.sha256
+        || !is_sha(&approved.sha256)
+        || pin.path.as_os_str().len() > 4096
+    {
+        return Err("replacement independent file pin".into());
+    }
+    Ok(())
+}
+fn file_identity(meta: &fs::Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
+    (
+        meta.dev(),
+        meta.ino(),
+        meta.len(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+    )
+}
+fn replacement_body(pin: &FilePin, approved: &Artifact, cap: usize) -> Result<Box<[u8]>> {
+    file_pin(pin, approved, cap)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&pin.path)?;
+    let before = file.metadata()?;
+    if !before.is_file() || before.nlink() != 1 || before.len() != pin.bytes as u64 {
+        return Err("replacement regular immutable file".into());
+    }
+    let mut body = vec![0_u8; pin.bytes].into_boxed_slice();
+    file.read_exact(&mut body)?;
+    let mut eof = [0_u8; 1];
+    if file.read(&mut eof)? != 0
+        || sha_hex(&body) != approved.sha256
+        || file_identity(&before) != file_identity(&file.metadata()?)
+        || file_identity(&before) != file_identity(&fs::symlink_metadata(&pin.path)?)
+    {
+        return Err("replacement file SHA/length/EOF/identity".into());
+    }
+    Ok(body)
+}
+
+fn replacement_proofs(c: &RouterReplacementConfig, a: &ReplacementApproval) -> Result<()> {
+    for (file, proof) in [
+        (&c.proofs.construction, &a.proofs.construction),
+        (&c.proofs.radial_parity, &a.proofs.radial_parity),
+        (&c.proofs.corrected_closure, &a.proofs.corrected_closure),
+        (&c.proofs.spatial, &a.proofs.spatial),
+        (
+            &c.proofs.source_qualification,
+            &a.proofs.source_qualification,
+        ),
+    ] {
+        let body = replacement_body(file, &proof.pin, CONFIG_CAP as usize)?;
+        if unique_json(&body)? != proof.expected {
+            return Err("replacement approved proof body".into());
+        }
+    }
+    let original = serde_json::to_value(&a.original)?;
+    let q = &a.proofs.construction.expected;
+    let p = &a.proofs.radial_parity.expected;
+    let h = &p["historical_parity"];
+    for name in ["root", "membership", "leaves"] {
+        if h[format!("old_{name}")]["bytes"] != a.original_discovery[format!("{name}_bytes")]
+            || h[format!("old_{name}")]["sha256"] != a.original_discovery[format!("{name}_sha256")]
+        {
+            return Err("replacement historical artifact provenance".into());
+        }
+    }
+    let closure = &a.proofs.corrected_closure.expected;
+    let spatial = &a.proofs.spatial.expected;
+    let source = &a.proofs.source_qualification.expected;
+    // Authenticate the screened configuration/authority themselves: a free SHA
+    // label would not bind SOURCE qualification to these two publications.
+    let screened_authority = unique_json(&replacement_body(
+        &c.proofs.source_authority,
+        &a.proofs.source_authority,
+        CONFIG_CAP as usize,
+    )?)?;
+    let screened_config = unique_json(&replacement_body(
+        &c.proofs.source_config,
+        &a.proofs.source_config,
+        CONFIG_CAP as usize,
+    )?)?;
+    if screened_authority["schema"] != "borsuk-paired-source-authority-v1"
+        || screened_authority["construction"]["original"] != original
+        || !publication_descriptor(&screened_authority["radial"], &a.radial)
+        || !publication_descriptor(&screened_authority["spatial"], &a.spatial)
+        || !descriptor(
+            &screened_authority["spatial_receipt"],
+            &a.proofs.spatial.pin,
+        )
+        || screened_authority["expected_spatial_receipt"] != *spatial
+        || screened_authority["construction"]["expected_qualification"] != *q
+        || screened_authority["construction"]["expected_radial_parity"] != *p
+        || screened_authority["construction"]["expected_corrected_closure"] != *closure
+        || !descriptor(
+            &screened_authority["construction"]["qualification"],
+            &a.proofs.construction.pin,
+        )
+        || !descriptor(
+            &screened_authority["construction"]["radial_parity"],
+            &a.proofs.radial_parity.pin,
+        )
+        || !descriptor(
+            &screened_authority["construction"]["corrected_closure"],
+            &a.proofs.corrected_closure.pin,
+        )
+        || screened_config["schema"] != "borsuk-paired-source-coverage-config-v1"
+        || !publication_descriptor(&screened_config["radial"], &a.radial)
+        || !publication_descriptor(&screened_config["spatial"], &a.spatial)
+        || !descriptor(&screened_config["spatial_receipt"], &a.proofs.spatial.pin)
+        || screened_config["inputs"]["generation_manifest"]["sha256"]
+            != a.original.generation_sha256
+        || screened_config["inputs"]["plane_manifest"]["sha256"] != a.original.plane_sha256
+        || !descriptor(&screened_config["inputs"]["centroids"], &a.centroids)
+    {
+        return Err("replacement screened publication provenance".into());
+    }
+    if q["schema"] != "borsuk-real1m-construction-qualified-v1"
+        || q["status"] != "REAL_RECONSTRUCTION_AND_HISTORICAL_RADIAL_PARITY_QUALIFIED"
+        || q["original_approval"] != original
+        || q["original_generation_sha256"] != a.original.generation_sha256
+        || !descriptor(&q["centroids"], &a.centroids)
+        || q["historical_parity"] != *h
+        || q["admission"]["all_closed_body_hashes_verified"] != true
+        || q["admission"]["original_ssm_success"] != true
+        || q["original_parity"]["native_exit"] != 0
+        || q["original_parity"]["manager_exit"] != 1
+        || q["original_parity"]["disposition"] != "INVALID_RECEIPT_VALIDATOR"
+        || q["original_parity"]["disposition_preserved"] != true
+        || q["original_parity"]["receipt_sha256"] != a.proofs.radial_parity.pin.sha256
+        || q["closed_output_revalidation"]["status"] != "Success"
+        || q["closed_output_revalidation"]["exit"] != 0
+        || q["closed_output_revalidation"]["native_reexecuted"] != false
+        || q["closed_output_revalidation"]["all_recovery_body_checksums_verified"] != true
+        || q["requests_opened"] != false
+        || q["truth_opened"] != false
+        || q["performance_claim"] != false
+        || p["schema"] != "borsuk-partition-reconstruction-receipt-v1"
+        || p["status"] != "HISTORICAL_RADIAL_PARITY"
+        || p["complete"] != true
+        || p["original"] != original
+        || !descriptor(&p["centroids"], &a.centroids)
+        || !publication_descriptor(&p["radial_outputs"], &a.radial)
+        || p["requests_opened"] != false
+        || p["truth_opened"] != false
+        || h["radial_root_sha256"] != a.radial.root.sha256
+        || h["radial_membership_sha256"] != a.radial.membership.sha256
+        || h["radial_leaves_sha256"] != a.radial.leaves.sha256
+        || h["root_exceptions"]
+            != json!([{"offset":0,"old":"BORSUSR2","new":"BORSUSR3"},
+            {"offset":88,"old_le_u32":0,"new_le_u32":1}])
+        || closure["schema"] != "borsuk-reconstruction-closed-parity-recovery-v1"
+        || closure["status"] != "CLOSED_NATIVE_PARITY_VALIDATED"
+        || closure["original_native_exit"] != 0
+        || closure["original_manager_exit"] != 1
+        || closure["original_stage_disposition"] != "INVALID_RECEIPT_VALIDATOR"
+        || closure["original_disposition_preserved"] != true
+        || closure["native_reexecuted"] != false
+        || closure["original_receipt_sha256"] != a.proofs.radial_parity.pin.sha256
+        || closure["derived_outputs_full_body_hash_verified"] != true
+        || closure["derived_outputs_retained_create_only"] != true
+        || closure["performance_claim"] != false
+        || spatial["schema"] != "borsuk-spatial-publication-receipt-v1"
+        || spatial["status"] != "SPATIAL_PREPARED"
+        || spatial["complete"] != true
+        || spatial["original"] != original
+        || spatial["partition"] != "widest_axis_quota_v1"
+        || !publication_descriptor(&spatial["publication"], &a.spatial)
+        || !descriptor(&spatial["centroids"], &a.centroids)
+        || !descriptor(&spatial["radial_parity"], &a.proofs.radial_parity.pin)
+        || !descriptor(&spatial["qualification"], &a.proofs.construction.pin)
+        || !descriptor(
+            &spatial["corrected_closure"],
+            &a.proofs.corrected_closure.pin,
+        )
+        || spatial["requests_opened"] != false
+        || spatial["truth_opened"] != false
+        || spatial["source_payload_opened"] != false
+        || spatial["requires_successful_file_sync"] != true
+        || spatial["requires_successful_directory_sync"] != true
+        || spatial["performance_claim"] != false
+        || spatial["qualified"] != false
+        || source["schema"] != "borsuk-paired-source-screen-qualified-v1"
+        || source["status"] != "CONSUMED_SOURCE_SCREEN_PASS"
+        || source["ssm_status"] != "Success"
+        || source["ssm_exit"] != 0
+        || source["all_server_sha_and_bytes_verified"] != true
+        || source["all_stage_manifests_verified"] != true
+        || source["exact_manifest_rosters"] != true
+        || source["selection_seal_hash_matches_native"] != true
+        || source["native_summary"]["schema"] != "borsuk-paired-source-coverage-v1"
+        || source["native_summary"]["status"] != "PASS"
+        || source["native_summary"]["complete"] != true
+        || source["native_summary"]["planner_only"] != true
+        || source["native_summary"]["candidate_returned_ids_computed"] != false
+        || source["candidate_returned_quality_claim"] != false
+        || source["performance_claim"] != false
+        || source["default_promotion"] != false
+    {
+        return Err("replacement closed construction/parity/spatial/SOURCE provenance".into());
+    }
+    let stages = source["stages"]
+        .as_array()
+        .ok_or("replacement SOURCE stages")?;
+    if stages.len() != 2
+        || stages[0]["phase"] != "canary"
+        || stages[1]["phase"] != "screen"
+        || stages.iter().any(|s| {
+            s["execution_closed"] != true
+                || s["owned_cgroup_drained"] != true
+                || s["manager_exit"] != 0
+                || s["configuration_sha256"] != a.proofs.source_config.sha256
+                || s["authority_sha256"] != a.proofs.source_authority.sha256
+        })
+        || stages[0]["native_exit"] != 2
+        || stages[1]["native_exit"] != 0
+    {
+        return Err("replacement closed SOURCE qualification binding".into());
+    }
+    Ok(())
+}
+
+struct ReplacementBodies {
+    centroids: Box<[u8]>,
+    radial: [Box<[u8]>; 3],
+    replacement: [Box<[u8]>; 3],
+}
+impl ReplacementBodies {
+    fn borrowed<'a>(&'a self, a: &'a ReplacementApproval) -> RetainedSemanticRouterReplacement<'a> {
+        let publication =
+            |b: &'a [Box<[u8]>; 3], p: &'a RouterPins, partition| RetainedRouterPublication {
+                root: RetainedRouterBody {
+                    body: &b[0],
+                    approved: &p.root,
+                },
+                membership: RetainedRouterBody {
+                    body: &b[1],
+                    approved: &p.membership,
+                },
+                leaves: RetainedRouterBody {
+                    body: &b[2],
+                    approved: &p.leaves,
+                },
+                partition,
+            };
+        RetainedSemanticRouterReplacement {
+            original_discovery_sha256: &a.original.discovery_sha256,
+            input: a.input(),
+            centroids: RetainedRouterBody {
+                body: &self.centroids,
+                approved: &a.centroids,
+            },
+            radial: publication(&self.radial, &a.radial, LeafPartition::Radial64V1),
+            replacement: publication(&self.replacement, a.replacement(), a.replacement_partition),
+        }
+    }
+}
+fn replacement_inputs(
+    c: &RetainedConfig,
+    config_sha: &str,
+    approval_path: &Path,
+    approval_sha: &str,
+    limits: &mut TwoBitGenerationLimits,
+) -> Result<(ReplacementApproval, ReplacementBodies)> {
+    // Capped authority/proof bytes, recursive JSON/typed copies and receipt
+    // serialization coexist; body buffers are charged again by the library.
+    limits.already_pinned_bytes = limits
+        .already_pinned_bytes
+        .checked_add(64 * CONFIG_CAP * 9)
+        .filter(|&n| n < limits.max_memory_bytes)
+        .ok_or("replacement CLI proof memory")?;
+    let a: ReplacementApproval =
+        serde_json::from_value(unique_json(&config_bytes(approval_path, approval_sha)?)?)?;
+    let files = c
+        .router_replacement
+        .as_ref()
+        .ok_or("replacement descriptors required")?;
+    let o = &a.original;
+    if a.schema != REPLACEMENT_APPROVAL_SCHEMA
+        || a.config_sha256 != config_sha
+        || o.schema != "borsuk-partition-reconstruction-approval-v1"
+        || o.generation_sha256 != c.original_root_sha256
+        || o.generation != c.original_generation
+        || o.base_epoch != 0
+        || o.plane_sha256 != o.input_root_sha256
+        || sha_hex(&serde_json::to_vec(&a.original_discovery)?) != o.discovery_sha256
+        || o.centroids_sha256 != a.centroids.sha256
+        || !(1..=256).contains(&o.input_schema.len())
+        || !o.profile.valid_geometry(o.rows, o.dimensions)
+        || [
+            &o.generation_sha256,
+            &o.plane_sha256,
+            &o.discovery_sha256,
+            &o.input_root_sha256,
+            &o.centroids_sha256,
+        ]
+        .into_iter()
+        .any(|s| !is_sha(s))
+    {
+        return Err("replacement independent construction approval".into());
+    }
+    let units = o.rows.div_ceil(32);
+    let centroid_bytes = units
+        .checked_mul(o.dimensions)
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| n.checked_add(32))
+        .ok_or("replacement geometry")?;
+    let membership_bytes = units.checked_mul(4).ok_or("replacement geometry")?;
+    let leaves_bytes = units
+        .checked_mul(4 + 2 * o.dimensions)
+        .ok_or("replacement geometry")?;
+    let selected = a.replacement();
+    let pins = [
+        (&files.centroids, &a.centroids, centroid_bytes),
+        (&files.radial.root, &a.radial.root, o.profile.root_cap()),
+        (
+            &files.radial.membership,
+            &a.radial.membership,
+            membership_bytes,
+        ),
+        (&files.radial.leaves, &a.radial.leaves, leaves_bytes),
+        (
+            &files.replacement.root,
+            &selected.root,
+            o.profile.root_cap(),
+        ),
+        (
+            &files.replacement.membership,
+            &selected.membership,
+            membership_bytes,
+        ),
+        (&files.replacement.leaves, &selected.leaves, leaves_bytes),
+    ];
+    let mut bytes = 0_u64;
+    for (file, pin, cap) in pins {
+        file_pin(file, pin, cap)?;
+        bytes = bytes
+            .checked_add(file.bytes as u64)
+            .ok_or("replacement body memory")?;
+    }
+    // Pre-allocation root/serving reserve; the shared publisher makes the final
+    // cumulative mode/group/staging admission before any destination write.
+    limits
+        .already_pinned_bytes
+        .checked_add(bytes)
+        .and_then(|n| n.checked_add(CONFIG_CAP * 32))
+        .filter(|&n| n < limits.max_memory_bytes)
+        .ok_or("replacement CLI body memory")?;
+    replacement_proofs(files, &a)?;
+    let read_router = |files: &RouterFiles, pins: &RouterPins| -> Result<[Box<[u8]>; 3]> {
+        Ok([
+            replacement_body(&files.root, &pins.root, o.profile.root_cap())?,
+            replacement_body(&files.membership, &pins.membership, membership_bytes)?,
+            replacement_body(&files.leaves, &pins.leaves, leaves_bytes)?,
+        ])
+    };
+    let bodies = ReplacementBodies {
+        centroids: replacement_body(&files.centroids, &a.centroids, centroid_bytes)?,
+        radial: read_router(&files.radial, &a.radial)?,
+        replacement: read_router(&files.replacement, selected)?,
+    };
+    Ok((a, bodies))
 }
 fn config_bytes(path: &Path, trusted_sha: &str) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -248,7 +803,12 @@ async fn publish(config_path: &Path, config_sha: &str, receipt: &Path) -> Result
     }))?;
     write_receipt(receipt, &body)
 }
-async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) -> Result<()> {
+async fn publish_retained(
+    config_path: &Path,
+    config_sha: &str,
+    receipt: &Path,
+    approval: Option<(&Path, &str)>,
+) -> Result<()> {
     let c = retained_config(config_path, config_sha)?;
     receipt_parent(receipt)?;
     if receipt.symlink_metadata().is_ok() {
@@ -262,6 +822,12 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
         .checked_add(CONFIG_CAP * 16 + 131072)
         .filter(|&n| n < limits.max_memory_bytes)
         .ok_or("retained CLI memory admission")?;
+    if c.router_replacement.is_some() != approval.is_some() {
+        return Err("replacement requires independent approval arguments".into());
+    }
+    let replacement = approval
+        .map(|(path, sha)| replacement_inputs(&c, config_sha, path, sha, &mut limits))
+        .transpose()?;
     let source = ObjectPath::parse(&c.retained_prefix)?;
     let destination = ObjectPath::parse(&c.destination_prefix)?;
     if source.as_ref().is_empty() || destination.as_ref().is_empty() {
@@ -302,6 +868,7 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
             control_epoch: c.original_control_epoch,
             sq8_object_key: &c.sq8_object_key,
             sq8_etag: &c.sq8_etag,
+            router_replacement: replacement.as_ref().map(|(a, bodies)| bodies.borrowed(a)),
         },
         &destination,
         limits,
@@ -340,14 +907,26 @@ async fn publish_retained(config_path: &Path, config_sha: &str, receipt: &Path) 
         "local_file_only": matches!(&c.backend, RetainedBackend::Local { .. }),
         "credential_mode": match &c.backend { RetainedBackend::Local { .. } => "none", RetainedBackend::S3 { .. } => "instance_role_imds" },
         "performance_claim": false,
+        "replacement_approval_sha256": approval.map(|(_, sha)| sha),
+        "router_replacement": c.router_replacement,
+        "replacement_partition": replacement.as_ref().map(|(a, _)| a.replacement_partition),
     }))?;
     write_receipt(receipt, &body)
 }
 fn run(args: &[String]) -> Result<()> {
-    let retained = args.get(1).is_some_and(|arg| arg == "--retained");
-    if args.len() != if retained { 5 } else { 4 } {
+    let replacement = args.get(1).is_some_and(|arg| arg == "--retained-router");
+    let retained = replacement || args.get(1).is_some_and(|arg| arg == "--retained");
+    if args.len()
+        != if replacement {
+            7
+        } else if retained {
+            5
+        } else {
+            4
+        }
+    {
         return Err(
-            "usage: publish_two_bit_generation [--retained] CONFIG CONFIG_SHA NEW_RECEIPT".into(),
+            "usage: publish_two_bit_generation [--retained] CONFIG CONFIG_SHA NEW_RECEIPT; --retained-router CONFIG CONFIG_SHA APPROVAL APPROVAL_SHA NEW_RECEIPT".into(),
         );
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -357,7 +936,8 @@ fn run(args: &[String]) -> Result<()> {
         runtime.block_on(publish_retained(
             Path::new(&args[2]),
             &args[3],
-            Path::new(&args[4]),
+            Path::new(&args[if replacement { 6 } else { 4 }]),
+            replacement.then(|| (Path::new(&args[4]), args[5].as_str())),
         ))
     } else {
         runtime.block_on(publish(Path::new(&args[1]), &args[2], Path::new(&args[3])))
@@ -534,6 +1114,7 @@ mod tests {
         fs::create_dir(&scratch).unwrap();
         let c = json!({
             "schema": RETAINED_CONFIG_SCHEMA,
+            "router_replacement": null,
             "backend": {"kind": "Local", "store_root": copied_root},
             "retained_prefix": "semantic/index",
             "original_root_sha256": head.root_sha256(),
@@ -566,11 +1147,312 @@ mod tests {
         ]
     }
 
+    // Real native publications with independently sealed synthetic provenance
+    // fixtures. These receipts exercise authorization, never claim qualification.
+    async fn replacement_cli_fixture() -> (tempfile::TempDir, Value, Value) {
+        let (dir, fresh) = fixture(64, 1024).await;
+        let (path, sha) = write_config(dir.path(), &fresh);
+        publish(&path, &sha, &dir.path().join("fresh-receipt.json"))
+            .await
+            .unwrap();
+        let store = LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap();
+        let source = ObjectPath::from("semantic/index");
+        let old = read_two_bit_head(&store, &source).await.unwrap().unwrap();
+        let mut root: Value =
+            serde_json::from_slice(&fs::read(dir.path().join("generation/manifest.json")).unwrap())
+                .unwrap();
+        let centroid = fs::read(dir.path().join("generation/centroids.bin")).unwrap();
+        let radial_root = fs::read(dir.path().join("generation/router/root.bin")).unwrap();
+        let radial_membership =
+            fs::read(dir.path().join("generation/router/membership.bin")).unwrap();
+        let radial_leaves = fs::read(dir.path().join("generation/router/leaves.bin")).unwrap();
+        let input = SourceIdentity {
+            profile: SemanticProfile::Native100k,
+            schema: root["discovery"]["input_schema"].as_str().unwrap(),
+            root_sha256: root["discovery"]["input_root_sha256"].as_str().unwrap(),
+            centroids_sha256: root["discovery"]["centroids_sha256"].as_str().unwrap(),
+            rows: 64,
+            dimensions: 1024,
+        };
+        let spatial = borsuk::semantic_unit_router::build_with_partition(
+            &centroid,
+            &input,
+            128_000_000,
+            LeafPartition::WidestAxisQuotaV1,
+        )
+        .unwrap();
+        let seal = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            json!({"path":path,"bytes":bytes.len(),"sha256":sha_hex(bytes)})
+        };
+        let centroids = seal("approved-centroids.bin", &centroid);
+        let radial = json!({"root":seal("radial-root.bin",&radial_root),"membership":seal("radial-membership.bin",&radial_membership),"leaves":seal("radial-leaves.bin",&radial_leaves)});
+        let candidate = json!({"root":seal("spatial-root.bin",&spatial.manifest),"membership":seal("spatial-membership.bin",&spatial.membership),"leaves":seal("spatial-leaves.bin",&spatial.leaves)});
+        let mut historical = radial_root.clone();
+        historical[..8].copy_from_slice(b"BORSUSR2");
+        historical[88..92].copy_from_slice(&0_u32.to_le_bytes());
+        root["discovery"]["root_sha256"] = sha_hex(&historical).into();
+        let body = serde_json::to_vec(&root).unwrap();
+        let root_sha = sha_hex(&body);
+        let metadata = source.clone().join("generations").join(root_sha.as_str());
+        for name in [
+            "manifest.json",
+            "page_manifest.json",
+            "page_digests.bin",
+            "plane/manifest.json",
+            "plane/mean.bin",
+            "plane/records.bin",
+            "plane/page_digests.bin",
+            "router/root.bin",
+            "router/membership.bin",
+            "router/leaves.bin",
+        ] {
+            let key = |prefix: &ObjectPath| name.split('/').fold(prefix.clone(), |p, s| p.join(s));
+            let bytes = match name {
+                "manifest.json" => bytes::Bytes::from(body.clone()),
+                "router/root.bin" => bytes::Bytes::from(historical.clone()),
+                _ => store
+                    .get(&key(&old.metadata_prefix()))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap(),
+            };
+            store.put(&key(&metadata), bytes.into()).await.unwrap();
+        }
+        store.put(&source.clone().join("head.json"),serde_json::to_vec(&json!({"schema":"borsuk-two-bit-head-v2","epoch":1,"generation":1,"root_sha256":root_sha,"mutation":null,"fence":null})).unwrap().into()).await.unwrap();
+        let original = json!({"schema":"borsuk-partition-reconstruction-approval-v1","generation_sha256":root_sha,"generation":1,"base_epoch":0,
+            "plane_sha256":root["plane_manifest_sha256"],"discovery_sha256":sha_hex(&serde_json::to_vec(&root["discovery"]).unwrap()),
+            "input_schema":root["discovery"]["input_schema"],"input_root_sha256":root["discovery"]["input_root_sha256"],
+            "centroids_sha256":root["discovery"]["centroids_sha256"],"profile":"native100k","rows":64,"dimensions":1024});
+        let pin = |v: &Value| json!({"bytes":v["bytes"],"sha256":v["sha256"]});
+        let router_pins = |v: &Value| json!({"root":pin(&v["root"]),"membership":pin(&v["membership"]),"leaves":pin(&v["leaves"])});
+        let h = json!({"old_root":{"bytes":historical.len(),"sha256":sha_hex(&historical)},
+            "old_membership":pin(&radial["membership"]),"old_leaves":pin(&radial["leaves"]),
+            "radial_root_sha256":radial["root"]["sha256"],"radial_membership_sha256":radial["membership"]["sha256"],"radial_leaves_sha256":radial["leaves"]["sha256"],
+            "root_exceptions":[{"offset":0,"old":"BORSUSR2","new":"BORSUSR3"},{"offset":88,"old_le_u32":0,"new_le_u32":1}]});
+        let parity = json!({"schema":"borsuk-partition-reconstruction-receipt-v1","status":"HISTORICAL_RADIAL_PARITY","complete":true,
+            "original":original,"centroids":centroids,"radial_outputs":radial,"historical_parity":h,"requests_opened":false,"truth_opened":false});
+        let parity_file = seal("parity.json", &serde_json::to_vec(&parity).unwrap());
+        let q = json!({"schema":"borsuk-real1m-construction-qualified-v1","status":"REAL_RECONSTRUCTION_AND_HISTORICAL_RADIAL_PARITY_QUALIFIED",
+            "original_approval":original,"original_generation_sha256":root_sha,"centroids":centroids,"historical_parity":h,
+            "admission":{"all_closed_body_hashes_verified":true,"original_ssm_success":true},
+            "original_parity":{"native_exit":0,"manager_exit":1,"disposition":"INVALID_RECEIPT_VALIDATOR","disposition_preserved":true,"receipt_sha256":parity_file["sha256"]},
+            "closed_output_revalidation":{"status":"Success","exit":0,"native_reexecuted":false,"all_recovery_body_checksums_verified":true},
+            "requests_opened":false,"truth_opened":false,"performance_claim":false});
+        let q_file = seal("construction.json", &serde_json::to_vec(&q).unwrap());
+        let closure = json!({"schema":"borsuk-reconstruction-closed-parity-recovery-v1","status":"CLOSED_NATIVE_PARITY_VALIDATED",
+            "original_native_exit":0,"original_manager_exit":1,"original_stage_disposition":"INVALID_RECEIPT_VALIDATOR","original_disposition_preserved":true,
+            "native_reexecuted":false,"original_receipt_sha256":parity_file["sha256"],"derived_outputs_full_body_hash_verified":true,"derived_outputs_retained_create_only":true,"performance_claim":false});
+        let closure_file = seal("closure.json", &serde_json::to_vec(&closure).unwrap());
+        let spatial_receipt = json!({"schema":"borsuk-spatial-publication-receipt-v1","status":"SPATIAL_PREPARED","complete":true,"original":original,
+            "partition":"widest_axis_quota_v1","publication":candidate,"centroids":centroids,"radial_parity":parity_file,"qualification":q_file,"corrected_closure":closure_file,
+            "requests_opened":false,"truth_opened":false,"source_payload_opened":false,"requires_successful_file_sync":true,"requires_successful_directory_sync":true,"performance_claim":false,"qualified":false});
+        let spatial_file = seal(
+            "spatial.json",
+            &serde_json::to_vec(&spatial_receipt).unwrap(),
+        );
+        let screened_authority = json!({"schema":"borsuk-paired-source-authority-v1",
+            "construction":{"original":original,"qualification":q_file,"radial_parity":parity_file,"corrected_closure":closure_file,
+                "expected_qualification":q,"expected_radial_parity":parity,"expected_corrected_closure":closure},
+            "radial":radial,"spatial":candidate,"spatial_receipt":spatial_file,"expected_spatial_receipt":spatial_receipt});
+        let source_authority_file = seal(
+            "screened-authority.json",
+            &serde_json::to_vec(&screened_authority).unwrap(),
+        );
+        let screened_config = json!({"schema":"borsuk-paired-source-coverage-config-v1","radial":radial,"spatial":candidate,"spatial_receipt":spatial_file,
+            "inputs":{"generation_manifest":{"sha256":root_sha},"plane_manifest":{"sha256":original["plane_sha256"]},"centroids":centroids}});
+        let source_config_file = seal(
+            "screened-config.json",
+            &serde_json::to_vec(&screened_config).unwrap(),
+        );
+        let source_config = source_config_file["sha256"].as_str().unwrap();
+        let source_authority = source_authority_file["sha256"].as_str().unwrap();
+        let source_q = json!({"schema":"borsuk-paired-source-screen-qualified-v1","status":"CONSUMED_SOURCE_SCREEN_PASS","ssm_status":"Success","ssm_exit":0,
+            "all_server_sha_and_bytes_verified":true,"all_stage_manifests_verified":true,"exact_manifest_rosters":true,"selection_seal_hash_matches_native":true,
+            "native_summary":{"schema":"borsuk-paired-source-coverage-v1","status":"PASS","complete":true,"planner_only":true,"candidate_returned_ids_computed":false},
+            "candidate_returned_quality_claim":false,"performance_claim":false,"default_promotion":false,
+            "stages":[{"phase":"canary","execution_closed":true,"owned_cgroup_drained":true,"manager_exit":0,"native_exit":2,"configuration_sha256":source_config,"authority_sha256":source_authority},
+                {"phase":"screen","execution_closed":true,"owned_cgroup_drained":true,"manager_exit":0,"native_exit":0,"configuration_sha256":source_config,"authority_sha256":source_authority}]});
+        let source_file = seal(
+            "source-qualification.json",
+            &serde_json::to_vec(&source_q).unwrap(),
+        );
+        let scratch = dir.path().join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        let config = json!({"schema":RETAINED_CONFIG_SCHEMA,"backend":{"kind":"Local","store_root":dir.path().join("store")},
+            "retained_prefix":"semantic/index","original_root_sha256":root_sha,"original_generation":1,"original_control_epoch":1,
+            "sq8_object_key":root["sq8_object_key"],"sq8_etag":root["sq8_etag"],"destination_prefix":"replacement-cli/index",
+            "scratch_parent":scratch,"max_scratch_bytes":4_000_000,"limits":fresh["limits"],
+            "router_replacement":{"centroids":centroids,"radial":radial,"replacement":candidate,
+                "proofs":{"construction":q_file,"radial_parity":parity_file,"corrected_closure":closure_file,"spatial":spatial_file,"source_qualification":source_file,
+                    "source_authority":source_authority_file,"source_config":source_config_file}}});
+        let authority = json!({"schema":REPLACEMENT_APPROVAL_SCHEMA,"config_sha256":sha_hex(&serde_json::to_vec(&config).unwrap()),"original":original,"original_discovery":root["discovery"],
+            "centroids":pin(&centroids),"radial":router_pins(&radial),"spatial":router_pins(&candidate),"replacement_partition":"widest_axis_quota_v1",
+            "proofs":{"construction":{"pin":pin(&q_file),"expected":q},"radial_parity":{"pin":pin(&parity_file),"expected":parity},
+                "corrected_closure":{"pin":pin(&closure_file),"expected":closure},"spatial":{"pin":pin(&spatial_file),"expected":spatial_receipt},"source_qualification":{"pin":pin(&source_file),"expected":source_q},
+                "source_authority":pin(&source_authority_file),"source_config":pin(&source_config_file)}});
+        (dir, config, authority)
+    }
+
+    fn replacement_args(dir: &Path, c: &Value, a: &Value, receipt: &Path) -> Vec<String> {
+        let (path, sha) = write_config(dir, c);
+        let authority = dir.join("replacement-approval.json");
+        let bytes = serde_json::to_vec(a).unwrap();
+        fs::write(&authority, &bytes).unwrap();
+        vec![
+            "publish_two_bit_generation".into(),
+            "--retained-router".into(),
+            path.to_str().unwrap().into(),
+            sha,
+            authority.to_str().unwrap().into(),
+            sha_hex(&bytes),
+            receipt.to_str().unwrap().into(),
+        ]
+    }
+
+    #[test]
+    fn retained_router_replacement_cli_requires_independent_pins_and_closed_provenance() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (dir, good, approved) = runtime.block_on(replacement_cli_fixture());
+        let receipt = dir.path().join("replacement-receipt.json");
+        let store = LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap();
+        let destination = ObjectPath::from("replacement-cli/index");
+        let source_proof_path = Path::new(
+            good["router_replacement"]["proofs"]["source_qualification"]["path"]
+                .as_str()
+                .unwrap(),
+        );
+        let source_proof = fs::read(source_proof_path).unwrap();
+        for fault in [
+            "approval-sha",
+            "config-only",
+            "pin",
+            "proof-pin",
+            "provenance",
+            "source-binding",
+            "source-claim",
+            "historical",
+            "cap",
+            "unknown",
+        ] {
+            let mut c = good.clone();
+            let mut a = approved.clone();
+            match fault {
+                "pin" => {
+                    c["router_replacement"]["replacement"]["root"]["sha256"] = "0".repeat(64).into()
+                }
+                "proof-pin" => a["proofs"]["construction"]["pin"]["sha256"] = "0".repeat(64).into(),
+                "provenance" => a["original"]["input_root_sha256"] = "0".repeat(64).into(),
+                "historical" => {
+                    a["original_discovery"]["root_sha256"] = "0".repeat(64).into();
+                    a["original"]["discovery_sha256"] =
+                        sha_hex(&serde_json::to_vec(&a["original_discovery"]).unwrap()).into();
+                }
+                "source-binding" => {
+                    a["proofs"]["source_authority"]["sha256"] = "0".repeat(64).into()
+                }
+                "source-claim" => {
+                    a["proofs"]["source_qualification"]["expected"]["candidate_returned_quality_claim"] =
+                        true.into();
+                    let body = serde_json::to_vec(&a["proofs"]["source_qualification"]["expected"])
+                        .unwrap();
+                    fs::write(source_proof_path, &body).unwrap();
+                    let pin = json!({"bytes":body.len(),"sha256":sha_hex(&body)});
+                    a["proofs"]["source_qualification"]["pin"] = pin.clone();
+                    c["router_replacement"]["proofs"]["source_qualification"]["bytes"] =
+                        pin["bytes"].clone();
+                    c["router_replacement"]["proofs"]["source_qualification"]["sha256"] =
+                        pin["sha256"].clone();
+                }
+                "cap" => c["limits"]["max_memory_bytes"] = 1.into(),
+                "unknown" => a["unapproved"] = true.into(),
+                _ => {}
+            }
+            a["config_sha256"] = sha_hex(&serde_json::to_vec(&c).unwrap()).into();
+            let mut args = replacement_args(dir.path(), &c, &a, &receipt);
+            if fault == "approval-sha" {
+                args[5] = "0".repeat(64);
+            }
+            if fault == "config-only" {
+                args = retained_args(Path::new(&args[2]), &args[3], &receipt);
+            }
+            assert!(run(&args).is_err(), "{fault}");
+            fs::write(source_proof_path, &source_proof).unwrap();
+            assert!(!receipt.exists());
+            assert!(
+                runtime
+                    .block_on(read_two_bit_head(&store, &destination))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let args = replacement_args(dir.path(), &good, &approved, &receipt);
+        run(&args).unwrap();
+        let received: Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(received["schema"], RETAINED_RECEIPT_SCHEMA);
+        assert_eq!(received["replacement_approval_sha256"], args[5]);
+        assert_eq!(received["router_replacement"], good["router_replacement"]);
+        assert_eq!(received["replacement_partition"], "widest_axis_quota_v1");
+        assert_eq!(received["performance_claim"], false);
+        let head = runtime
+            .block_on(read_two_bit_head(&store, &destination))
+            .unwrap()
+            .unwrap();
+        assert_eq!(received["root_sha256"], head.root_sha256());
+        assert!(run(&args).is_err());
+    }
+
+    #[test]
+    fn retained_router_replacement_files_reject_duplicates_corruption_truncation_and_links() {
+        assert!(unique_json(br#"{"proof":{"complete":true,"complete":false}}"#).is_err());
+        assert!(unique_json(br#"{"proof":[{"bytes":1,"bytes":2}]}"#).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.bin");
+        fs::write(&path, b"approved").unwrap();
+        let approved = Artifact {
+            bytes: 8,
+            sha256: sha_hex(b"approved"),
+        };
+        let pin = FilePin {
+            path: path.clone(),
+            bytes: 8,
+            sha256: approved.sha256.clone(),
+        };
+        assert_eq!(
+            replacement_body(&pin, &approved, 8).unwrap().as_ref(),
+            b"approved"
+        );
+        for bytes in [
+            b"corrupt!".as_slice(),
+            b"short".as_slice(),
+            b"approved-extra".as_slice(),
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert!(replacement_body(&pin, &approved, 8).is_err());
+        }
+        fs::write(&path, b"approved").unwrap();
+        let hard = dir.path().join("hard");
+        fs::hard_link(&path, &hard).unwrap();
+        assert!(replacement_body(&pin, &approved, 8).is_err());
+        fs::remove_file(&hard).unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&hard, &path).unwrap();
+        assert!(replacement_body(&pin, &approved, 8).is_err());
+        assert!(replacement_body(&pin, &approved, 7).is_err());
+    }
+
     #[test]
     fn retained_backend_descriptors_are_strict_before_store_operations() {
         let dir = tempfile::tempdir().unwrap();
         let mut value = json!({
             "schema": RETAINED_CONFIG_SCHEMA,
+            "router_replacement": null,
             "backend": {"kind": "S3", "bucket": "fixture", "region": "eu-central-1", "namespace": "tenant/import", "request_timeout_seconds": 120},
             "retained_prefix": "semantic/index",
             "original_root_sha256": "1".repeat(64),
