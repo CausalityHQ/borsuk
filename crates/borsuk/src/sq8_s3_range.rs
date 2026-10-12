@@ -615,7 +615,7 @@ pub(crate) async fn fetch_verified_ranges_inner(
 }
 
 /// `fetch_verified_ranges_inner` plus opt-in diagnostics. Every range future is
-/// the production one, polled by the same ordered `buffered` combinator; spans are
+/// the production one, polled by the same completion-driven combinator; spans are
 /// returned by value from each future, so no shared state is touched while
 /// requests are in flight. All requests drain before any outcome is examined.
 #[allow(clippy::too_many_arguments)]
@@ -673,25 +673,20 @@ pub(crate) async fn fetch_verified_ranges_traced(
         trace.fetch_start_ns = Some(trace.now_ns());
         trace.origin
     });
-    // The buffered element is the named `fetch_verified_pages_traced` future itself, with no
-    // extra async block around it, so a test can measure exactly the type `buffered` holds.
-    let outcomes = stream::iter(ranges.iter().copied().enumerate().map(
+    // The indexed future has a named type-producing function so the layout test measures
+    // the actual scheduler element, including its plan index.
+    let mut outcomes = stream::iter(ranges.iter().copied().enumerate().map(
         |(index, (first, last))| {
-            fetch_verified_pages_traced(
-                store,
-                location,
-                authority,
-                first,
-                last,
-                etag,
-                max_bytes,
-                origin.map(|origin| (origin, index)),
+            fetch_verified_pages_indexed(
+                store, location, authority, first, last, etag, max_bytes, index, origin,
             )
         },
     ))
-    .buffered(max_parallel.min(ranges.len()))
+    .buffer_unordered(max_parallel.min(ranges.len()))
     .collect::<Vec<_>>()
     .await;
+    // Refill slots on completion; restore plan order for results, traces and errors.
+    outcomes.sort_unstable_by_key(|(index, _)| *index);
     if let Some(trace) = trace.as_deref_mut() {
         trace.all_ranges_complete_ns = Some(trace.now_ns());
     }
@@ -701,7 +696,7 @@ pub(crate) async fn fetch_verified_ranges_traced(
     };
     let mut verified = Vec::with_capacity(ranges.len());
     let mut first_error = None;
-    for (outcome, probe) in outcomes {
+    for (_, (outcome, probe)) in outcomes {
         if let (Some(trace), Some(probe)) = (trace.as_deref_mut(), probe) {
             trace.push(probe.span);
         }
@@ -793,6 +788,34 @@ async fn fetch_verified_pages_traced(
 
 /// A finished range: its result and, only when tracing, its diagnostic record.
 type RangeOutcome = (Result<VerifiedRange, RangeFetchError>, Option<Box<Probe>>);
+
+type IndexedRangeOutcome = (usize, RangeOutcome);
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_pages_indexed(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    first_page: usize,
+    last_page: usize,
+    etag: &str,
+    max_bytes: usize,
+    index: usize,
+    origin: Option<Instant>,
+) -> IndexedRangeOutcome {
+    let outcome = fetch_verified_pages_traced(
+        store,
+        location,
+        authority,
+        first_page,
+        last_page,
+        etag,
+        max_bytes,
+        origin.map(|origin| (origin, index)),
+    )
+    .await;
+    (index, outcome)
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn fetch_verified_pages_core(
@@ -1201,9 +1224,9 @@ impl Sq8RangeTrace {
 
     /// Peak range-drain state that exists with tracing ON OR OFF, as a conservative bound
     /// rather than a delta: each of at most `max_parallel` pending ranges is charged its
-    /// whole `RANGE_FUTURE_ALLOWANCE_BYTES` (future, executor node, allocation), the ordered
-    /// queue may hold that many finished-but-unyielded outcomes, and the collected outcome
-    /// vector is charged at its growth peak. Every outcome includes the pointer-sized probe
+    /// whole `RANGE_FUTURE_ALLOWANCE_BYTES` (future, executor node, allocation), the scheduler
+    /// may hold that many finished-but-unyielded outcomes, and the collected outcome
+    /// vector is charged at its growth peak. Every outcome includes its plan index and probe
     /// slot. The tracing-off DELTA against the pre-change layout is only a part of this
     /// (one extra async layer, one probe pointer per future, one pointer per outcome). It is
     /// NOT measured by the layout test, which prints the current futures only: the
@@ -1211,7 +1234,7 @@ impl Sq8RangeTrace {
     /// fixture on the base commit it is an unmeasured estimate of a few hundred bytes per
     /// pending range, inside the allowance charged above.
     pub fn pending_futures_bytes(ranges: usize, max_parallel: usize) -> usize {
-        let outcome = std::mem::size_of::<RangeOutcome>();
+        let outcome = std::mem::size_of::<IndexedRangeOutcome>();
         let pending = ranges.min(max_parallel);
         pending
             .saturating_mul(RANGE_FUTURE_ALLOWANCE_BYTES)
@@ -3328,11 +3351,12 @@ mod tests {
         let store = InMemory::new();
         let location = Path::from("sq8.bin");
         let (authority, _) = short_tail_authority();
-        // The exact element type `buffered` holds in production, the body it wraps with no
+        // The exact element type the scheduler holds in production, the body it wraps with no
         // probe, and the plain entry point used outside batches. Unpolled futures report
         // their whole state, so this is the full per-range footprint.
-        let production =
-            fetch_verified_pages_traced(&store, &location, &authority, 0, 0, "etag", 3328, None);
+        let production = fetch_verified_pages_indexed(
+            &store, &location, &authority, 0, 0, "etag", 3328, 0, None,
+        );
         let body =
             fetch_verified_pages_core(&store, &location, &authority, 0, 0, "etag", 3328, None);
         let plain = fetch_verified_pages_inner(&store, &location, &authority, 0, 0, "etag", 3328);
@@ -3341,7 +3365,7 @@ mod tests {
             size_of_val(&body),
             size_of_val(&plain),
         );
-        let outcome = size_of::<RangeOutcome>();
+        let outcome = size_of::<IndexedRangeOutcome>();
         let result = size_of::<Result<VerifiedRange, RangeFetchError>>();
         // Run with --nocapture to record the measured layout next to the preregistered allowances.
         println!(
@@ -3361,17 +3385,17 @@ mod tests {
                 <= RANGE_FUTURE_ALLOWANCE_BYTES,
             "production future {production_bytes} body {body_bytes} plain {plain_bytes}"
         );
-        // The instrumentable layer is the only addition over the body, and it stays small.
+        // Instrumentation and indexing stay within the charged future allowance.
         assert!(body_bytes <= production_bytes);
         assert!(
             production_bytes - body_bytes <= 512,
             "{production_bytes} {body_bytes}"
         );
         // With tracing off the probe slot, its borrow and the returned record are one pointer each,
-        // and an outcome carries exactly one pointer more than the bare result.
+        // and an outcome adds the probe pointer and plan index to the bare result.
         assert_eq!(size_of::<Option<Box<Probe>>>(), size_of::<usize>());
         assert_eq!(size_of::<Option<&mut Probe>>(), size_of::<usize>());
-        assert!(outcome <= result + size_of::<usize>());
+        assert!(outcome <= result + 2 * size_of::<usize>());
         // Retained trace bytes, cumulative drain peak and the on/off-path state are distinct figures.
         let (capacity, parallel) = (32, 16);
         let retained = Sq8RangeTrace::retained_bytes(capacity);
@@ -3964,7 +3988,8 @@ mod tests {
         let (result, refilled) = tokio::join!(work, async {
             let refilled = tokio::time::timeout(
                 Duration::from_secs(2),
-                fixture.wait(|state| state.finished[1].contains(&starts[1]) && state.active[1] >= 2),
+                fixture
+                    .wait(|state| state.finished[1].contains(&starts[1]) && state.active[1] >= 2),
             )
             .await
             .is_ok();
@@ -3976,6 +4001,7 @@ mod tests {
             refilled
         });
         let failure = result.unwrap_err();
+        assert!(matches!(failure.error, RangeFetchError::Store(_)));
         assert_eq!(
             failure.stats,
             Sq8ReadStats {
@@ -4023,7 +4049,10 @@ mod tests {
         assert_eq!(state.active[1], 0);
         assert!(state.peak[1] <= 2);
         fixture.finish();
-        assert!(refilled, "completed request must refill its slot before earlier body finishes");
+        assert!(
+            refilled,
+            "completed request must refill its slot before earlier body finishes"
+        );
     }
 
     #[tokio::test]
