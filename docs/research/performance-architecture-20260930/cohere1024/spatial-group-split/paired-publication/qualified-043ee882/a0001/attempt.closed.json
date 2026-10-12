@@ -1,0 +1,49 @@
+{
+  "schema": "borsuk-paired-native-attempt-closed-v1",
+  "status": "INVALID_COMPILER",
+  "source_commit": "90469ee3143f28770b469aa78c962c529a0e3767",
+  "ssm_command": "e719d4cd-0af4-4524-b496-877bfe27f7ab",
+  "ssm_status": "Failed",
+  "ssm_exit": 1,
+  "batch": {
+    "schema": "borsuk-paired-native-batch-v1",
+    "source_commit": "90469ee3143f28770b469aa78c962c529a0e3767",
+    "batch_exit": 1,
+    "completed_stages": 0,
+    "required_stages": 8,
+    "gate_groups": 6,
+    "failed_stage": "paired-debug",
+    "native_qualified": false,
+    "performance_claim": false
+  },
+  "stage": {
+    "schema": "borsuk-sealed-loss-native-stage-v1",
+    "stage": "paired-debug",
+    "source_commit": "90469ee3143f28770b469aa78c962c529a0e3767",
+    "manager_exit": 101,
+    "native_exit": null,
+    "owned_cgroup_drained": true,
+    "performance_claim": false
+  },
+  "failure": {
+    "code": "E0277",
+    "file": "crates/borsuk/examples/compare_native_replay/paired_partition_coverage.rs",
+    "line": 1849,
+    "detail": "Vec<&PathBuf> cannot Extend<&Path>",
+    "native_log_sha256": "8017da5fa90823b5568d864ac0c55faeee61d6bed098a76309676dc8e7aa6096"
+  },
+  "native_tests_run": false,
+  "remaining_stages_unrun": 7,
+  "source_after_unavailable": true,
+  "all_collected_stage_body_hashes_verified": true,
+  "instance_id": "i-00b949b98fc462348",
+  "terminated": true,
+  "volume_id": "vol-0f482b40d5e2493dd",
+  "volume_deleted_notfound_exit": 254,
+  "background_marker": false,
+  "root_watchdog_cleared": true,
+  "repair_commit": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "repair_native_status": "UNVERIFIED",
+  "performance_claim": false,
+  "product_goal_complete": false
+}

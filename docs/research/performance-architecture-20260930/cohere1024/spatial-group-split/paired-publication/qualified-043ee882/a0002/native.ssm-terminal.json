@@ -1,0 +1,22 @@
+{
+    "CommandId": "a804791b-2f61-43ee-8451-556b48c758ad",
+    "InstanceId": "i-00fee86b4158e42be",
+    "Comment": "BORSUK corrected source043ee882 serial native gates a0002",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-12T00:42:36.860Z",
+    "ExecutionElapsedTime": "PT34M42.29S",
+    "ExecutionEndDateTime": "2026-10-12T01:17:18.860Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/paired-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/axis-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/paired-release.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/axis-release.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/complete-example.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/release-elf.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-clippy.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-test-build.sh: OK\n{\n  \"schema\": \"borsuk-paired-native-batch-v1\",\n  \"source_commit\": \"043ee8826e485b0e1a1f1f46e11448a742a001de\",\n  \"batch_exit\": 0,\n  \"completed_stages\": 8,\n  \"required_stages\": 8,\n  \"gate_groups\": 6,\n  \"failed_stage\": \"\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

@@ -1,0 +1,1 @@
+cargo test --release --locked -p borsuk --example compare_native_replay paired_partition_coverage::tests:: -- --test-threads=1

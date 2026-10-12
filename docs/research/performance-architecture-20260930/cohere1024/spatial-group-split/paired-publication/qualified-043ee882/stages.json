@@ -1,0 +1,98 @@
+[
+  {
+    "name": "paired-debug",
+    "command": "cargo test --locked -p borsuk --example compare_native_replay paired_partition_coverage::tests:: -- --test-threads=1",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "b27ed02bd2d2896f58894898469ca352e55c005ff1c479e17fac9b3733d024e6",
+    "terminal_sha256": "ac1e2ff2867329bb70ea1684516bfd6eb54970804cbfdd27d94b470c4835daaf",
+    "body_manifest_sha256": "5bee7814fa3f18f873790cfbdd6b13eb633818751ce86970e2cf8f838179df7d"
+  },
+  {
+    "name": "axis-debug",
+    "command": "cargo test --locked -p borsuk --lib spatial_axis1023_top48_gains_and_displaced_losses -- --test-threads=1",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "2696b898b5873348fe7511bef030b9e8a470cb4a82626794953a3ee8d5b3dc21",
+    "terminal_sha256": "17242bcee1a3520a7099c25b1118f17f439b5bc87d8024f5e846541db5cc4155",
+    "body_manifest_sha256": "caf68c40905ca462299f3fe09146c0852c989795a08e4ebd305fd43d9f417e96"
+  },
+  {
+    "name": "paired-release",
+    "command": "cargo test --release --locked -p borsuk --example compare_native_replay paired_partition_coverage::tests:: -- --test-threads=1",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "6d20d2e266885b9b285df2820c5e159d265a5823a2f31661b847c24914968291",
+    "terminal_sha256": "d804083d7b728d3f82dfbe2280933231eb6264376359a7902068bb4a8804e798",
+    "body_manifest_sha256": "7b83d832481c47a8668dcba6c2ef4c002f937321fe5863b12adfd301d8e62a15"
+  },
+  {
+    "name": "axis-release",
+    "command": "cargo test --release --locked -p borsuk --lib spatial_axis1023_top48_gains_and_displaced_losses -- --test-threads=1",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "22fa4199b0e978988ee11fafdfaf73bee9b457bfa751654f51ca7f88c44c03fc",
+    "terminal_sha256": "94431289143450f6a6b02e424bd992b0aa06843d6e93cadb474054702d149e1f",
+    "body_manifest_sha256": "a37f1977712c01981ea8e74d7f33c670ec611d4b7eefb1c82cf4e34dd0711cae"
+  },
+  {
+    "name": "complete-example",
+    "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "44b27de16761d811587c390741f4dff2eaf86516b96ce5b54bf49b8a57537ff5",
+    "terminal_sha256": "1ca214bb76cb9b9c88e0460c6f87fe7590a2ddafa56e9bf7c81d395146fa9da7",
+    "body_manifest_sha256": "ad49a88953c5ae3dd3290ccdaa628471209ff8a16528895d6d3f5f323fc7c115"
+  },
+  {
+    "name": "release-elf",
+    "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "683438a1d59aa4b98f224bbeeab162e47fb9a7cad5c19152d9efabdce11666df",
+    "terminal_sha256": "e6b9523a5e1e520bccdee011e34d339295b5f485ffd662c077d0be03008c4462",
+    "body_manifest_sha256": "75a3acca4229e056adb3835089634dfb3b699a5ffb6860979ff5bfdf8de2cad9"
+  },
+  {
+    "name": "workspace-clippy",
+    "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "29646454957a6a199dc527210a9de722abb31226dd4ea18a6cd85f9998f824c6",
+    "terminal_sha256": "d8aad6dfbd91d322e7c9a4fd5e0dd5f7e6fb6547ede9f4be533cd2f174477dc4",
+    "body_manifest_sha256": "f74b86f20c3ff87fbc0022f25ef3dd47abae9e73e5524975ef960996b7c7a4e9"
+  },
+  {
+    "name": "workspace-test-build",
+    "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh",
+    "native_exit": 0,
+    "manager_exit": 0,
+    "owned_cgroup_drained": true,
+    "full_source_before_after_root_match": true,
+    "all_evidence_body_hashes_verified": true,
+    "native_log_sha256": "1fe8e4bda7733e36d2d1af63bb4d4b14379bec9d43c27e32821e388189ecb252",
+    "terminal_sha256": "48e3e08b9b6ed774b829c6bd7c24f75c5c46c8876245d2c70f23e5440cef2266",
+    "body_manifest_sha256": "3820fb2dcbe6a062ba8a3da80cc2cda199c3c3a723ab17631269c84c9dc770bf"
+  }
+]

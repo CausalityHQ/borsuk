@@ -1,0 +1,22 @@
+{
+    "CommandId": "e719d4cd-0af4-4524-b496-877bfe27f7ab",
+    "InstanceId": "i-00b949b98fc462348",
+    "Comment": "BORSUK exact90469ee3 serial paired native gates a0001",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-12T00:27:37.484Z",
+    "ExecutionElapsedTime": "PT2M33.863S",
+    "ExecutionEndDateTime": "2026-10-12T00:30:10.484Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/paired-debug.sh: OK\n{\n  \"schema\": \"borsuk-paired-native-batch-v1\",\n  \"source_commit\": \"90469ee3143f28770b469aa78c962c529a0e3767\",\n  \"batch_exit\": 1,\n  \"completed_stages\": 0,\n  \"required_stages\": 8,\n  \"gate_groups\": 6,\n  \"failed_stage\": \"paired-debug\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

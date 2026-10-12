@@ -1,0 +1,11 @@
+{
+    "AcceptRanges": "bytes",
+    "LastModified": "2026-10-12T00:45:56+00:00",
+    "ContentLength": 872,
+    "ETag": "\"dd363569167aa65724482ba3911f07e1\"",
+    "ChecksumCRC64NVME": "TvSenoA6pAs=",
+    "ChecksumType": "FULL_OBJECT",
+    "ContentType": "binary/octet-stream",
+    "ServerSideEncryption": "AES256",
+    "Metadata": {}
+}

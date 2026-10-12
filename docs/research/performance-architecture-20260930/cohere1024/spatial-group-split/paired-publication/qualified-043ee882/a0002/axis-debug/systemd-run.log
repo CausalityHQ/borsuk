@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-axis-debug.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1min 23.167s
+CPU time consumed: 1min 45.871s
+Memory peak: 7.1M
+Memory swap peak: 0B

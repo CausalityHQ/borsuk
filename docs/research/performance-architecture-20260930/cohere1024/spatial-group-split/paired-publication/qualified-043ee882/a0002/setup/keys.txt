@@ -1,0 +1,15 @@
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/SHA256SUMS
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/base-native-source.json
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/base-source-files.sha256
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/cargo.txt
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/gate-deadline.epoch
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/gate-started.epoch
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/machine-stop.epoch
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/native-source-overlay.log
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/native-source.json
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/native-source.sha256
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/rustc.txt
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/source-files.sha256
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/source-overlay.log
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/source-setup.log
+research/semantic-router/20261012/paired-native-qualification-a0002/setup/terminal.json

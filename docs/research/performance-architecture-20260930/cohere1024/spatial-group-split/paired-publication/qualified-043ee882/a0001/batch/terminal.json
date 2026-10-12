@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-paired-native-batch-v1",
+  "source_commit": "90469ee3143f28770b469aa78c962c529a0e3767",
+  "batch_exit": 1,
+  "completed_stages": 0,
+  "required_stages": 8,
+  "gate_groups": 6,
+  "failed_stage": "paired-debug",
+  "native_qualified": false,
+  "performance_claim": false
+}

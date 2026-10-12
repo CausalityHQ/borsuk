@@ -1,0 +1,8 @@
+paired-debug	0
+axis-debug	0
+paired-release	0
+axis-release	0
+complete-example	0
+release-elf	0
+workspace-clippy	0
+workspace-test-build	0

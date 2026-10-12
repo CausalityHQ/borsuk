@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-paired-debug.service
+Finished with result: exit-code
+Main processes terminated with: code=exited/status=101
+Service runtime: 2min 19.025s
+CPU time consumed: 3min 19.469s
+Memory peak: 7.1M
+Memory swap peak: 0B

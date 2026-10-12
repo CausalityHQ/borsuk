@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-paired-debug.service; invocation ID: 54dd3681925c4e5d8c15f745f4676623
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 3min 6.946s
+CPU time consumed: 4min 11.217s
+Memory peak: 7.1M
+Memory swap peak: 0B

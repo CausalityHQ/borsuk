@@ -1,0 +1,31 @@
+{
+  "schema": "borsuk-paired-native-launch-admission-v1",
+  "status": "READY_COMPILER_AND_SYNTHETIC_QUALIFICATION",
+  "source_commit": "043ee8826e485b0e1a1f1f46e11448a742a001de",
+  "source_archive": {
+    "bytes": 4341061,
+    "sha256": "71cc534d218b2e62cdd6cbde1a4a97353c15d061e7409a624cf3815f015ad017"
+  },
+  "full_source": {
+    "count": 465,
+    "manifest_sha256": "b6c47cc4617987d43592c9c7747ad1e163f14f0e3ea324c668d1e31005899863"
+  },
+  "native_source": {
+    "count": 432,
+    "manifest_sha256": "a01fa7352ef4cf1a08e03538f1d21226990d6283e51a519ed1eafdf9d74cef23"
+  },
+  "review_findings_reconciled": true,
+  "all_input_server_sha256_match": true,
+  "required_stages": 8,
+  "gate_groups": 6,
+  "instance_type": "c7i.2xlarge",
+  "compiler_jobs": 2,
+  "stage_memory_max_bytes": 15032385536,
+  "swap_max_bytes": 0,
+  "machine_stop_seconds": 10800,
+  "root_watchdog_seconds": 10920,
+  "total_ceiling_usd": 0.90,
+  "performance_claim": false,
+  "prior_attempt_closed": true,
+  "causal_change": "Vec<&Path> and PathBuf::as_path type coherence; no algorithm or fixture changes"
+}
