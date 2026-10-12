@@ -7,7 +7,9 @@ use borsuk::{
     unit_centroid_pages::UnitCentroidPages,
 };
 use futures_util::StreamExt;
-use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path as ObjectPath};
+use object_store::{
+    ObjectStore, ObjectStoreExt, PutPayload, memory::InMemory, path::Path as ObjectPath,
+};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Cursor};
 fn hash(b: &[u8]) -> String {
@@ -458,7 +460,7 @@ impl RetainedFixture {
         let mut root: serde_json::Value = serde_json::from_slice(
             &self
                 .copied
-                .get(&old_prefix.join("manifest.json"))
+                .get(&old_prefix.clone().join("manifest.json"))
                 .await
                 .unwrap()
                 .bytes()
