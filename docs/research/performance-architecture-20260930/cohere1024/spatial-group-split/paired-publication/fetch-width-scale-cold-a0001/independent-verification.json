@@ -1,0 +1,21 @@
+{
+  "status": "CLOSED_NATIVE_FETCH_WIDTH_COMPARISON_VERIFIED",
+  "source": "1a8c0a4617474bda78eea7059fda5f0ab765bb0d",
+  "instance_id": "i-01e0d1e8151e4f4a7",
+  "ssm_command_id": "b26ed1ee-f978-4159-810d-9628b4d7a96e",
+  "stage_count": 18,
+  "cell_count": 4,
+  "queries_per_cell": 1000,
+  "recall_at10": 0.978,
+  "underfill": 0,
+  "native_semantic_physical_plan_logical_charge_parity": true,
+  "outer_memory_bytes": 1073741824,
+  "library_payload_budget_bytes": 536870912,
+  "swap_oom": 0,
+  "terminated": true,
+  "volume_deleted": true,
+  "watchdog_stopped": true,
+  "provider_cache_controlled": false,
+  "matched_vendor_win": false,
+  "production_ready": false
+}

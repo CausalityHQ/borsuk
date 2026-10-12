@@ -1,0 +1,23 @@
+	Command being timed: "/usr/bin/timeout -k 20 1800 /mnt/borsuk-fetch-width-scale/bin/check_cohere_native_baseline /mnt/borsuk-fetch-width-scale/inputs/formal-width16.config.json 5eb80958bfc0daee05c2eb492aac07d0133bc2a9ce8d8d65597d5451706d6c05 /mnt/borsuk-fetch-width-scale/results/formal-width16-a2.jsonl"
+	User time (seconds): 90.43
+	System time (seconds): 18.38
+	Percent of CPU this job got: 31%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:44.72
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 64780
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 646061
+	Voluntary context switches: 402414
+	Involuntary context switches: 3492
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 77320
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

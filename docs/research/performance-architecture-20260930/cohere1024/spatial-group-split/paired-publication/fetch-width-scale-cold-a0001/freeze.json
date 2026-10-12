@@ -1,0 +1,28 @@
+{
+  "status": "FROZEN_FETCH_WIDTH_SCALE",
+  "source": "1a8c0a4617474bda78eea7059fda5f0ab765bb0d",
+  "qualified_native_source": "bb80700f546426d695d5b87879672fc2101fb4f9",
+  "completed_qualification_sha256": "3ca7a6ac0a8d19e842f566b7f0f0e2018a86da9bc6af7f3e3cae6e8bb751bdb2",
+  "baseline_sha256": "b1c12829989c75ed75de94d7c6824e361fceff59be5538d52899a7105b295be5",
+  "reducer_sha256": "8d3e5b54f75c6b5e751004493f5b8c63b209ca85775647bfb020beec0a5a5575",
+  "transport_sha256": "c7b6c1774e475e4609d8f103d0f3ac836a4e329f916849ece80bc7086de4d2b6",
+  "bootstrap_sha256": "2c70d809599030128809357cff94d19f6941732847cd932230f002779cd2ea06",
+  "transport_rows": 22,
+  "native_stages": 18,
+  "order": [
+    16,
+    32,
+    32,
+    16
+  ],
+  "machine_seconds": 14400,
+  "external_seconds": 14520,
+  "cost_ceiling_usd": 1.50,
+  "outer_query_memory_bytes": 1073741824,
+  "library_payload_budget_bytes": 536870912,
+  "source_cache": "off",
+  "provider_cache_controlled": false,
+  "actual_input_admission_pending": true,
+  "disposable_canary_pending": true,
+  "performance_claim": false
+}
