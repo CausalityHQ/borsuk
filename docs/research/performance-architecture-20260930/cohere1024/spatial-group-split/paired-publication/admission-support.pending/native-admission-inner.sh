@@ -12,8 +12,11 @@ source "$support/admission.env"
 : "${CONFIG_SHA256:?}" "${AUTHORITY_SHA256:?}" "${STRACE_REALPATH:?}" "${STRACE_SHA256:?}"
 [[ $STRACE_REALPATH == /usr/bin/strace && $STRACE_SHA256 =~ ^[0-9a-f]{64}$ ]]
 test "$(realpath "$(command -v strace)")" = "$STRACE_REALPATH"
+[[ -f $STRACE_REALPATH && -x $STRACE_REALPATH && ! -L $STRACE_REALPATH ]]
+test "$(od -An -tx1 -N4 "$STRACE_REALPATH")" = ' 7f 45 4c 46'
+[[ $(cat "$support/tracer.verify.exit") == 0 && ! -s $support/tracer.verify.stdout ]]
 printf '%s  %s\n' "$STRACE_SHA256" "$STRACE_REALPATH" "$CONFIG_SHA256" "$root/paired.config.json" "$AUTHORITY_SHA256" "$root/paired.authority.json" fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748 "$root/bin/compare_native_replay" | sha256sum -c - > "$ev/runtime-pins.log"
-cp "$support/tracer.realpath" "$support/tracer.sha256" "$support/tracer.version" "$support/tracer.package" "$support/tracer.owner" "$support/aws.version" "$ev/"
+cp "$support"/tracer.{realpath,sha256,version,package,owner,verify.stdout,verify.stderr,verify.exit} "$support/aws.version" "$ev/"
 export BORSUK_CPU_THREADS=1 RAYON_NUM_THREADS=1 RUST_TEST_THREADS=1
 unset BORSUK_SOURCE_NEIGHBORHOOD_CRASH_DIR
 cg=$(awk -F: '$1==0 {print $3}' /proc/self/cgroup)
@@ -35,9 +38,9 @@ truth=$(jq -r '.truth.path' "$root/paired.config.json")
 sq8=$(jq -r '.sq8.path' "$root/paired.config.json")
 membership=$(jq -r '.spatial.membership.path' "$root/paired.config.json")
 membership_sha=$(jq -r '.spatial.membership.sha256' "$root/paired.config.json")
-for path in "$request" "$truth" "$sq8"; do test ! -e "$path" && test ! -L "$path"; done
-test ! -e "$ev/selection.json" && test ! -L "$ev/selection.json"
-test ! -e "$ev/report.json" && test ! -L "$ev/report.json"
+for path in "$request" "$truth" "$sq8"; do [[ ! -e $path && ! -L $path ]]; done
+[[ ! -e $ev/selection.json && ! -L $ev/selection.json ]]
+[[ ! -e $ev/report.json && ! -L $ev/report.json ]]
 restore() {
  if [[ $phase == corrupt ]] && test -f "$membership.approved-original"; then
   printf '%s  %s\n' "$membership_sha" "$membership.approved-original" | sha256sum -c - > "$ev/backup-authentication.log"
@@ -49,7 +52,7 @@ restore() {
 }
 if [[ $phase == corrupt ]]; then
  printf '%s  %s\n' "$membership_sha" "$membership" | sha256sum -c - > "$ev/original-membership.log"
- test ! -e "$membership.approved-original" && test ! -L "$membership.approved-original"
+ [[ ! -e $membership.approved-original && ! -L $membership.approved-original ]]
  trap restore EXIT
  mv "$membership" "$membership.approved-original"
  cp --reflink=never "$membership.approved-original" "$membership"
@@ -82,7 +85,8 @@ for f in memory.peak memory.events memory.swap.peak pids.peak cpu.stat; do if te
 test "$status" = 2
 test "$(cat "$ev/native-exit.txt")" = 2
 test -s "$ev/native.trace"
-if grep -Eq '<unfinished \.\.\.>|resumed>|strace:|\.\.\.' "$ev/native.trace"; then exit 1; fi
+# Stat-field abbreviation is normal; abbreviated quoted strings lose path evidence.
+if grep -Eq '<unfinished \.\.\.>|resumed>|strace:|"([^"\\]|\\.)*"\.\.\.' "$ev/native.trace" || grep -Fq 'strace:' "$ev/native.stderr"; then exit 1; fi
 # -yy binds openat's resolved directory FD plus basename to the configured absolute role.
 awk -v request="$request" -v truth="$truth" -v sq8="$sq8" -v phase="$phase" -v inputs="$root/inputs/" '
  function refers(line,path, parent,base,n,parts) {
@@ -99,10 +103,10 @@ awk -v request="$request" -v truth="$truth" -v sq8="$sq8" -v phase="$phase" -v i
  }
  END {if ((phase=="prefix" && count!=1) || (phase!="prefix" && count!=0)) bad=1; exit bad}
 ' "$ev/native.trace" > "$ev/request-witness.txt"
-test ! -e "$ev/selection.json" && test ! -L "$ev/selection.json"
+[[ ! -e $ev/selection.json && ! -L $ev/selection.json ]]
 if [[ $phase == canary ]]; then
  grep -Fx 'INVALID: config SHA/length/identity; external gates required' "$ev/native.stderr" > "$ev/refusal-witness.txt"
- test ! -e "$ev/report.json" && test ! -L "$ev/report.json"
+ [[ ! -e $ev/report.json && ! -L $ev/report.json ]]
  gate=EXPECTED_CONFIG_SHA_REFUSAL
 else
  jq -e '.schema=="borsuk-paired-source-coverage-v1" and .status=="INVALID" and .complete==false and .qualified==false and .resource_gate_failed==false and .cold_s3_claim==false and .candidate_returned_ids_computed==false' "$ev/report.json" > "$ev/native-invalid-check.log"
@@ -115,7 +119,7 @@ else
   gate=EXPECTED_PAIRED_BINARY_SHA_REFUSAL
  fi
 fi
-for path in "$request" "$truth" "$sq8"; do test ! -e "$path" && test ! -L "$path"; done
+for path in "$request" "$truth" "$sq8"; do [[ ! -e $path && ! -L $path ]]; done
 test "$(cat "$ev/memory.swap.peak.after")" = 0
 awk '$1 ~ /^oom/ && $2 != 0 {bad=1} END {exit bad}' "$ev/memory.events.after"
 printf '%s\n' "$gate" > "$ev/wrapper-prefix-gate.txt"

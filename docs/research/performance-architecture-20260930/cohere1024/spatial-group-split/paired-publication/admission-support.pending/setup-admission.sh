@@ -24,12 +24,22 @@ timeout -k 5 60 ./aws/install
 [[ $(aws --version) == aws-cli/2.36.11\ * ]]
 aws --version > aws.version
 tracer=$(realpath "$(command -v strace)")
+test "$tracer" = /usr/bin/strace
+[[ -f $tracer && -x $tracer && ! -L $tracer ]]
+test "$(od -An -tx1 -N4 "$tracer")" = ' 7f 45 4c 46'
 sha256sum "$tracer" > tracer.sha256
 printf '%s\n' "$tracer" > tracer.realpath
 "$tracer" --version > tracer.version
 dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' strace > tracer.package
 dpkg-query -S "$tracer" > tracer.owner
-test ! -e "$root" && test ! -L "$root"
+set +e
+timeout -k 5 30 dpkg --verify strace > tracer.verify.stdout 2> tracer.verify.stderr
+verify_exit=$?
+set -e
+printf '%s\n' "$verify_exit" > tracer.verify.exit
+test "$verify_exit" = 0
+test ! -s tracer.verify.stdout
+[[ ! -e $root && ! -L $root ]]
 mkdir "$root"
 test "$(findmnt -n -o FSTYPE --target "$root")" = ext4
 mkdir "$root/bin" "$root/inputs" "$root/inputs/construction" "$root/evidence"
@@ -45,7 +55,7 @@ while IFS=$'\t' read -r key path bytes sha; do
  [[ $path == "$root/inputs/"* || $path == "$root/bin/compare_native_replay" || $path == "$root/paired.config.json" || $path == "$root/paired.authority.json" ]]
  [[ $path =~ ^/[A-Za-z0-9_./-]+$ && $path != *..* && $path != *//* && $sha =~ ^[0-9a-f]{64}$ && $bytes =~ ^[1-9][0-9]*$ ]]
  [[ $path != "$root/inputs/queries.f32" && $path != "$root/inputs/truth.u64" && $path != "$root/inputs/sq8.bin" ]]
- test ! -e "$path" && test ! -L "$path"
+ [[ ! -e $path && ! -L $path ]]
  left=$((deadline-$(date +%s)-5)); (( left > 0 )) || exit 124
  (( left <= 180 )) || left=180
  timeout -k 5 "$left" aws --cli-connect-timeout 10 --cli-read-timeout 60 s3api get-object --bucket borsuk-bench-453182569524-euc1 --key "$key" "$path.part" > "${path##*/}.get.json"
@@ -61,6 +71,6 @@ jq -s -e '.[0] as $c | .[1] as $a | .[2] as $t | [$c.inputs.generation_manifest,
 chmod 0500 "$root/bin/compare_native_replay"
 printf '%s  %s\n' fd6d36f6bfbb4e370a94707941cec396af59492f832f6d1090c24eacbc1ec748 "$root/bin/compare_native_replay" | sha256sum -c -
 test "$(od -An -tx1 -N4 "$root/bin/compare_native_replay")" = ' 7f 45 4c 46'
-for path in "$root/inputs/queries.f32" "$root/inputs/truth.u64" "$root/inputs/sq8.bin"; do test ! -e "$path" && test ! -L "$path"; done
+for path in "$root/inputs/queries.f32" "$root/inputs/truth.u64" "$root/inputs/sq8.bin"; do [[ ! -e $path && ! -L $path ]]; done
 sync -f "$root"
 printf '%s\n' ADMISSION_INPUTS_AUTHENTICATED_RUNTIME_TRACER_FREEZE_REQUIRED
