@@ -106,6 +106,7 @@ fn valid_sha(s: &str) -> bool {
 const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
 const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
 const SCALE_PAIRED_SCHEMA: &str = "borsuk-scale-paired-native-reduction-v1";
+const SCALE_SCHEDULER_SCHEMA: &str = "borsuk-scale-scheduler-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
@@ -4087,16 +4088,20 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         None
     };
     let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
+    let scheduler = scale && c.schema == "borsuk-scale-scheduler-native-reduction-config-v1";
+    let parallelisms: [usize; 2] = if scheduler { [32, 32] } else { [16, 32] };
     require(
         c.schema
-            == if scale {
+            == if scheduler {
+                "borsuk-scale-scheduler-native-reduction-config-v1"
+            } else if scale {
                 "borsuk-scale-paired-native-reduction-config-v1"
             } else {
                 "borsuk-paired-native-reduction-config-v1"
             },
         "paired config schema",
     )?;
-    for (arm, parallelism) in c.arms.iter().zip([16, 32]) {
+    for (arm, parallelism) in c.arms.iter().zip(parallelisms) {
         require(
             arm.schema
                 == if scale {
@@ -4106,7 +4111,11 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
                 }
                 && arm.expected_identity["fetch_parallelism"] == parallelism
                 && arm.expected_bound_inputs["fetch_parallelism"] == parallelism,
-            "paired arms must be ordered integer fetch_parallelism 16 then 32",
+            if scheduler {
+                "scheduler arms must both use integer fetch_parallelism 32"
+            } else {
+                "paired arms must be ordered integer fetch_parallelism 16 then 32"
+            },
         )?;
         // This experiment compares the retained production Cohere panel, not
         // arbitrary matching outputs. Admit its pins before either input opens;
@@ -4181,6 +4190,17 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
     )?;
     identity["config_sha256"] = b.expected_identity["config_sha256"].clone();
     identity["fetch_parallelism"] = json!(32);
+    if scheduler {
+        for field in ["binary_sha256", "sq8_range_source_sha256"] {
+            require(
+                valid_sha(identity[field].as_str().unwrap_or(""))
+                    && valid_sha(b.expected_identity[field].as_str().unwrap_or(""))
+                    && identity[field] != b.expected_identity[field],
+                "scheduler requires distinct authenticated binary and fetcher pins",
+            )?;
+            identity[field] = b.expected_identity[field].clone();
+        }
+    }
     let mut inputs = a.expected_bound_inputs.clone();
     inputs["fetch_parallelism"] = json!(32);
     require(
@@ -4225,7 +4245,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         )?;
     }
     let mut reports = Vec::with_capacity(2);
-    for ((arm, run), parallelism) in c.arms.iter().zip(&runs).zip([16, 32]) {
+    for ((arm, run), parallelism) in c.arms.iter().zip(&runs).zip(parallelisms) {
         // The maximum includes every query. Native100k selects at most16
         // leaves, so neither fetch width can admit a larger per-query peak.
         require(
@@ -4288,7 +4308,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         )?;
     }
     Ok(
-        json!({"schema":if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
+        json!({"schema":if scheduler { SCALE_SCHEDULER_SCHEMA } else if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
         "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
         "semantic_parity":true,"trace_plan_parity":true,"logical_charge_parity":true,
         "arms":reports,"pooled_both_arms":{"statistics":pooled,"stage_wall_sums":stage_totals},
@@ -8294,10 +8314,37 @@ fn main() {
                 )
             });
         }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--paired-scheduler-scale")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --paired-scheduler-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            let config_path = Path::new(&args[2]);
+            let config_sha = args[3].to_str().ok_or("config SHA encoding")?;
+            let (config, _): (PairedConfig, _) = read_config(config_path, config_sha)?;
+            require(
+                config.schema == "borsuk-scale-scheduler-native-reduction-config-v1",
+                "scheduler config schema",
+            )?;
+            return execute_report(Path::new(&args[4]), SCALE_SCHEDULER_SCHEMA, || {
+                reduce_paired_scope(config_path, config_sha, true)
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--paired-scale") {
             require(
                 args.len() == 5,
                 "usage: compare_native_replay --paired-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            let (config, _): (PairedConfig, _) = read_config(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("config SHA encoding")?,
+            )?;
+            require(
+                config.schema == "borsuk-scale-paired-native-reduction-config-v1",
+                "paired config schema",
             )?;
             return execute_report(Path::new(&args[4]), SCALE_PAIRED_SCHEMA, || {
                 reduce_paired_scope(
@@ -11764,12 +11811,70 @@ mod tests {
         let body = serde_json::to_vec(&config).unwrap();
         std::fs::write(&path, &body).unwrap();
         let report = reduce_paired_scope(&path, &sha(&body), true).unwrap();
+        assert_eq!(report["schema"], SCALE_SCHEDULER_SCHEMA);
         assert_eq!(report["semantic_parity"], true);
         assert_eq!(report["trace_plan_parity"], true);
         assert_eq!(report["logical_charge_parity"], true);
         assert_eq!(report["pooled_both_arms"]["statistics"]["count"], 2000);
         assert_eq!(report["performance_pass_claim"], false);
         assert!(reduce_paired(&path, &sha(&body)).is_err());
+        for mutation in 0..9 {
+            let mut bad = config.clone();
+            let error = match mutation {
+                0 | 1 => {
+                    let field = if mutation == 0 {
+                        "binary_sha256"
+                    } else {
+                        "sq8_range_source_sha256"
+                    };
+                    bad["arms"][1]["expected_identity"][field] =
+                        bad["arms"][0]["expected_identity"][field].clone();
+                    "scheduler requires distinct authenticated binary and fetcher pins"
+                }
+                2..=5 => {
+                    let field = [
+                        "runner_source_sha256",
+                        "router_source_sha256",
+                        "codec_source_sha256",
+                        "returned_source_sha256",
+                    ][mutation - 2];
+                    let current = bad["arms"][1]["expected_identity"][field].clone();
+                    let replacement = if current == json!("a".repeat(64)) {
+                        "b"
+                    } else {
+                        "a"
+                    };
+                    bad["arms"][1]["expected_identity"][field] = json!(replacement.repeat(64));
+                    "paired binary/source/benchmark/generation/backend/input/scoring pins differ"
+                }
+                6 => {
+                    for arm in bad["arms"].as_array_mut().unwrap() {
+                        arm["expected_identity"]["fetch_parallelism"] = json!(16);
+                        arm["expected_bound_inputs"]["fetch_parallelism"] = json!(16);
+                    }
+                    "scheduler arms must both use integer fetch_parallelism 32"
+                }
+                7 => {
+                    bad["arms"][1]["expected_bound_inputs"]["rows"] = json!(100000);
+                    "paired scale full1M production pins"
+                }
+                _ => {
+                    bad["arms"][1]["expected_bound_inputs"]["source_cache"] = json!("on");
+                    "paired scale full1M production pins"
+                }
+            };
+            for arm in bad["arms"].as_array_mut().unwrap() {
+                arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+            }
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                reduce_paired_scope(&path, &sha(&bytes), true)
+                    .unwrap_err()
+                    .to_string(),
+                error
+            );
+        }
     }
 
     #[test]
