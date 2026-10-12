@@ -43,6 +43,30 @@ struct LostHeadResponse {
     head: ObjectPath,
     competing_head: bool,
     stage_mutation: Option<(ObjectPath, bytes::Bytes)>,
+    sq8_spy: Option<std::sync::Arc<RetainedSq8Spy>>,
+}
+
+#[derive(Debug)]
+struct RetainedSq8Spy {
+    locations: [ObjectPath; 2],
+    full_gets: [std::sync::atomic::AtomicUsize; 2],
+    source_heads: std::sync::atomic::AtomicUsize,
+    change_current_version: bool,
+}
+impl RetainedSq8Spy {
+    fn new(source: &ObjectPath, current: &ObjectPath, change_current_version: bool) -> Self {
+        Self {
+            locations: [source.clone(), current.clone()],
+            full_gets: std::array::from_fn(|_| std::sync::atomic::AtomicUsize::new(0)),
+            source_heads: std::sync::atomic::AtomicUsize::new(0),
+            change_current_version,
+        }
+    }
+    fn counts(&self) -> [usize; 2] {
+        self.full_gets
+            .each_ref()
+            .map(|n| n.load(std::sync::atomic::Ordering::SeqCst))
+    }
 }
 
 impl std::fmt::Display for LostHeadResponse {
@@ -100,7 +124,25 @@ impl object_store::ObjectStore for LostHeadResponse {
         path: &ObjectPath,
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
-        self.inner.get_opts(path, options).await
+        use std::sync::atomic::Ordering;
+        let mut change_version = false;
+        if let Some(spy) = &self.sq8_spy {
+            if let Some(index) = spy.locations.iter().position(|location| location == path) {
+                if options.head && index == 0 {
+                    change_version = spy.source_heads.fetch_add(1, Ordering::SeqCst) == 1
+                        && spy.change_current_version;
+                } else if !options.head && options.range.is_none() {
+                    spy.full_gets[index].fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+        let mut response = self.inner.get_opts(path, options).await?;
+        // Same path/size/SHA/ETag, different current version: only full metadata
+        // equality may deduplicate, and the conditional response must refuse it.
+        if change_version {
+            response.meta.version = Some("changed-current-version".into());
+        }
+        Ok(response)
     }
     async fn get_ranges(
         &self,
@@ -591,8 +633,16 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
         } else {
             "replacement-spatial/index"
         });
+        let spy = std::sync::Arc::new(RetainedSq8Spy::new(&f.old_sq8_key, &f.old_sq8_key, false));
+        let observed = LostHeadResponse {
+            inner: f.copied.clone(),
+            head: destination.clone().join("unused-head.json"),
+            competing_head: false,
+            stage_mutation: None,
+            sq8_spy: Some(spy.clone()),
+        };
         let published = republish_retained_two_bit_generation(
-            f.copied.as_ref(),
+            &observed,
             &retained,
             approval,
             &destination,
@@ -602,6 +652,44 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
         )
         .await
         .unwrap();
+        assert_eq!(spy.counts(), [1, 0], "same-object SQ8 authenticates once");
+        let changed_spy =
+            std::sync::Arc::new(RetainedSq8Spy::new(&f.old_sq8_key, &f.old_sq8_key, true));
+        let changed_destination = destination.clone().join("changed-identity");
+        let changed = LostHeadResponse {
+            inner: f.copied.clone(),
+            head: changed_destination.clone().join("unused-head.json"),
+            competing_head: false,
+            stage_mutation: None,
+            sq8_spy: Some(changed_spy.clone()),
+        };
+        assert!(matches!(
+            republish_retained_two_bit_generation(
+                &changed,
+                &retained,
+                approval,
+                &changed_destination,
+                f.limits,
+                &f.scratch(),
+                4_000_000
+            )
+            .await,
+            Err(borsuk::two_bit_store::TwoBitStoreError::Invalid(
+                "retained response identity"
+            ))
+        ));
+        assert_eq!(
+            changed_spy.counts(),
+            [2, 0],
+            "changed metadata cannot reuse SQ8 authentication"
+        );
+        assert!(
+            f.copied
+                .list(Some(&changed_destination))
+                .next()
+                .await
+                .is_none()
+        );
         let mut after: serde_json::Value = serde_json::from_slice(
             &f.copied
                 .get(&published.metadata_prefix().join("manifest.json"))
@@ -705,6 +793,7 @@ async fn retained_semantic_router_replacement_preserves_unchanged_transport_and_
             head: lost_prefix.clone().join("head.json"),
             competing_head: false,
             stage_mutation: None,
+            sq8_spy: None,
         };
         assert!(matches!(
             republish_retained_two_bit_generation(
@@ -1002,6 +1091,7 @@ async fn retained_semantic_router_replacement_rechecks_source_and_control_after_
             head: destination.clone().join("unused-head.json"),
             competing_head: false,
             stage_mutation: Some((source, bytes)),
+            sq8_spy: None,
         };
         let mut approval = f.approval(before["sq8_etag"].as_str().unwrap());
         approval.sq8_object_key = f.old_sq8_key.as_ref();
@@ -1113,8 +1203,20 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
         .unwrap()
         .e_tag
         .unwrap();
+    let spy = std::sync::Arc::new(RetainedSq8Spy::new(
+        &fixture.old_sq8_key,
+        &fixture.new_sq8_key,
+        false,
+    ));
+    let observed = LostHeadResponse {
+        inner: fixture.copied.clone(),
+        head: destination.clone().join("unused-head.json"),
+        competing_head: false,
+        stage_mutation: None,
+        sq8_spy: Some(spy.clone()),
+    };
     let rebound = republish_retained_two_bit_generation(
-        fixture.copied.as_ref(),
+        &observed,
         &copied_head,
         fixture.approval(&etag),
         &destination,
@@ -1124,6 +1226,11 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        spy.counts(),
+        [1, 1],
+        "distinct SQ8 transports each authenticate"
+    );
     assert_eq!(rebound.generation(), 7);
     assert_eq!(rebound.control_epoch(), 1);
     assert_ne!(rebound.root_sha256(), fixture.root_sha);
@@ -1309,6 +1416,7 @@ async fn retained_semantic_republication_preserves_payload_and_score_bits() {
             head: lost_prefix.clone().join("head.json"),
             competing_head,
             stage_mutation: None,
+            sq8_spy: None,
         };
         let result = republish_retained_two_bit_generation(
             &lost,

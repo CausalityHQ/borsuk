@@ -1250,13 +1250,34 @@ pub async fn republish_retained_two_bit_generation(
             authenticate_retained_body(store, meta, digest, buffer_bytes, false).await?;
         }
     }
-    for (meta, digest) in [
-        (&sq8_meta, manifest.sq8_object_sha256.as_str()),
-        (&current_sq8_meta, manifest.sq8_object_sha256.as_str()),
-        (&canonical_meta, manifest.canonical.sha256.as_str()),
-    ] {
-        authenticate_retained_body(store, meta, digest, buffer_bytes, false).await?;
+    authenticate_retained_body(
+        store,
+        &sq8_meta,
+        &manifest.sq8_object_sha256,
+        buffer_bytes,
+        false,
+    )
+    .await?;
+    // Both SQ8 pins already require the same SHA and exact sq8_bytes size.
+    // Reuse full authentication only for identical path/version/ETag/metadata.
+    if current_sq8_meta != sq8_meta {
+        authenticate_retained_body(
+            store,
+            &current_sq8_meta,
+            &manifest.sq8_object_sha256,
+            buffer_bytes,
+            false,
+        )
+        .await?;
     }
+    authenticate_retained_body(
+        store,
+        &canonical_meta,
+        &manifest.canonical.sha256,
+        buffer_bytes,
+        false,
+    )
+    .await?;
     let mut created = Vec::with_capacity(10);
     let mut head_attempted = false;
     let result = async {
