@@ -202,6 +202,23 @@ impl std::fmt::Display for ResourceFailure {
 }
 impl std::error::Error for ResourceFailure {}
 
+#[derive(Debug)]
+struct AdmissionRefusal(String);
+impl std::fmt::Display for AdmissionRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for AdmissionRefusal {}
+
+fn incomplete_admission(error: Box<dyn Error + Send + Sync>) -> Box<dyn Error + Send + Sync> {
+    if error.downcast_ref::<ResourceFailure>().is_some() {
+        Box::new(AdmissionRefusal(error.to_string()))
+    } else {
+        error
+    }
+}
+
 fn mul(a: u64, b: u64) -> Result<u64> {
     a.checked_mul(b)
         .ok_or_else(|| "paired ownership overflow".into())
@@ -394,11 +411,7 @@ fn metadata_charge(c: &ConstructionInputs, a: &ConstructionApproval, extra: u64)
     plus(plus(mul(64, plus(bytes, extra)?)?, RESERVE)?, 2 * STREAM)
 }
 
-fn authenticate_construction(
-    c: &ConstructionInputs,
-    a: &ConstructionApproval,
-    stamps: &mut Vec<HeaderSnapshot>,
-) -> Result<()> {
+fn validate_construction_inputs(c: &ConstructionInputs, a: &ConstructionApproval) -> Result<()> {
     let o = &a.original;
     require(
         a.schema == CONSTRUCTION_APPROVAL
@@ -422,7 +435,16 @@ fn authenticate_construction(
             && c.centroids.sha256 == o.centroids_sha256
             && c.centroids.bytes == o.centroid_bytes()?,
         "approved original construction identity",
-    )?;
+    )
+}
+
+fn authenticate_construction(
+    c: &ConstructionInputs,
+    a: &ConstructionApproval,
+    stamps: &mut Vec<HeaderSnapshot>,
+) -> Result<()> {
+    validate_construction_inputs(c, a)?;
+    let o = &a.original;
     let (approval, aps) = header_json(&a.original_approval)?;
     require(
         approval == serde_json::to_value(o)?,
@@ -710,20 +732,23 @@ fn same_publication(a: &Publication, b: &Publication) -> Result<()> {
 }
 
 fn group_map(router: &SemanticUnitRouter) -> Result<Vec<u32>> {
-    router
-        .unit_membership()
-        .iter()
-        .map(|&leaf| {
-            Ok(u32::try_from(
-                router
-                    .manifest()
-                    .leaves
-                    .get(leaf)
-                    .ok_or("unit group leaf")?
-                    .group_ordinal,
-            )?)
-        })
-        .collect()
+    // Known-size initialization never grows the retained vector.
+    let mut groups = vec![0_u32; router.unit_membership().len()];
+    for (group, &leaf) in groups.iter_mut().zip(router.unit_membership()) {
+        *group = u32::try_from(
+            router
+                .manifest()
+                .leaves
+                .get(leaf)
+                .ok_or("unit group leaf")?
+                .group_ordinal,
+        )?;
+    }
+    require(
+        groups.capacity() == groups.len(),
+        "exact group-map capacity",
+    )?;
+    Ok(groups)
 }
 
 fn compare_groups(router: &SemanticUnitRouter, radial: &[u32]) -> Result<()> {
@@ -751,39 +776,46 @@ fn import(
     o: &Original,
     blob: &[u8],
     expected: LeafPartition,
-    map: Option<&[u32]>,
+    map: Option<&Vec<u32>>,
     ledger: &mut Ledger,
     stamps: &mut Vec<HeaderSnapshot>,
 ) -> Result<Option<Vec<u32>>> {
     publication_pins(p, o)?;
-    let map_bytes = mul(o.rows.div_ceil(32) as u64, 4)?;
-    ledger.phase(
-        "import root authentication",
-        &[p.root.bytes, blob.len() as u64, map_bytes],
-    )?;
+    let map_bytes = mul(map.map_or(o.rows.div_ceil(32), Vec::capacity) as u64, 4)?;
+    ledger
+        .phase(
+            "import root authentication",
+            &[p.root.bytes, blob.len() as u64, map_bytes],
+        )
+        .map_err(incomplete_admission)?;
     let (root, rs) = binary(&p.root, p.root.bytes)?;
     // Root authentication/mode admission precedes membership/payload/decoder allocations.
-    let available = ledger.remaining(&[blob.len() as u64, map_bytes])?;
-    let (mode, modeled) = admit_authenticated_root(&root, &p.root.sha256, &o.identity(), available)
-        .map_err(admission_error)?;
+    let available = ledger
+        .remaining(&[blob.len() as u64, map_bytes])
+        .map_err(incomplete_admission)?;
+    let (mode, modeled) = admit_root(&root, &p.root.sha256, o, available)?;
     require(mode == expected, "derived publication partition")?;
-    ledger.phase(
-        "mode-specific import validation",
-        &[modeled as u64, blob.len() as u64, map_bytes],
-    )?;
+    ledger
+        .phase(
+            "mode-specific import validation",
+            &[modeled as u64, blob.len() as u64, map_bytes],
+        )
+        .map_err(incomplete_admission)?;
     let (membership, ms) = binary(&p.membership, p.membership.bytes)?;
     let (leaves, ls) = binary(&p.leaves, p.leaves.bytes)?;
-    ledger.phase(
-        "actual imported capacities",
-        &[
-            modeled as u64,
-            blob.len() as u64,
-            map_bytes,
-            root.capacity().saturating_sub(root.len()) as u64,
-            membership.capacity().saturating_sub(membership.len()) as u64,
-            leaves.capacity().saturating_sub(leaves.len()) as u64,
-        ],
-    )?;
+    ledger
+        .phase(
+            "actual imported capacities",
+            &[
+                modeled as u64,
+                blob.len() as u64,
+                map_bytes,
+                root.capacity().saturating_sub(root.len()) as u64,
+                membership.capacity().saturating_sub(membership.len()) as u64,
+                leaves.capacity().saturating_sub(leaves.len()) as u64,
+            ],
+        )
+        .map_err(incomplete_admission)?;
     validate_publication(&root, &membership, &leaves, &o.identity(), blob)?;
     let router = SemanticUnitRouter::open(
         &root,
@@ -1056,10 +1088,14 @@ fn prepare_with(
         c.schema == PREP_CONFIG && a.schema == CONSTRUCTION_APPROVAL,
         "source-only preparation schema",
     )?;
-    let mut ledger = Ledger::new(c.inputs.max_owned_bytes, metadata_charge(&c.inputs, &a, 0)?)?;
+    validate_construction_inputs(&c.inputs, &a)?;
+    let mut ledger = Ledger::new(c.inputs.max_owned_bytes, metadata_charge(&c.inputs, &a, 0)?)
+        .map_err(incomplete_admission)?;
     let mut stamps = vec![cs, aps];
     authenticate_construction(&c.inputs, &a, &mut stamps)?;
-    ledger.phase("centroid authentication", &[c.inputs.centroids.bytes])?;
+    ledger
+        .phase("centroid authentication", &[c.inputs.centroids.bytes])
+        .map_err(incomplete_admission)?;
     let (blob, bs) = binary(&c.inputs.centroids, a.original.centroid_bytes()?)?;
     stamps.push(bs);
     let geometry = preflight(
@@ -1157,7 +1193,10 @@ pub(super) fn prepare(
 ) -> Result<bool> {
     match prepare_with(config, sha, authority, authority_sha, |f, _| f.sync_all()) {
         Ok(value) => Ok(value),
-        Err(error) if error.downcast_ref::<ResourceFailure>().is_some() => {
+        Err(error)
+            if error.downcast_ref::<ResourceFailure>().is_some()
+                || error.downcast_ref::<AdmissionRefusal>().is_some() =>
+        {
             let (c, cs): (PrepConfig, _) = small(config, sha)?;
             let (_, aps): (ConstructionApproval, _) = small(authority, authority_sha)?;
             header_path(&c.output_directory)?;
@@ -1174,7 +1213,8 @@ pub(super) fn prepare(
             let dir_id = dir.metadata()?;
             dir.sync_all()?;
             outer.sync_all()?;
-            let value = json!({"schema":PREP_RECEIPT,"status":"FAIL","complete":true,"resource_gate_failed":true,
+            let value = json!({"schema":PREP_RECEIPT,"status":"FAIL","complete":error.downcast_ref::<AdmissionRefusal>().is_none(),
+                "resource_gate_failed":true,"admission_refused":error.downcast_ref::<AdmissionRefusal>().is_some(),
                 "config_sha256":sha,"authority_sha256":authority_sha,"requests_opened":false,"truth_opened":false,
                 "error":error.to_string(),"qualified":false,"performance_claim":false});
             publish_selection_seal_with_sync(
@@ -1208,15 +1248,40 @@ pub(super) fn prepare(
     }
 }
 
-fn admission_error(error: Box<dyn Error + Send + Sync>) -> Box<dyn Error + Send + Sync> {
-    if error
-        .to_string()
-        .starts_with("modeled allocation admission:")
-    {
-        Box::new(ResourceFailure(error.to_string()))
-    } else {
-        error
+fn admit_root(
+    body: &[u8],
+    sha: &str,
+    o: &Original,
+    available: usize,
+) -> Result<(LeafPartition, usize)> {
+    require(
+        o.profile.valid_geometry(o.rows, o.dimensions)
+            && (512..=o.profile.root_cap()).contains(&body.len())
+            && digest(body) == sha
+            && &body[..8] == b"BORSUSR3",
+        "paired authenticated root header",
+    )?;
+    let mode = match u32::from_le_bytes(body[88..92].try_into()?) {
+        1 => LeafPartition::Radial64V1,
+        2 => LeafPartition::WidestAxisQuotaV1,
+        _ => return Err("paired root partition".into()),
+    };
+    let peak = *construction_phases(o, mode)?
+        .iter()
+        .max()
+        .ok_or("root phase maximum")?;
+    let limit = u64::from_le_bytes(body[80..88].try_into()?);
+    require(
+        peak <= limit && limit <= o.profile.allocation_cap() as u64,
+        "invalid embedded root construction limit",
+    )?;
+    if peak > available as u64 {
+        return Err(Box::new(AdmissionRefusal(
+            "enclosing root allocation admission".into(),
+        )));
     }
+    // Decoder errors remain INVALID; it cannot allocate before the enclosing admission above.
+    admit_authenticated_root(body, sha, &o.identity(), available)
 }
 
 fn source_path(path: &str) -> bool {
@@ -1606,13 +1671,12 @@ fn select_arm(
         &[p.root.bytes, requests.len() as u64, retained],
     )?;
     let (root, rs) = binary(&p.root, p.root.bytes)?;
-    let (mode, modeled) = admit_authenticated_root(
+    let (mode, modeled) = admit_root(
         &root,
         &p.root.sha256,
-        &o.identity(),
+        o,
         ledger.remaining(&[requests.len() as u64, retained])?,
-    )
-    .map_err(admission_error)?;
+    )?;
     require(mode == expected, "replay frozen partition")?;
     ledger.phase(
         "router requests nominations",
@@ -1743,6 +1807,7 @@ fn output_roles(
     a: &ScreenApproval,
     selection: &Path,
     report: &Path,
+    bootstrap: &[&Path],
 ) -> Result<()> {
     header_path(selection)?;
     header_path(report)?;
@@ -1761,7 +1826,6 @@ fn output_roles(
         &c.spatial_receipt.path,
         &c.requests.path,
         &c.sq8.path,
-        &c.truth.path,
         &a.producer.result.path,
         &a.producer.config.path,
         &a.producer.source_bundle.base_archive.path,
@@ -1782,21 +1846,40 @@ fn output_roles(
         &a.construction.qualification.path,
         &a.construction.corrected_closure.path,
     ]);
-    let normalized = |p: &Path| {
-        p.components()
-            .filter(|c| !matches!(c, Component::CurDir))
-            .collect::<PathBuf>()
-    };
-    require(
-        normalized(selection) != normalized(report),
-        "normalized output alias",
-    )?;
-    let mut roles = BTreeSet::new();
-    for p in paths {
+    paths.extend(bootstrap.iter().copied());
+    // Bootstrap reads discover these role names; this guard precedes all subsequent role traversal.
+    let normalized = |p: &Path| -> Result<PathBuf> {
         header_path(p)?;
-        let path = normalized(p);
         require(
-            path != normalized(selection) && path != normalized(report),
+            p.components().all(|c| {
+                matches!(
+                    c,
+                    Component::RootDir | Component::CurDir | Component::Normal(_)
+                )
+            }),
+            "lexical directory traversal component",
+        )?;
+        Ok(p.components()
+            .filter(|c| !matches!(c, Component::CurDir))
+            .collect())
+    };
+    let truth = normalized(&c.truth.path)?;
+    let selection = normalized(selection)?;
+    let report = normalized(report)?;
+    require(selection != report, "normalized output alias")?;
+    require(
+        !selection.starts_with(&truth) && !report.starts_with(&truth),
+        "truth ancestor of output role",
+    )?;
+    let mut roles = BTreeSet::from([truth.clone()]);
+    for p in paths {
+        let path = normalized(p)?;
+        require(
+            !path.starts_with(&truth),
+            "truth ancestor of input/bootstrap role",
+        )?;
+        require(
+            path != selection && path != report,
             "output/input role alias",
         )?;
         require(roles.insert(path), "input role path alias")?;
@@ -1966,7 +2049,8 @@ fn reduce_with(
         config != selection && config != report && approval != selection && approval != report,
         "config/output alias",
     )?;
-    output_roles(&c, &a, selection, report)?;
+    output_roles(&c, &a, selection, report, &[config, approval])?;
+    validate_construction_inputs(&c.inputs, &a.construction)?;
     let mut extra = plus(a.producer.config.bytes, c.spatial_receipt.bytes)?;
     for p in [
         &a.producer.source_bundle.final_source_map,
@@ -1984,12 +2068,15 @@ fn reduce_with(
     let mut ledger = Ledger::new(
         c.inputs.max_owned_bytes,
         metadata_charge(&c.inputs, &a.construction, extra)?,
-    )?;
+    )
+    .map_err(incomplete_admission)?;
     let mut stamps = vec![cs, aps];
     authenticate_construction(&c.inputs, &a.construction, &mut stamps)?;
     authenticate_spatial_receipt(&a, &c, &mut stamps)?;
     let (completed, i) = authenticate_producer(&a, &c, scope, &mut stamps)?;
-    ledger.phase("centroid import", &[c.inputs.centroids.bytes])?;
+    ledger
+        .phase("centroid import", &[c.inputs.centroids.bytes])
+        .map_err(incomplete_admission)?;
     let (blob, bs) = binary(
         &c.inputs.centroids,
         a.construction.original.centroid_bytes()?,
@@ -2016,10 +2103,12 @@ fn reduce_with(
     )?;
     drop((blob, radial_groups));
     let nominations = replay_charge(scope.ordinals.len())?;
-    ledger.phase(
-        "requests and retained nominations",
-        &[c.requests.bytes, nominations],
-    )?;
+    ledger
+        .phase(
+            "requests and retained nominations",
+            &[c.requests.bytes, nominations],
+        )
+        .map_err(incomplete_admission)?;
     let (requests, request_stamp) = binary(&c.requests, i.requests_bytes)?;
     stamps.push(request_stamp);
     let radial = select_arm(
@@ -2043,10 +2132,12 @@ fn reduce_with(
         &mut stamps,
     )?;
     drop(requests);
-    ledger.phase(
-        "producer control parsing",
-        &[nominations, mul(64, LINE_CAP as u64)?, 8 * RESERVE],
-    )?;
+    ledger
+        .phase(
+            "producer control parsing",
+            &[nominations, mul(64, LINE_CAP as u64)?, 8 * RESERVE],
+        )
+        .map_err(incomplete_admission)?;
     let (run, controls, traces) = control(&completed, &radial, &scope.ordinals)?;
     distinct(&stamps)?;
     ledger.retain(
@@ -2084,9 +2175,10 @@ fn reduce_with(
 }
 
 fn failure(error: &(dyn Error + 'static)) -> Value {
-    let resource = error.downcast_ref::<ResourceFailure>().is_some();
+    let admission = error.downcast_ref::<AdmissionRefusal>().is_some();
+    let resource = admission || error.downcast_ref::<ResourceFailure>().is_some();
     json!({"schema":REPORT_SCHEMA,"status":if resource {"FAIL"} else {"INVALID"},
-        "complete":resource,"resource_gate_failed":resource,
+        "complete":resource&&!admission,"resource_gate_failed":resource,"admission_refused":admission,
         "error":error.to_string().chars().take(512).collect::<String>(),"qualified":false,
         "cold_s3_claim":false,"default_promotion":false,"candidate_returned_ids_computed":false})
 }
@@ -2129,7 +2221,7 @@ fn screen_with(
     // Validate lexical output roles before reserving any output (including an absent truth path).
     let (c, _): (ScreenConfig, _) = small(config, sha)?;
     let (a, _): (ScreenApproval, _) = small(approval, approval_sha)?;
-    output_roles(&c, &a, selection, report)?;
+    output_roles(&c, &a, selection, report, &[config, approval])?;
     require(
         config != selection && config != report && approval != selection && approval != report,
         "config/output alias",
@@ -2614,9 +2706,11 @@ mod tests {
             sealed["producer_traces"][0]["trace_sha256"],
             digest(&serde_json::to_vec(&query["trace"]).unwrap())
         );
-        for mutation in 0..6 {
+        for mutation in 0..7 {
             let mut changed: ScreenApproval =
                 serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+            let mut changed_c: ScreenConfig =
+                serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
             let mut changed_rows = records.clone();
             match mutation {
                 0 => {
@@ -2657,12 +2751,27 @@ mod tests {
                         json!(changed.producer.binary.sha256);
                     changed_rows[0]["binary_sha256"] = json!(changed.producer.binary.sha256);
                 }
-                _ => {
+                5 => {
                     let q = changed_rows
                         .iter_mut()
                         .find(|v| v["phase"] == "query")
                         .unwrap();
                     q["ordinal"] = json!(1);
+                }
+                _ => {
+                    let mut body = std::fs::read(&c.spatial.root.path).unwrap();
+                    body[80..88].copy_from_slice(&0_u64.to_le_bytes());
+                    changed_c.spatial.root = put(&f.dir.path().join("full-low-limit-root"), &body);
+                    changed.spatial =
+                        serde_json::from_value(serde_json::to_value(&changed_c.spatial).unwrap())
+                            .unwrap();
+                    changed.expected_spatial_receipt["publication"] =
+                        publication_value(&changed_c.spatial);
+                    changed_c.spatial_receipt = put_json(
+                        &f.dir.path().join("full-low-limit-receipt"),
+                        &changed.expected_spatial_receipt,
+                    );
+                    changed.spatial_receipt = copy_pin(&changed_c.spatial_receipt);
                 }
             }
             changed.producer.result = put(
@@ -2677,6 +2786,12 @@ mod tests {
                     .join(format!("full-mutation-authority-{mutation}")),
                 &serde_json::to_value(&changed).unwrap(),
             );
+            let cp = put_json(
+                &f.dir
+                    .path()
+                    .join(format!("full-mutation-config-{mutation}")),
+                &serde_json::to_value(&changed_c).unwrap(),
+            );
             let selection = f
                 .dir
                 .path()
@@ -2688,8 +2803,8 @@ mod tests {
             let opened = std::cell::Cell::new(0);
             assert!(
                 !screen_with(
-                    &config.path,
-                    &config.sha256,
+                    &cp.path,
+                    &cp.sha256,
                     &ap.path,
                     &ap.sha256,
                     &selection,
@@ -2707,6 +2822,15 @@ mod tests {
             assert!(!selection.exists());
             let value: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
             assert_eq!(value["status"], "INVALID");
+            if mutation == 6 {
+                assert_eq!(value["complete"], false);
+                assert!(
+                    value["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("embedded root construction limit")
+                );
+            }
         }
     }
 
@@ -2846,14 +2970,9 @@ mod tests {
         assert!(spatial > radial);
         let (root, _) = binary(&f.spatial.root, f.spatial.root.bytes).unwrap();
         let midpoint = (radial + (spatial - radial) / 2) as usize;
-        let error = admit_authenticated_root(
-            &root,
-            &f.spatial.root.sha256,
-            &f.a.original.identity(),
-            midpoint,
-        )
-        .unwrap_err();
-        assert_eq!(failure(admission_error(error).as_ref())["status"], "FAIL");
+        let error = admit_root(&root, &f.spatial.root.sha256, &f.a.original, midpoint).unwrap_err();
+        assert_eq!(failure(error.as_ref())["status"], "FAIL");
+        assert_eq!(failure(error.as_ref())["complete"], false);
         assert_eq!(
             admit_authenticated_root(
                 &root,
@@ -2870,6 +2989,26 @@ mod tests {
         assert!(ledger.phase("cumulative", &[40, 41]).is_err());
         assert!(Ledger::new(OWNED_CAP + 1, 0).is_err());
         let (centroids, _) = binary(&f.c.inputs.centroids, f.c.inputs.centroids.bytes).unwrap();
+        let mut corrupt = root.clone();
+        corrupt[80..88].copy_from_slice(&0_u64.to_le_bytes());
+        let bad = Publication {
+            root: put(&f.dir.path().join("rehashed-low-limit-root"), &corrupt),
+            membership: copy_pin(&f.spatial.membership),
+            leaves: copy_pin(&f.spatial.leaves),
+        };
+        let error = import(
+            &bad,
+            &f.a.original,
+            &centroids,
+            LeafPartition::WidestAxisQuotaV1,
+            None,
+            &mut Ledger::new(OWNED_CAP, RESERVE).unwrap(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(failure(error.as_ref())["status"], "INVALID");
+        assert_eq!(failure(error.as_ref())["complete"], false);
+        assert!(!f.c.output_directory.exists());
         let cumulative =
             RESERVE + radial + centroids.len() as u64 + (f.a.original.rows.div_ceil(32) * 4) as u64;
         let mut short = Ledger::new(cumulative - 1, RESERVE).unwrap();
@@ -2885,21 +3024,48 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure(error.as_ref())["status"], "FAIL");
         let mut exact = Ledger::new(cumulative, RESERVE).unwrap();
-        assert_eq!(
+        let groups = import(
+            &f.radial,
+            &f.a.original,
+            &centroids,
+            LeafPartition::Radial64V1,
+            None,
+            &mut exact,
+            &mut Vec::new(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(groups.len(), 129);
+        assert_eq!(groups.capacity(), 129);
+        let capacity_bytes = (groups.capacity() * size_of::<u32>()) as u64;
+        let cumulative = RESERVE + spatial + centroids.capacity() as u64 + capacity_bytes;
+        let mut short = Ledger::new(cumulative - 1, RESERVE).unwrap();
+        let error = import(
+            &f.spatial,
+            &f.a.original,
+            &centroids,
+            LeafPartition::WidestAxisQuotaV1,
+            Some(&groups),
+            &mut short,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(failure(error.as_ref())["status"], "FAIL");
+        let mut exact = Ledger::new(cumulative, RESERVE).unwrap();
+        assert!(
             import(
-                &f.radial,
+                &f.spatial,
                 &f.a.original,
                 &centroids,
-                LeafPartition::Radial64V1,
-                None,
+                LeafPartition::WidestAxisQuotaV1,
+                Some(&groups),
                 &mut exact,
                 &mut Vec::new()
             )
             .unwrap()
-            .unwrap()
-            .len(),
-            129
+            .is_none()
         );
+        assert_eq!(exact.phases["mode-specific import validation"], cumulative);
     }
 
     #[test]
@@ -3602,12 +3768,70 @@ mod tests {
         let a = source_authority(&f, &mut c);
         let selection = f.dir.path().join("selection");
         let report = f.dir.path().join("report");
-        output_roles(&c, &a, &selection, &report).unwrap();
-        assert!(output_roles(&c, &a, &c.truth.path, &report).is_err());
-        assert!(output_roles(&c, &a, &selection, &c.truth.path).is_err());
-        assert!(output_roles(&c, &a, &selection, &selection).is_err());
+        output_roles(&c, &a, &selection, &report, &[]).unwrap();
+        assert!(output_roles(&c, &a, &c.truth.path, &report, &[]).is_err());
+        assert!(output_roles(&c, &a, &selection, &c.truth.path, &[]).is_err());
+        assert!(output_roles(&c, &a, &selection, &selection, &[]).is_err());
+        let truth_dir = f.dir.path().join("truth-directory");
+        std::fs::create_dir(&truth_dir).unwrap();
+        for mutation in 0..8 {
+            let mut changed_c: ScreenConfig =
+                serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+            let mut changed_a: ScreenApproval =
+                serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+            changed_c.truth.path = truth_dir.join(".");
+            let child = truth_dir.join("./pre-seal-child");
+            let mut selection = f.dir.path().join(format!("ancestor-selection-{mutation}"));
+            let mut report = f.dir.path().join(format!("ancestor-report-{mutation}"));
+            let mut config_path = f.dir.path().join(format!("ancestor-config-{mutation}"));
+            let mut approval_path = f.dir.path().join(format!("ancestor-authority-{mutation}"));
+            match mutation {
+                0 => selection = child,
+                1 => report = child,
+                2 => changed_c.requests.path = child,
+                3 => changed_a.construction.constructor.archive.path = child,
+                4 => changed_a.producer.source_bundle.overlays[0].body.path = child,
+                5 => config_path = child,
+                6 => approval_path = child,
+                _ => changed_c.inputs.centroids.path = child,
+            }
+            let config = put_json(&config_path, &serde_json::to_value(&changed_c).unwrap());
+            let authority = put_json(&approval_path, &serde_json::to_value(&changed_a).unwrap());
+            let opened = std::cell::Cell::new(0);
+            let scope = CoverageScope {
+                rows: 4097,
+                count: 1,
+                ordinals: vec![0],
+                original_hits: 0,
+                original_coverage: 0,
+            };
+            let error = screen_with(
+                &config.path,
+                &config.sha256,
+                &authority.path,
+                &authority.sha256,
+                &selection,
+                &report,
+                &scope,
+                |file, _| file.sync_all(),
+                |pin, bytes| {
+                    opened.set(opened.get() + 1);
+                    binary(pin, bytes)
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("truth ancestor"));
+            assert_eq!(opened.get(), 0);
+            assert!(!selection.exists());
+            assert!(!report.exists());
+        }
+        let mut traversal: ScreenConfig =
+            serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+        traversal.truth.path = truth_dir.clone();
+        traversal.requests.path = truth_dir.join("../request");
+        assert!(output_roles(&traversal, &a, &selection, &report, &[]).is_err());
         c.truth.path = c.requests.path.clone();
-        assert!(output_roles(&c, &a, &selection, &report).is_err());
+        assert!(output_roles(&c, &a, &selection, &report, &[]).is_err());
         assert!(!f.dir.path().join("absent-truth").exists());
     }
 
@@ -3631,8 +3855,95 @@ mod tests {
         .unwrap();
         assert_eq!(value["status"], "FAIL");
         assert_eq!(value["resource_gate_failed"], true);
+        assert_eq!(value["complete"], false);
+        assert_eq!(value["admission_refused"], true);
         assert_eq!(value["truth_opened"], false);
         assert!(!f.c.output_directory.join("spatial-root.bin").exists());
+        for mutation in 0..2 {
+            f.c.output_directory = f.dir.path().join(format!("invalid-low-cap-{mutation}"));
+            if mutation == 0 {
+                f.a.original.schema = "invalid independently rehashed schema".into();
+            } else {
+                f.a.original.schema = "borsuk-partition-reconstruction-approval-v1".into();
+                f.a.original.dimensions = 0;
+            }
+            f.a.original_approval = put_json(
+                &f.a.original_approval.path,
+                &serde_json::to_value(&f.a.original).unwrap(),
+            );
+            f.save();
+            let error = prepare(
+                &f.config.path,
+                &f.config.sha256,
+                &f.approval.path,
+                &f.approval.sha256,
+            )
+            .unwrap_err();
+            assert_eq!(failure(error.as_ref())["status"], "INVALID");
+            assert_eq!(failure(error.as_ref())["complete"], false);
+            assert!(!f.c.output_directory.exists());
+        }
+        let f = Fixture::new(33, 1024);
+        let mut c = screen_config(&f);
+        let a = source_authority(&f, &mut c);
+        c.inputs.max_owned_bytes = 1;
+        let config = put_json(
+            &f.dir.path().join("low-screen-config"),
+            &serde_json::to_value(&c).unwrap(),
+        );
+        for mutation in 0..3 {
+            let mut changed: ScreenApproval =
+                serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+            if mutation == 1 {
+                changed.construction.original.schema = "invalid rehashed original".into();
+            }
+            if mutation == 2 {
+                changed.construction.original.dimensions = 0;
+            }
+            changed.construction.original_approval = put_json(
+                &f.dir.path().join(format!("low-original-{mutation}")),
+                &serde_json::to_value(&changed.construction.original).unwrap(),
+            );
+            let authority = put_json(
+                &f.dir.path().join(format!("low-authority-{mutation}")),
+                &serde_json::to_value(&changed).unwrap(),
+            );
+            let selection = f.dir.path().join(format!("low-selection-{mutation}"));
+            let report = f.dir.path().join(format!("low-report-{mutation}"));
+            let opened = std::cell::Cell::new(0);
+            let scope = CoverageScope {
+                rows: 33,
+                count: 1,
+                ordinals: vec![0],
+                original_hits: 0,
+                original_coverage: 0,
+            };
+            assert!(
+                !screen_with(
+                    &config.path,
+                    &config.sha256,
+                    &authority.path,
+                    &authority.sha256,
+                    &selection,
+                    &report,
+                    &scope,
+                    |file, _| file.sync_all(),
+                    |pin, bytes| {
+                        opened.set(opened.get() + 1);
+                        binary(pin, bytes)
+                    }
+                )
+                .unwrap()
+            );
+            let value: Value = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+            assert_eq!(
+                value["status"],
+                if mutation == 0 { "FAIL" } else { "INVALID" }
+            );
+            assert_eq!(value["complete"], false);
+            assert_eq!(opened.get(), 0);
+            assert!(!selection.exists());
+        }
     }
 
     #[test]
