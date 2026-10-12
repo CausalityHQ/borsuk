@@ -1,0 +1,36 @@
+{
+  "schema": "borsuk-s3-vectors-scale-config-v1",
+  "mode": "scale-measurement",
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "rows": 1000000,
+  "count": 1000,
+  "dimensions": 1024,
+  "k": 10,
+  "metric": "cosine",
+  "corpus": {
+    "path": "/mnt/borsuk-s3v/inputs/canonical.bin",
+    "bytes": 4104000000,
+    "sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c"
+  },
+  "queries": {
+    "path": "/mnt/borsuk-s3v/inputs/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-s3v/inputs/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  },
+  "state_dir": "/mnt/borsuk-s3v/state",
+  "run_id": "f062232183c0d9cb0b06a98e49d76d9f",
+  "profile": "causality",
+  "region": "eu-central-1",
+  "account_id": "453182569524",
+  "bucket": "borsuk-s3v-f062232183c0d9cb0b06a98e49d76d9f",
+  "index": "baseline-f062232183c0d9cb0b06a98e49d76d9f",
+  "idle_seconds": 3600,
+  "query_interval_ms": 0,
+  "host_identity": "i-041b7d96cf0536754"
+}

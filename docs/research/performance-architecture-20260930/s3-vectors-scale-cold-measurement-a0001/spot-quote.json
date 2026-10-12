@@ -1,0 +1,13 @@
+{
+    "SpotPriceHistory": [
+        {
+            "AvailabilityZone": "eu-central-1c",
+            "AvailabilityZoneId": "euc1-az1",
+            "InstanceType": "c7i.xlarge",
+            "ProductDescription": "Linux/UNIX",
+            "SpotPrice": "0.100500",
+            "Timestamp": "2026-10-12T15:00:00+00:00"
+        }
+    ],
+    "NextToken": "eyJOZXh0VG9rZW4iOiBudWxsLCAiYm90b190cnVuY2F0ZV9hbW91bnQiOiAxfQ=="
+}

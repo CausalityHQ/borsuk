@@ -1,0 +1,4 @@
+role	bytes	sha256	s3_key	target
+canonical	4104000000	72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c	research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c	inputs/canonical.bin
+queries	4096000	8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e	research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32	inputs/queries.f32
+truth	80000	0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f	research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64	inputs/truth.u64

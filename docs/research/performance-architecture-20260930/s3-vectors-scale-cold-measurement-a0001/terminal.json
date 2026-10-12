@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-s3v-scale-cold-measurement-terminal-v1",
+  "original_exit": 0,
+  "exit": 0,
+  "owned_cgroup_drained": true,
+  "evidence": {
+    "sha256": "72fd94b2437ef7eb250284810cab33ade40d51f3004dcca6d352de7ae50b263f",
+    "bytes": 1606759
+  },
+  "claims_quality": false,
+  "claims_performance": false
+}
