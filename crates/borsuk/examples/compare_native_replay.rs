@@ -1287,6 +1287,7 @@ struct Sample {
     hits10: u64,
     wall_ns: u64,
     trace_sha256: [u8; 32],
+    physical_plan_sha256: [u8; 32],
 }
 
 struct Run {
@@ -1657,6 +1658,12 @@ fn read_run_observed_with_identity(
         } else {
             trace_fingerprint(&rows.line)?
         };
+        let physical_plan_sha256 = if completed.is_some() {
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            Sha256::digest(serde_json::to_vec(&raw["plan"])?).into()
+        } else {
+            [0; 32]
+        };
         require(
             q.ordinal == ordinal
                 && !q.truth_opened
@@ -1717,6 +1724,7 @@ fn read_run_observed_with_identity(
             hits10: 0,
             wall_ns: q.query_wall_ns,
             trace_sha256,
+            physical_plan_sha256,
         });
     }
     let (prefix_bytes, prefix_sha) = (rows.bytes, rows.sha());
@@ -3433,6 +3441,7 @@ mod scale_prefix_parity_tests {
                 hits10: K as u64,
                 wall_ns: 1,
                 trace_sha256: [0; 32],
+                physical_plan_sha256: [0; 32],
             })
             .collect()
     }
@@ -4072,6 +4081,11 @@ fn reduce_paired(config_path: &Path, config_sha: &str) -> Result<Value> {
 }
 
 fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Result<Value> {
+    let config_identity = if scale {
+        Some(file_identity(&open_input(config_path)?)?)
+    } else {
+        None
+    };
     let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
     require(
         c.schema
@@ -4189,7 +4203,8 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
             a.returned == b.returned
                 && a.hits10 == b.hits10
                 && a.charges == b.charges
-                && a.trace_sha256 == b.trace_sha256,
+                && a.trace_sha256 == b.trace_sha256
+                && (!scale || a.physical_plan_sha256 == b.physical_plan_sha256),
             &format!("paired query {ordinal}: ordered hits/recall/plan/logical GET/bytes mismatch"),
         )?;
     }
@@ -4247,6 +4262,15 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         sq8_ns: plus(a.sq8_ns, b.sq8_ns)?,
         max_leaf_peak_inflight: a.max_leaf_peak_inflight.max(b.max_leaf_peak_inflight),
     };
+    if scale {
+        recheck_parity_path(&c.arms[0].input, &runs[0].file_identity)?;
+        recheck_parity_path(&c.arms[1].input, &runs[1].file_identity)?;
+        require(
+            Some(file_identity(&open_input(config_path)?)?) == config_identity,
+            "paired scale config pathname mutation",
+        )?;
+        read_config::<PairedConfig>(config_path, config_sha)?;
+    }
     Ok(
         json!({"schema":if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
         "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
@@ -4255,7 +4279,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         "statistics_population":"all 1000 ordered queries per arm including first; pooled_both_arms includes all 2000 observations without arm selection",
         "percentile_method":"nearest_rank",
         "sequential_qps_definition":"query_count * 1e9 / sum(query_wall_ns); not concurrent service QPS",
-        "plan_scope":"complete ordered TwoBitPlanTrace; timing, inflight and transport fields are outside the plan",
+        "plan_scope":if scale { "complete ordered TwoBitPlanTrace and physical plan; timing, inflight and transport fields excluded" } else { "complete ordered TwoBitPlanTrace; timing, inflight and transport fields are outside the plan" },
         "source_cache":"off","cache_state":"external cold/cache qualification required",
         "local_file_only":true,"physical_s3":false,"external_resources_and_cost_gate_required":true,
         "frozen_runtime_root_config_admission_required":true,"qualified":false,
@@ -11711,11 +11735,13 @@ mod tests {
 
     #[test]
     fn paired_scale_refuses_resealed_last_query_score_and_trace_mutations() {
-        for trace in [false, true] {
+        for mutation in 0..3 {
             let dir = tempfile::tempdir().unwrap();
             let a = paired_scale_fixture(16);
             let mut b = paired_scale_fixture(32);
-            if trace {
+            if mutation == 2 {
+                b[1004]["plan"]["ranges"] = json!([[100, 200]]);
+            } else if mutation == 1 {
                 b[1004]["trace"]["ranked_candidate_pages"] = json!([1, 0]);
             } else {
                 let bits = b[1004]["returned"][0]["score_bits"].as_u64().unwrap();
@@ -11752,15 +11778,44 @@ mod tests {
             let body = serde_json::to_vec(&c).unwrap();
             std::fs::write(&path, &body).unwrap();
             let error = reduce_paired_scope(&path, &sha(&body), true).unwrap_err();
-            assert!(
-                error.downcast_ref::<std::io::Error>().is_none(),
+            assert_eq!(
+                error.to_string(),
+                if matches!(key, "rows" | "source_cache") {
+                    "explicit scale input geometry/profile/cap"
+                } else {
+                    "paired scale full1M production pins"
+                },
                 "{key}: {error}"
             );
         }
+        let mut control = original;
+        for arm in control["arms"].as_array_mut().unwrap() {
+            arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+        }
+        let body = serde_json::to_vec(&control).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        assert!(
+            reduce_paired_scope(&path, &sha(&body), true)
+                .unwrap_err()
+                .downcast_ref::<rustix::io::Errno>()
+                .is_some()
+        );
     }
 
     #[test]
     fn paired_scale_refuses_selector_overrun_and_unsealed_tail_mutation() {
+        for (arm, peak) in [(0, 17), (1, 33)] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut fixtures = [paired_scale_fixture(16), paired_scale_fixture(32)];
+            fixtures[arm][1004]["stages"]["leaf_peak_inflight"] = json!(peak);
+            let (path, pin) = paired_scale_config(dir.path(), fixtures);
+            assert_eq!(
+                reduce_paired_scope(&path, &pin, true)
+                    .unwrap_err()
+                    .to_string(),
+                "paired Scale1m query leaf_peak_inflight exceeds selector"
+            );
+        }
         let dir = tempfile::tempdir().unwrap();
         let a = paired_scale_fixture(16);
         let mut b = paired_scale_fixture(32);
