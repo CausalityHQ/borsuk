@@ -1,0 +1,23 @@
+	Command being timed: "/usr/bin/timeout -k 20 1800 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/formal-original.config.json a2e1674710329e9b8aa60c782352d84678c547171d0e6d2d4445a328b38ea62a /mnt/borsuk-source-width64/results/formal-original-a2.jsonl"
+	User time (seconds): 83.35
+	System time (seconds): 16.26
+	Percent of CPU this job got: 61%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:40.87
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 76696
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 144485
+	Voluntary context switches: 76020
+	Involuntary context switches: 7766
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 77280
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

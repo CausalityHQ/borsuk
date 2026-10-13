@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-source-width128-attempt-envelope-v1",
+  "attempt": "a0002",
+  "zone": "eu-central-1a",
+  "instance_type": "c7i.2xlarge",
+  "root_volume_gib": 96,
+  "spot_quote_usd_per_hour": 0.209500,
+  "machine_seconds": 14400,
+  "maximum_compute_at_quote_usd": 0.838,
+  "all_in_ceiling_usd": 1.50,
+  "actual_bill_measured": false,
+  "protocol_commit": "c4115b79a80996f389fd73e3a796042cecedf17c",
+  "same_executable": true,
+  "scientific_result_pending": true
+}

@@ -1,0 +1,16 @@
+{
+  "status": "FROZEN_SOURCE_WIDTH128_SCALE",
+  "source": "5c4a82f46abb55ae9ce6afe678fae535f7c423f3",
+  "native_source": "32bce58e1d981b26d9fa3bb5b2052dad7d6dc7bb",
+  "machine_seconds": 14400,
+  "external_seconds": 14520,
+  "cost_ceiling_usd": 1.50,
+  "same_baseline_executable": true,
+  "all_executable_roles_independently_native_qualified": true,
+  "actual_input_and_canary_required_before_measurement": true,
+  "scientific_results": false,
+  "prior_attempt": "a0001_INSUFFICIENT_SPOT_CAPACITY_NO_INSTANCE",
+  "availability_zone": "eu-central-1a",
+  "source_protocol_commit": "c4115b79a80996f389fd73e3a796042cecedf17c",
+  "shared_immutable_inputs": "cold-launch-a0001/input-upload.closed"
+}

@@ -1,0 +1,33 @@
+{
+  "schema": "borsuk-source-width128-cold-decision-v1",
+  "decision": "WIDTH128_NOT_SELECTED_KEEP_WIDTH64",
+  "recall_anchor": 0.978,
+  "query_count_per_cell": 1000,
+  "numerical_trace_plan_logical_charge_parity": true,
+  "pairs": [
+    {
+      "original_width": 64,
+      "candidate_width": 128,
+      "p95_change_percent": 86.35031593064149,
+      "p90_change_percent": 96.38938496052374,
+      "p99_change_percent": 17.756005133845278,
+      "qps_change_percent": -19.527067168547262,
+      "first_query_change_percent": 32.66122488991685
+    },
+    {
+      "original_width": 64,
+      "candidate_width": 128,
+      "p95_change_percent": 71.32510335431812,
+      "p90_change_percent": 95.64116926891084,
+      "p99_change_percent": 38.40378658386576,
+      "qps_change_percent": -20.681892665741742,
+      "first_query_change_percent": 9.741228032009253
+    }
+  ],
+  "source_stage_tail_regression_observed": true,
+  "underlying_transport_cause_proven": false,
+  "algorithm_quality_rejection": false,
+  "execution_invalid": false,
+  "matched_vendor_win": false,
+  "product_ready": false
+}

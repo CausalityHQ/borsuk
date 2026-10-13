@@ -1,0 +1,1 @@
+Original a0001 AWS capacity rejection preserved; zero instances independently confirmed. Root chooses ONE new a0002 Spot attempt in eu-central-1a with same instance type, exact source/executables/inputs/scientific protocol. Immutable S3 inputs already staged; no prior compute or scientific results exist. No automatic retries; a2 has a distinct client token and external timer.
