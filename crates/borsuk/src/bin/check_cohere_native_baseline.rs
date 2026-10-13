@@ -548,8 +548,8 @@ fn default_fetch_parallelism() -> usize {
 
 fn query_runtime(fetch_parallelism: usize) -> Result<tokio::runtime::Runtime> {
     require(
-        matches!(fetch_parallelism, 16 | 32 | 64),
-        "fetch_parallelism must be 16, 32 or 64",
+        matches!(fetch_parallelism, 16 | 32 | 64 | 128),
+        "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
     Ok(tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -708,8 +708,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     validate_population(c)?;
     let shape = population(c, shape);
     require(
-        matches!(c.fetch_parallelism, 16 | 32 | 64),
-        "fetch_parallelism must be 16, 32 or 64",
+        matches!(c.fetch_parallelism, 16 | 32 | 64 | 128),
+        "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
     require(
         c.schema == CONFIG_SCHEMA,
@@ -2994,18 +2994,18 @@ mod tests {
         let mut value = config_value(dir.path(), shape);
         let default: Config = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(default.fetch_parallelism, 16);
-        for parallelism in [0, 1, 16, 17, 32, 33, 63, 64, 65, usize::MAX] {
+        for parallelism in [0, 1, 16, 17, 32, 33, 63, 64, 65, 127, 128, 129, usize::MAX] {
             value["fetch_parallelism"] = json!(parallelism);
             let config: Config = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(
                 validate_config(&config, shape).is_ok(),
-                matches!(parallelism, 16 | 32 | 64)
+                matches!(parallelism, 16 | 32 | 64 | 128)
             );
             assert_eq!(
                 query_runtime(config.fetch_parallelism).is_ok(),
-                matches!(parallelism, 16 | 32 | 64)
+                matches!(parallelism, 16 | 32 | 64 | 128)
             );
-            if matches!(parallelism, 16 | 32 | 64) {
+            if matches!(parallelism, 16 | 32 | 64 | 128) {
                 let admission = limits(&config).unwrap();
                 assert_eq!(admission.max_parallel_gets, parallelism);
                 assert_eq!(admission.max_parallel_source_gets, parallelism);
