@@ -107,6 +107,7 @@ const COMPLETED_SCHEMA: &str = "borsuk-completed-native-reduction-v1";
 const PAIRED_SCHEMA: &str = "borsuk-paired-native-reduction-v1";
 const SCALE_PAIRED_SCHEMA: &str = "borsuk-scale-paired-native-reduction-v1";
 const SCALE_SCHEDULER_SCHEMA: &str = "borsuk-scale-scheduler-native-reduction-v1";
+const SCALE_WIDTH64_SCHEMA: &str = "borsuk-scale-width64-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
@@ -249,8 +250,8 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
     };
     if matches!(phase, "identity" | "bound_inputs") && v.get("fetch_parallelism").is_some() {
         require(
-            matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32)),
-            "fetch_parallelism must be integer 16 or 32",
+            matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32 | 64)),
+            "fetch_parallelism must be integer 16, 32 or 64",
         )?;
         if phase == "bound_inputs" {
             fields(&v, &format!("{names} fetch_parallelism source_cache"))?;
@@ -4089,10 +4090,19 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
     };
     let (c, config_bytes): (PairedConfig, _) = read_config(config_path, config_sha)?;
     let scheduler = scale && c.schema == "borsuk-scale-scheduler-native-reduction-config-v1";
-    let parallelisms: [u64; 2] = if scheduler { [32, 32] } else { [16, 32] };
+    let width64 = scale && c.schema == "borsuk-scale-width64-native-reduction-config-v1";
+    let parallelisms: [u64; 2] = if width64 {
+        [32, 64]
+    } else if scheduler {
+        [32, 32]
+    } else {
+        [16, 32]
+    };
     require(
         c.schema
-            == if scheduler {
+            == if width64 {
+                "borsuk-scale-width64-native-reduction-config-v1"
+            } else if scheduler {
                 "borsuk-scale-scheduler-native-reduction-config-v1"
             } else if scale {
                 "borsuk-scale-paired-native-reduction-config-v1"
@@ -4111,7 +4121,9 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
                 }
                 && arm.expected_identity["fetch_parallelism"] == parallelism
                 && arm.expected_bound_inputs["fetch_parallelism"] == parallelism,
-            if scheduler {
+            if width64 {
+                "width64 arms must be ordered integer fetch_parallelism 32 then 64"
+            } else if scheduler {
                 "scheduler arms must both use integer fetch_parallelism 32"
             } else {
                 "paired arms must be ordered integer fetch_parallelism 16 then 32"
@@ -4189,7 +4201,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         "paired native configs must have distinct SHA256",
     )?;
     identity["config_sha256"] = b.expected_identity["config_sha256"].clone();
-    identity["fetch_parallelism"] = json!(32);
+    identity["fetch_parallelism"] = json!(parallelisms[1]);
     if scheduler {
         for field in ["binary_sha256", "sq8_range_source_sha256"] {
             require(
@@ -4202,7 +4214,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         }
     }
     let mut inputs = a.expected_bound_inputs.clone();
-    inputs["fetch_parallelism"] = json!(32);
+    inputs["fetch_parallelism"] = json!(parallelisms[1]);
     require(
         identity == b.expected_identity && inputs == b.expected_bound_inputs,
         "paired binary/source/benchmark/generation/backend/input/scoring pins differ",
@@ -4308,7 +4320,7 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
         )?;
     }
     Ok(
-        json!({"schema":if scheduler { SCALE_SCHEDULER_SCHEMA } else if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
+        json!({"schema":if width64 { SCALE_WIDTH64_SCHEMA } else if scheduler { SCALE_SCHEDULER_SCHEMA } else if scale { SCALE_PAIRED_SCHEMA } else { PAIRED_SCHEMA },"status":"MEASURED","complete":true,
         "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
         "semantic_parity":true,"trace_plan_parity":true,"logical_charge_parity":true,
         "arms":reports,"pooled_both_arms":{"statistics":pooled,"stage_wall_sums":stage_totals},
@@ -8330,6 +8342,25 @@ fn main() {
                 "scheduler config schema",
             )?;
             return execute_report(Path::new(&args[4]), SCALE_SCHEDULER_SCHEMA, || {
+                reduce_paired_scope(config_path, config_sha, true)
+            });
+        }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--paired-width64-scale")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --paired-width64-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            let config_path = Path::new(&args[2]);
+            let config_sha = args[3].to_str().ok_or("config SHA encoding")?;
+            let (config, _): (PairedConfig, _) = read_config(config_path, config_sha)?;
+            require(
+                config.schema == "borsuk-scale-width64-native-reduction-config-v1",
+                "width64 config schema",
+            )?;
+            return execute_report(Path::new(&args[4]), SCALE_WIDTH64_SCHEMA, || {
                 reduce_paired_scope(config_path, config_sha, true)
             });
         }
