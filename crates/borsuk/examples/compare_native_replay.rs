@@ -3527,6 +3527,111 @@ mod scale_prefix_parity_tests {
     }
 }
 
+const SOURCE_COVER_CURVE_SCHEMA: &str = "borsuk-source-cover-cost-curve-v1";
+const SOURCE_COVER_CURVE_CAPS: [usize; 5] = [128, 96, 64, 48, 32];
+
+fn source_cover_costs(
+    line: &[u8],
+    q: &Query,
+    inputs: &Inputs,
+    caps: &[usize],
+) -> Result<Vec<Option<(u64, u64)>>> {
+    // Validate recorded nomination, completion, original SOURCE charges and SQ8
+    // plan before deriving any counterfactual. Never substitute selected SQ8
+    // pages for the full discovered SOURCE closure.
+    let coverage = loss_coverage(line, q, inputs)?;
+    let pages = coverage
+        .scored_units
+        .iter()
+        .map(|unit| unit / 8)
+        .collect::<BTreeSet<_>>();
+    let width = source_record_bytes(inputs.dimensions)?;
+    caps.iter()
+        .map(|&cap| {
+            match borsuk::two_bit_generation::plan_two_bit_source_cover(
+                &pages,
+                inputs.rows,
+                width,
+                cap,
+                64 * 1024 * 1024,
+            ) {
+                Ok((ranges, bytes)) => Ok(Some((ranges.len() as u64, bytes as u64))),
+                Err(borsuk::two_bit_generation::TwoBitGenerationError::Budget(
+                    borsuk::budgeted_page_rank::BudgetedPageError::InsufficientBudget,
+                )) => Ok(None),
+                Err(error) => Err(error.into()),
+            }
+        })
+        .collect()
+}
+
+fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (CompletedConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == SCALE_CONFIG_SCHEMA
+            && c.expected_bound_inputs["rows"] == 1_000_000
+            && c.expected_bound_inputs["execution"]["mode"] == "full"
+            && c.expected_bound_inputs["source_cache"] == "off",
+        "source cover curve requires full cache-off scale input",
+    )?;
+    let mut costs: [Vec<(u64, u64)>; 5] = std::array::from_fn(|_| Vec::with_capacity(COUNT));
+    let run = read_run_observed(
+        &c.input.path,
+        &c.input.sha256,
+        Some(&c),
+        |line, q, inputs| {
+            for (values, cost) in costs.iter_mut().zip(source_cover_costs(
+                line,
+                q,
+                inputs,
+                &SOURCE_COVER_CURVE_CAPS,
+            )?) {
+                if let Some(cost) = cost {
+                    values.push(cost);
+                }
+            }
+            Ok(())
+        },
+    )?;
+    require(
+        run.inputs.count == COUNT && run.samples.len() == COUNT && costs[0].len() == COUNT,
+        "source cover curve complete population",
+    )?;
+    let curves = SOURCE_COVER_CURVE_CAPS
+        .iter()
+        .zip(&costs)
+        .map(|(&cap, values)| {
+            let gets = values.iter().map(|&(gets, _)| gets).sum::<u64>();
+            let bytes = values.iter().map(|&(_, bytes)| bytes).sum::<u64>();
+            json!({"get_cap":cap,"feasible_queries":values.len(),
+                "byte_cap_refusals":COUNT-values.len(),
+                "all_queries_feasible":values.len()==COUNT,
+                "totals_population":"feasible queries only; never extrapolated",
+                "total_gets":gets,"total_bytes":bytes})
+        })
+        .collect::<Vec<_>>();
+    require(
+        file_identity(&open_input(&c.input.path)?)? == run.file_identity,
+        "source cover input changed before publication",
+    )?;
+    read_config::<CompletedConfig>(config_path, config_sha)?;
+    Ok(
+        json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_path,"config_bytes":config_bytes,"config_sha256":config_sha,
+        "input":{"path":c.input.path,"bytes":c.input.bytes,"sha256":c.input.sha256},
+        "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"count":COUNT,
+        "source_byte_cap":64*1024*1024,"curves":curves,
+        "shared_planner":"borsuk::two_bit_generation::plan_two_bit_source_cover",
+        "reducer_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs"))),
+        "generation_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/two_bit_generation.rs"))),
+        "planner_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("../src/budgeted_page_rank.rs"))),
+        "counterfactual_cost_only":true,"native_ann_called":false,
+        "corpus_queries_truth_bodies_opened":false,"claims_latency":false,
+        "claims_quality":false,"claims_bill":false,"production_change":false,
+        "qualified":false,"root_producer_provenance_and_resource_admission_required":true}),
+    )
+}
+
 fn reduce_scale(config_path: &Path, config_sha: &str) -> Result<Value> {
     let (c, config_bytes): (CompletedConfig, _) = read_config(config_path, config_sha)?;
     require(
@@ -8310,6 +8415,18 @@ fn main() {
             )?;
             return publish_bound_headers(output, config);
         }
+        if args.get(1).is_some_and(|arg| arg == "--source-cover-scale") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --source-cover-scale CONFIG CONFIG_SHA256 NEW_REPORT_JSON",
+            )?;
+            return execute_report(Path::new(&args[4]), SOURCE_COVER_CURVE_SCHEMA, || {
+                reduce_source_cover_curve(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--source-utilization") {
             require(
                 args.len() == 5,
@@ -8558,6 +8675,64 @@ mod tests {
         q["charges"]["sq8"] = json!({"submitted_gets":1,"verified_bytes":bytes,"failed_gets":0});
         q["plan"] = json!({"selected_pages":[0,2],"ranges":[[0,bytes]],"planned_bytes":bytes});
         (i, q)
+    }
+
+    #[test]
+    fn source_cover_curve_preserves_full_closure_and_charges_bridge_bytes() {
+        let (inputs, raw) = sealed_loss_fixture();
+        let query: Query = serde_json::from_value(raw.clone()).unwrap();
+        let costs = source_cover_costs(
+            &serde_json::to_vec(&raw).unwrap(),
+            &query,
+            &inputs,
+            &[128, 1],
+        )
+        .unwrap();
+        let page_bytes = 256 * source_record_bytes(inputs.dimensions).unwrap() as u64;
+        // Three SOURCE pages, despite only two selected SQ8 pages. Joining the
+        // two runs adds the unselected gap page; it changes no scored units.
+        assert_eq!(
+            costs,
+            [Some((2, 3 * page_bytes)), Some((1, 4 * page_bytes))]
+        );
+        let mut corrupt = raw;
+        corrupt["charges"]["source"]["verified_bytes"] = json!(3 * page_bytes - 1);
+        let query: Query = serde_json::from_value(corrupt.clone()).unwrap();
+        assert_eq!(
+            source_cover_costs(
+                &serde_json::to_vec(&corrupt).unwrap(),
+                &query,
+                &inputs,
+                &[128, 1]
+            )
+            .unwrap_err()
+            .to_string(),
+            "loss SOURCE cover charges"
+        );
+    }
+
+    #[test]
+    fn source_cover_curve_keeps_byte_cap_refusal_separate_from_measured_cost() {
+        let (mut inputs, mut raw) = sealed_loss_fixture();
+        inputs.rows = 1_000_000;
+        raw["trace"]["ranked_candidate_pages"] = json!([0, 2, 3900]);
+        raw["trace"]["semantic_units"] = json!([0, 16, 31200]);
+        raw["trace"]["nomination_evaluated_units"] =
+            json!((0..8).chain(16..24).chain(31200..31208).collect::<Vec<_>>());
+        raw["charges"]["source"]["submitted_gets"] = json!(3);
+        let query: Query = serde_json::from_value(raw.clone()).unwrap();
+        let costs = source_cover_costs(
+            &serde_json::to_vec(&raw).unwrap(),
+            &query,
+            &inputs,
+            &[128, 1],
+        )
+        .unwrap();
+        assert_eq!(costs[0].unwrap().0, 3);
+        assert_eq!(costs[1], None);
+        assert!(
+            source_cover_costs(&serde_json::to_vec(&raw).unwrap(), &query, &inputs, &[0]).is_err()
+        );
     }
 
     #[test]
