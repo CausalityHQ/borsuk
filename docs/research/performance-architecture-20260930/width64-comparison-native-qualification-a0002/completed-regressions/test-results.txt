@@ -1,0 +1,5 @@
+test tests::completed_v2_quantiles_stages_and_create_only_report ... ok
+test tests::completed_v2_rejects_incomplete_reordered_and_unknown_rows ... ok
+test tests::completed_v2_rejects_pins_sums_and_transport_contradictions ... ok
+test tests::completed_v2_rejects_prefix_seal_and_full_file_tamper ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 168 filtered out; finished in 27.43s

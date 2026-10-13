@@ -1,0 +1,5 @@
+test tests::paired_v2_rejects_authenticated_semantic_plan_and_charge_changes ... ok
+test tests::paired_v2_rejects_duplicate_truncated_unsealed_and_unpinned_files ... ok
+test tests::paired_v2_rejects_pins_selectors_unknowns_and_failures ... ok
+test tests::paired_v2_sealed_native_rows_statistics_and_create_only ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 168 filtered out; finished in 61.89s

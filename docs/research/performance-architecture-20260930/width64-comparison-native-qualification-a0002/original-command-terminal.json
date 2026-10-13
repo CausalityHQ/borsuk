@@ -1,0 +1,22 @@
+{
+    "CommandId": "cf9646f1-8281-45b8-b3e6-af9624498a96",
+    "InstanceId": "i-0406e77df72c7571d",
+    "Comment": "",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-13T02:13:57.822Z",
+    "ExecutionElapsedTime": "PT32M53.661S",
+    "ExecutionEndDateTime": "2026-10-13T02:46:50.822Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/compile-example.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/width64-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/scale-regressions.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/paired-regressions.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/completed-regressions.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/scheduler-debug.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/release-elf.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-clippy.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/workspace-test-build.sh: OK\n{\n  \"schema\": \"borsuk-fetch-scheduler-native-batch-v1\",\n  \"source_commit\": \"f4d66fc784ace5bec6401614b5197173bc15ed05\",\n  \"batch_exit\": 0,\n  \"completed_stages\": 9,\n  \"required_stages\": 9,\n  \"gate_groups\": 9,\n  \"failed_stage\": \"\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

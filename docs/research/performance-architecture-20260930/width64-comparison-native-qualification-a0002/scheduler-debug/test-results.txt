@@ -1,0 +1,2 @@
+test tests::paired_scheduler_scale_accepts_only_explicit_same_width_source_delta ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 171 filtered out; finished in 2.09s

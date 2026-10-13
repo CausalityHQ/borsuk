@@ -1,0 +1,6 @@
+test tests::paired_scale_accepts_full_sealed_population_and_preserves_historical_refusal ... ok
+test tests::paired_scale_rechecks_both_artifacts_and_config_after_reading ... ok
+test tests::paired_scale_refuses_resealed_last_query_score_and_trace_mutations ... ok
+test tests::paired_scale_refuses_selector_overrun_and_unsealed_tail_mutation ... ok
+test tests::paired_scale_wrong_population_cache_and_pins_refuse_before_input_open ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 24.40s

@@ -1,0 +1,9 @@
+compile-example	cargo test --locked -p borsuk --example compare_native_replay --no-run
+width64-debug	cargo test --locked -p borsuk --example compare_native_replay tests::paired_width64_scale_requires_same_source_and_ordered_widths -- --exact --test-threads=1
+scale-regressions	cargo test --locked -p borsuk --example compare_native_replay tests::paired_scale_ -- --test-threads=1
+paired-regressions	cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_ -- --test-threads=1
+completed-regressions	cargo test --locked -p borsuk --example compare_native_replay tests::completed_v2_ -- --test-threads=1
+scheduler-debug	cargo test --locked -p borsuk --example compare_native_replay tests::paired_scheduler_scale_accepts_only_explicit_same_width_source_delta -- --exact --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --example compare_native_replay
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

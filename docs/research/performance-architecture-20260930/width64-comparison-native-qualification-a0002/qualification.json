@@ -1,0 +1,154 @@
+{
+  "schema": "borsuk-width64-comparison-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "f4d66fc784ace5bec6401614b5197173bc15ed05",
+  "source_file_count": 437,
+  "support_file_count": 470,
+  "native_source_identity_sha256": "d9f28a26a65ce57cfde8a66b4f1f515f12083deb6a0b7e6c48ac62dec1116a86",
+  "native_source_identity_definition": "sha256 of exact native-source.json bytes",
+  "source_archive_sha256": "bab55aef0067e871cb8d855dabaf5b379846300d2ce488e4cc8906c88dedcc43",
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "instance_id": "i-0406e77df72c7571d",
+  "root_volume_id": "vol-0e5041186b5d283ea",
+  "volume_deleted": true,
+  "external_timer_inactive": true,
+  "stage_count": 9,
+  "stages": [
+    {
+      "name": "compile-example",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/compile-example-collected/terminal.json",
+        "bytes": 249,
+        "sha256": "1e1e601f56d28fd05e7f77bf9dfa4a48107ea9173cae1fc1bbff0abbdb467566"
+      }
+    },
+    {
+      "name": "width64-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_width64_scale_requires_same_source_and_ordered_widths -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/width64-debug-collected/terminal.json",
+        "bytes": 247,
+        "sha256": "9d185ebcc9fcf0d3dea513e68a8fc8788c2a09cd3d1822383f6fd7fc3d9c56f5"
+      }
+    },
+    {
+      "name": "scale-regressions",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_scale_ -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/scale-regressions-collected/terminal.json",
+        "bytes": 251,
+        "sha256": "625e61e15a794055a573ea4b03f4804cc5ff1c7ee66a1b105b553066b4b6f03e"
+      }
+    },
+    {
+      "name": "paired-regressions",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_v2_ -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/paired-regressions-collected/terminal.json",
+        "bytes": 252,
+        "sha256": "618a51e9412d3d81b2f310879ca5676fc577575642bc23a657332590f65b22aa"
+      }
+    },
+    {
+      "name": "completed-regressions",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::completed_v2_ -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/completed-regressions-collected/terminal.json",
+        "bytes": 255,
+        "sha256": "933d0e0e202a721b6b7075896e88dda6947222cce9637edb771e6a069fbb98e0"
+      }
+    },
+    {
+      "name": "scheduler-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_scheduler_scale_accepts_only_explicit_same_width_source_delta -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/scheduler-debug-collected/terminal.json",
+        "bytes": 249,
+        "sha256": "9a6abcfdd53de3c0fde6bb4dce038db26ec59a3e1a6fcbdcd3bff9636ce55499"
+      }
+    },
+    {
+      "name": "release-elf",
+      "exit": 0,
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/release-elf-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "d8c5d30bb17c35b2e4412039cbb7f2cade90b0a0a8ce7fe6e20612cc9ffb3ebb"
+      }
+    },
+    {
+      "name": "workspace-clippy",
+      "exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/workspace-clippy-collected/terminal.json",
+        "bytes": 250,
+        "sha256": "72de84509409e25b6f3512d83c64575160fcd2ea2ed23d998d1d64734f4d3262"
+      }
+    },
+    {
+      "name": "workspace-test-build",
+      "exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-reducer-native-a0002/workspace-test-build-collected/terminal.json",
+        "bytes": 254,
+        "sha256": "13eae26f95c021fea1f153fbd3ed355a903e563a836ad646367c48a846124b2a"
+      }
+    }
+  ],
+  "resources": {
+    "cpus": "0-3",
+    "cpu_quota_percent": 400,
+    "memory_max_bytes": 15032385536,
+    "swap_max_bytes": 0,
+    "pids_max": 512,
+    "compiler_jobs": 1,
+    "all_stages_swap_and_oom_zero": true
+  },
+  "comparison_binary": {
+    "bytes": 9196824,
+    "sha256": "955210af66106974db10b92ecfabc307719d0eb4d26534e1d1c9596ea4b83842",
+    "s3_key": "research/semantic-router/20261013/source-width64-reducer-native-a0002/stages/release-elf/compare_native_replay"
+  },
+  "test_counts": {
+    "width64": 1,
+    "paired_scale": 5,
+    "paired_v2": 4,
+    "completed_v2": 4,
+    "scheduler": 1
+  },
+  "claims": {
+    "rust_correctness": true,
+    "performance": false,
+    "recall": false,
+    "vendor_win": false
+  }
+}

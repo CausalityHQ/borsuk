@@ -1,0 +1,23 @@
+	Command being timed: "timeout --kill-after=30 8958 cargo test --locked -p borsuk --example compare_native_replay --no-run"
+	User time (seconds): 191.49
+	System time (seconds): 17.83
+	Percent of CPU this job got: 87%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:58.92
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 3966848
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 597
+	Minor (reclaiming a frame) page faults: 10049678
+	Voluntary context switches: 28476
+	Involuntary context switches: 2135
+	Swaps: 0
+	File system inputs: 464
+	File system outputs: 5427256
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

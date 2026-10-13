@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --example compare_native_replay tests::paired_scheduler_scale_accepts_only_explicit_same_width_source_delta -- --exact --test-threads=1
