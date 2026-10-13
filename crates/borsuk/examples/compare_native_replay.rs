@@ -251,8 +251,8 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
     };
     if matches!(phase, "identity" | "bound_inputs") && v.get("fetch_parallelism").is_some() {
         require(
-            matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32 | 64)),
-            "fetch_parallelism must be integer 16, 32 or 64",
+            matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32 | 64 | 128)),
+            "fetch_parallelism must be integer 16, 32, 64 or 128",
         )?;
         if phase == "bound_inputs" {
             fields(&v, &format!("{names} fetch_parallelism source_cache"))?;
