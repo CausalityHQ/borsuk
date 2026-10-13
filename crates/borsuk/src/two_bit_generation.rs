@@ -10,7 +10,7 @@ use crate::{
     object_native_generation::{
         MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_two_bit_metadata,
     },
-    rotated_two_bit::PreparedTwoBit,
+    rotated_two_bit::{PreparedTwoBit, SCORE_BATCH_ROWS},
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{
         OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats, VerifiedRange,
@@ -735,15 +735,25 @@ pub fn plan_two_bit_source_walks<'a>(
             nomination_evaluated_units.push(unit);
         }
         let mut maximum = f64::NEG_INFINITY;
-        for row in unit * 32..((unit + 1) * 32).min(rows) {
-            maximum = maximum.max(
+        let end = ((unit + 1) * 32).min(rows);
+        for first in (unit * 32..end).step_by(SCORE_BATCH_ROWS) {
+            let count = (end - first).min(SCORE_BATCH_ROWS);
+            let mut records = [&[][..]; SCORE_BATCH_ROWS];
+            for (lane, target) in records[..count].iter_mut().enumerate() {
+                *target = record(first + lane)
+                    .ok_or(TwoBitGenerationError::Invalid("missing source record"))?;
+                // Refuse an earlier bad footer before invoking a later callback.
                 prepared
-                    .score(
-                        record(row)
-                            .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
-                    )
-                    .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
-            );
+                    .record_scalars(target)
+                    .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+            }
+            let mut scores = [0.0; SCORE_BATCH_ROWS];
+            prepared
+                .score_batch(&records[..count], &mut scores[..count])
+                .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+            for value in &scores[..count] {
+                maximum = maximum.max(*value);
+            }
         }
         Ok(maximum)
     };
@@ -2833,6 +2843,138 @@ impl TwoBitGeneration {
 mod source_walk_tests {
     use super::*;
     use futures_util::{StreamExt, stream};
+
+    #[test]
+    fn batched_source_nomination_matches_scalar_plan_trace_and_first_error() {
+        use crate::rotated_two_bit::{RotatedTwoBitCodec, TwoBitError};
+        let rows: usize = 321;
+        let dimensions = 31;
+        let codec = RotatedTwoBitCodec::new(&vec![0.0; dimensions], 7).unwrap();
+        let query = (0..dimensions)
+            .map(|i| (i % 11 + 1) as f32 / 11.0)
+            .collect::<Vec<_>>();
+        let prepared = codec.prepare_query(&query, usize::MAX).unwrap();
+        let records = (0..rows)
+            .map(|row| {
+                let vector = (0..dimensions)
+                    .map(|i| ((i * 13 + row * 17) % 31) as f32 / 16.0 - 15.0 / 16.0)
+                    .collect::<Vec<_>>();
+                codec.encode(&vector).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let walks = vec![(0, (0..rows.div_ceil(32)).collect::<Vec<_>>())];
+        let mut scalar_units = Vec::new();
+        let ranked = rank_walked_source_with_limit(rows, &walks, 2, None, |unit| {
+            scalar_units.push(unit);
+            let mut maximum = f64::NEG_INFINITY;
+            for record in &records[unit * 32..((unit + 1) * 32).min(rows)] {
+                maximum = maximum.max(prepared.score(record).unwrap());
+            }
+            Ok(maximum)
+        })
+        .unwrap();
+        let order = ranked
+            .iter()
+            .enumerate()
+            .map(|(rank, &(page, _))| (page, rank as f32))
+            .collect::<Vec<_>>();
+        let reference = choose_budgeted_pages_sparse(
+            &order,
+            &[ranked[0].0 * 256],
+            rows,
+            dimensions,
+            2,
+            2,
+            usize::MAX,
+        )
+        .unwrap();
+        let mut trace = TwoBitPlanTrace::default();
+        let mut callbacks = Vec::new();
+        let actual = plan_two_bit_source_walks(
+            rows,
+            dimensions,
+            2,
+            None,
+            &walks,
+            &prepared,
+            |row| {
+                callbacks.push(row);
+                Some(records[row].as_slice())
+            },
+            2,
+            usize::MAX,
+            Some(&mut trace),
+        )
+        .unwrap();
+        assert_eq!(actual, reference);
+        assert_eq!(callbacks, (0..rows).collect::<Vec<_>>());
+        assert_eq!(trace.nomination_evaluated_units, scalar_units);
+        assert_eq!(
+            trace.ranked_candidate_pages,
+            ranked.iter().map(|&(page, _)| page).collect::<Vec<_>>()
+        );
+        assert_eq!(trace.primary_page, ranked[0].0);
+
+        for bad_row in [0, 1, 7, 8, 15, 31, 32, 320] {
+            let mut bad = records[bad_row].clone();
+            let footer = bad.len() - 8;
+            bad[footer..footer + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+            let mut callbacks = Vec::new();
+            let failure = plan_two_bit_source_walks(
+                rows,
+                dimensions,
+                2,
+                None,
+                &walks,
+                &prepared,
+                |row| {
+                    callbacks.push(row);
+                    if row == bad_row {
+                        Some(bad.as_slice())
+                    } else if row > bad_row {
+                        None
+                    } else {
+                        Some(records[row].as_slice())
+                    }
+                },
+                2,
+                usize::MAX,
+                None,
+            );
+            assert!(matches!(
+                failure,
+                Err(TwoBitGenerationError::Plane(SourceBuildError::Codec(
+                    TwoBitError::Record
+                )))
+            ));
+            assert_eq!(callbacks, (0..=bad_row).collect::<Vec<_>>());
+        }
+        let mut callbacks = Vec::new();
+        let failure = plan_two_bit_source_walks(
+            rows,
+            dimensions,
+            2,
+            None,
+            &walks,
+            &prepared,
+            |row| {
+                callbacks.push(row);
+                if row == 1 {
+                    None
+                } else {
+                    Some(records[row].as_slice())
+                }
+            },
+            2,
+            usize::MAX,
+            None,
+        );
+        assert!(matches!(
+            failure,
+            Err(TwoBitGenerationError::Invalid("missing source record"))
+        ));
+        assert_eq!(callbacks, vec![0, 1]);
+    }
 
     fn assert_metadata_waves(startup: &RemoteOpenStats, names: &[&str]) {
         assert_eq!(
