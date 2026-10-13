@@ -1,0 +1,73 @@
+{
+  "schema": "borsuk-cold-scheduler-decision-v1",
+  "status": "ADOPT_SCHEDULER",
+  "pairs": [
+    {
+      "repetition": 1,
+      "original": {
+        "count": 1000,
+        "p50_ms": 197.260857,
+        "p90_ms": 223.426814,
+        "p90_ns": 223426814,
+        "p95_ms": 238.452318,
+        "p95_ns": 238452318,
+        "p99_ms": 275.411004,
+        "query_wall_ns": 196685664582,
+        "sequential_qps": 5.084254625903816
+      },
+      "candidate": {
+        "count": 1000,
+        "p50_ms": 176.174235,
+        "p90_ms": 194.301779,
+        "p90_ns": 194301779,
+        "p95_ms": 203.304565,
+        "p95_ns": 203304565,
+        "p99_ms": 232.260013,
+        "query_wall_ns": 175450651569,
+        "sequential_qps": 5.699608357434495
+      },
+      "p95_improvement_percent": 14.739950231894994,
+      "p90_ratio": 0.8696439586700637,
+      "qps_ratio": 1.121031257639125,
+      "pass": true
+    },
+    {
+      "repetition": 2,
+      "original": {
+        "count": 1000,
+        "p50_ms": 195.360837,
+        "p90_ms": 217.905424,
+        "p90_ns": 217905424,
+        "p95_ms": 225.18572,
+        "p95_ns": 225185720,
+        "p99_ms": 249.372877,
+        "query_wall_ns": 193342204365,
+        "sequential_qps": 5.172176469614237
+      },
+      "candidate": {
+        "count": 1000,
+        "p50_ms": 174.590945,
+        "p90_ms": 193.702747,
+        "p90_ns": 193702747,
+        "p95_ms": 199.813807,
+        "p95_ns": 199813807,
+        "p99_ms": 218.462037,
+        "query_wall_ns": 172480967473,
+        "sequential_qps": 5.7977411342879845
+      },
+      "p95_improvement_percent": 11.267105658387223,
+      "p90_ratio": 0.8889303599895704,
+      "qps_ratio": 1.1209480512408745,
+      "pass": true
+    }
+  ],
+  "recall_at10": 0.978,
+  "underfill": 0,
+  "semantic_trace_physical_plan_logical_charge_parity": true,
+  "quality_loss": 0,
+  "provider_cache_controlled": false,
+  "replications_per_arm": 2,
+  "matched_vendor_win": false,
+  "total_lifecycle_cost_qualified": false,
+  "production_ready": false
+}

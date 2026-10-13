@@ -1,0 +1,80 @@
+{
+  "schema": "borsuk-cold-scheduler-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "scope": "RUST_REDUCER_COMPILE_AND_CORRECTNESS",
+  "source_commit": "ad0b3b180e726c03605bcace1ce3be71c9ff634b",
+  "native_source_identity_sha256": "4615c9027b4f1b929624398e8b3b5ceeda068497c9d33953a581abeae8a96b4c",
+  "source_file_count": 437,
+  "support_file_count": 470,
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "stages": [
+    {
+      "name": "compile-example",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run",
+      "exit": 0,
+      "instance_id": "i-0495f9eaeefc34aba",
+      "session": "52d1760e-22af-46f8-becb-9228e5934bf4",
+      "stage_manifest_sha256": "2cb91f16e1580e5812955a6806992012ea2557b4888836fe3a79bbb3a40c2578"
+    },
+    {
+      "name": "scheduler-debug",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_scheduler_scale_accepts_only_explicit_same_width_source_delta -- --exact --test-threads=1",
+      "exit": 0,
+      "instance_id": "i-0495f9eaeefc34aba",
+      "session": "52d1760e-22af-46f8-becb-9228e5934bf4",
+      "stage_manifest_sha256": "e5b28a8a2fbee0c2a452713b0661dc3887063d46fe04f583eee08844859e5a41"
+    },
+    {
+      "name": "example-debug",
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "exit": 0,
+      "instance_id": "i-097f338db0f974a3f",
+      "session": "07253c1d-7ecf-470d-8209-29ddcf6465f4",
+      "stage_manifest_sha256": "ed8bc29726e2508fb0a8bd458b3c0747db15c7f941e051c96283edf885e62d82"
+    },
+    {
+      "name": "release-elf",
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "exit": 0,
+      "instance_id": "i-097f338db0f974a3f",
+      "session": "07253c1d-7ecf-470d-8209-29ddcf6465f4",
+      "stage_manifest_sha256": "a83eacdf7d431550a6867b048b6ef7bff32090466e4bc50845cf1994eccd9a6f"
+    },
+    {
+      "name": "workspace-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "instance_id": "i-097f338db0f974a3f",
+      "session": "07253c1d-7ecf-470d-8209-29ddcf6465f4",
+      "stage_manifest_sha256": "31e192e058fd137d2c9aeffed8999c3874fb7749014ca05640ae6beddf61acac"
+    },
+    {
+      "name": "workspace-test-build",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "instance_id": "i-097f338db0f974a3f",
+      "session": "07253c1d-7ecf-470d-8209-29ddcf6465f4",
+      "stage_manifest_sha256": "8de07589a620aca8e16de118f284239684f63eb7af32d92e42aba57b7999895d"
+    }
+  ],
+  "library": {
+    "source_commit": "8e0b1d5ab7322574181433311e5653991d9a2ff9",
+    "native_gates": 9,
+    "baseline_sha256": "23d31d59f51cd37af645b9d61ae50efe1a21d024fbc09a3b08529f863260d74e",
+    "terminated": true
+  },
+  "reducer": {
+    "bytes": 9180752,
+    "sha256": "37d77b4b35180c5c4b443f1ed149878e8cabbd2b47a87e0d768e81bd282da69b"
+  },
+  "historical_wrapper_failure": {
+    "attempt": "a0003",
+    "original_exit": 2,
+    "disposition": "EXECUTION_INVALID_PRESERVED",
+    "native_compile_and_exact_fixture_reused": true
+  },
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "product_ready": false
+}

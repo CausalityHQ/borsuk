@@ -1,0 +1,9 @@
+compile-lib	cargo test --locked -p borsuk --lib --no-run
+scheduler-debug	cargo test --locked -p borsuk --lib sq8_s3_range::tests::completion_driven_fetch_refills_before_earlier_body_finishes -- --exact --test-threads=1
+layout-debug	cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --nocapture --test-threads=1
+range-debug	cargo test --locked -p borsuk --lib sq8_s3_range:: -- --test-threads=1
+generation-debug	cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1
+range-release	cargo test --release --locked -p borsuk --lib sq8_s3_range:: -- --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --bin check_cohere_native_baseline
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

@@ -1,0 +1,2 @@
+crates/borsuk/src/bin/check_s3_vectors_baseline.rs
+crates/borsuk/src/sq8_s3_range.rs
