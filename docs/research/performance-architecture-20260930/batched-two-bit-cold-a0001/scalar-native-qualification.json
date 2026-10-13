@@ -1,0 +1,146 @@
+{
+  "schema": "borsuk-width64-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "fbebe3dd3a4cf512f4e046689626e16c482d624a",
+  "source_file_count": 437,
+  "support_file_count": 470,
+  "native_source_identity_sha256": "c88ae3da7b1aec74e7a97d7b17edfe89ee4c116a915446f81b5b854a59958e09",
+  "native_source_identity_definition": "sha256 of exact native-source.json bytes",
+  "source_archive_sha256": "72ed4099e8489dccfcbb65bd957260f8fc6c8ac75e0ebb7819f1523722562278",
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "instance_id": "i-0fbdfe9a3868e6206",
+  "root_volume_id": "vol-054926d0c862eff3c",
+  "volume_deleted": true,
+  "external_timer_inactive": true,
+  "stage_count": 8,
+  "stages": [
+    {
+      "name": "compile-bin",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline --no-run",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/compile-bin-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "32a5e0fda595772de3870e057a6ad6bbebf445250d17cc3e81b0a49db6f66967"
+      }
+    },
+    {
+      "name": "width64-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism64_preserves_caps_and_bounded_runtime -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/width64-debug-collected/terminal.json",
+        "bytes": 247,
+        "sha256": "d53f4934d6b1ec4444ada0f2b6f9abb4ac444a38c5406429809aa257873a58e8"
+      }
+    },
+    {
+      "name": "selector-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism_selector_is_explicit_and_bounded -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/selector-debug-collected/terminal.json",
+        "bytes": 248,
+        "sha256": "90319f6e8c92653ee03d68a26adcc6c2ecf887d66effe769a69276fe4549948e"
+      }
+    },
+    {
+      "name": "runtime-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::query_runtime_bounds_blocking_threads_and_drains -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/runtime-debug-collected/terminal.json",
+        "bytes": 247,
+        "sha256": "fb3844b77ab32fe1e068fe0738e1e9eb4cdd066520e79e8117d24569e9627265"
+      }
+    },
+    {
+      "name": "baseline-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/baseline-debug-collected/terminal.json",
+        "bytes": 248,
+        "sha256": "7b0821df4ec158397ea4827bec5e444c703ba87d7ac8b13daa74b2bca5d87dab"
+      }
+    },
+    {
+      "name": "release-elf",
+      "exit": 0,
+      "command": "cargo build --release --locked -p borsuk --bin check_cohere_native_baseline",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/release-elf-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "88991bd4a4e34ada83fc07163fe01fb801dced8f6974da8bb1c0c85ad1180688"
+      }
+    },
+    {
+      "name": "workspace-clippy",
+      "exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/workspace-clippy-collected/terminal.json",
+        "bytes": 250,
+        "sha256": "09946a25ed51dcc81b29e0a491c2c03056839bd7154dbf857c984c8048c3ab39"
+      }
+    },
+    {
+      "name": "workspace-test-build",
+      "exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-source-width64.pending/launch-a0002/workspace-test-build-collected/terminal.json",
+        "bytes": 254,
+        "sha256": "0d20f7b782559b5ef2a6f7c71a6aa6efdfb3ef8860b821321c65b40b19284388"
+      }
+    }
+  ],
+  "resources": {
+    "cpus": "0-3",
+    "cpu_quota_percent": 400,
+    "memory_max_bytes": 15032385536,
+    "swap_max_bytes": 0,
+    "pids_max": 512,
+    "compiler_jobs": 1,
+    "all_stages_swap_and_oom_zero": true
+  },
+  "baseline_binary": {
+    "bytes": 17112816,
+    "sha256": "3dfad91671d20bb6501ca4050af047ac877e8ae20510deb9fc5598aad2513655",
+    "s3_key": "research/semantic-router/20261013/source-width64-native-a0002/stages/release-elf/check_cohere_native_baseline"
+  },
+  "test_counts": {
+    "width64": 1,
+    "selector": 1,
+    "runtime": 1,
+    "baseline": 43
+  },
+  "collection": {
+    "original_exit": 124,
+    "resume_exit": 0,
+    "native_work_repeated": false
+  },
+  "claims": {
+    "rust_correctness": true,
+    "performance": false,
+    "recall": false,
+    "vendor_win": false
+  }
+}
