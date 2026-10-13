@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-width64-scale-freeze-v1",
+  "status": "FROZEN_WIDTH64_SCALE",
+  "source": "f5a0c36b0bd00b550c53690402577a2012b5b2b4",
+  "baseline_source": "fbebe3dd3a4cf512f4e046689626e16c482d624a",
+  "comparison_source": "f4d66fc784ace5bec6401614b5197173bc15ed05",
+  "baseline_binary_sha256": "3dfad91671d20bb6501ca4050af047ac877e8ae20510deb9fc5598aad2513655",
+  "comparison_binary_sha256": "955210af66106974db10b92ecfabc307719d0eb4d26534e1d1c9596ea4b83842",
+  "transport_sha256": "7fc58b1d52753d8132a26b4768181b26f19471ae0c1eab2d5116752aed43de38",
+  "transport_count": 22,
+  "configured_widths": [
+    32,
+    64
+  ],
+  "arm_order": [
+    32,
+    64,
+    64,
+    32
+  ],
+  "all_queries": 1000,
+  "actual_admission_ordinal": 527,
+  "canary_ordinal": 0,
+  "machine_seconds": 14400,
+  "cost_ceiling_usd": 1.50,
+  "prerequisites_must_close_before_measurement": true,
+  "measurement_body_read_before_terminal": false,
+  "claims_performance": false,
+  "claims_vendor_win": false
+}
