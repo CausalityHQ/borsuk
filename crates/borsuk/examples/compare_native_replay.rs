@@ -11878,6 +11878,65 @@ mod tests {
     }
 
     #[test]
+    fn paired_width64_scale_requires_same_source_and_ordered_widths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = paired_scale_config(
+            dir.path(),
+            [paired_scale_fixture(32), paired_scale_fixture(64)],
+        );
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["schema"] = json!("borsuk-scale-width64-native-reduction-config-v1");
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let report = reduce_paired_scope(&path, &sha(&bytes), true).unwrap();
+        assert_eq!(report["schema"], "borsuk-scale-width64-native-reduction-v1");
+        assert_eq!(report["semantic_parity"], true);
+        assert_eq!(report["trace_plan_parity"], true);
+        assert_eq!(report["logical_charge_parity"], true);
+        assert_eq!(report["pooled_both_arms"]["statistics"]["count"], 2000);
+        assert_eq!(report["performance_pass_claim"], false);
+        assert!(reduce_paired(&path, &sha(&bytes)).is_err());
+        for field in [
+            "binary_sha256",
+            "runner_source_sha256",
+            "sq8_range_source_sha256",
+            "router_source_sha256",
+            "codec_source_sha256",
+            "returned_source_sha256",
+        ] {
+            let mut bad = config.clone();
+            bad["arms"][1]["expected_identity"][field] = json!("a".repeat(64));
+            for arm in bad["arms"].as_array_mut().unwrap() {
+                arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+            }
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                reduce_paired_scope(&path, &sha(&bytes), true)
+                    .unwrap_err()
+                    .to_string(),
+                "paired binary/source/benchmark/generation/backend/input/scoring pins differ"
+            );
+        }
+        for widths in [[16, 32], [32, 32], [64, 32], [64, 64], [32, 63], [32, 65]] {
+            let mut bad = config.clone();
+            for (arm, width) in bad["arms"].as_array_mut().unwrap().iter_mut().zip(widths) {
+                arm["expected_identity"]["fetch_parallelism"] = json!(width);
+                arm["expected_bound_inputs"]["fetch_parallelism"] = json!(width);
+                arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+            }
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                reduce_paired_scope(&path, &sha(&bytes), true)
+                    .unwrap_err()
+                    .to_string(),
+                "width64 arms must be ordered integer fetch_parallelism 32 then 64"
+            );
+        }
+    }
+
+    #[test]
     fn paired_scale_accepts_full_sealed_population_and_preserves_historical_refusal() {
         let dir = tempfile::tempdir().unwrap();
         let (path, pin) = paired_scale_config(
