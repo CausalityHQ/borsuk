@@ -548,8 +548,8 @@ fn default_fetch_parallelism() -> usize {
 
 fn query_runtime(fetch_parallelism: usize) -> Result<tokio::runtime::Runtime> {
     require(
-        matches!(fetch_parallelism, 16 | 32),
-        "fetch_parallelism must be 16 or 32",
+        matches!(fetch_parallelism, 16 | 32 | 64),
+        "fetch_parallelism must be 16, 32 or 64",
     )?;
     Ok(tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -708,8 +708,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     validate_population(c)?;
     let shape = population(c, shape);
     require(
-        matches!(c.fetch_parallelism, 16 | 32),
-        "fetch_parallelism must be 16 or 32",
+        matches!(c.fetch_parallelism, 16 | 32 | 64),
+        "fetch_parallelism must be 16, 32 or 64",
     )?;
     require(
         c.schema == CONFIG_SCHEMA,
@@ -2963,18 +2963,18 @@ mod tests {
         let mut value = config_value(dir.path(), shape);
         let default: Config = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(default.fetch_parallelism, 16);
-        for parallelism in [0, 1, 16, 17, 32, 33, usize::MAX] {
+        for parallelism in [0, 1, 16, 17, 32, 33, 63, 64, 65, usize::MAX] {
             value["fetch_parallelism"] = json!(parallelism);
             let config: Config = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(
                 validate_config(&config, shape).is_ok(),
-                matches!(parallelism, 16 | 32)
+                matches!(parallelism, 16 | 32 | 64)
             );
             assert_eq!(
                 query_runtime(config.fetch_parallelism).is_ok(),
-                matches!(parallelism, 16 | 32)
+                matches!(parallelism, 16 | 32 | 64)
             );
-            if matches!(parallelism, 16 | 32) {
+            if matches!(parallelism, 16 | 32 | 64) {
                 let admission = limits(&config).unwrap();
                 assert_eq!(admission.max_parallel_gets, parallelism);
                 assert_eq!(admission.max_parallel_source_gets, parallelism);
@@ -3029,7 +3029,7 @@ mod tests {
             }
         }
 
-        for parallelism in [16, 32] {
+        for parallelism in [16, 32, 64] {
             let jobs = Arc::new(Jobs::default());
             let cleanup = RuntimeCleanup {
                 runtime: Some(query_runtime(parallelism).unwrap()),
@@ -3038,7 +3038,7 @@ mod tests {
             let runtime = cleanup.runtime.as_ref().unwrap();
             let mut handles = Vec::new();
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-            for _ in 0..64 {
+            for _ in 0..128 {
                 let jobs = jobs.clone();
                 handles.push(runtime.spawn_blocking(move || {
                     let active = jobs.active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -3083,7 +3083,7 @@ mod tests {
                 "deadline at cap {parallelism}"
             );
             assert!(joined, "blocking job failed at cap {parallelism}");
-            assert_eq!(jobs.completed.load(Ordering::SeqCst), 64);
+            assert_eq!(jobs.completed.load(Ordering::SeqCst), 128);
             assert_eq!(jobs.active.load(Ordering::SeqCst), 0);
             let peak = jobs.peak.load(Ordering::SeqCst);
             assert!(peak <= parallelism, "peak {peak} exceeds cap {parallelism}");
