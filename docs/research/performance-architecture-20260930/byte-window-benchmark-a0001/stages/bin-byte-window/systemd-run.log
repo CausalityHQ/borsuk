@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-bin-byte-window.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 1.662s
+CPU time consumed: 1.581s
+Memory peak: 7.4M
+Memory swap peak: 0B

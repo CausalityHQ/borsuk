@@ -110,6 +110,7 @@ const SCALE_SCHEDULER_SCHEMA: &str = "borsuk-scale-scheduler-native-reduction-v1
 const SCALE_WIDTH64_SCHEMA: &str = "borsuk-scale-width64-native-reduction-v1";
 const SCALE_WIDTH128_SCHEMA: &str = "borsuk-scale-width128-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
+const BYTE_WINDOW_ABBA_SCHEMA: &str = "borsuk-byte-window-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -135,6 +136,37 @@ struct CompletedConfig {
 struct PairedConfig {
     schema: String,
     arms: [CompletedConfig; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ByteWindowAbbaConfig {
+    schema: String,
+    runs: [CompletedConfig; 4],
+    runtime_configs: [CompletedInput; 2],
+}
+
+fn validate_byte_window(value: &Value, width: u64) -> Result<()> {
+    fields(value, "max_bytes max_waiters max_state_bytes")?;
+    let bytes = value["max_bytes"]
+        .as_u64()
+        .ok_or("byte-window capacity integer")?;
+    let waiters = value["max_waiters"]
+        .as_u64()
+        .ok_or("byte-window waiters integer")?;
+    let state = value["max_state_bytes"]
+        .as_u64()
+        .ok_or("byte-window state integer")?;
+    require(
+        (1..=512 * 1024 * 1024).contains(&bytes)
+            && waiters >= width
+            && (1..=512 * 1024 * 1024).contains(&state)
+            && usize::try_from(waiters)
+                .ok()
+                .and_then(borsuk::sq8_s3_range::InFlightBytes::modeled_state_bytes)
+                .is_some_and(|bytes| bytes as u64 <= state),
+        "byte-window explicit bounded capacity/waiters/state",
+    )
 }
 
 #[derive(Deserialize)]
@@ -684,6 +716,34 @@ fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
 
 fn validate_scale_row(line: &[u8], phase: &str) -> Result<()> {
     let UniqueJson(mut raw) = serde_json::from_slice(line)?;
+    if matches!(phase, "identity" | "bound_inputs") {
+        if let Some(window) = raw
+            .as_object_mut()
+            .ok_or("scale row object")?
+            .remove("shared_byte_window")
+        {
+            validate_byte_window(
+                &window,
+                raw["fetch_parallelism"]
+                    .as_u64()
+                    .ok_or("byte-window width")?,
+            )?;
+        }
+    }
+    if phase == "startup" {
+        if let Some(state) = raw
+            .as_object_mut()
+            .ok_or("startup object")?
+            .remove("shared_byte_window_state_bytes")
+        {
+            require(
+                state
+                    .as_u64()
+                    .is_some_and(|n| (1..=512 * 1024 * 1024).contains(&n)),
+                "byte-window allocated state",
+            )?;
+        }
+    }
     if phase == "diagnostic_admission" {
         fields(
             &raw,
@@ -1601,6 +1661,34 @@ fn read_run_observed_with_identity(
     }
     let startup: Startup = rows.row("startup")?;
     require(!startup.truth_opened, "startup truth boundary")?;
+    if scale {
+        let c = expected.ok_or("byte-window expected config")?;
+        require(
+            c.expected_identity.get("shared_byte_window")
+                == c.expected_bound_inputs.get("shared_byte_window"),
+            "byte-window header agreement",
+        )?;
+        let raw: Value = serde_json::from_slice(&rows.line)?;
+        match c.expected_bound_inputs.get("shared_byte_window") {
+            Some(window) => require(
+                raw["shared_byte_window_state_bytes"]
+                    .as_u64()
+                    .is_some_and(|n| {
+                        let minimum = window["max_waiters"]
+                            .as_u64()
+                            .and_then(|n| usize::try_from(n).ok())
+                            .and_then(borsuk::sq8_s3_range::InFlightBytes::modeled_state_bytes);
+                        minimum.is_some_and(|minimum| n >= minimum as u64)
+                            && n <= window["max_state_bytes"].as_u64().unwrap_or(0)
+                    }),
+                "byte-window startup state/config binding",
+            )?,
+            None => require(
+                raw.get("shared_byte_window_state_bytes").is_none(),
+                "unconfigured byte-window startup state",
+            )?,
+        }
+    }
     if let Some(e) = &mut completed {
         e.startup = serde_json::from_slice(&rows.line)?;
     }
@@ -4226,6 +4314,14 @@ fn reduce_paired_scope(config_path: &Path, config_sha: &str, scale: bool) -> Res
     )?;
     for (arm, parallelism) in c.arms.iter().zip(parallelisms) {
         require(
+            arm.expected_identity.get("shared_byte_window").is_none()
+                && arm
+                    .expected_bound_inputs
+                    .get("shared_byte_window")
+                    .is_none(),
+            "historical paired modes refuse byte-window intervention",
+        )?;
+        require(
             arm.schema
                 == if scale {
                     SCALE_CONFIG_SCHEMA
@@ -4468,6 +4564,309 @@ fn recheck_scale_pair(
     )?;
     read_config::<PairedConfig>(config_path, config_sha)?;
     Ok(())
+}
+
+fn reduce_byte_window_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let config_file = open_input(config_path)?;
+    let config_identity = file_identity(&config_file)?;
+    let (c, config_bytes): (ByteWindowAbbaConfig, _) =
+        read_config_file(&config_file, config_path, config_sha, CONFIG_CAP)?;
+    require(
+        c.schema == "borsuk-byte-window-abba-native-reduction-config-v1",
+        "byte-window ABBA schema",
+    )?;
+    require(
+        c.runtime_configs[0].sha256 != c.runtime_configs[1].sha256
+            && c.runtime_configs[0].path != c.runtime_configs[1].path,
+        "distinct byte-window runtime configs",
+    )?;
+    let runtime = [
+        header_json(&c.runtime_configs[0])?,
+        header_json(&c.runtime_configs[1])?,
+    ];
+    let names = "schema dataset revision metric tie_rule corpus_intervals reserved_query_interval cohort_receipt derivation_receipt producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 scratch_parent requests truth native_source max_memory_bytes fetch_parallelism serving execution";
+    fields(&runtime[0].0, names)?;
+    fields(&runtime[1].0, &format!("{names} shared_byte_window"))?;
+    for (native, _) in &runtime {
+        validate_header_descriptors(native)?;
+        header_path(Path::new(
+            native["scratch_parent"]
+                .as_str()
+                .ok_or("byte-window scratch parent")?,
+        ))?;
+        for role in ["cohort_receipt", "derivation_receipt", "requests", "truth"] {
+            let pin: CompletedInput = serde_json::from_value(native[role].clone())?;
+            header_pin(
+                &pin,
+                if matches!(role, "requests" | "truth") {
+                    4_096_000
+                } else {
+                    HEADER_JSON_CAP
+                },
+            )?;
+        }
+        fields(
+            &native["native_source"],
+            "source_sha256 sq8_sha256 source_order_sha256",
+        )?;
+    }
+    let window = &runtime[1].0["shared_byte_window"];
+    validate_byte_window(window, 64)?;
+    let mut candidate = runtime[1].0.clone();
+    candidate
+        .as_object_mut()
+        .ok_or("runtime config object")?
+        .remove("shared_byte_window");
+    require(
+        candidate == runtime[0].0,
+        "byte-window runtime unapproved intervention",
+    )?;
+    for (index, run) in c.runs.iter().enumerate() {
+        let arm = usize::from(index == 1 || index == 2);
+        let native = &runtime[arm].0;
+        let identity = &run.expected_identity;
+        let inputs = &run.expected_bound_inputs;
+        require(
+            run.schema == SCALE_CONFIG_SCHEMA
+                && native["schema"] == "borsuk-cohere-native-baseline-config-v7"
+                && native["fetch_parallelism"] == 64
+                && identity["config_sha256"] == c.runtime_configs[arm].sha256
+                && identity["fetch_parallelism"] == 64
+                && inputs["fetch_parallelism"] == 64
+                && identity.get("shared_byte_window") == native.get("shared_byte_window")
+                && inputs.get("shared_byte_window") == native.get("shared_byte_window"),
+            "byte-window ABBA runtime/header binding",
+        )?;
+        validate_scale_row(&serde_json::to_vec(identity)?, "identity")?;
+        validate_scale_row(&serde_json::to_vec(inputs)?, "bound_inputs")?;
+        let parsed: Inputs = serde_json::from_value(inputs.clone())?;
+        validate_scale_inputs(&parsed, inputs)?;
+        require(
+            parsed.rows == 1_000_000
+                && parsed.count == COUNT
+                && parsed.profile == "scale1m"
+                && inputs["corpus_intervals"]
+                    == json!([{"start":0,"end":100000},{"start":101000,"end":1001000}])
+                && inputs["reserved_query_interval"] == json!({"start":100000,"end":101000})
+                && inputs["reserved_queries_sha256"]
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+                && inputs["requests_sha256"]
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+                && inputs["truth_sha256"]
+                    == "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+                && inputs["execution"] == json!({"mode":"full"}),
+            "byte-window frozen 1M workload",
+        )?;
+        for key in "dataset revision metric tie_rule corpus_intervals reserved_query_interval producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 max_memory_bytes fetch_parallelism serving execution".split_whitespace() {
+            require(native[key] == inputs[key], "byte-window runtime/input field mismatch")?;
+        }
+        require(
+            identity["serving"] == native["serving"]
+                && identity["execution"] == native["execution"],
+            "byte-window runtime/identity field mismatch",
+        )?;
+        for role in ["requests", "truth"] {
+            require(
+                native[role]["bytes"] == inputs[format!("{role}_bytes")]
+                    && native[role]["sha256"] == inputs[format!("{role}_sha256")],
+                "byte-window runtime input seal",
+            )?;
+        }
+        for (source, bound) in [
+            ("source_sha256", "native_source_sha256"),
+            ("sq8_sha256", "native_sq8_sha256"),
+            ("source_order_sha256", "native_order_sha256"),
+        ] {
+            require(
+                native["native_source"][source] == inputs[bound],
+                "byte-window native source seal",
+            )?;
+        }
+        require(
+            native["cohort_receipt"]["sha256"] == inputs["cohort_receipt_sha256"]
+                && native["derivation_receipt"]["sha256"] == inputs["derivation_receipt_sha256"],
+            "byte-window receipt seal",
+        )?;
+    }
+    let normalized = |run: &CompletedConfig| -> Result<[Value; 2]> {
+        let mut identity = run.expected_identity.clone();
+        let mut inputs = run.expected_bound_inputs.clone();
+        identity
+            .as_object_mut()
+            .ok_or("identity object")?
+            .remove("config_sha256");
+        identity
+            .as_object_mut()
+            .ok_or("identity object")?
+            .remove("shared_byte_window");
+        inputs
+            .as_object_mut()
+            .ok_or("input object")?
+            .remove("shared_byte_window");
+        Ok([identity, inputs])
+    };
+    let invariant = normalized(&c.runs[0])?;
+    for run in &c.runs[1..] {
+        require(
+            normalized(run)? == invariant,
+            "byte-window ABBA source/binary/input drift",
+        )?;
+    }
+    let mut runs: Vec<Run> = Vec::with_capacity(4);
+    for (index, pinned) in c.runs.iter().enumerate() {
+        let run = read_run_with(&pinned.input.path, &pinned.input.sha256, Some(pinned))
+            .map_err(|e| format!("{}: {e}", LABELS[index]))?;
+        require(
+            run.stages.max_leaf_peak_inflight <= 64,
+            "byte-window query leaf peak exceeds width64",
+        )?;
+        let evidence = run
+            .completed
+            .as_ref()
+            .ok_or("missing byte-window completed evidence")?;
+        let transport = &evidence
+            .last
+            .as_ref()
+            .ok_or("missing byte-window transport")?
+            .after;
+        require(
+            transport.transport_failures == 0
+                && transport.stream_failures == 0
+                && transport.dropped_error_bodies == 0
+                && run.terminal.sum.failed_gets == 0,
+            "byte-window transport/logical GET failure",
+        )?;
+        for (old, pin) in runs.iter().zip(&c.runs) {
+            require(
+                pinned.input.sha256 != pin.input.sha256
+                    && (run.file_identity.dev, run.file_identity.ino)
+                        != (old.file_identity.dev, old.file_identity.ino),
+                "duplicate byte-window run evidence",
+            )?;
+        }
+        if let Some(first) = runs.first() {
+            require(
+                evidence.binding_charge
+                    == first
+                        .completed
+                        .as_ref()
+                        .ok_or("missing byte-window binding")?
+                        .binding_charge,
+                "byte-window source binding charge mismatch",
+            )?;
+            for (ordinal, (a, b)) in first.samples.iter().zip(&run.samples).enumerate() {
+                require(
+                    a.returned == b.returned
+                        && a.hits10 == b.hits10
+                        && a.charges == b.charges
+                        && a.trace_sha256 == b.trace_sha256
+                        && a.physical_plan_sha256 == b.physical_plan_sha256,
+                    &format!(
+                        "{} query {ordinal}: byte-window quality/plan/charge drift",
+                        LABELS[index]
+                    ),
+                )?;
+            }
+        }
+        runs.push(run);
+    }
+    for (pin, run) in c.runs.iter().zip(&runs) {
+        recheck_header_file(
+            &open_input(&pin.input.path)?,
+            &pin.input.path,
+            &run.file_identity,
+        )?;
+    }
+    for (_, snapshot) in &runtime {
+        snapshot.recheck()?;
+    }
+    recheck_header_file(&config_file, config_path, &config_identity)?;
+    let comparisons = [
+        byte_window_comparison(&runs[0], &runs[1], "B1-A1")?,
+        byte_window_comparison(&runs[3], &runs[2], "B2-A2")?,
+    ];
+    let reports = c
+        .runs
+        .iter()
+        .zip(&runs)
+        .enumerate()
+        .map(|(index, (pin, run))| {
+            let mut report = completed_report(pin, run)?;
+            report["run"] = json!(LABELS[index]);
+            let evidence = run.completed.as_ref().ok_or("missing byte-window first query evidence")?;
+            report["first_query"] = json!({"ordinal":0,"query_wall_ns":run.samples[0].wall_ns,
+                "charges":run.samples[0].charges,"hits10":run.samples[0].hits10,
+                "returned_count":run.samples[0].returned.len(),
+                "stage_wall_ns":{"discovery":evidence.stage_samples[0][0],"source":evidence.stage_samples[1][0],
+                    "planning":evidence.stage_samples[2][0],"sq8":evidence.stage_samples[3][0]}});
+            Ok(report)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let quality_anchor = runs.iter().all(|run| run.terminal.total_hits10 >= 9780);
+    let capacity = window["max_bytes"].as_u64().ok_or("byte-window capacity")?;
+    let opportunities = [
+        byte_window_opportunities(&runs[0], capacity),
+        byte_window_opportunities(&runs[3], capacity),
+    ];
+    let potentially_binding = opportunities
+        .iter()
+        .all(|value| value["potentially_binding_queries"].as_u64().unwrap_or(0) > 0);
+    let noise = [
+        byte_window_comparison(&runs[0], &runs[3], "A2-A1 noise reference")?,
+        byte_window_comparison(&runs[1], &runs[2], "B2-B1 noise reference")?,
+    ];
+    let screen_passed = quality_anchor
+        && potentially_binding
+        && comparisons
+            .iter()
+            .all(|pair| pair["timing_gate_passed"] == true);
+    Ok(
+        json!({"schema":BYTE_WINDOW_ABBA_SCHEMA,"status":"MEASURED","complete":true,
+        "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,
+        "runtime_configs":c.runtime_configs,"shared_byte_window":window,
+        "declared_run_order":LABELS,"execution_order_verified":false,
+        "execution_order_authority":"external root original campaign receipts",
+        "source_binary_qualification_verified":false,
+        "source_binary_authority":"external root frozen source/archive/binary qualification receipts",
+        "semantic_trace_physical_plan_logical_charge_parity":true,
+        "recall_anchor_hits10":9780,"recall_denominator":10000,"recall_anchor_verified":quality_anchor,
+        "window_opportunities":opportunities,"window_waiting_observed":false,
+        "within_arm_noise_references":noise,
+        "runs":reports,"comparisons":comparisons,"performance_screen_passed":screen_passed,"source_cache":"off",
+        "cache_resources_cost_and_transport_qualified":false,
+        "vendor_win_claim":false}),
+    )
+}
+
+fn byte_window_opportunities(run: &Run, capacity: u64) -> Value {
+    let could_bind = |sample: &Sample| {
+        sample.charges.source.verified_bytes > capacity
+            || sample.charges.sq8.verified_bytes > capacity
+    };
+    let mut tail: Vec<_> = run.samples.iter().enumerate().collect();
+    tail.sort_by_key(|(ordinal, sample)| (std::cmp::Reverse(sample.wall_ns), *ordinal));
+    let tail_count = run.samples.len().div_ceil(20);
+    json!({"potentially_binding_queries":run.samples.iter().filter(|q| could_bind(q)).count(),
+        "control_top_5_percent_queries":tail_count,
+        "potentially_binding_control_top_5_percent_queries":tail.iter().take(tail_count).filter(|(_,q)| could_bind(q)).count(),
+        "scope":"phase total bytes above capacity is an upper bound on opportunities, not evidence of waiting; per-range SOURCE feasibility requires separate native admission"})
+}
+
+fn byte_window_comparison(a: &Run, b: &Run, label: &str) -> Result<Value> {
+    let mut report = paired(a, b, label)?;
+    let a = statistics(&a.samples.iter().map(|q| q.wall_ns).collect::<Vec<_>>())?;
+    let b = statistics(&b.samples.iter().map(|q| q.wall_ns).collect::<Vec<_>>())?;
+    let p95 = b.p95_ns < a.p95_ns;
+    let p90 = u128::from(b.p90_ns) * 100 <= u128::from(a.p90_ns) * 105;
+    let qps = u128::from(a.query_wall_ns) * 100 >= u128::from(b.query_wall_ns) * 95;
+    report["p95_improved"] = json!(p95);
+    report["p90_regression_at_most_5_percent"] = json!(p90);
+    report["qps_regression_at_most_5_percent"] = json!(qps);
+    report["timing_gate_passed"] = json!(p95 && p90 && qps);
+    report["screen"] = json!(
+        "positive p95 improvement; at most 5 percent p90/QPS regression; both pairs required externally; p99/first-query retained"
+    );
+    Ok(report)
 }
 
 fn reduce_membership_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
@@ -8446,6 +8845,21 @@ fn main() {
                 )
             });
         }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--byte-window-abba-scale")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --byte-window-abba-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), BYTE_WINDOW_ABBA_SCHEMA, || {
+                reduce_byte_window_abba(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("byte-window config SHA encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--membership-abba-v2") {
             require(
                 args.len() == 5,
@@ -12053,6 +12467,399 @@ mod tests {
         let body = serde_json::to_vec(&config).unwrap();
         std::fs::write(&path, &body).unwrap();
         (path, sha(&body))
+    }
+
+    fn byte_window_abba_fixture(dir: &Path) -> (Value, [Vec<Value>; 4]) {
+        let base = paired_scale_fixture(64);
+        let bound = &base[1];
+        let mut native = json!({"schema":"borsuk-cohere-native-baseline-config-v7",
+            "scratch_parent":dir.join("scratch")});
+        for key in "dataset revision metric tie_rule corpus_intervals reserved_query_interval producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 max_memory_bytes fetch_parallelism serving execution".split_whitespace() {
+            native[key] = bound[key].clone();
+        }
+        for role in ["cohort_receipt", "derivation_receipt", "requests", "truth"] {
+            native[role] = json!({"path":dir.join(role),"bytes":if matches!(role,"requests"|"truth") {bound[format!("{role}_bytes")].as_u64().unwrap()} else {1},
+                "sha256":bound[format!("{role}_sha256")]});
+        }
+        native["native_source"] = json!({"source_sha256":bound["native_source_sha256"],
+            "sq8_sha256":bound["native_sq8_sha256"],"source_order_sha256":bound["native_order_sha256"]});
+        let mut candidate = native.clone();
+        candidate["shared_byte_window"] =
+            json!({"max_bytes":16*1024*1024,"max_waiters":64,"max_state_bytes":16384});
+        let pins = [native, candidate]
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let bytes = serde_json::to_vec(value).unwrap();
+                let path = dir.join(format!("runtime-{i}.json"));
+                std::fs::write(&path, &bytes).unwrap();
+                json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)})
+            })
+            .collect::<Vec<_>>();
+        let rows = std::array::from_fn(|index| {
+            let arm = usize::from(index == 1 || index == 2);
+            let mut rows = base.clone();
+            rows[0]["config_sha256"] = pins[arm]["sha256"].clone();
+            if arm == 1 {
+                let window =
+                    json!({"max_bytes":16*1024*1024,"max_waiters":64,"max_state_bytes":16384});
+                rows[0]["shared_byte_window"] = window.clone();
+                rows[1]["shared_byte_window"] = window;
+                let startup = rows
+                    .iter_mut()
+                    .find(|row| row["phase"] == "startup")
+                    .unwrap();
+                startup["shared_byte_window_state_bytes"] = json!(4096);
+            }
+            let time = if arm == 0 { 1_000_000 } else { 990_000 };
+            for row in rows.iter_mut().filter(|row| row["phase"] == "query") {
+                row["query_wall_ns"] = json!(time);
+                row["charges"]["source"]["verified_bytes"] = json!(20_000_000_u64);
+                row["charges"]["source"]["submitted_gets"] = json!(2);
+                row["sum"]["submitted_gets"] = json!(
+                    ["router", "source", "sq8"]
+                        .iter()
+                        .map(|role| row["charges"][*role]["submitted_gets"].as_u64().unwrap())
+                        .sum::<u64>()
+                );
+                row["sum"]["verified_bytes"] = json!(
+                    ["router", "source", "sq8"]
+                        .iter()
+                        .map(|role| row["charges"][*role]["verified_bytes"].as_u64().unwrap())
+                        .sum::<u64>()
+                );
+                let ordinal = row["ordinal"].as_u64().unwrap();
+                for (key, completed) in [("before", ordinal), ("after", ordinal + 1)] {
+                    let old = row["transport"][key]["consumed_payload_bytes"]
+                        .as_u64()
+                        .unwrap();
+                    row["transport"][key]["consumed_payload_bytes"] =
+                        json!(old + completed * 19_999_999);
+                }
+            }
+            for row in rows.iter_mut().filter(|row| row["phase"] == "recall") {
+                let hits = if row["ordinal"].as_u64().unwrap() < 780 {
+                    10
+                } else {
+                    9
+                };
+                row["hits10"] = json!(hits);
+                row["recall10"] = json!(hits as f64 / 10.0);
+            }
+            let terminal = &mut rows.last_mut().unwrap()["summary"];
+            terminal["total_hits10"] = json!(9780);
+            terminal["recall_numerator"] = json!(9780);
+            terminal["mean_recall10"] = json!(0.978);
+            terminal["charges"]["source"]["verified_bytes"] = json!(20_000_000_u64 * COUNT as u64);
+            terminal["charges"]["source"]["submitted_gets"] = json!(2 * COUNT as u64);
+            terminal["sum"]["submitted_gets"] = json!(
+                ["router", "source", "sq8"]
+                    .iter()
+                    .map(|role| terminal["charges"][*role]["submitted_gets"]
+                        .as_u64()
+                        .unwrap())
+                    .sum::<u64>()
+            );
+            terminal["sum"]["verified_bytes"] = json!(
+                ["router", "source", "sq8"]
+                    .iter()
+                    .map(|role| terminal["charges"][*role]["verified_bytes"]
+                        .as_u64()
+                        .unwrap())
+                    .sum::<u64>()
+            );
+            for (key, completed) in [("before", 999_u64), ("after", 1000)] {
+                let old = terminal["transport_last_boundary"][key]["consumed_payload_bytes"]
+                    .as_u64()
+                    .unwrap();
+                terminal["transport_last_boundary"][key]["consumed_payload_bytes"] =
+                    json!(old + completed * 19_999_999);
+            }
+            let first = rows
+                .iter_mut()
+                .find(|row| row["phase"] == "query" && row["ordinal"] == 0)
+                .unwrap();
+            first["query_wall_ns"] = json!(time + 12345 + index as u64);
+            rows.last_mut().unwrap()["summary"]["query_wall_ns"] =
+                json!(time * COUNT as u64 + 12345 + index as u64);
+            rows.last_mut().unwrap()["summary"]["process_wall_ns"] =
+                json!(time * COUNT as u64 + 12345 + index as u64 + 100);
+            rows.last_mut().unwrap()["summary"]["observed_process_peak_bytes"] =
+                json!(12345 + index);
+            rows
+        });
+        (
+            json!({"schema":"borsuk-byte-window-abba-native-reduction-config-v1","runtime_configs":pins}),
+            rows,
+        )
+    }
+
+    fn write_byte_window_abba(
+        dir: &Path,
+        mut config: Value,
+        rows: &[Vec<Value>; 4],
+    ) -> (PathBuf, String) {
+        config["runs"] = json!(rows.iter().enumerate().map(|(index, rows)| {
+            let mut rows = rows.clone();
+            authenticate(&mut rows);
+            let bytes = encode(&rows);
+            let path = dir.join(format!("byte-run-{index}.jsonl"));
+            std::fs::write(&path, &bytes).unwrap();
+            json!({"schema":SCALE_CONFIG_SCHEMA,"input":{"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)},
+                "expected_identity":rows[0],"expected_bound_inputs":rows[1]})
+        }).collect::<Vec<_>>());
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let path = dir.join("byte-abba.json");
+        std::fs::write(&path, &bytes).unwrap();
+        (path, sha(&bytes))
+    }
+
+    #[test]
+    fn byte_window_abba_binds_four_runs_and_accepts_modest_improvement() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, rows) = byte_window_abba_fixture(dir.path());
+        let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+        let report = reduce_byte_window_abba(&path, &pin).unwrap();
+        assert_eq!(report["runs"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            report["semantic_trace_physical_plan_logical_charge_parity"],
+            true
+        );
+        assert_eq!(report["performance_screen_passed"], true);
+        assert_eq!(report["execution_order_verified"], false);
+        assert_eq!(report["source_binary_qualification_verified"], false);
+        assert_eq!(report["vendor_win_claim"], false);
+        assert_eq!(report["recall_anchor_verified"], true);
+        assert_eq!(
+            report["window_opportunities"][0]["potentially_binding_queries"],
+            1000
+        );
+        assert_eq!(
+            report["window_opportunities"][0]["potentially_binding_control_top_5_percent_queries"],
+            50
+        );
+        assert_eq!(report["runs"][0]["first_query"]["query_wall_ns"], 1_012_345);
+        for pair in report["comparisons"].as_array().unwrap() {
+            assert_eq!(pair["p95_improved"], true);
+            assert_eq!(pair["p95_at_least_5_percent_lower"], false);
+        }
+    }
+
+    #[test]
+    fn byte_window_abba_review_anchor_and_noop_windows_do_not_pass() {
+        for noop in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut config, mut rows) = byte_window_abba_fixture(dir.path());
+            if noop {
+                let path = PathBuf::from(config["runtime_configs"][1]["path"].as_str().unwrap());
+                let mut native: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                native["shared_byte_window"]["max_bytes"] = json!(64 * 1024 * 1024);
+                let bytes = serde_json::to_vec(&native).unwrap();
+                std::fs::write(&path, &bytes).unwrap();
+                config["runtime_configs"][1]["bytes"] = json!(bytes.len());
+                config["runtime_configs"][1]["sha256"] = json!(sha(&bytes));
+                for index in [1, 2] {
+                    rows[index][0]["config_sha256"] = json!(sha(&bytes));
+                    for row in &mut rows[index][..2] {
+                        row["shared_byte_window"] = native["shared_byte_window"].clone();
+                    }
+                }
+            } else {
+                for rows in &mut rows {
+                    let recall = rows
+                        .iter_mut()
+                        .find(|row| row["phase"] == "recall" && row["ordinal"] == 779)
+                        .unwrap();
+                    recall["hits10"] = json!(9);
+                    recall["recall10"] = json!(0.9);
+                    let terminal = &mut rows.last_mut().unwrap()["summary"];
+                    terminal["total_hits10"] = json!(9779);
+                    terminal["recall_numerator"] = json!(9779);
+                    terminal["mean_recall10"] = json!(0.9779);
+                }
+            }
+            let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+            let report = reduce_byte_window_abba(&path, &pin).unwrap();
+            assert_eq!(report["status"], "MEASURED");
+            assert_eq!(report["performance_screen_passed"], false);
+            assert_eq!(report["recall_anchor_verified"], noop);
+            assert_eq!(
+                report["window_opportunities"][0]["potentially_binding_queries"],
+                if noop { 0 } else { 1000 }
+            );
+        }
+    }
+
+    #[test]
+    fn byte_window_abba_review_failure_and_state_falsifiers() {
+        for mutation in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, mut rows) = byte_window_abba_fixture(dir.path());
+            let expected = match mutation {
+                0 => {
+                    rows[3][1004]["transport"]["after"]["stream_failures"] = json!(1);
+                    rows[3].last_mut().unwrap()["summary"]["transport_last_boundary"]["after"]["stream_failures"] =
+                        json!(1);
+                    "byte-window transport/logical GET failure"
+                }
+                1 => {
+                    rows[2][1004]["stages"]["leaf_peak_inflight"] = json!(65);
+                    "byte-window query leaf peak exceeds width64"
+                }
+                _ => {
+                    let minimum =
+                        borsuk::sq8_s3_range::InFlightBytes::modeled_state_bytes(64).unwrap();
+                    rows[2][4]["shared_byte_window_state_bytes"] =
+                        json!(if mutation == 2 { 1 } else { minimum - 1 });
+                    "B2: byte-window startup state/config binding"
+                }
+            };
+            let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+            assert_eq!(
+                reduce_byte_window_abba(&path, &pin)
+                    .unwrap_err()
+                    .to_string(),
+                expected,
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_window_abba_legacy_width_modes_refuse_windowed_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let window = json!({"max_bytes":16*1024*1024,"max_waiters":64,"max_state_bytes":16384});
+        let mut rows = [paired_scale_fixture(32), paired_scale_fixture(64)];
+        for arm in &mut rows {
+            for row in &mut arm[..2] {
+                row["shared_byte_window"] = window.clone();
+            }
+        }
+        let (path, _) = paired_scale_config(dir.path(), rows);
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["schema"] = json!("borsuk-scale-width64-native-reduction-config-v1");
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_paired_scope(&path, &sha(&bytes), true)
+                .unwrap_err()
+                .to_string(),
+            "historical paired modes refuse byte-window intervention"
+        );
+    }
+
+    #[test]
+    fn byte_window_abba_refuses_resealed_header_and_query_mutations() {
+        for mutation in 0..11 {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, mut rows) = byte_window_abba_fixture(dir.path());
+            match mutation {
+                0 => rows[2][0]["binary_sha256"] = json!("a".repeat(64)),
+                1 => rows[2][1]["source_cache"] = json!("on"),
+                2 => rows[2][0]["fetch_parallelism"] = json!(32),
+                3 => rows[2][1]["shared_byte_window"]["max_bytes"] = json!(1),
+                4 => {
+                    rows[2][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("shared_byte_window");
+                }
+                5 => rows[2][1]["shared_byte_window"]["max_waiters"] = json!(63),
+                6 => rows[2][1]["shared_byte_window"]["extra"] = json!(true),
+                7 => {
+                    rows[2][1004]["returned"][0]["score_bits"] =
+                        json!(rows[2][1004]["returned"][0]["score_bits"].as_u64().unwrap() ^ 1)
+                }
+                8 => rows[2][1004]["trace"]["primary_page"] = json!(1),
+                9 => rows[2][1004]["plan"]["ranges"] = json!([[1, 101]]),
+                _ => rows[2][4]["shared_byte_window_state_bytes"] = json!(16385),
+            }
+            let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+            assert!(
+                reduce_byte_window_abba(&path, &pin).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_window_abba_rejects_bad_runtime_window_before_result_open() {
+        for (field, value) in [
+            ("max_bytes", json!(0)),
+            ("max_bytes", json!(536_870_913_u64)),
+            ("max_bytes", json!(true)),
+            ("max_waiters", json!(0)),
+            ("max_waiters", json!(63)),
+            ("max_waiters", json!(u64::MAX)),
+            ("max_state_bytes", json!(0)),
+            ("max_state_bytes", json!(1)),
+            ("max_state_bytes", json!(536_870_913_u64)),
+            ("extra", json!(true)),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, rows) = byte_window_abba_fixture(dir.path());
+            let (path, _) = write_byte_window_abba(dir.path(), config, &rows);
+            let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            for run in config["runs"].as_array().unwrap() {
+                std::fs::remove_file(run["input"]["path"].as_str().unwrap()).unwrap();
+            }
+            let native_path = PathBuf::from(config["runtime_configs"][1]["path"].as_str().unwrap());
+            let mut native: Value =
+                serde_json::from_slice(&std::fs::read(&native_path).unwrap()).unwrap();
+            native["shared_byte_window"][field] = value;
+            let bytes = serde_json::to_vec(&native).unwrap();
+            std::fs::write(&native_path, &bytes).unwrap();
+            config["runtime_configs"][1]["sha256"] = json!(sha(&bytes));
+            config["runtime_configs"][1]["bytes"] = json!(bytes.len());
+            for index in [1, 2] {
+                config["runs"][index]["expected_identity"]["config_sha256"] = json!(sha(&bytes));
+                config["runs"][index]["expected_identity"]["shared_byte_window"] =
+                    native["shared_byte_window"].clone();
+                config["runs"][index]["expected_bound_inputs"]["shared_byte_window"] =
+                    native["shared_byte_window"].clone();
+            }
+            let bytes = serde_json::to_vec(&config).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            let error = reduce_byte_window_abba(&path, &sha(&bytes))
+                .unwrap_err()
+                .to_string();
+            let expected = if field == "extra" {
+                "unknown/missing v2 field"
+            } else if field == "max_bytes" && native["shared_byte_window"][field].is_boolean() {
+                "byte-window capacity integer"
+            } else {
+                "byte-window explicit bounded capacity/waiters/state"
+            };
+            assert_eq!(error, expected, "{field}");
+        }
+    }
+
+    #[test]
+    fn byte_window_abba_requires_second_pair_and_distinct_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut rows) = byte_window_abba_fixture(dir.path());
+        for row in rows[2].iter_mut().filter(|row| row["phase"] == "query") {
+            row["query_wall_ns"] = json!(1_100_000);
+        }
+        rows[2].last_mut().unwrap()["summary"]["query_wall_ns"] = json!(1_100_000 * COUNT as u64);
+        rows[2].last_mut().unwrap()["summary"]["process_wall_ns"] =
+            json!(1_100_000 * COUNT as u64 + 100);
+        let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+        let report = reduce_byte_window_abba(&path, &pin).unwrap();
+        assert_eq!(report["comparisons"][0]["timing_gate_passed"], true);
+        assert_eq!(report["comparisons"][1]["timing_gate_passed"], false);
+        assert_eq!(report["performance_screen_passed"], false);
+        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        config["runs"][3] = config["runs"][0].clone();
+        let bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_byte_window_abba(&path, &sha(&bytes))
+                .unwrap_err()
+                .to_string(),
+            "duplicate byte-window run evidence"
+        );
     }
 
     #[test]

@@ -1,0 +1,10 @@
+affected-compile	plain	cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay --no-run
+bin-byte-window	listed	cargo test --locked -p borsuk --bin check_cohere_native_baseline byte_window -- --test-threads=1
+generation-byte-window	listed	cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::generation_shared_byte_window_preserves_scores_and_reaches_all_fetch_paths -- --exact --test-threads=1
+abba-byte-window	listed	cargo test --locked -p borsuk --example compare_native_replay byte_window_abba_ -- --test-threads=1
+bin-regressions	listed	cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1
+example-regressions	listed	cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1
+generation-regressions	listed	cargo test --locked -p borsuk --lib two_bit_generation:: -- --test-threads=1
+release-binaries	plain	cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --example compare_native_replay
+workspace-clippy	plain	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	plain	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::generation_shared_byte_window_preserves_scores_and_reaches_all_fetch_paths -- --exact --test-threads=1

@@ -1004,6 +1004,36 @@ impl TwoBitGeneration {
         self.modeled_memory_bytes
     }
 
+    /// Actual allocated shared controller state, separate from payload residency.
+    pub fn byte_window_state_bytes(&self) -> Option<usize> {
+        self.byte_window.as_ref().map(|window| window.state_bytes())
+    }
+
+    /// Allocate a generation-owned byte window only after admitting its control state.
+    /// Existing query and payload limits remain unchanged. Replacing a window admits
+    /// the temporary coexistence of both controllers before releasing the old one.
+    pub fn with_byte_window_limits(
+        self,
+        capacity: usize,
+        max_waiters: usize,
+        max_state_bytes: usize,
+    ) -> Result<Self> {
+        let bad = TwoBitGenerationError::Invalid;
+        if capacity == 0 {
+            return Err(bad("zero byte-window capacity"));
+        }
+        let remaining = self
+            .limits
+            .max_memory_bytes
+            .checked_sub(self.modeled_memory_bytes)
+            .ok_or(bad("byte-window remaining memory"))?;
+        let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
+        let window =
+            InFlightBytes::with_waiter_limit(capacity, max_waiters, max_state_bytes.min(remaining))
+                .map_err(bad)?;
+        self.with_shared_byte_window(window)
+    }
+
     /// Share FIFO download/authentication admission across queries and generations.
     /// Conservatively charge the shared control roster to every attached generation.
     /// Query payload residency and generation-local query slots remain separate bounds.
@@ -7739,10 +7769,61 @@ mod source_walk_tests {
                 .collect::<Vec<_>>()
         };
         let before = generation.modeled_memory_bytes();
-        let window = InFlightBytes::with_waiter_limit(64 * 1024 * 1024, 128, 16384).unwrap();
+        let requests = fixture.snapshot().requests;
+        let covered = |path: &str| path == key.to_string() || path.ends_with("/plane/records.bin");
+        let byte_capacity = requests
+            .iter()
+            .filter(|(path, head, _, _)| !*head && covered(path))
+            .filter_map(|(_, _, range, _)| range.map(|(first, end)| end - first))
+            .max()
+            .unwrap();
+        let phase_bytes = |source: bool| {
+            requests
+                .iter()
+                .filter(|(path, head, _, _)| {
+                    !*head
+                        && if source {
+                            path.ends_with("/plane/records.bin")
+                        } else {
+                            *path == key.to_string()
+                        }
+                })
+                .filter_map(|(_, _, range, _)| range.map(|(first, end)| end - first))
+                .sum::<usize>()
+        };
+        assert!(
+            phase_bytes(true) > byte_capacity || phase_bytes(false) > byte_capacity,
+            "fixture must exercise a feasible window smaller than a complete fetch phase"
+        );
+        let window = InFlightBytes::with_waiter_limit(byte_capacity, 128, 16384).unwrap();
         let charged = window.state_bytes() as u64;
-        let generation = generation.with_shared_byte_window(window).unwrap();
+        drop(window);
+        let mut constrained = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &prefix,
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        constrained.limits.max_memory_bytes = constrained.modeled_memory_bytes() + charged - 1;
+        fixture.arm(None);
+        assert!(matches!(
+            constrained.with_byte_window_limits(byte_capacity, 128, 16384),
+            Err(TwoBitGenerationError::Invalid("byte-window state budget"))
+        ));
+        assert!(fixture.snapshot().requests.is_empty());
+        let mut generation = generation;
+        generation.limits.max_memory_bytes = before + charged;
+        let mut generation = generation
+            .with_byte_window_limits(byte_capacity, 128, 16384)
+            .unwrap();
+        assert_eq!(generation.byte_window_state_bytes(), Some(charged as usize));
         assert_eq!(generation.modeled_memory_bytes(), before + charged);
+        // The boundary above concerns controller allocation; restore the fixture's
+        // original query envelope before testing its unchanged SOURCE/SQ8 oracles.
+        generation.limits.max_memory_bytes = limits.max_memory_bytes;
         let admitted = run_source_and_sq8_http(
             &fixture,
             generation.search_with_store(fixture.reader.store(), &query, 10, None),

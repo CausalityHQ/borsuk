@@ -2,7 +2,9 @@
 use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
-    sq8_s3_range::{NativeTransportStats, OneAttemptS3, Sq8RangeTrace, Sq8ReadStats},
+    sq8_s3_range::{
+        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeTrace, Sq8ReadStats,
+    },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
         TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
@@ -299,8 +301,17 @@ struct Config {
     max_memory_bytes: u64,
     #[serde(default = "default_fetch_parallelism")]
     fetch_parallelism: usize,
+    #[serde(default)]
+    shared_byte_window: Option<SharedByteWindow>,
     serving: Serving,
     execution: Execution,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SharedByteWindow {
+    max_bytes: usize,
+    max_waiters: usize,
+    max_state_bytes: usize,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -711,6 +722,18 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         matches!(c.fetch_parallelism, 16 | 32 | 64 | 128),
         "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
+    if let Some(window) = c.shared_byte_window {
+        require(
+            (1..=MEMORY_CAP as usize).contains(&window.max_bytes)
+                && c.fetch_parallelism
+                    .checked_mul(ACTIVE_QUERIES)
+                    .is_some_and(|requests| window.max_waiters >= requests)
+                && (1..=MEMORY_CAP as usize).contains(&window.max_state_bytes)
+                && InFlightBytes::modeled_state_bytes(window.max_waiters)
+                    .is_some_and(|bytes| bytes <= window.max_state_bytes),
+            "shared byte-window explicit capacity/waiters/state budget",
+        )?;
+    }
     require(
         c.schema == CONFIG_SCHEMA,
         "config format marker must be borsuk-cohere-native-baseline-config-v7; older formats refuse",
@@ -2057,19 +2080,29 @@ async fn query_and_seal_with(
     out.emit(&json!({"phase":"generation_open","transport":p.transport,
         "success":generation.is_ok(),"truth_opened":false}))?;
     let generation = generation?;
+    let generation = match c.shared_byte_window {
+        Some(window) => generation.with_byte_window_limits(
+            window.max_bytes,
+            window.max_waiters,
+            window.max_state_bytes,
+        )?,
+        None => generation,
+    };
     require(
         generation.rows() == c.rows
             && generation.discovery_mode() == DiscoveryMode::Semantic
             && generation.semantic_profile() == Some(c.profile),
         "generation geometry/profile",
     )?;
-    out.emit(
-        &json!({"phase":"startup","metadata":generation.remote_open_stats(),
+    let mut startup = json!({"phase":"startup","metadata":generation.remote_open_stats(),
         "serving":c.serving,
         "library_cap_bytes":MEMORY_CAP,"caller_pinned_bytes":admission.already_pinned_bytes,
         "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
-        "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false}),
-    )?;
+        "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
+    if let Some(bytes) = generation.byte_window_state_bytes() {
+        startup["shared_byte_window_state_bytes"] = json!(bytes);
+    }
+    out.emit(&startup)?;
     if let Some(direct) = c.serving.direct() {
         // Exact modeled memory must fit before any direct query: the existing model is kept
         // whole (no SOURCE credit) and a full direct query budget is added.
@@ -2574,6 +2607,9 @@ fn execute_paths_status(
         identity["execution"] = json!(configured.as_ref().ok().map(|c| &c.execution));
         identity["sq8_range_source_sha256"] = json!(hash(include_bytes!("../sq8_s3_range.rs")));
         identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
+        if let Some(window) = configured.as_ref().ok().and_then(|c| c.shared_byte_window) {
+            identity["shared_byte_window"] = json!(window);
+        }
         out.emit(&identity)?;
         let c = configured?;
         let shape = population(&c, shape);
@@ -2601,6 +2637,9 @@ fn execute_paths_status(
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
         bound["execution"] = json!(c.execution);
         bound["selected_count"] = json!(selected_len(&c));
+        if let Some(window) = c.shared_byte_window {
+            bound["shared_byte_window"] = json!(window);
+        }
         out.emit(&bound)?;
         let seal = query(&c, shape, &mut out, &mut p)?;
         let summary = reduce(&c, &mut out, &seal, &mut p)?;
@@ -3032,6 +3071,58 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn cold_shared_byte_window_config_is_explicit_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        value["fetch_parallelism"] = json!(64);
+        let historical: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&historical, shape).unwrap();
+        let window = json!({"max_bytes":16 * 1024 * 1024,
+            "max_waiters":64,"max_state_bytes":16384});
+        value["shared_byte_window"] = window.clone();
+        let candidate: Config = serde_json::from_value(value.clone())
+            .expect("missing explicit shared byte-window benchmark configuration");
+        validate_config(&candidate, shape).unwrap();
+        let original = limits(&historical).unwrap();
+        let admitted = limits(&candidate).unwrap();
+        assert_eq!(admitted.max_source_bytes, original.max_source_bytes);
+        assert_eq!(admitted.max_source_gets, original.max_source_gets);
+        assert_eq!(admitted.max_query_bytes, original.max_query_bytes);
+        assert_eq!(admitted.max_query_gets, original.max_query_gets);
+        assert_eq!(admitted.max_active_queries, original.max_active_queries);
+        let (path, sha) = write_config(dir.path(), &value);
+        let output = dir.path().join("byte-window-identity.jsonl");
+        assert!(
+            !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                Err("identity-only byte-window fixture".into())
+            })
+            .unwrap()
+        );
+        let output = records(&output);
+        assert_eq!(output[0]["shared_byte_window"], window);
+        assert_eq!(output[1]["shared_byte_window"], window);
+        for (field, changed) in [
+            ("max_bytes", json!(0)),
+            ("max_bytes", json!(MEMORY_CAP + 1)),
+            ("max_waiters", json!(0)),
+            ("max_waiters", json!(63)),
+            ("max_waiters", json!(usize::MAX)),
+            ("max_state_bytes", json!(0)),
+            ("max_state_bytes", json!(1)),
+            ("max_state_bytes", json!(MEMORY_CAP + 1)),
+        ] {
+            let mut bad = value.clone();
+            bad["shared_byte_window"][field] = changed;
+            let bad: Config = serde_json::from_value(bad).unwrap();
+            assert!(validate_config(&bad, shape).is_err(), "{field}");
+        }
+        let mut bad = value;
+        bad["shared_byte_window"]["unrecorded"] = json!(true);
+        assert!(serde_json::from_value::<Config>(bad).is_err());
+    }
+
     #[test]
     fn query_runtime_bounds_blocking_threads_and_drains() {
         use std::{
@@ -3814,6 +3905,66 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn actual_shared_byte_window_config_reaches_serving_and_preserves_parity() {
+        let shape = Shape::tiny(257);
+        let (dir, value) = fixture(shape).await;
+        let mut original = None;
+        for (name, capacity) in [
+            ("unset", None),
+            ("bounded", Some(16 * 1024 * 1024)),
+            ("tiny", Some(1)),
+        ] {
+            let mut value = value.clone();
+            if let Some(bytes) = capacity {
+                value["shared_byte_window"] = json!({"max_bytes":bytes,
+                    "max_waiters":64,"max_state_bytes":16384});
+            }
+            let config: Config = serde_json::from_value(value).unwrap();
+            let path = dir.path().join(format!("window-{name}.jsonl"));
+            let mut out = Output::create(&path).unwrap();
+            let mut progress = Progress::default();
+            let result = query_and_seal(&config, shape, &mut out, &mut progress).await;
+            let rows = records(&path);
+            let startup = rows.iter().find(|row| row["phase"] == "startup").unwrap();
+            if capacity.is_some() {
+                let bytes = startup["shared_byte_window_state_bytes"].as_u64().unwrap();
+                assert!(bytes > 0 && bytes <= 16384);
+            } else {
+                assert!(startup.get("shared_byte_window_state_bytes").is_none());
+            }
+            if capacity == Some(1) {
+                assert!(result.is_err());
+                assert!(!progress.sealed && !progress.truth_opened);
+                assert_eq!(progress.completed, 0);
+                assert!(!rows.iter().any(|row| row["phase"] == "query"));
+                continue;
+            }
+            let seal = result.unwrap();
+            let parity = rows
+                .iter()
+                .filter(|row| row["phase"] == "query")
+                .map(|row| {
+                    assert_eq!(row["returned"].as_array().unwrap().len(), K);
+                    assert!(row["trace"].is_object());
+                    assert!(row["charges"].is_object());
+                    assert!(row["plan"].is_object());
+                    json!({"returned":row["returned"],"trace":row["trace"],
+                        "charges":row["charges"],"plan":row["plan"]})
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(parity.len(), 2);
+            if let Some(original) = &original {
+                assert_eq!(&parity, original);
+            } else {
+                original = Some(parity);
+            }
+            let summary = reduce(&config, &mut out, &seal, &mut progress).unwrap();
+            assert_eq!(summary["status"], "MEASURED");
+            assert_eq!(summary["total_hits10"], 20);
+        }
+    }
+
     #[test]
     fn missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed() {
         let runtime = tokio::runtime::Builder::new_current_thread()
