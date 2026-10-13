@@ -2957,6 +2957,37 @@ mod tests {
     }
 
     #[test]
+    fn cold_fetch_parallelism128_preserves_caps_and_one_source_wave() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        value["fetch_parallelism"] = json!(128);
+        let config: Config = serde_json::from_value(value).unwrap();
+        validate_config(&config, shape).unwrap();
+        query_runtime(config.fetch_parallelism).unwrap();
+        let admission = limits(&config).unwrap();
+        assert_eq!(
+            admission.max_parallel_source_gets,
+            admission.max_source_gets
+        );
+        assert_eq!(admission.max_parallel_source_gets, 128);
+        assert_eq!(admission.max_query_gets, 32);
+        assert_eq!(admission.max_source_bytes, 64 * 1024 * 1024);
+        assert_eq!(admission.max_query_bytes, 16_773_120);
+        assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
+        assert_eq!(admission.max_active_queries, 1);
+        value = config_value(dir.path(), shape);
+        value["fetch_parallelism"] = json!(64);
+        let original: Config = serde_json::from_value(value).unwrap();
+        assert!(pinned_bytes(&config).unwrap() > pinned_bytes(&original).unwrap());
+        assert_eq!(
+            ordinary_range_state_pinned(&config) - ordinary_range_state_pinned(&original),
+            Sq8RangeTrace::pending_futures_bytes(128, 128)
+                - Sq8RangeTrace::pending_futures_bytes(128, 64)
+        );
+    }
+
+    #[test]
     fn cold_fetch_parallelism_selector_is_explicit_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
