@@ -1,0 +1,19 @@
+{
+  "status": "ENVIRONMENT_INVALID",
+  "attempt": "a0001",
+  "setup_command": "c5b5aa1b-86f9-4e02-8636-42efe6417e98",
+  "setup_exit": 125,
+  "transport_exit": 125,
+  "instance_id": "i-063cfd0e4e503ff17",
+  "terminated": true,
+  "volume_deleted": true,
+  "algorithm_executed": false,
+  "admission_executed": false,
+  "canary_executed": false,
+  "performance_results": false,
+  "demonstrated_adapter_defects": [
+    "transport target allowlist omits bin/check_cohere_native_baseline_batch",
+    "created scratch directories do not match frozen config scratch_parent paths"
+  ],
+  "exact_remote_refusal_trace_available": false
+}

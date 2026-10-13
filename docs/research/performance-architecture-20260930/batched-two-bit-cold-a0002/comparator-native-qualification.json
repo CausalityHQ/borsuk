@@ -1,0 +1,99 @@
+{
+  "schema": "borsuk-batch-scoring-comparator-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "c9be7f3971bc397cecd52e2cf6652c4647b95999",
+  "source_file_count": 437,
+  "support_file_count": 470,
+  "native_source_identity_sha256": "94d29019561f6d568d0397e7d13a2d8c125b24847fda166f093192e84d3909a4",
+  "native_source_identity_definition": "sha256 of exact native-source.json bytes",
+  "source_archive_sha256": "7f45a2ffbfeacb4237e5aa0d9f66e45d8b027e36b6d651845c07a9370c944ac3",
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "instance_id": "i-0740c3f508afca156",
+  "root_volume_id": "vol-02d88975a4b08b16c",
+  "volume_deleted": true,
+  "external_timer_inactive": true,
+  "stage_count": 6,
+  "stages": [
+    {
+      "name": "compile-example",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/compile-example-collected/terminal.json",
+        "bytes": 249,
+        "sha256": "ba71cf451d573561e0f39282ab67904b2deaab332cf07dcfcd3b1b5233dca8a2"
+      }
+    },
+    {
+      "name": "batch-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay tests::paired_batch_scoring_scale_requires_only_kernel_delta_at_width64 -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/batch-debug-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "a7fe0b65dbbdfde89ec909b8c74f8ce24f0bcfae6e497788983fbb6e7453d757"
+      }
+    },
+    {
+      "name": "example-regressions",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/example-regressions-collected/terminal.json",
+        "bytes": 253,
+        "sha256": "733fee89e54a98ba888b989c418f13049c9835dfb1c2c9636a6196710db0d2b2"
+      }
+    },
+    {
+      "name": "release-elf",
+      "exit": 0,
+      "command": "cargo build --release --locked -p borsuk --example compare_native_replay",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/release-elf-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "3c77820e8cc145016bb0e5c9e4aa01fea7f5b59678382f7032cdb3086e548ec4"
+      }
+    },
+    {
+      "name": "workspace-clippy",
+      "exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/workspace-clippy-collected/terminal.json",
+        "bytes": 250,
+        "sha256": "278336cb0be1b680b737cfe45edcad221f5ac5f53a4a0b5cecda835b4fa84bea"
+      }
+    },
+    {
+      "name": "workspace-test-build",
+      "exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/reducer-green-launch-a0001/workspace-test-build-collected/terminal.json",
+        "bytes": 254,
+        "sha256": "e3273d21f87802df5b57d6ecfc5387c19618e3a056a3ea7bcabca66f1749a04d"
+      }
+    }
+  ],
+  "release": {
+    "bytes": 9217264,
+    "sha256": "c8056b5d794d373ac284804b6ee12cefadc125003b356b3d5458b35a6b0d4af7"
+  },
+  "native_correctness_qualification_only": true,
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "product_ready": false
+}
