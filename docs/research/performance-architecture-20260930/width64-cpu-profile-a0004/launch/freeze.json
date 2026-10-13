@@ -1,0 +1,10 @@
+{
+  "status": "FROZEN_CPU_PROFILE",
+  "source": "f5a0c36b0bd00b550c53690402577a2012b5b2b4",
+  "machine_seconds": 2400,
+  "external_seconds": 2520,
+  "cost_ceiling_usd": 0.50,
+  "configuration_sha256": "b45ae94e059118ef5efe07ff96bc690890277c15877a5445d1f2ecff9963a396",
+  "native_rebuild": false,
+  "performance_claim": false
+}
