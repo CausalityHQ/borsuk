@@ -1,0 +1,8 @@
+compile-bin	cargo test --locked -p borsuk --bin check_cohere_native_baseline --no-run
+width64-debug	cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism64_preserves_caps_and_bounded_runtime -- --exact --test-threads=1
+selector-debug	cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::cold_fetch_parallelism_selector_is_explicit_and_bounded -- --exact --test-threads=1
+runtime-debug	cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::query_runtime_bounds_blocking_threads_and_drains -- --exact --test-threads=1
+baseline-debug	cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --bin check_cohere_native_baseline
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

@@ -1,0 +1,8 @@
+compile-bin	0
+width64-debug	0
+selector-debug	0
+runtime-debug	0
+baseline-debug	0
+release-elf	0
+workspace-clippy	0
+workspace-test-build	0

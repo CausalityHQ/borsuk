@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --bin check_cohere_native_baseline tests::query_runtime_bounds_blocking_threads_and_drains -- --exact --test-threads=1
