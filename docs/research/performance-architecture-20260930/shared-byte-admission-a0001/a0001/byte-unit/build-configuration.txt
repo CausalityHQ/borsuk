@@ -1,0 +1,4 @@
+features=manifest-default; no scalar-control
+target=rustc-host; CARGO_BUILD_TARGET unset
+RUSTFLAGS unset; CARGO_ENCODED_RUSTFLAGS unset
+CARGO_BUILD_JOBS=1; BORSUK_CPU_THREADS=1; RAYON_NUM_THREADS=1

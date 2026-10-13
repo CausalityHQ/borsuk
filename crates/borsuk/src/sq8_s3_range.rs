@@ -19,6 +19,308 @@ use object_store::{
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
+/// Shared FIFO admission for bytes being downloaded and authenticated.
+/// Completed payloads remain subject to the caller's separate resident-byte cap.
+pub struct InFlightBytes {
+    capacity: usize,
+    max_waiters: usize,
+    available: Mutex<usize>,
+    waiters: Mutex<std::collections::VecDeque<Arc<()>>>,
+    changed: tokio::sync::Notify,
+}
+
+impl InFlightBytes {
+    #[cfg(test)]
+    fn new(capacity: usize) -> Arc<Self> {
+        Self::with_waiter_limit(capacity, 1024, usize::MAX).unwrap()
+    }
+
+    /// Create a byte window with an explicit, bounded waiting-request roster.
+    pub fn with_waiter_limit(
+        capacity: usize,
+        max_waiters: usize,
+        max_state_bytes: usize,
+    ) -> Result<Arc<Self>, &'static str> {
+        if max_waiters == 0 {
+            return Err("zero byte-window waiter limit");
+        }
+        if Self::modeled_state_bytes(max_waiters).is_none_or(|bytes| bytes > max_state_bytes) {
+            return Err("byte-window state budget");
+        }
+        let mut waiters = std::collections::VecDeque::new();
+        waiters
+            .try_reserve_exact(max_waiters)
+            .map_err(|_| "byte-window waiter allocation")?;
+        if Self::modeled_state_bytes(waiters.capacity()).is_none_or(|bytes| bytes > max_state_bytes)
+        {
+            return Err("byte-window allocated state budget");
+        }
+        Ok(Arc::new(Self {
+            capacity,
+            max_waiters,
+            available: Mutex::new(capacity),
+            waiters: Mutex::new(waiters),
+            changed: tokio::sync::Notify::new(),
+        }))
+    }
+
+    /// Conservative shared state charge, including the queue and waiter token allocations.
+    /// Pending async frames and retained payloads are charged separately by the query.
+    pub fn modeled_state_bytes(max_waiters: usize) -> Option<usize> {
+        let per_waiter = std::mem::size_of::<Arc<()>>()
+            .checked_add(2 * std::mem::size_of::<usize>())?
+            .checked_add(ALLOCATION_ALLOWANCE_BYTES)?;
+        max_waiters
+            .checked_mul(per_waiter)?
+            .checked_add(std::mem::size_of::<Self>())?
+            .checked_add(2 * std::mem::size_of::<usize>())?
+            .checked_add(ALLOCATION_ALLOWANCE_BYTES)
+    }
+
+    /// Charged shared state for this window, using the allocated queue capacity.
+    pub fn state_bytes(&self) -> usize {
+        let capacity = self
+            .waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .capacity();
+        Self::modeled_state_bytes(capacity).expect("admitted byte-window state")
+    }
+
+    async fn reserve(self: &Arc<Self>, bytes: usize) -> Option<InFlightPermit> {
+        if bytes > self.capacity {
+            return None;
+        }
+        let token = Arc::new(());
+        {
+            let mut waiters = self
+                .waiters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if waiters.len() >= self.max_waiters {
+                return None;
+            }
+            waiters.push_back(token.clone());
+        }
+        let mut waiting = ByteWaiter {
+            budget: self.clone(),
+            token,
+            registered: true,
+        };
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut waiters = self
+                    .waiters
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut available = self
+                    .available
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if waiters
+                    .front()
+                    .is_some_and(|head| Arc::ptr_eq(head, &waiting.token))
+                    && bytes <= *available
+                {
+                    *available -= bytes;
+                    waiters.pop_front();
+                    waiting.registered = false;
+                    self.changed.notify_waiters();
+                    return Some(InFlightPermit {
+                        budget: self.clone(),
+                        bytes,
+                    });
+                }
+            }
+            changed.await;
+        }
+    }
+}
+
+struct ByteWaiter {
+    budget: Arc<InFlightBytes>,
+    token: Arc<()>,
+    registered: bool,
+}
+
+impl Drop for ByteWaiter {
+    fn drop(&mut self) {
+        if self.registered {
+            let mut waiters = self
+                .budget
+                .waiters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(position) = waiters
+                .iter()
+                .position(|token| Arc::ptr_eq(token, &self.token))
+            {
+                waiters.remove(position);
+            }
+            drop(waiters);
+            self.budget.changed.notify_waiters();
+        }
+    }
+}
+
+struct InFlightPermit {
+    budget: Arc<InFlightBytes>,
+    bytes: usize,
+}
+
+impl Drop for InFlightPermit {
+    fn drop(&mut self) {
+        if self.bytes == 0 {
+            return;
+        }
+        let mut available = self
+            .budget
+            .available
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *available = available
+            .checked_add(self.bytes)
+            .expect("byte permit conservation");
+        assert!(
+            *available <= self.budget.capacity,
+            "byte permit conservation"
+        );
+        drop(available);
+        self.budget.changed.notify_waiters();
+    }
+}
+
+#[cfg(test)]
+mod byte_admission_tests {
+    use super::*;
+
+    #[test]
+    fn byte_window_state_budget_is_checked_before_allocation() {
+        let bytes = InFlightBytes::modeled_state_bytes(3).unwrap();
+        assert!(InFlightBytes::with_waiter_limit(7, 3, bytes - 1).is_err());
+        assert!(InFlightBytes::with_waiter_limit(7, 3, bytes).is_ok());
+        assert!(InFlightBytes::with_waiter_limit(7, 0, usize::MAX).is_err());
+        assert!(InFlightBytes::modeled_state_bytes(usize::MAX).is_none());
+        assert!(InFlightBytes::with_waiter_limit(7, usize::MAX, usize::MAX).is_err());
+    }
+
+    #[tokio::test]
+    async fn byte_window_rejects_impossible_reservation_without_waiting() {
+        let budget = InFlightBytes::new(7);
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_millis(100), budget.reserve(8))
+                .await
+                .expect("an impossible weighted reservation must refuse without waiting");
+        assert!(outcome.is_none(), "missing pre-I/O byte-window admission");
+    }
+
+    #[tokio::test]
+    async fn byte_window_refills_and_cancelled_waiter_never_consumes_capacity() {
+        let budget = InFlightBytes::new(7);
+        let held = budget.reserve(6).await.unwrap();
+        let mut waiting = Box::pin(budget.reserve(2));
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        assert_eq!(*budget.available.lock().unwrap(), 1);
+        drop(held);
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(*budget.available.lock().unwrap(), 5);
+        let first = budget.reserve(5).await.unwrap();
+        let mut cancelled = Box::pin(budget.reserve(1));
+        assert!(futures_util::poll!(cancelled.as_mut()).is_pending());
+        drop(cancelled);
+        drop(first);
+        assert_eq!(*budget.available.lock().unwrap(), 5);
+        drop(second);
+        assert_eq!(*budget.available.lock().unwrap(), 7);
+        let all = budget.reserve(7).await.unwrap();
+        assert_eq!(*budget.available.lock().unwrap(), 0);
+        drop(all);
+        assert_eq!(*budget.available.lock().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn byte_window_does_not_bypass_an_older_large_waiter() {
+        let budget = InFlightBytes::new(7);
+        let held = budget.reserve(6).await.unwrap();
+        let mut older = Box::pin(budget.reserve(7));
+        assert!(futures_util::poll!(older.as_mut()).is_pending());
+        let mut younger = Box::pin(budget.reserve(1));
+        assert!(
+            futures_util::poll!(younger.as_mut()).is_pending(),
+            "a younger small reservation must not starve an older large reservation"
+        );
+        drop(held);
+        let large = tokio::time::timeout(std::time::Duration::from_secs(1), older)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(futures_util::poll!(younger.as_mut()).is_pending());
+        drop(large);
+        let small = tokio::time::timeout(std::time::Duration::from_secs(1), younger)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(small);
+        assert_eq!(*budget.available.lock().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn byte_window_cancelled_head_unblocks_successor_and_full_queue_refuses() {
+        let budget = InFlightBytes::new(7);
+        let held = budget.reserve(6).await.unwrap();
+        let mut head = Box::pin(budget.reserve(7));
+        assert!(futures_util::poll!(head.as_mut()).is_pending());
+        let mut successor = Box::pin(budget.reserve(1));
+        assert!(futures_util::poll!(successor.as_mut()).is_pending());
+        drop(head);
+        let small = tokio::time::timeout(std::time::Duration::from_secs(1), successor)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(*budget.available.lock().unwrap(), 0);
+        let mut waiting = Vec::new();
+        for _ in 0..1024 {
+            let mut request = Box::pin(budget.reserve(1));
+            assert!(futures_util::poll!(request.as_mut()).is_pending());
+            waiting.push(request);
+        }
+        assert_eq!(budget.waiters.lock().unwrap().len(), 1024);
+        assert!(budget.reserve(1).await.is_none());
+        drop(waiting);
+        assert!(budget.waiters.lock().unwrap().is_empty());
+        drop(small);
+        drop(held);
+        assert_eq!(*budget.available.lock().unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn byte_window_handles_zero_and_usize_max_without_rounding_or_overflow() {
+        let empty = InFlightBytes::new(0);
+        assert!(empty.reserve(1).await.is_none());
+        drop(empty.reserve(0).await.unwrap());
+        assert_eq!(*empty.available.lock().unwrap(), 0);
+        let budget = InFlightBytes::new(usize::MAX);
+        let held = budget.reserve(usize::MAX).await.unwrap();
+        let mut waiting = Box::pin(budget.reserve(1));
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        drop(waiting);
+        drop(held);
+        assert_eq!(*budget.available.lock().unwrap(), usize::MAX);
+        let almost_all = budget.reserve(usize::MAX - 1).await.unwrap();
+        let last = budget.reserve(1).await.unwrap();
+        assert_eq!(*budget.available.lock().unwrap(), 0);
+        drop(almost_all);
+        drop(last);
+        assert_eq!(*budget.available.lock().unwrap(), usize::MAX);
+    }
+}
+
 #[derive(Debug)]
 pub enum RangeFetchError {
     Store(object_store::Error),
@@ -496,7 +798,45 @@ pub(crate) async fn rank_verified_sq8_pages_traced(
     max_bytes: usize,
     max_parallel: usize,
     excluded_ids: &[i64],
+    trace: Option<&mut Sq8RangeTrace>,
+) -> Result<RankedSq8, RankedSq8Failure> {
+    rank_verified_sq8_pages_traced_with_byte_window(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        query,
+        low,
+        step,
+        top_k,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        excluded_ids,
+        trace,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn rank_verified_sq8_pages_traced_with_byte_window(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    excluded_ids: &[i64],
     mut trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
 ) -> Result<RankedSq8, RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
@@ -527,7 +867,7 @@ pub(crate) async fn rank_verified_sq8_pages_traced(
     {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidQuery)));
     }
-    let (verified, stats) = fetch_verified_ranges_traced(
+    let (verified, stats) = fetch_verified_ranges_traced_with_byte_window(
         store,
         location,
         authority,
@@ -537,6 +877,7 @@ pub(crate) async fn rank_verified_sq8_pages_traced(
         max_bytes,
         max_parallel,
         trace.as_deref_mut(),
+        budget,
     )
     .await?;
     if let Some(trace) = trace.as_deref_mut() {
@@ -589,6 +930,36 @@ pub(crate) async fn rank_verified_sq8_pages_traced(
 }
 
 /// Shared bounded range transport; all requests finish within this future.
+/// Fetch authenticated ranges with a byte window shared by concurrent callers.
+/// Reject any range larger than the window before issuing any request.
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_verified_ranges_with_byte_window(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    budget: &Arc<InFlightBytes>,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_verified_ranges_traced_with_byte_window(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        None,
+        Some(budget),
+    )
+    .await
+}
+
+/// Shared bounded range transport; all requests finish within this future.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_verified_ranges_inner(
     store: &dyn ObjectStore,
@@ -628,7 +999,35 @@ pub(crate) async fn fetch_verified_ranges_traced(
     max_gets: usize,
     max_bytes: usize,
     max_parallel: usize,
+    trace: Option<&mut Sq8RangeTrace>,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_verified_ranges_traced_with_byte_window(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        trace,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
     mut trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
 ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
@@ -657,6 +1056,9 @@ pub(crate) async fn fetch_verified_ranges_traced(
         let interval = authority
             .byte_range(first, last)
             .map_err(|error| fail(RangeFetchError::Page(error)))?;
+        if budget.is_some_and(|budget| interval.end - interval.start > budget.capacity) {
+            return Err(fail(RangeFetchError::UnexpectedMetadata));
+        }
         planned_bytes = planned_bytes
             .checked_add(interval.end - interval.start)
             .ok_or_else(|| fail(RangeFetchError::UnexpectedMetadata))?;
@@ -677,8 +1079,8 @@ pub(crate) async fn fetch_verified_ranges_traced(
     // the actual scheduler element, including its plan index.
     let mut outcomes = stream::iter(ranges.iter().copied().enumerate().map(
         |(index, (first, last))| {
-            fetch_verified_pages_indexed(
-                store, location, authority, first, last, etag, max_bytes, index, origin,
+            fetch_verified_pages_admitted_indexed(
+                store, location, authority, first, last, etag, max_bytes, index, origin, budget,
             )
         },
     ))
@@ -686,17 +1088,15 @@ pub(crate) async fn fetch_verified_ranges_traced(
     .collect::<Vec<_>>()
     .await;
     // Refill slots on completion; restore plan order for results, traces and errors.
-    outcomes.sort_unstable_by_key(|(index, _)| *index);
+    outcomes.sort_unstable_by_key(|(index, _, _)| *index);
     if let Some(trace) = trace.as_deref_mut() {
         trace.all_ranges_complete_ns = Some(trace.now_ns());
     }
-    let mut stats = Sq8ReadStats {
-        submitted_gets: ranges.len(),
-        ..Sq8ReadStats::default()
-    };
+    let mut stats = Sq8ReadStats::default();
     let mut verified = Vec::with_capacity(ranges.len());
     let mut first_error = None;
-    for (_, (outcome, probe)) in outcomes {
+    for (_, submitted, (outcome, probe)) in outcomes {
+        stats.submitted_gets += usize::from(submitted);
         if let (Some(trace), Some(probe)) = (trace.as_deref_mut(), probe) {
             trace.push(probe.span);
         }
@@ -706,7 +1106,7 @@ pub(crate) async fn fetch_verified_ranges_traced(
                 verified.push(value);
             }
             Err(error) => {
-                stats.failed_gets += 1;
+                stats.failed_gets += usize::from(submitted);
                 first_error.get_or_insert(error);
             }
         }
@@ -789,7 +1189,44 @@ async fn fetch_verified_pages_traced(
 /// A finished range: its result and, only when tracing, its diagnostic record.
 type RangeOutcome = (Result<VerifiedRange, RangeFetchError>, Option<Box<Probe>>);
 
-type IndexedRangeOutcome = (usize, RangeOutcome);
+type IndexedRangeOutcome = (usize, bool, RangeOutcome);
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_pages_admitted_indexed(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    first_page: usize,
+    last_page: usize,
+    etag: &str,
+    max_bytes: usize,
+    index: usize,
+    origin: Option<Instant>,
+    budget: Option<&Arc<InFlightBytes>>,
+) -> IndexedRangeOutcome {
+    let _permit = if let Some(budget) = budget {
+        let interval = match authority.byte_range(first_page, last_page) {
+            Ok(interval) => interval,
+            Err(error) => return (index, false, (Err(RangeFetchError::Page(error)), None)),
+        };
+        match budget.reserve(interval.end - interval.start).await {
+            Some(permit) => Some(permit),
+            None => {
+                return (
+                    index,
+                    false,
+                    (Err(RangeFetchError::UnexpectedMetadata), None),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    fetch_verified_pages_indexed(
+        store, location, authority, first_page, last_page, etag, max_bytes, index, origin,
+    )
+    .await
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn fetch_verified_pages_indexed(
@@ -814,7 +1251,7 @@ async fn fetch_verified_pages_indexed(
         origin.map(|origin| (origin, index)),
     )
     .await;
-    (index, outcome)
+    (index, true, outcome)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3356,8 +3793,18 @@ mod tests {
         // The exact element type the scheduler holds in production, the body it wraps with no
         // probe, and the plain entry point used outside batches. Unpolled futures report
         // their whole state, so this is the full per-range footprint.
-        let production = fetch_verified_pages_indexed(
-            &store, &location, &authority, 0, 0, "etag", 3328, 0, None,
+        let budget = InFlightBytes::new(3328);
+        let production = fetch_verified_pages_admitted_indexed(
+            &store,
+            &location,
+            &authority,
+            0,
+            0,
+            "etag",
+            3328,
+            0,
+            None,
+            Some(&budget),
         );
         let body =
             fetch_verified_pages_core(&store, &location, &authority, 0, 0, "etag", 3328, None);
@@ -3397,7 +3844,7 @@ mod tests {
         // and an outcome adds the probe pointer and plan index to the bare result.
         assert_eq!(size_of::<Option<Box<Probe>>>(), size_of::<usize>());
         assert_eq!(size_of::<Option<&mut Probe>>(), size_of::<usize>());
-        assert!(outcome <= result + 2 * size_of::<usize>());
+        assert!(outcome <= result + 3 * size_of::<usize>());
         // Retained trace bytes, cumulative drain peak and the on/off-path state are distinct figures.
         let (capacity, parallel) = (32, 16);
         let retained = Sq8RangeTrace::retained_bytes(capacity);
@@ -3950,6 +4397,207 @@ mod tests {
             (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
             (None, None, None)
         );
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn shared_byte_window_limits_actual_http_bodies() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(8 * 256);
+        let authority = sq8_authority(&object, 8 * 256);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let ranges = (0..8).map(|page| (page, page)).collect::<Vec<_>>();
+        let budget = InFlightBytes::new(2 * 3328);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        fixture.arm(None);
+        let work = fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            8,
+            object.len(),
+            8,
+            &budget,
+        );
+        let (result, peak) = tokio::join!(work, async {
+            fixture.wait(|state| state.active[1] >= 2).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let peak = fixture.snapshot().peak[1];
+            fixture.release(1);
+            peak
+        });
+        let (returned, stats) = result.unwrap();
+        assert_eq!(stats.submitted_gets, 8);
+        assert_eq!(stats.verified_bytes, object.len());
+        for (page, payload) in returned.iter().enumerate() {
+            assert_eq!(&payload.bytes[..], &object[page * 3328..(page + 1) * 3328]);
+        }
+        assert_eq!(fixture.snapshot().finished[1].len(), 8);
+        assert_eq!(fixture.snapshot().active[1], 0);
+        fixture.finish();
+        assert!(
+            peak <= 2,
+            "missing shared byte-window admission in actual HTTP transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_byte_window_spans_queries_and_refuses_late_oversize_before_io() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(8 * 256);
+        let authority = sq8_authority(&object, 8 * 256);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let ranges = (0..8).map(|page| (page, page)).collect::<Vec<_>>();
+        let budget = InFlightBytes::new(2 * 3328);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        fixture.arm(None);
+        let narrow = InFlightBytes::new(3328);
+        let refusal = fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 0), (1, 2)],
+            ETAG,
+            8,
+            object.len(),
+            8,
+            &narrow,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(refusal.error, RangeFetchError::UnexpectedMetadata));
+        assert_eq!(refusal.stats.submitted_gets, 0);
+        assert!(fixture.snapshot().requests.is_empty());
+        let full = InFlightBytes::with_waiter_limit(3328, 1, 4096).unwrap();
+        let held = full.reserve(3328).await.unwrap();
+        let mut waiter = Box::pin(full.reserve(1));
+        assert!(futures_util::poll!(waiter.as_mut()).is_pending());
+        let rejected = fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            8,
+            object.len(),
+            8,
+            &full,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(
+            rejected.error,
+            RangeFetchError::UnexpectedMetadata
+        ));
+        assert_eq!(rejected.stats.submitted_gets, 0);
+        assert_eq!(rejected.stats.failed_gets, 0);
+        assert!(fixture.snapshot().requests.is_empty());
+        drop(waiter);
+        drop(held);
+        assert_eq!(*full.available.lock().unwrap(), 3328);
+        let first = fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            8,
+            object.len(),
+            8,
+            &budget,
+        );
+        let second = fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            8,
+            object.len(),
+            8,
+            &budget,
+        );
+        let (first, second, peak) = tokio::join!(first, second, async {
+            fixture.wait(|state| state.active[1] == 2).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let peak = fixture.snapshot().peak[1];
+            fixture.release(1);
+            peak
+        });
+        for result in [first, second] {
+            let (returned, stats) = result.unwrap();
+            assert_eq!(stats.submitted_gets, 8);
+            assert_eq!(stats.verified_bytes, object.len());
+            for (page, payload) in returned.iter().enumerate() {
+                assert_eq!(&payload.bytes[..], &object[page * 3328..(page + 1) * 3328]);
+            }
+        }
+        assert!(peak <= 2);
+        assert_eq!(fixture.snapshot().finished[1].len(), 16);
+        assert_eq!(fixture.snapshot().active[1], 0);
+        assert_eq!(*budget.available.lock().unwrap(), 2 * 3328);
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn shared_byte_window_preserves_ordered_error_and_queued_drain() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(4 * 256);
+        let authority = sq8_authority(&object, 4 * 256);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let ranges = (0..4).map(|page| (page, page)).collect::<Vec<_>>();
+        let budget = InFlightBytes::new(2 * 3328);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        fixture.arm(Some((1, [0, 3328, 6656])));
+        let mut work = Box::pin(fetch_verified_ranges_with_byte_window(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            4,
+            object.len(),
+            4,
+            &budget,
+        ));
+        tokio::select! {
+            _ = &mut work => panic!("returned before ordered stream error"),
+            () = fixture.wait(|state| state.finished[1].contains(&3328)) => {}
+        }
+        assert!(!fixture.snapshot().finished[1].contains(&0));
+        fixture.release_error();
+        tokio::select! {
+            _ = &mut work => panic!("returned before held sibling drained"),
+            () = fixture.wait(|state| state.finished[1].contains(&0)) => {}
+        }
+        fixture.release_sibling();
+        let error = work.await.err().unwrap();
+        assert!(matches!(error.error, RangeFetchError::Store(_)));
+        assert_eq!(error.stats.submitted_gets, 4);
+        assert_eq!(error.stats.failed_gets, 2);
+        assert_eq!(error.stats.verified_bytes, object.len() - 2 * 3328);
+        let state = fixture.snapshot();
+        assert_eq!(state.active[1], 0);
+        assert_eq!(state.finished[1].len(), 4);
+        assert!(state.peak[1] <= 2);
+        assert!(state.errors.is_empty());
+        assert_eq!(*budget.available.lock().unwrap(), 2 * 3328);
         fixture.finish();
     }
 

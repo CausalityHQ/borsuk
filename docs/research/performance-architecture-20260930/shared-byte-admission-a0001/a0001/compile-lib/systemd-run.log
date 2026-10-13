@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-compile-lib.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 4min 29.965s
+CPU time consumed: 4min 937ms
+Memory peak: 6.8M
+Memory swap peak: 0B

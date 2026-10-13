@@ -13,8 +13,9 @@ use crate::{
     rotated_two_bit::PreparedTwoBit,
     sq8_page_authority::{PageAuthority, PageError},
     sq8_s3_range::{
-        OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats, VerifiedRange,
-        fetch_verified_ranges_inner, rank_verified_sq8_pages_traced,
+        InFlightBytes, OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats,
+        VerifiedRange, fetch_verified_ranges_traced_with_byte_window,
+        rank_verified_sq8_pages_traced_with_byte_window,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -600,6 +601,7 @@ pub struct TwoBitGeneration {
     remote_open_stats: Option<RemoteOpenStats>,
     source: Option<RemoteSource>,
     source_cache: Option<std::sync::Mutex<SourceCache>>,
+    byte_window: Option<std::sync::Arc<InFlightBytes>>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -1000,6 +1002,32 @@ impl TwoBitGeneration {
     }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
+    }
+
+    /// Share FIFO download/authentication admission across queries and generations.
+    /// Conservatively charge the shared control roster to every attached generation.
+    /// Query payload residency and generation-local query slots remain separate bounds.
+    pub fn with_shared_byte_window(
+        mut self,
+        window: std::sync::Arc<InFlightBytes>,
+    ) -> Result<Self> {
+        let old = self
+            .byte_window
+            .as_ref()
+            .map_or(0, |window| window.state_bytes() as u64);
+        let charge = u64::try_from(window.state_bytes())
+            .map_err(|_| TwoBitGenerationError::Invalid("byte-window state width"))?;
+        let modeled = self
+            .modeled_memory_bytes
+            .checked_sub(old)
+            .and_then(|bytes| bytes.checked_add(charge))
+            .filter(|&bytes| bytes <= self.limits.max_memory_bytes)
+            .ok_or(TwoBitGenerationError::Invalid(
+                "byte-window generation memory",
+            ))?;
+        self.modeled_memory_bytes = modeled;
+        self.byte_window = Some(window);
+        Ok(self)
     }
 
     /// Opt in to a generation-local cache of authenticated 256-row source blocks.
@@ -1627,6 +1655,7 @@ impl TwoBitGeneration {
             remote_open_stats: None,
             source,
             source_cache: None,
+            byte_window: None,
         })
     }
     /// Authenticated concrete discovery mode.
@@ -1719,7 +1748,7 @@ impl TwoBitGeneration {
             .as_ref()
             .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
         let Some(cache) = &self.source_cache else {
-            return fetch_verified_ranges_inner(
+            return fetch_verified_ranges_traced_with_byte_window(
                 store,
                 &source.location,
                 &source.authority,
@@ -1728,6 +1757,8 @@ impl TwoBitGeneration {
                 self.limits.max_source_gets,
                 self.limits.max_source_bytes,
                 self.limits.max_parallel_source_gets,
+                None,
+                self.byte_window.as_ref(),
             )
             .await
             .map_err(TwoBitGenerationError::SourceRead);
@@ -1756,7 +1787,7 @@ impl TwoBitGeneration {
         if !misses.is_empty() {
             // The shared fetcher preserves ordered errors and drains every
             // admitted original miss. A failed batch inserts nothing.
-            let (fetched, charged) = fetch_verified_ranges_inner(
+            let (fetched, charged) = fetch_verified_ranges_traced_with_byte_window(
                 store,
                 &source.location,
                 &source.authority,
@@ -1765,6 +1796,8 @@ impl TwoBitGeneration {
                 self.limits.max_source_gets,
                 self.limits.max_source_bytes,
                 self.limits.max_parallel_source_gets,
+                None,
+                self.byte_window.as_ref(),
             )
             .await
             .map_err(TwoBitGenerationError::SourceRead)?;
@@ -2406,7 +2439,7 @@ impl TwoBitGeneration {
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
         stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
-        let ranked = rank_verified_sq8_pages_traced(
+        let ranked = rank_verified_sq8_pages_traced_with_byte_window(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2421,6 +2454,7 @@ impl TwoBitGeneration {
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
             range_trace,
+            self.byte_window.as_ref(),
         )
         .await;
         stages.sq8.end_ns = started.elapsed().as_nanos();
@@ -2621,7 +2655,7 @@ impl TwoBitGeneration {
             .iter()
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
-        let ranked = rank_verified_sq8_pages_traced(
+        let ranked = rank_verified_sq8_pages_traced_with_byte_window(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2636,6 +2670,7 @@ impl TwoBitGeneration {
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
             range_trace,
+            self.byte_window.as_ref(),
         )
         .await
         .map_err(|sq8| TwoBitGenerationError::charged_read(Sq8ReadStats::default(), sq8))?;
@@ -7663,6 +7698,100 @@ mod source_walk_tests {
             fixture.release(1);
         });
         value
+    }
+
+    #[tokio::test]
+    async fn generation_shared_byte_window_preserves_scores_and_reaches_all_fetch_paths() {
+        let ClassFixture {
+            temp,
+            root_sha,
+            key,
+            prefix,
+            objects,
+            limits,
+            rows,
+            dimensions,
+            ..
+        } = class_fixture(32);
+        let fixture = DirectHttp::new(objects, Instant::now() + Duration::from_secs(90));
+        let generation = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &prefix,
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let query = class_query(dimensions);
+        let original = run_source_and_sq8_http(
+            &fixture,
+            generation.search_with_store(fixture.reader.store(), &query, 10, None),
+        )
+        .await
+        .unwrap();
+        let bits = |result: &TwoBitSearchResult| {
+            result
+                .ranked
+                .candidates
+                .iter()
+                .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        let before = generation.modeled_memory_bytes();
+        let window = InFlightBytes::with_waiter_limit(64 * 1024 * 1024, 128, 16384).unwrap();
+        let charged = window.state_bytes() as u64;
+        let generation = generation.with_shared_byte_window(window).unwrap();
+        assert_eq!(generation.modeled_memory_bytes(), before + charged);
+        let admitted = run_source_and_sq8_http(
+            &fixture,
+            generation.search_with_store(fixture.reader.store(), &query, 10, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bits(&original), bits(&admitted));
+        assert_eq!(original.source_stats, admitted.source_stats);
+        assert_eq!(original.ranked.stats, admitted.ranked.stats);
+        let tiny = InFlightBytes::with_waiter_limit(1, 128, 16384).unwrap();
+        let generation = generation.with_shared_byte_window(tiny).unwrap();
+        for direct in [false, true] {
+            fixture.arm(None);
+            let result = if direct {
+                generation
+                    .direct_closure_search_with_store(
+                        fixture.reader.store(),
+                        &query,
+                        10,
+                        None,
+                        DirectClosureLimits {
+                            max_sq8_bytes: rows * (dimensions + 12),
+                            max_sq8_gets: 32,
+                        },
+                    )
+                    .await
+            } else {
+                generation
+                    .search_with_store(fixture.reader.store(), &query, 10, None)
+                    .await
+            };
+            assert!(result.is_err());
+            // Routing metadata may be read; SOURCE and SQ8 must not start.
+            assert!(fixture.snapshot().requests.iter().all(|(path, _, _, _)| {
+                *path != key.to_string() && !path.ends_with("/plane/records.bin")
+            }));
+        }
+        let generation = generation.with_source_cache(1024 * 1024).unwrap();
+        fixture.arm(None);
+        assert!(
+            generation
+                .search_with_store(fixture.reader.store(), &query, 10, None)
+                .await
+                .is_err()
+        );
+        assert!(fixture.snapshot().requests.iter().all(|(path, _, _, _)| {
+            *path != key.to_string() && !path.ends_with("/plane/records.bin")
+        }));
+        fixture.finish();
     }
 
     #[tokio::test]

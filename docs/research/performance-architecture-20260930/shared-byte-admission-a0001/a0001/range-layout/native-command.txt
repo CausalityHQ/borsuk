@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --lib sq8_s3_range::tests::range_future_and_outcome_layout_stay_within_the_modeled_allowance -- --exact --test-threads=1 --nocapture
