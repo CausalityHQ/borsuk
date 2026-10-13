@@ -1,0 +1,22 @@
+{
+    "CommandId": "48d90366-e220-4cda-a9d7-b5a4dab14d3e",
+    "InstanceId": "i-0b1abf1291eaab188",
+    "Comment": "borsuk-width64-cpu-profile-a0002-setup",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-13T03:57:01.990Z",
+    "ExecutionElapsedTime": "PT29.29S",
+    "ExecutionEndDateTime": "2026-10-13T03:57:30.990Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "(Reading database ... \r(Reading database ... 5%\r(Reading database ... 10%\r(Reading database ... 15%\r(Reading database ... 20%\r(Reading database ... 25%\r(Reading database ... 30%\r(Reading database ... 35%\r(Reading database ... 40%\r(Reading database ... 45%\r(Reading database ... 50%\r(Reading database ... 55%\r(Reading database ... 60%\r(Reading database ... 65%\r(Reading database ... 70%\r(Reading database ... 75%\r(Reading database ... 80%\r(Reading database ... 85%\r(Reading database ... 90%\r(Reading database ... 95%\r(Reading database ... 100%\r(Reading database ... 79226 files and directories currently installed.)\r\nPreparing to unpack .../0-curl_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking curl (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nPreparing to unpack .../1-libcurl4t64_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nPreparing to unpack .../2-libcurl3t64-gnutls_8.5.0-2ubuntu10.15_amd64.deb ...\r\nUnpacking libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) over (8.5.0-2ubuntu10.13) ...\r\nPreparing to unpack .../3-linux-tools-common_6.8.0-147.147_all.deb ...\r\nUnpacking linux-tools-common (6.8.0-147.147) over (6.8.0-142.142) ...\r\nSelecting previously unselected package linux-tools-6.8.0-147.\r\nPreparing to unpack .../4-linux-tools-6.8.0-147_6.8.0-147.147_amd64.deb ...\r\nUnpacking linux-tools-6.8.0-147 (6.8.0-147.147) ...\r\nSelecting previously unselected package unzip.\r\nPreparing to unpack .../5-unzip_6.0-28ubuntu4.1_amd64.deb ...\r\nUnpacking unzip (6.0-28ubuntu4.1) ...\r\nSetting up libcurl4t64:amd64 (8.5.0-2ubuntu10.15) ...\r\nSetting up unzip (6.0-28ubuntu4.1) ...\r\nSetting up libcurl3t64-gnutls:amd64 (8.5.0-2ubuntu10.15) ...\r\nSetting up curl (8.5.0-2ubuntu10.15) ...\r\nSetting up linux-tools-common (6.8.0-147.147) ...\r\nSetting up linux-tools-6.8.0-147 (6.8.0-147.147) ...\r\nProcessing triggers for man-db (2.12.0-4build2) ...\r\nProcessing triggers for libc-bin (2.39-0ubuntu8.9) ...\r\nawscliv2.zip: OK\nYou can now run: /usr/local/bin/aws --version\ntransport.tsv: OK\nbootstrap-transport.sh: OK\n/mnt/borsuk-source-width64/transport.tsv: OK\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "\nRunning kernel seems to be up-to-date.\n\nRestarting services...\n systemctl restart packagekit.service\n\nNo containers need to be restarted.\n\nNo user sessions are running outdated binaries.\n\nNo VM guests are running outdated hypervisor (qemu) binaries on this host.\nRunning as unit: borsuk-source-width64-transport.service\nFinished with result: success\nMain processes terminated with: code=exited/status=0\nService runtime: 9.646s\nCPU time consumed: 8.581s\nMemory peak: 4.7M\nMemory swap peak: 0B\nRunning as unit: borsuk-source-width64-perf-admission.service; invocation ID: 70b3078b29e143cdb9bbdefd7d63c9a4\nFinished with result: exit-code\nMain processes terminated with: code=exited/status=1\nService runtime: 2.297s\nCPU time consumed: 1.192s\nMemory peak: 3.7M\nMemory swap peak: 0B\nfailed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}
