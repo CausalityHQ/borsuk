@@ -3618,7 +3618,7 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
     )?;
     read_config::<CompletedConfig>(config_path, config_sha)?;
     Ok(
-        json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"MEASURED","complete":true,
+        json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"COUNTERFACTUAL_COST_ONLY","complete":true,
         "config_path":config_path,"config_bytes":config_bytes,"config_sha256":config_sha,
         "input":{"path":c.input.path,"bytes":c.input.bytes,"sha256":c.input.sha256},
         "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"count":COUNT,
@@ -4886,6 +4886,11 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
+    if schema == SOURCE_COVER_CURVE_SCHEMA {
+        return Ok(report["schema"] == SOURCE_COVER_CURVE_SCHEMA
+            && report["status"] == "COUNTERFACTUAL_COST_ONLY"
+            && report["complete"] == true);
+    }
     Ok(report["status"] == "MEASURED"
         || (schema == SCALE_PARITY_REPORT_SCHEMA
             && report["schema"] == SCALE_PARITY_REPORT_SCHEMA
@@ -8738,6 +8743,20 @@ mod tests {
         assert!(
             source_cover_costs(&serde_json::to_vec(&raw).unwrap(), &query, &inputs, &[0]).is_err()
         );
+    }
+
+    #[test]
+    fn source_cover_curve_publication_rejects_measurement_status_and_incomplete_report() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, (report, accepted)) in [
+            (json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"COUNTERFACTUAL_COST_ONLY","complete":true}), true),
+            (json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"MEASURED","complete":true}), false),
+            (json!({"schema":SOURCE_COVER_CURVE_SCHEMA,"status":"COUNTERFACTUAL_COST_ONLY","complete":false}), false),
+            (json!({"schema":"unrelated","status":"COUNTERFACTUAL_COST_ONLY","complete":true}), false),
+        ].into_iter().enumerate() {
+            assert_eq!(execute_report(&dir.path().join(format!("curve-{index}.json")),
+                SOURCE_COVER_CURVE_SCHEMA, || Ok(report)).unwrap(), accepted);
+        }
     }
 
     #[test]
