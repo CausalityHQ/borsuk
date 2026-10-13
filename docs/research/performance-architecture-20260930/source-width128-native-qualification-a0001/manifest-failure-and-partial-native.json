@@ -1,0 +1,27 @@
+{
+  "status": "NATIVE_PARTIAL_QUALIFIED_HARNESS_ROSTER_INVALID",
+  "source": "32bce58e1d981b26d9fa3bb5b2052dad7d6dc7bb",
+  "instance_id": "i-011f3d091b10cce0d",
+  "command_id": "c109f670-89f7-42cf-9ee0-0dcec105bd11",
+  "compile_exit": 0,
+  "range_tests": {
+    "selected": 22,
+    "passed": 22,
+    "failed": 0
+  },
+  "source_tests": {
+    "selected": 32,
+    "passed": 32,
+    "failed": 0
+  },
+  "stale_roster_entry": "removed batched_source_nomination_matches_scalar_plan_trace_and_first_error",
+  "qualified_stage_count": 3,
+  "remaining_stages_unrun": 5,
+  "full_source_before_after_root_match": true,
+  "swap_oom": 0,
+  "terminated": true,
+  "volume_deleted": true,
+  "timer_inactive": true,
+  "algorithm_rejected": false,
+  "performance_claim": false
+}

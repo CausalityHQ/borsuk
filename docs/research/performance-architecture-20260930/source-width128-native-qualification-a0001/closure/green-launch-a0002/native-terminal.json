@@ -1,0 +1,22 @@
+{
+    "CommandId": "c109f670-89f7-42cf-9ee0-0dcec105bd11",
+    "InstanceId": "i-011f3d091b10cce0d",
+    "Comment": "SOURCE width128 a0002 fixture-repaired eight native gates",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 42,
+    "ExecutionStartDateTime": "2026-10-13T10:14:20.751Z",
+    "ExecutionElapsedTime": "PT7M32.951S",
+    "ExecutionEndDateTime": "2026-10-13T10:21:52.751Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/compile-affected.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/range-regressions.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/source-regressions.sh: OK\n{\n  \"schema\": \"borsuk-fetch-scheduler-native-batch-v1\",\n  \"source_commit\": \"32bce58e1d981b26d9fa3bb5b2052dad7d6dc7bb\",\n  \"batch_exit\": 42,\n  \"completed_stages\": 2,\n  \"required_stages\": 8,\n  \"gate_groups\": 8,\n  \"failed_stage\": \"source-regressions\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 42",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

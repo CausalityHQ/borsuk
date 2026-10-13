@@ -1,0 +1,8 @@
+compile-affected	cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay --no-run
+range-regressions	cargo test --locked -p borsuk --lib sq8_s3_range::tests:: -- --test-threads=1
+source-regressions	cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1
+baseline-regressions	cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1
+example-regressions	cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --example compare_native_replay
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
