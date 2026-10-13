@@ -1,0 +1,1 @@
+/mnt/borsuk-paired-qualification/source/target/release/examples/compare_native_replay --source-cover-scale /mnt/borsuk-paired-qualification/curve-real.config.json 5cd2e59a3f480fc21ebd40c422dfe4be66482af02eeb3c0d0ae175a83d6cb400 /mnt/borsuk-paired-qualification/evidence/curve-real/curve.json

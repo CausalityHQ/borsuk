@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-workspace-clippy.service
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 4min 18.541s
+CPU time consumed: 3min 50.777s
+Memory peak: 7.3M
+Memory swap peak: 0B

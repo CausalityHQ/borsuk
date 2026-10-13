@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-fetch-scheduler-native-batch-v1",
+  "source_commit": "13eb0bdc84c55db3f3e9433f56a1ee7d6bed7d8c",
+  "batch_exit": 0,
+  "completed_stages": 9,
+  "required_stages": 9,
+  "gate_groups": 9,
+  "failed_stage": "",
+  "native_qualified": false,
+  "performance_claim": false
+}
