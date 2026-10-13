@@ -3535,7 +3535,7 @@ fn source_cover_costs(
     q: &Query,
     inputs: &Inputs,
     caps: &[usize],
-) -> Result<Vec<Option<(u64, u64)>>> {
+) -> Result<Vec<(u64, u64, bool)>> {
     // Validate recorded nomination, completion, original SOURCE charges and SQ8
     // plan before deriving any counterfactual. Never substitute selected SQ8
     // pages for the full discovered SOURCE closure.
@@ -3546,21 +3546,22 @@ fn source_cover_costs(
         .map(|unit| unit / 8)
         .collect::<BTreeSet<_>>();
     let width = source_record_bytes(inputs.dimensions)?;
+    // Numeric geometry only: no allocation or GET. Keep costs outside the
+    // historical envelope so a larger prospective budget can be assessed.
+    let geometry_bytes = inputs
+        .rows
+        .checked_mul(width)
+        .ok_or("source geometry overflow")?;
     caps.iter()
         .map(|&cap| {
-            match borsuk::two_bit_generation::plan_two_bit_source_cover(
+            let (ranges, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
                 &pages,
                 inputs.rows,
                 width,
                 cap,
-                64 * 1024 * 1024,
-            ) {
-                Ok((ranges, bytes)) => Ok(Some((ranges.len() as u64, bytes as u64))),
-                Err(borsuk::two_bit_generation::TwoBitGenerationError::Budget(
-                    borsuk::budgeted_page_rank::BudgetedPageError::InsufficientBudget,
-                )) => Ok(None),
-                Err(error) => Err(error.into()),
-            }
+                geometry_bytes,
+            )?;
+            Ok((ranges.len() as u64, bytes as u64, bytes <= 64 * 1024 * 1024))
         })
         .collect()
 }
@@ -3574,7 +3575,7 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
             && c.expected_bound_inputs["source_cache"] == "off",
         "source cover curve requires full cache-off scale input",
     )?;
-    let mut costs: [Vec<(u64, u64)>; 5] = std::array::from_fn(|_| Vec::with_capacity(COUNT));
+    let mut costs: [Vec<(u64, u64, bool)>; 5] = std::array::from_fn(|_| Vec::with_capacity(COUNT));
     let run = read_run_observed(
         &c.input.path,
         &c.input.sha256,
@@ -3586,9 +3587,7 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
                 inputs,
                 &SOURCE_COVER_CURVE_CAPS,
             )?) {
-                if let Some(cost) = cost {
-                    values.push(cost);
-                }
+                values.push(cost);
             }
             Ok(())
         },
@@ -3601,13 +3600,16 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
         .iter()
         .zip(&costs)
         .map(|(&cap, values)| {
-            let gets = values.iter().map(|&(gets, _)| gets).sum::<u64>();
-            let bytes = values.iter().map(|&(_, bytes)| bytes).sum::<u64>();
-            json!({"get_cap":cap,"feasible_queries":values.len(),
-                "byte_cap_refusals":COUNT-values.len(),
-                "all_queries_feasible":values.len()==COUNT,
-                "totals_population":"feasible queries only; never extrapolated",
-                "total_gets":gets,"total_bytes":bytes})
+            let gets = values.iter().map(|&(gets, _, _)| gets).sum::<u64>();
+            let bytes = values.iter().map(|&(_, bytes, _)| bytes).sum::<u64>();
+            let inside = values.iter().filter(|&&(_, _, inside)| inside).count();
+            json!({"get_cap":cap,"predicted_queries":values.len(),
+                "inside_historical_byte_cap_queries":inside,
+                "outside_historical_byte_cap_queries":COUNT-inside,
+                "all_queries_inside_historical_byte_cap":inside==COUNT,
+                "totals_population":"all authenticated queries, including outside historical envelope",
+                "predicted_total_gets":gets,"predicted_total_bytes":bytes,
+                "predicted_max_query_bytes":values.iter().map(|&(_,bytes,_)|bytes).max()})
         })
         .collect::<Vec<_>>();
     require(
@@ -8693,7 +8695,7 @@ mod tests {
         // two runs adds the unselected gap page; it changes no scored units.
         assert_eq!(
             costs,
-            [Some((2, 3 * page_bytes)), Some((1, 4 * page_bytes))]
+            [(2, 3 * page_bytes, true), (1, 4 * page_bytes, true)]
         );
         let mut corrupt = raw;
         corrupt["charges"]["source"]["verified_bytes"] = json!(3 * page_bytes - 1);
@@ -8712,7 +8714,7 @@ mod tests {
     }
 
     #[test]
-    fn source_cover_curve_keeps_byte_cap_refusal_separate_from_measured_cost() {
+    fn source_cover_curve_retains_costs_outside_historical_byte_cap() {
         let (mut inputs, mut raw) = sealed_loss_fixture();
         inputs.rows = 1_000_000;
         raw["trace"]["ranked_candidate_pages"] = json!([0, 2, 3900]);
@@ -8728,8 +8730,11 @@ mod tests {
             &[128, 1],
         )
         .unwrap();
-        assert_eq!(costs[0].unwrap().0, 3);
-        assert_eq!(costs[1], None);
+        assert_eq!(costs[0].0, 3);
+        assert!(costs[0].2);
+        assert_eq!(costs[1].0, 1);
+        assert!(costs[1].1 > 64 * 1024 * 1024);
+        assert!(!costs[1].2);
         assert!(
             source_cover_costs(&serde_json::to_vec(&raw).unwrap(), &query, &inputs, &[0]).is_err()
         );
