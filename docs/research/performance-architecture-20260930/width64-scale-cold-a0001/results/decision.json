@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-width64-cold-decision-v1",
+  "decision": "SELECT_WIDTH64",
+  "recall_at10": 0.978,
+  "recall_loss": 0,
+  "exact_semantic_trace_plan_logical_charge_parity": true,
+  "pairs": [
+    {
+      "p95_gain_percent": 12.442240232287304,
+      "p90_ratio": 0.8571236553307006,
+      "qps_ratio": 1.2186600084205397,
+      "p99_ratio": 1.0483771615888007,
+      "source_time_gain_percent": 29.359003676471186,
+      "pass": true
+    },
+    {
+      "p95_gain_percent": 11.14447730010395,
+      "p90_ratio": 0.8729926601115494,
+      "qps_ratio": 1.2035304268784437,
+      "p99_ratio": 1.1654974491603913,
+      "source_time_gain_percent": 30.347310665956208,
+      "pass": true
+    }
+  ],
+  "p99_tradeoff_reported": true,
+  "provider_cache_controlled": false,
+  "matched_vendor_win": false,
+  "production_ready": false,
+  "frozen_commit": "63874940a5cc6d7c637bd3e9ccc057eff45c266a"
+}
