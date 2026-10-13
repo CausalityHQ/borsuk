@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-native-cpu-profile-independent-verification-v1",
+  "status": "CLOSED_NATIVE_CPU_PROFILE_VERIFIED",
+  "instance_id": "i-0c4a2961e9a7537bd",
+  "command_id": "4b5d885a-ea8f-47ae-98d4-07ad13673b3d",
+  "frozen_commit": "eadadae549423531c91c3e58191f6d0b28145028",
+  "archive_sha256": "58cc0755ac3e966a0f5212de1720a16322b5678eb2446280688b640697f6d538",
+  "native_stages": 6,
+  "all_native_and_manager_exits_zero": true,
+  "resource_and_input_checks": true,
+  "terminated": true,
+  "root_volume_absent": true,
+  "external_timer_inactive": true,
+  "lost_samples": 0,
+  "query_count": 128,
+  "population_or_latency_win_claim": false,
+  "product_ready": false
+}
