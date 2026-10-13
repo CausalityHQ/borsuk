@@ -1,0 +1,84 @@
+{
+  "name": "compile-lib",
+  "exit": 0,
+  "command": "cargo test --locked -p borsuk --lib --no-run",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/compile-lib-collected/terminal.json",
+    "bytes": 245,
+    "sha256": "c5008df59163dbede0ff1b506c02bb353711c1e8e2dd6cbc9eb1734c4c9dd2f7"
+  }
+}
+{
+  "name": "codec-debug",
+  "exit": 0,
+  "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/codec-debug-collected/terminal.json",
+    "bytes": 245,
+    "sha256": "25e46cf2d7f90323c635d6fca4ee92e78a7a1ec17447fa2a24a6722a9b7d8947"
+  }
+}
+{
+  "name": "planner-debug",
+  "exit": 0,
+  "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error -- --exact --test-threads=1",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/planner-debug-collected/terminal.json",
+    "bytes": 247,
+    "sha256": "9a66d26c5cc1c1df5e43691e318d0c437dc31e9fba6b3d2b4b488348f34bebe9"
+  }
+}
+{
+  "name": "source-debug",
+  "exit": 0,
+  "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/source-debug-collected/terminal.json",
+    "bytes": 246,
+    "sha256": "e68cfaef84a4e809f2c5221da021dbdb0d1d847f354c18c80ec5411d8fd3729a"
+  }
+}
+{
+  "name": "release-elf",
+  "exit": 0,
+  "command": "cargo build --release --locked -p borsuk --bin check_cohere_native_baseline",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/release-elf-collected/terminal.json",
+    "bytes": 245,
+    "sha256": "d8eb6c4121f9d9a90cf4baa46a2f2a9ca99c19a89b3733c7e0dd142d5a21f1fc"
+  }
+}
+{
+  "name": "workspace-clippy",
+  "exit": 0,
+  "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/workspace-clippy-collected/terminal.json",
+    "bytes": 250,
+    "sha256": "cbf78c70dfbb72e465952cdf04e538ac34d1c90027bec883f6ceaa8f813f7a1c"
+  }
+}
+{
+  "name": "workspace-test-build",
+  "exit": 0,
+  "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "receipt": {
+    "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/workspace-test-build-collected/terminal.json",
+    "bytes": 254,
+    "sha256": "29d7779edfa4a5b81dda65281721cc156347bbcd282b0433356a399f78da8cd9"
+  }
+}

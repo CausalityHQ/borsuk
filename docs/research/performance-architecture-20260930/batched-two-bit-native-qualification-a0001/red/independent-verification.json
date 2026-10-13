@@ -1,0 +1,15 @@
+{
+  "status": "EXPECTED_NATIVE_RED_VERIFIED",
+  "source_commit": "9ae1bd31c5881999bc57de060b68061713be66b8",
+  "source_file_count": 470,
+  "native_source_file_count": 437,
+  "compile_exit": 0,
+  "test_exit": 101,
+  "expected_test_count": 1,
+  "before_after_source_match": true,
+  "swap_oom_zero": true,
+  "instance_id": "i-03494b57e93643586",
+  "terminated": true,
+  "volume_absent": true,
+  "performance_claim": false
+}

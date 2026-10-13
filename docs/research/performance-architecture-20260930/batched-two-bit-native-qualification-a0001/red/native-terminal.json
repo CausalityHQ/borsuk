@@ -1,0 +1,22 @@
+{
+    "CommandId": "6a3c11e3-072b-4b17-a52a-64992d204d64",
+    "InstanceId": "i-03494b57e93643586",
+    "Comment": "borsuk-batched-two-bit-red-a0001-native",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-13T05:04:25.960Z",
+    "ExecutionElapsedTime": "PT5M12.282S",
+    "ExecutionEndDateTime": "2026-10-13T05:09:37.960Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-native-gates.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/required-tests.json: OK\n/mnt/borsuk-paired-qualification/stage-assets/compile-lib.sh: OK\n/mnt/borsuk-paired-qualification/stage-assets/red-fixture.sh: OK\n{\n  \"schema\": \"borsuk-fetch-scheduler-red-batch-v1\",\n  \"source_commit\": \"9ae1bd31c5881999bc57de060b68061713be66b8\",\n  \"batch_exit\": 0,\n  \"completed_stages\": 2,\n  \"required_stages\": 2,\n  \"gate_groups\": 2,\n  \"failed_stage\": \"\",\n  \"native_qualified\": false,\n  \"performance_claim\": false\n}\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

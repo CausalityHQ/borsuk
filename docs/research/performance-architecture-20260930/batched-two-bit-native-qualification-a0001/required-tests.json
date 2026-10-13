@@ -1,0 +1,48 @@
+{
+   "codec-debug" : [
+      "rotated_two_bit::tests::batched_scores_match_scalar_bits_for_generic_geometry_and_partial_widths",
+      "rotated_two_bit::tests::batched_scores_preserve_ordered_cancellation_and_signed_zero",
+      "rotated_two_bit::tests::batched_scores_refuse_shape_and_invalid_records_without_output_mutation",
+      "rotated_two_bit::tests::batch_query_scratch_refuses_unmodeled_small_dimension_buffers",
+      "rotated_two_bit::tests::required_query_scratch_matches_exact_prepare_query_budget",
+      "rotated_two_bit::tests::required_query_scratch_rejects_invalid_or_overflowing_geometry"
+   ],
+   "planner-debug" : [
+      "two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error"
+   ],
+   "source-debug" : [
+      "two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error",
+      "two_bit_generation::source_walk_tests::semantic_d768_diagnostic_scratch_preserves_production_search",
+      "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_router_validation_d1024_and_d768",
+      "two_bit_generation::source_walk_tests::native_full_sixteen_leaf_generation_admission_d1024_and_d768",
+      "two_bit_generation::source_walk_tests::native_fresh1m_membership_nomination_parity_and_bounds",
+      "two_bit_generation::source_walk_tests::native_cold_fetch_parallelism_parity_and_drain",
+      "two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity",
+      "two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle",
+      "two_bit_generation::source_walk_tests::semantic_object_store_parity",
+      "two_bit_generation::source_walk_tests::paged_source_matches_reference_and_preserves_failure_charges",
+      "two_bit_generation::source_walk_tests::paged_source_cache_preserves_parity_admission_and_failure_drains",
+      "two_bit_generation::source_walk_tests::empty_head_reuse_and_coordinated_restart_charge_retained_body",
+      "two_bit_generation::source_walk_tests::fragmented_paged_source_preserves_trace_and_rank_across_get_caps",
+      "two_bit_generation::source_walk_tests::diagnostic_page_limit_admits_short_closure_without_relaxing_control",
+      "two_bit_generation::source_walk_tests::scale_scattered_source_walk_scores_complete_pages_once",
+      "two_bit_generation::source_walk_tests::scale_scattered_codec_walk_covers_rows_and_partial_tail",
+      "two_bit_generation::source_walk_tests::fresh48_source_walk_completes_512_pages_once_and_rejects_excess_before_io",
+      "two_bit_generation::source_walk_tests::diagnostic_normalization_preserves_native_query_space_and_rejections",
+      "two_bit_generation::source_walk_tests::diagnostic_source_cover_charges_bridges_and_partial_tail_before_scoring",
+      "two_bit_generation::source_walk_tests::diagnostic_source_walks_reject_missing_nonfinite_and_invalid_inputs",
+      "two_bit_generation::source_walk_tests::bounded_completion_recovers_unvisited_rows_without_duplicate_or_extra_work",
+      "two_bit_generation::source_walk_tests::source_nomination_precedes_centroid_cutoff_and_scores_units_once",
+      "two_bit_generation::source_walk_tests::source_nomination_handles_one_graph_partial_rows_and_rejects_invalid_walks",
+      "two_bit_generation::source_walk_tests::direct_bridge_counterexample_changes_population_and_winner_pure",
+      "two_bit_generation::source_walk_tests::native_direct_closure_cold_oracle_zero_source_memory_and_caps",
+      "two_bit_generation::source_walk_tests::native_direct_closure_real_planner_bridge_counterexample_changes_winner",
+      "two_bit_generation::source_walk_tests::native_direct_closure_shares_the_query_slot_with_ordinary_search_and_drains",
+      "two_bit_generation::source_walk_tests::native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures",
+      "two_bit_generation::source_walk_tests::native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct",
+      "two_bit_generation::source_walk_tests::native_sq8_range_trace_memory_and_capacity_are_refused_before_slot_or_any_get",
+      "two_bit_generation::source_walk_tests::native_sq8_range_trace_early_refusal_never_exposes_a_reused_trace_for_baseline_and_direct",
+      "two_bit_generation::source_walk_tests::native_sq8_range_trace_failure_outcomes_are_truthful_and_leave_ranking_unstarted",
+      "two_bit_generation::source_walk_tests::direct_closure_rejects_graph_discovery_before_any_io"
+   ]
+}

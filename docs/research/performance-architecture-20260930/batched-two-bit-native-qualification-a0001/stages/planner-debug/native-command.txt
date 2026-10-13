@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error -- --exact --test-threads=1

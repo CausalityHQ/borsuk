@@ -1,0 +1,7 @@
+compile-lib	cargo test --locked -p borsuk --lib --no-run
+codec-debug	cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1
+planner-debug	cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error -- --exact --test-threads=1
+source-debug	cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1
+release-elf	cargo build --release --locked -p borsuk --bin check_cohere_native_baseline
+workspace-clippy	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh

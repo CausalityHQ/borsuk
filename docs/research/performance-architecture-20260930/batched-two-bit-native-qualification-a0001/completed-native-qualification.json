@@ -1,0 +1,111 @@
+{
+  "schema": "borsuk-batched-two-bit-native-qualification-v1",
+  "status": "NATIVE_QUALIFIED",
+  "source_commit": "86d9b711b0ee85b11faa82ba5deb12bdcc30e319",
+  "source_file_count": 437,
+  "support_file_count": 470,
+  "native_source_identity_sha256": "2cb11125f1a5afccdb82a40c941c8eb52bf19fc4712a8dfac9df6b20abc68bc4",
+  "native_source_identity_definition": "sha256 of exact native-source.json bytes",
+  "source_archive_sha256": "357a46fb1a0ed69fc1504d799dd5ae223b5edb64211e7a626935431278530862",
+  "full_source_before_after_root_match": true,
+  "terminated": true,
+  "instance_id": "i-0b14cfb55e4fcc4a6",
+  "root_volume_id": "vol-0f3bbf94833f724e8",
+  "volume_deleted": true,
+  "external_timer_inactive": true,
+  "stage_count": 7,
+  "stages": [
+    {
+      "name": "compile-lib",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --lib --no-run",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/compile-lib-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "c5008df59163dbede0ff1b506c02bb353711c1e8e2dd6cbc9eb1734c4c9dd2f7"
+      }
+    },
+    {
+      "name": "codec-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --lib rotated_two_bit::tests:: -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/codec-debug-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "25e46cf2d7f90323c635d6fca4ee92e78a7a1ec17447fa2a24a6722a9b7d8947"
+      }
+    },
+    {
+      "name": "planner-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::batched_source_nomination_matches_scalar_plan_trace_and_first_error -- --exact --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/planner-debug-collected/terminal.json",
+        "bytes": 247,
+        "sha256": "9a66d26c5cc1c1df5e43691e318d0c437dc31e9fba6b3d2b4b488348f34bebe9"
+      }
+    },
+    {
+      "name": "source-debug",
+      "exit": 0,
+      "command": "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests:: -- --test-threads=1",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/source-debug-collected/terminal.json",
+        "bytes": 246,
+        "sha256": "e68cfaef84a4e809f2c5221da021dbdb0d1d847f354c18c80ec5411d8fd3729a"
+      }
+    },
+    {
+      "name": "release-elf",
+      "exit": 0,
+      "command": "cargo build --release --locked -p borsuk --bin check_cohere_native_baseline",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/release-elf-collected/terminal.json",
+        "bytes": 245,
+        "sha256": "d8eb6c4121f9d9a90cf4baa46a2f2a9ca99c19a89b3733c7e0dd142d5a21f1fc"
+      }
+    },
+    {
+      "name": "workspace-clippy",
+      "exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/workspace-clippy-collected/terminal.json",
+        "bytes": 250,
+        "sha256": "cbf78c70dfbb72e465952cdf04e538ac34d1c90027bec883f6ceaa8f813f7a1c"
+      }
+    },
+    {
+      "name": "workspace-test-build",
+      "exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+      "manager_exit": 0,
+      "owned_cgroup_drained": true,
+      "receipt": {
+        "path": "/data/target/borsuk-batched-two-bit.pending/green-launch-a0001/workspace-test-build-collected/terminal.json",
+        "bytes": 254,
+        "sha256": "29d7779edfa4a5b81dda65281721cc156347bbcd282b0433356a399f78da8cd9"
+      }
+    }
+  ],
+  "release": {
+    "bytes": 17140008,
+    "sha256": "a62a1f45101e91233423a1e039d83b1301d39b7c06d3290e70ee20d9621fb44c"
+  },
+  "native_correctness_qualification_only": true,
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "product_ready": false
+}
