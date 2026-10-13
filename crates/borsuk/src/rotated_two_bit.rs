@@ -46,10 +46,6 @@ pub struct PreparedTwoBit {
     inverse_query_norm: f64,
 }
 
-pub(crate) const SCORE_BATCH_ROWS: usize = 8;
-const SCORE_BATCH_SCRATCH_BYTES: usize =
-    SCORE_BATCH_ROWS * (std::mem::size_of::<&[u8]>() + 4 * std::mem::size_of::<f64>());
-
 fn hadamard(block: &mut [f64]) {
     let mut width = 1;
     while width < block.len() {
@@ -131,22 +127,17 @@ impl RotatedTwoBitCodec {
     }
 
     /// Required peak query scratch bytes for a source dimension, without allocating.
-    /// Includes the lookup table plus the larger of temporary rotation and
-    /// eight-row scoring buffers; preparation and scoring do not overlap.
+    /// Includes the packed-byte lookup table and temporary rotated query:
+    /// `(ceil(padded_dimensions / 4) * 256 + padded_dimensions) * size_of::<f64>()`.
     /// Uses the constructor's block padding; rejects invalid geometry or overflow.
     /// Allocator overhead and immutable codec metadata are charged separately.
     pub fn required_query_scratch_bytes(dimensions: usize) -> Result<usize, TwoBitError> {
         let padded = Self::padded_dimensions(dimensions)?;
-        let table_bytes = padded
+        padded
             .div_ceil(4)
             .checked_mul(256)
+            .and_then(|values| values.checked_add(padded))
             .and_then(|values| values.checked_mul(std::mem::size_of::<f64>()))
-            .ok_or(TwoBitError::Geometry)?;
-        let rotated_bytes = padded
-            .checked_mul(std::mem::size_of::<f64>())
-            .ok_or(TwoBitError::Geometry)?;
-        table_bytes
-            .checked_add(rotated_bytes.max(SCORE_BATCH_SCRATCH_BYTES))
             .ok_or(TwoBitError::Geometry)
     }
 
@@ -308,20 +299,6 @@ impl PreparedTwoBit {
     /// Cosine to one reconstructed row. The caller authenticates the record's
     /// generation and chooses a bounded roster; this method performs no scan.
     pub fn score(&self, record: &[u8]) -> Result<f64, TwoBitError> {
-        let (scale, inverse_norm) = self.record_scalars(record)?;
-        let dot = record[..self.packed_bytes]
-            .iter()
-            .enumerate()
-            .map(|(byte, &word)| self.table[byte * 256 + usize::from(word)])
-            .sum::<f64>();
-        let score = (self.mean_dot + scale * dot) * self.inverse_query_norm * inverse_norm;
-        if !score.is_finite() {
-            return Err(TwoBitError::Record);
-        }
-        Ok(score)
-    }
-
-    pub(crate) fn record_scalars(&self, record: &[u8]) -> Result<(f64, f64), TwoBitError> {
         if record.len() != self.packed_bytes + 8 {
             return Err(TwoBitError::Record);
         }
@@ -334,46 +311,18 @@ impl PreparedTwoBit {
         if !scale.is_finite() || scale < 0.0 || !inverse_norm.is_finite() || inverse_norm <= 0.0 {
             return Err(TwoBitError::Record);
         }
-        Ok((f64::from(scale), f64::from(inverse_norm)))
-    }
-
-    /// Score zero to eight caller-selected, authenticated records without allocation.
-    /// Output width must match input; errors leave output untouched. Each row keeps
-    /// scalar byte-order accumulation while neighboring rows reuse a LUT bank.
-    /// Query preparation admits the fixed batch buffers in its scratch bound.
-    pub fn score_batch(&self, records: &[&[u8]], scores: &mut [f64]) -> Result<(), TwoBitError> {
-        if records.len() > SCORE_BATCH_ROWS {
-            return Err(TwoBitError::MemoryBudget);
+        let dot = record[..self.packed_bytes]
+            .iter()
+            .enumerate()
+            .map(|(byte, &word)| self.table[byte * 256 + usize::from(word)])
+            .sum::<f64>();
+        let score = (self.mean_dot + f64::from(scale) * dot)
+            * self.inverse_query_norm
+            * f64::from(inverse_norm);
+        if !score.is_finite() {
+            return Err(TwoBitError::Record);
         }
-        if records.len() != scores.len() {
-            return Err(TwoBitError::Geometry);
-        }
-        if records.is_empty() {
-            return Ok(());
-        }
-        let mut scales = [0.0; SCORE_BATCH_ROWS];
-        let mut inverse_norms = [0.0; SCORE_BATCH_ROWS];
-        for (lane, record) in records.iter().enumerate() {
-            (scales[lane], inverse_norms[lane]) = self.record_scalars(record)?;
-        }
-        // Match f64::Sum's identity, including an all-negative-zero row.
-        let mut dots = [-0.0; SCORE_BATCH_ROWS];
-        for byte in 0..self.packed_bytes {
-            let bank: &[f64; 256] = self.table[byte * 256..(byte + 1) * 256].try_into().unwrap();
-            for (lane, record) in records.iter().enumerate() {
-                dots[lane] += bank[usize::from(record[byte])];
-            }
-        }
-        for lane in 0..records.len() {
-            dots[lane] = (self.mean_dot + scales[lane] * dots[lane])
-                * self.inverse_query_norm
-                * inverse_norms[lane];
-            if !dots[lane].is_finite() {
-                return Err(TwoBitError::Record);
-            }
-        }
-        scores.copy_from_slice(&dots[..records.len()]);
-        Ok(())
+        Ok(score)
     }
 }
 
@@ -381,178 +330,9 @@ impl PreparedTwoBit {
 mod tests {
     use super::*;
 
-    fn score_record(words: &[u8], scale: f32, inverse_norm: f32) -> Vec<u8> {
-        let mut record = words.to_vec();
-        record.extend_from_slice(&scale.to_le_bytes());
-        record.extend_from_slice(&inverse_norm.to_le_bytes());
-        record
-    }
-
-    #[test]
-    fn batched_scores_match_scalar_bits_for_generic_geometry_and_partial_widths() {
-        for dimensions in [
-            1, 2, 3, 4, 5, 31, 32, 63, 64, 255, 256, 257, 511, 512, 768, 1024, 1536,
-        ] {
-            let codec = RotatedTwoBitCodec::new(&vec![0.0; dimensions], 7).unwrap();
-            let query = (0..dimensions)
-                .map(|i| (i % 11 + 1) as f32 / 11.0)
-                .collect::<Vec<_>>();
-            let prepared = codec.prepare_query(&query, usize::MAX).unwrap();
-            let records = (0..8)
-                .map(|row| {
-                    let vector = (0..dimensions)
-                        .map(|i| ((i * 13 + row * 17) % 31) as f32 / 16.0 - 15.0 / 16.0)
-                        .collect::<Vec<_>>();
-                    codec.encode(&vector).unwrap()
-                })
-                .collect::<Vec<_>>();
-            for count in 0..=8 {
-                let refs = records[..count]
-                    .iter()
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>();
-                let mut scores = vec![123.0; count];
-                prepared.score_batch(&refs, &mut scores).unwrap();
-                for (record, score) in refs.iter().zip(&scores) {
-                    assert_eq!(
-                        score.to_bits(),
-                        prepared.score(record).unwrap().to_bits(),
-                        "D={dimensions}, count={count}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn batched_scores_preserve_ordered_cancellation_and_signed_zero() {
-        let mut table = vec![0.0; 4 * 256];
-        for (bank, value) in [1e16, 1.0, -1e16, 1.0].into_iter().enumerate() {
-            table[bank * 256..(bank + 1) * 256].fill(value);
-        }
-        let prepared = PreparedTwoBit {
-            table,
-            packed_bytes: 4,
-            mean_dot: 0.0,
-            inverse_query_norm: 1.0,
-        };
-        let record = score_record(&[0; 4], 1.0, 1.0);
-        let mut scores = [0.0; 8];
-        prepared
-            .score_batch(&[record.as_slice(); 8], &mut scores)
-            .unwrap();
-        assert!(
-            scores
-                .iter()
-                .all(|score| score.to_bits() == 1.0_f64.to_bits())
-        );
-        let prepared = PreparedTwoBit {
-            table: vec![-0.0; 256],
-            packed_bytes: 1,
-            mean_dot: -0.0,
-            inverse_query_norm: 1.0,
-        };
-        let record = score_record(&[0], 1.0, 1.0);
-        prepared
-            .score_batch(&[record.as_slice(); 8], &mut scores)
-            .unwrap();
-        assert!(
-            scores
-                .iter()
-                .all(|score| score.to_bits() == 0x8000_0000_0000_0000)
-        );
-
-        // Independently hand-computed footer/word results, not a common parser oracle.
-        let mut table = vec![0.0; 256];
-        table[0] = 1.0;
-        table[1] = -2.0;
-        let prepared = PreparedTwoBit {
-            table,
-            packed_bytes: 1,
-            mean_dot: 0.25,
-            inverse_query_norm: 0.5,
-        };
-        let a = score_record(&[0], 2.0, 0.5);
-        let b = score_record(&[1], 2.0, 0.5);
-        prepared.score_batch(&[&a, &b], &mut scores[..2]).unwrap();
-        assert_eq!(scores[0].to_bits(), 0.5625_f64.to_bits());
-        assert_eq!(scores[1].to_bits(), (-0.9375_f64).to_bits());
-    }
-
-    #[test]
-    fn batched_scores_refuse_shape_and_invalid_records_without_output_mutation() {
-        let codec = RotatedTwoBitCodec::new(&[0.0], 7).unwrap();
-        let prepared = codec.prepare_query(&[1.0], usize::MAX).unwrap();
-        let good = codec.encode(&[2.0]).unwrap();
-        let mut out = [123.0; 9];
-        assert!(matches!(
-            prepared.score_batch(&[good.as_slice(); 9], &mut out),
-            Err(TwoBitError::MemoryBudget)
-        ));
-        assert!(out.iter().all(|value| *value == 123.0));
-        assert!(matches!(
-            prepared.score_batch(&[&good], &mut out[..0]),
-            Err(TwoBitError::Geometry)
-        ));
-        for slot in 0..8 {
-            let mut invalid = vec![good[..good.len() - 1].to_vec(), {
-                let mut v = good.clone();
-                v.push(0);
-                v
-            }];
-            for (scale, inverse_norm) in [
-                (f32::NAN, 1.0),
-                (f32::INFINITY, 1.0),
-                (-1.0, 1.0),
-                (1.0, 0.0),
-                (1.0, -1.0),
-                (1.0, f32::NAN),
-                (1.0, f32::INFINITY),
-            ] {
-                invalid.push(score_record(&good[..1], scale, inverse_norm));
-            }
-            for bad in &invalid {
-                let mut refs = [good.as_slice(); 8];
-                refs[slot] = bad;
-                let mut scores = [123.0; 8];
-                assert!(matches!(
-                    prepared.score_batch(&refs, &mut scores),
-                    Err(TwoBitError::Record)
-                ));
-                assert_eq!(scores, [123.0; 8]);
-            }
-        }
-    }
-
-    #[test]
-    fn batch_query_scratch_refuses_unmodeled_small_dimension_buffers() {
-        // One-byte LUT =2048B; eight borrowed slices and four f64 lane arrays
-        // need384B on64-bit, exceeding the old8B temporary rotation buffer.
-        let codec = RotatedTwoBitCodec::new(&[0.0], 7).unwrap();
-        let query = [1.0];
-        if usize::BITS == 64 {
-            assert!(matches!(
-                codec.prepare_query(&query, 2056),
-                Err(TwoBitError::MemoryBudget)
-            ));
-            assert!(codec.prepare_query(&query, 2431).is_err());
-            assert!(codec.prepare_query(&query, 2432).is_ok());
-        }
-    }
-
     #[test]
     fn required_query_scratch_matches_exact_prepare_query_budget() {
-        let (small, padded_small) = if usize::BITS == 64 {
-            (2432, 4480)
-        } else {
-            (2368, 4416)
-        };
-        for (dimensions, expected) in [
-            (1, small),
-            (5, padded_small),
-            (768, 399_360),
-            (1024, 532_480),
-        ] {
+        for (dimensions, expected) in [(1, 2056), (5, 4160), (768, 399_360), (1024, 532_480)] {
             let required = RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
             assert_eq!(required, expected);
             let codec = RotatedTwoBitCodec::new(&vec![0.0; dimensions], 7).unwrap();

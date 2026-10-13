@@ -1,0 +1,21 @@
+{
+  "decision": "BATCH_KERNEL_UNSELECTED_FOR_COLD_PERFORMANCE",
+  "recall_at10": 0.978,
+  "exact_semantic_and_plan_parity": true,
+  "pair1": {
+    "p95_change_percent": 1.2828553707280532,
+    "p90_change_percent": 0.42123564381468803,
+    "qps_change_percent": -3.1495261298986166,
+    "p99_change_percent": 12.05367869827738,
+    "planning_change_percent": 2.4818048923844094
+  },
+  "pair2": {
+    "p95_change_percent": 1.0995477646628782,
+    "p90_change_percent": 2.2099682676314236,
+    "qps_change_percent": -1.5194189695861615,
+    "p99_change_percent": -4.4536083685838275,
+    "planning_change_percent": 4.603527525975748
+  },
+  "scalar_width64_selected": true,
+  "matched_vendor_win": false
+}
