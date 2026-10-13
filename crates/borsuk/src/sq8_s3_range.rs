@@ -1384,7 +1384,9 @@ pub(crate) mod cold_http_fixture {
                     match listener.accept() {
                         Ok((socket, _)) => {
                             accepted += 1;
-                            if accepted > 2048 || handlers.len() >= 64 {
+                            // Allow 128 held bodies plus handlers finishing after refill.
+                            // Each handler has a bounded 128 KiB stack.
+                            if accepted > 2048 || handlers.len() >= 256 {
                                 shared.0.lock().unwrap().errors.push("handler cap".into());
                                 break;
                             }
