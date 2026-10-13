@@ -3952,6 +3952,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_wave128_range_transport_preserves_bytes_errors_and_drain() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(128 * 256);
+        let authority = sq8_authority(&object, 128 * 256);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let ranges = (0..128).map(|page| (page, page)).collect::<Vec<_>>();
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            Instant::now() + Duration::from_secs(60),
+        );
+        for parallelism in [64, 128] {
+            fixture.arm(None);
+            let work = fetch_verified_ranges_inner(
+                fixture.reader.store(),
+                &location,
+                &authority,
+                &ranges,
+                ETAG,
+                128,
+                object.len(),
+                parallelism,
+            );
+            let (result, ()) = tokio::join!(work, async {
+                fixture.wait(|state| state.active[1] == parallelism).await;
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                assert_eq!(fixture.snapshot().peak[1], parallelism);
+                fixture.release(1);
+            });
+            let (verified, stats) = result.unwrap();
+            assert_eq!(stats.submitted_gets, 128);
+            assert_eq!(stats.verified_bytes, object.len());
+            assert_eq!(stats.failed_gets, 0);
+            assert_eq!(verified.len(), 128);
+            for (page, returned) in verified.iter().enumerate() {
+                assert_eq!(returned.start, page * 3328);
+                assert_eq!(&returned.bytes[..], &object[page * 3328..(page + 1) * 3328]);
+            }
+            assert_eq!(fixture.snapshot().finished[1].len(), 128);
+            assert_eq!(fixture.snapshot().active[1], 0);
+
+            fixture.arm(Some((1, [0, 3328, 6656])));
+            let mut work = Box::pin(fetch_verified_ranges_inner(
+                fixture.reader.store(),
+                &location,
+                &authority,
+                &ranges,
+                ETAG,
+                128,
+                object.len(),
+                parallelism,
+            ));
+            tokio::select! {
+                _ = &mut work => panic!("returned before ordered stream error"),
+                () = fixture.wait(|state| state.finished[1].contains(&3328)) => {}
+            }
+            assert!(!fixture.snapshot().finished[1].contains(&0));
+            fixture.release_error();
+            tokio::select! {
+                _ = &mut work => panic!("returned before held sibling drained"),
+                () = fixture.wait(|state| state.finished[1].contains(&0)) => {}
+            }
+            fixture.release_sibling();
+            let error = work.await.err().unwrap();
+            assert!(matches!(error.error, RangeFetchError::Store(_)));
+            assert_eq!(error.stats.submitted_gets, 128);
+            assert_eq!(error.stats.failed_gets, 2);
+            assert_eq!(error.stats.verified_bytes, object.len() - 2 * 3328);
+            let state = fixture.snapshot();
+            assert_eq!(state.active[1], 0);
+            assert_eq!(state.finished[1].len(), 128);
+            assert!(state.peak[1] <= parallelism);
+            assert!(state.errors.is_empty(), "{:?}", state.errors);
+        }
+        fixture.finish();
+    }
+
+    #[tokio::test]
     async fn completion_driven_fetch_refills_before_earlier_body_finishes() {
         use super::cold_http_fixture::{ETAG, Fixture};
         let object = unique_sq8_object(600);
