@@ -11911,10 +11911,10 @@ mod tests {
     #[test]
     fn paired_width64_scale_requires_same_source_and_ordered_widths() {
         let dir = tempfile::tempdir().unwrap();
-        let (path, _) = paired_scale_config(
-            dir.path(),
-            [paired_scale_fixture(32), paired_scale_fixture(64)],
-        );
+        let a = paired_scale_fixture(32);
+        let mut b = paired_scale_fixture(64);
+        b[0]["config_sha256"] = json!("e".repeat(64));
+        let (path, _) = paired_scale_config(dir.path(), [a, b]);
         let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         config["schema"] = json!("borsuk-scale-width64-native-reduction-config-v1");
         let bytes = serde_json::to_vec(&config).unwrap();
@@ -11927,6 +11927,20 @@ mod tests {
         assert_eq!(report["pooled_both_arms"]["statistics"]["count"], 2000);
         assert_eq!(report["performance_pass_claim"], false);
         assert!(reduce_paired(&path, &sha(&bytes)).is_err());
+        let mut bad = config.clone();
+        bad["arms"][1]["expected_identity"]["config_sha256"] =
+            bad["arms"][0]["expected_identity"]["config_sha256"].clone();
+        for arm in bad["arms"].as_array_mut().unwrap() {
+            arm["input"]["path"] = json!(dir.path().join("must-not-open"));
+        }
+        let bytes = serde_json::to_vec(&bad).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            reduce_paired_scope(&path, &sha(&bytes), true)
+                .unwrap_err()
+                .to_string(),
+            "paired native configs must have distinct SHA256"
+        );
         for field in [
             "binary_sha256",
             "runner_source_sha256",
