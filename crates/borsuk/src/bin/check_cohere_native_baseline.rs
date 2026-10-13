@@ -2937,6 +2937,26 @@ mod tests {
     }
 
     #[test]
+    fn cold_fetch_parallelism64_preserves_caps_and_bounded_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        value["fetch_parallelism"] = json!(64);
+        let config: Config = serde_json::from_value(value).unwrap();
+        assert!(validate_config(&config, shape).is_ok());
+        assert!(query_runtime(config.fetch_parallelism).is_ok());
+        let admission = limits(&config).unwrap();
+        assert_eq!(admission.max_parallel_source_gets, 64);
+        assert_eq!(admission.max_parallel_gets, 64);
+        assert_eq!(admission.max_source_gets, 128);
+        assert_eq!(admission.max_query_gets, 32);
+        assert_eq!(admission.max_source_bytes, 64 * 1024 * 1024);
+        assert_eq!(admission.max_query_bytes, 16_773_120);
+        assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
+        assert_eq!(admission.max_active_queries, 1);
+    }
+
+    #[test]
     fn cold_fetch_parallelism_selector_is_explicit_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
