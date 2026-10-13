@@ -331,6 +331,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn batch_query_scratch_refuses_unmodeled_small_dimension_buffers() {
+        // One-byte LUT =2048B; eight borrowed slices and four f64 lane arrays
+        // need384B on64-bit, exceeding the old8B temporary rotation buffer.
+        let codec = RotatedTwoBitCodec::new(&[0.0], 7).unwrap();
+        let query = [1.0];
+        if usize::BITS == 64 {
+            assert!(matches!(
+                codec.prepare_query(&query, 2056),
+                Err(TwoBitError::MemoryBudget)
+            ));
+            assert!(codec.prepare_query(&query, 2431).is_err());
+            assert!(codec.prepare_query(&query, 2432).is_ok());
+        }
+    }
+
+    #[test]
     fn required_query_scratch_matches_exact_prepare_query_budget() {
         for (dimensions, expected) in [(1, 2056), (5, 4160), (768, 399_360), (1024, 532_480)] {
             let required = RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
