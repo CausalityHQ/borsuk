@@ -4700,6 +4700,12 @@ fn recheck_scale_pair(
     Ok(())
 }
 
+// Private RED checkpoint: no SOURCE-budget result may be accepted until the
+// four-run authority and per-query native cover replay are implemented.
+fn reduce_source_budget_abba(_config_path: &Path, _config_sha: &str) -> Result<Value> {
+    Err("SOURCE budget ABBA implementation unavailable".into())
+}
+
 fn reduce_byte_window_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
     let config_file = open_input(config_path)?;
     let config_identity = file_identity(&config_file)?;
@@ -12968,6 +12974,97 @@ mod tests {
         let path = dir.join("byte-abba.json");
         std::fs::write(&path, &bytes).unwrap();
         (path, sha(&bytes))
+    }
+
+    #[test]
+    fn source_budget_abba_replays_distinct_cover_with_identical_quality_and_sq8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, mut runs) = byte_window_abba_fixture(dir.path());
+        config["schema"] = json!("borsuk-source-budget-abba-native-reduction-config-v1");
+        let pages = (0_usize..130).map(|n| 2 * n).collect::<Vec<_>>();
+        let trace = json!({"ranked_candidate_pages":pages,"primary_page":0,
+            "discoveries":[],"semantic_leaves":[0],
+            "semantic_units":pages.iter().map(|p|p*8).collect::<Vec<_>>(),
+            "semantic_seed_additions":[1,2,3,4,5,6,7],
+            "nomination_evaluated_units":pages.iter().flat_map(|p|p*8..(p+1)*8).collect::<Vec<_>>()});
+        for arm in 0..2 {
+            let old_pin = &config["runtime_configs"][arm];
+            let path = PathBuf::from(old_pin["path"].as_str().unwrap());
+            let mut native: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            native.as_object_mut().unwrap().remove("shared_byte_window");
+            native["schema"] = json!("borsuk-cohere-native-baseline-config-v8");
+            native["source_get_budget"] = json!(if arm == 0 { 128 } else { 96 });
+            let bytes = serde_json::to_vec(&native).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            config["runtime_configs"][arm] =
+                json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)});
+        }
+        for (index, rows) in runs.iter_mut().enumerate() {
+            let arm = usize::from(index == 1 || index == 2);
+            let budget = if arm == 0 { 128 } else { 96 };
+            let source_bytes = if arm == 0 { 8_921_088_u64 } else { 11_083_776 };
+            rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+            rows[0]["config_sha256"] = config["runtime_configs"][arm]["sha256"].clone();
+            for header in &mut rows[..2] {
+                header.as_object_mut().unwrap().remove("shared_byte_window");
+                header["source_get_budget"] = json!(budget);
+            }
+            let mut totals = Charges::default();
+            let mut payload_delta = 0_i128;
+            for row in rows.iter_mut().filter(|row| row["phase"] == "query") {
+                let old = row["sum"]["verified_bytes"].as_u64().unwrap();
+                row["trace"] = trace.clone();
+                row["plan"] = json!({"selected_pages":[0],"ranges":[[0,265216]],
+                    "planned_bytes":265216,"target_pages":1,"target_shortfall":0,
+                    "primary_pages_retained":1,"covered_pages":1,"bridge_pages":0});
+                row["charges"]["source"] =
+                    json!({"submitted_gets":budget,"verified_bytes":source_bytes,"failed_gets":0});
+                row["charges"]["sq8"] =
+                    json!({"submitted_gets":1,"verified_bytes":265216,"failed_gets":0});
+                let charge: Charges = serde_json::from_value(row["charges"].clone()).unwrap();
+                let sum = charge.sum().unwrap();
+                payload_delta = i128::from(sum.verified_bytes) - i128::from(old);
+                row["sum"] = serde_json::to_value(sum).unwrap();
+                totals.add(charge).unwrap();
+                let ordinal = row["ordinal"].as_u64().unwrap();
+                for (boundary, completed) in [("before", ordinal), ("after", ordinal + 1)] {
+                    let old = row["transport"][boundary]["consumed_payload_bytes"]
+                        .as_u64()
+                        .unwrap();
+                    let adjusted = i128::from(old) + i128::from(completed) * payload_delta;
+                    row["transport"][boundary]["consumed_payload_bytes"] =
+                        json!(u64::try_from(adjusted).unwrap());
+                }
+            }
+            let terminal = &mut rows.last_mut().unwrap()["summary"];
+            terminal["charges"] = serde_json::to_value(totals).unwrap();
+            terminal["sum"] = serde_json::to_value(totals.sum().unwrap()).unwrap();
+            for (boundary, completed) in [("before", 999_u64), ("after", 1000)] {
+                let old = terminal["transport_last_boundary"][boundary]["consumed_payload_bytes"]
+                    .as_u64()
+                    .unwrap();
+                terminal["transport_last_boundary"][boundary]["consumed_payload_bytes"] = json!(
+                    u64::try_from(i128::from(old) + i128::from(completed) * payload_delta).unwrap()
+                );
+            }
+            let startup = rows
+                .iter_mut()
+                .find(|row| row["phase"] == "startup")
+                .unwrap();
+            startup
+                .as_object_mut()
+                .unwrap()
+                .remove("shared_byte_window_state_bytes");
+        }
+        let (path, pin) = write_byte_window_abba(dir.path(), config, &runs);
+        let report = reduce_source_budget_abba(&path, &pin)
+            .expect("four sealed SOURCE128/96 runs need authenticated cover authority");
+        assert_eq!(report["runs"].as_array().unwrap().len(), 4);
+        assert_eq!(report["source_cover_replay_verified"], true);
+        assert_eq!(report["quality_trace_sq8_parity"], true);
+        assert_eq!(report["distinct_source_cover_verified"], true);
+        assert_eq!(report["recall_anchor_verified"], true);
+        assert_eq!(report["vendor_win_claim"], false);
     }
 
     #[test]
