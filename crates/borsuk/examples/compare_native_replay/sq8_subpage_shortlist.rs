@@ -2272,9 +2272,14 @@ fn geometry_aggregate(
                     && selected <= size
                     && blocks > 0
                     && blocks <= selected
+                    && selected
+                        <= blocks
+                            .checked_mul(32)
+                            .ok_or("geometry selected capacity overflow")?
                     && runs > 0
                     && runs <= blocks
                     && gets == runs.min(30)
+                    && bridge / GEOMETRY_BLOCK_BYTES >= runs - gets
                     && nominated
                         == blocks
                             .checked_mul(GEOMETRY_BLOCK_BYTES)
@@ -2437,14 +2442,15 @@ mod geometry_tests {
     use serde_json::{Value, json};
     fn fixture() -> Value {
         let queries=(0..1000).map(|ordinal| {
-            let arms=[1024,2048,4096,8192].map(|size| {
-                let (blocks,runs,cover,bridge,quality):(u64,u64,u64,u64,Value)=if ordinal<500 {(1,1,1,0,json!({"hits10":10}))}
+            let arms=[1024,2048,4096,8192].into_iter().enumerate().map(|(index,size)| {
+                let extra=index as u64;
+                let (blocks,runs,cover,bridge,quality):(u64,u64,u64,u64,Value)=if ordinal<500 {(1+extra,1,1+extra,0,json!({"hits10":10}))}
                     else if ordinal<750 {(1013,1,1013,0,Value::Null)}
-                    else {(31,31,1013,982,Value::Null)};
+                    else {(31+extra,31+extra,1013,982-extra,Value::Null)};
                 json!({"size":size,"selected_rows":blocks,"selected_blocks":blocks,"pre_cap_runs":runs,"gets":runs.min(30),
                     "physical_bytes":cover*GEOMETRY_BLOCK_BYTES,"bridge_bytes":bridge*GEOMETRY_BLOCK_BYTES,
                     "status":if quality.is_null(){"BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"}else{"MEASURED"},"quality":quality})
-            });
+            }).collect::<Vec<_>>();
             json!({"ordinal":ordinal,"baseline_hits10":if ordinal<978{10}else{0},"arms":arms})
         }).collect::<Vec<_>>();
         json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":"a".repeat(64),"query_count":1000,
@@ -2453,10 +2459,15 @@ mod geometry_tests {
             "baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,
             "recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"local_file_only":true,"cold_latency_claim":false,
             "qps_claim":false,"vendor_win_claim":false,"qualified":false,"queries":queries,
-            "admissible_queries":vec![500_u64;4],"measured_hit_subtotals":vec![5000_u64;4],"physical_bytes_totals":vec![500*GEOMETRY_BLOCK_BYTES;4],"quality_floor_met":[null,null,null,null]})
+            "admissible_queries":vec![500_u64;4],"measured_hit_subtotals":vec![5000_u64;4],"physical_bytes_totals":(1..=4).map(|n|n*500*GEOMETRY_BLOCK_BYTES).collect::<Vec<_>>(),"quality_floor_met":[null,null,null,null]})
     }
     #[test]
     fn closed_shortlist_geometry_full_population_cost_and_disjoint_failures() {
+        let statistics = geometry_statistics((1_u64..=1000).rev().collect()).unwrap();
+        assert_eq!(
+            statistics,
+            json!({"count":1000,"total":500500,"p50":500,"p90":900,"p95":950,"max":1000})
+        );
         let result = geometry_aggregate(&fixture(), &"a".repeat(64)).unwrap();
         assert_eq!(result["arms"].as_array().unwrap().len(), 4);
         let arm = &result["arms"][0];
@@ -2475,6 +2486,26 @@ mod geometry_tests {
         assert_eq!(arm["cover_bytes"]["p50"], GEOMETRY_BLOCK_BYTES);
         assert_eq!(arm["cover_bytes"]["p90"], 1013 * GEOMETRY_BLOCK_BYTES);
         assert_eq!(arm["gets"]["max"], 30);
+        for index in 0..4 {
+            let extra = index as u64;
+            let arm = &result["arms"][index];
+            assert_eq!(
+                arm["admitted_byte_subtotal"],
+                500 * (1 + extra) * GEOMETRY_BLOCK_BYTES
+            );
+            assert_eq!(
+                arm["nominated_bytes"]["total"],
+                (500 * (1 + extra) + 250 * 1013 + 250 * (31 + extra)) * GEOMETRY_BLOCK_BYTES
+            );
+            assert_eq!(
+                arm["bridge_bytes"]["total"],
+                250 * (982 - extra) * GEOMETRY_BLOCK_BYTES
+            );
+            assert_eq!(
+                arm["cover_bytes"]["total"],
+                (500 * (1 + extra) + 500 * 1013) * GEOMETRY_BLOCK_BYTES
+            );
+        }
     }
     #[test]
     fn closed_shortlist_geometry_rejects_inconsistent_rosters_and_costs() {
@@ -2496,6 +2527,7 @@ mod geometry_tests {
             ("/config_sha256", json!("b".repeat(64))),
             ("/baseline_hits10", json!(9779)),
             ("/queries/0/arms/0/physical_bytes", json!(33.5)),
+            ("/queries/0/arms/0/selected_rows", json!(33)),
         ] {
             let mut bad = original.clone();
             *bad.pointer_mut(pointer).unwrap() = value;
@@ -2513,5 +2545,128 @@ mod geometry_tests {
             .unwrap()
             .pop();
         assert!(geometry_aggregate(&missing_arm, &"a".repeat(64)).is_err());
+        let mut impossible = fixture();
+        impossible["queries"][500]["arms"][0]["pre_cap_runs"] = json!(31);
+        impossible["queries"][500]["arms"][0]["gets"] = json!(30);
+        assert!(geometry_aggregate(&impossible, &"a".repeat(64)).is_err());
+    }
+
+    fn pinned_json(path: &std::path::Path, value: &Value) -> Value {
+        use sha2::{Digest, Sha256};
+        let body = serde_json::to_vec(value).unwrap();
+        std::fs::write(path, &body).unwrap();
+        json!({"path":path,"bytes":body.len(),"sha256":format!("{:x}",Sha256::digest(&body))})
+    }
+
+    #[test]
+    fn closed_shortlist_geometry_authenticates_files_and_terminal_and_preserves_output() {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!(
+            "shortlist-geometry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let report_pin = pinned_json(&root.join("report.json"), &fixture());
+        let terminal = json!({"schema":"borsuk-shortlist-offline-curve-stage-v1","source_commit":"1".repeat(40),"elf_sha256":"2".repeat(64),"config_sha256":"a".repeat(64),"native_exit":0,"manager_exit":0,"owned_cgroup_drained":true,"quality_byte_diagnostic":true,"cold_performance_run":false,"performance_claim":false});
+        let terminal_pin = pinned_json(&root.join("terminal.json"), &terminal);
+        let config = json!({"schema":format!("{GEOMETRY_SCHEMA}-config"),"report":report_pin,"producer_terminal":terminal_pin,"producer_source_commit":"1".repeat(40),"producer_elf_sha256":"2".repeat(64),"producer_config_sha256":"a".repeat(64)});
+        let config_path = root.join("config.json");
+        let run = |body: Vec<u8>, sha_override: Option<String>, name: &str, expected: bool| {
+            std::fs::write(&config_path, &body).unwrap();
+            let sha = sha_override.unwrap_or_else(|| format!("{:x}", Sha256::digest(&body)));
+            let output = root.join(name);
+            assert_eq!(
+                execute_geometry(&config_path, &sha, &output).unwrap(),
+                expected,
+                "{name}"
+            );
+            let value: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+            assert_eq!(
+                value["status"],
+                if expected {
+                    "CLOSED_GEOMETRY_ONLY"
+                } else {
+                    "INVALID"
+                }
+            );
+        };
+        run(
+            serde_json::to_vec(&config).unwrap(),
+            None,
+            "good.json",
+            true,
+        );
+        let good_before = std::fs::read(root.join("good.json")).unwrap();
+        let body = serde_json::to_vec(&config).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&body));
+        assert!(execute_geometry(&config_path, &sha, &root.join("good.json")).is_err());
+        assert_eq!(std::fs::read(root.join("good.json")).unwrap(), good_before);
+        run(
+            body.clone(),
+            Some("0".repeat(64)),
+            "bad-config-pin.json",
+            false,
+        );
+        for (index, (pointer, value)) in [
+            ("/report/sha256", json!("0".repeat(64))),
+            ("/report/bytes", json!(1)),
+            ("/producer_terminal/sha256", json!("0".repeat(64))),
+            ("/producer_source_commit", json!("3".repeat(40))),
+            ("/producer_elf_sha256", json!("3".repeat(64))),
+            ("/producer_config_sha256", json!("3".repeat(64))),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut bad = config.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            run(
+                serde_json::to_vec(&bad).unwrap(),
+                None,
+                &format!("bad-pin-{index}.json"),
+                false,
+            );
+        }
+        let mut unknown = config.clone();
+        unknown["unknown"] = json!(true);
+        run(
+            serde_json::to_vec(&unknown).unwrap(),
+            None,
+            "unknown.json",
+            false,
+        );
+        let duplicate = format!(
+            "{{\"schema\":{},{}",
+            serde_json::to_string(&config["schema"]).unwrap(),
+            std::str::from_utf8(&body[1..]).unwrap()
+        );
+        run(duplicate.into_bytes(), None, "duplicate.json", false);
+        for (index, (key, value)) in [
+            ("native_exit", json!(2)),
+            ("manager_exit", json!(2)),
+            ("owned_cgroup_drained", json!(false)),
+            ("source_commit", json!("3".repeat(40))),
+            ("elf_sha256", json!("3".repeat(64))),
+            ("config_sha256", json!("3".repeat(64))),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut bad_terminal = terminal.clone();
+            bad_terminal[key] = value;
+            let mut bad = config.clone();
+            bad["producer_terminal"] = pinned_json(&root.join("terminal.json"), &bad_terminal);
+            run(
+                serde_json::to_vec(&bad).unwrap(),
+                None,
+                &format!("bad-terminal-{index}.json"),
+                false,
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
