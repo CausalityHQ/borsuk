@@ -719,3 +719,49 @@ mod selected_sq8_rows_contract {
         assert!(plan_selected_sq8_rows(&auth, &[0, 32, 96, 768], limits).is_ok());
     }
 }
+
+#[cfg(test)]
+mod selected_sq8_plane_kind_contract {
+    use super::{BudgetedPageError, SelectedSq8Limits, plan_selected_sq8_rows};
+    use crate::sq8_page_authority::PageAuthority;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn selected_sq8_rows_rejects_source_authority() {
+        let object = vec![7_u8; 330];
+        let sidecar = object
+            .chunks(320)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-two-bit-plane-v3", "rows":33, "dimensions":5,
+            "seed":20260923, "record_bytes":10, "page_rows":32,
+            "source_sha256":"0".repeat(64), "sq8_sha256":"1".repeat(64),
+            "source_order_sha256":"2".repeat(64), "mean_sha256":"3".repeat(64),
+            "records_sha256":format!("{:x}",Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar)),
+            "query_or_truth_used":false
+        }))
+        .unwrap();
+        let source = PageAuthority::load_two_bit(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            9,
+            &sidecar,
+        )
+        .unwrap();
+        assert_eq!(source.byte_range(1, 1), Ok(320..330));
+        assert_eq!(
+            plan_selected_sq8_rows(
+                &source,
+                &[32],
+                SelectedSq8Limits {
+                    max_gets: 1,
+                    max_bytes: 17,
+                    max_planner_bytes: 4_608,
+                }
+            ),
+            Err(BudgetedPageError::InvalidGeometry)
+        );
+    }
+}
