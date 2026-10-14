@@ -1,0 +1,12 @@
+Running as unit: run-p4012802-i930733802.scope; invocation ID: e728b6ae19fa43879e27c639d4394fa4
+affected-compile VERIFIED
+example-compile VERIFIED
+selected-positive VERIFIED
+selected-refusal VERIFIED
+selected-plane-kind VERIFIED
+planner-regressions VERIFIED
+authority-regressions VERIFIED
+release-lib VERIFIED
+workspace-clippy VERIFIED
+workspace-test-build VERIFIED
+TEN_NATIVE_PLANNER_REPAIR_GATES_SOURCE_RESOURCES_AND_COMPUTE_CLOSURE_VERIFIED
