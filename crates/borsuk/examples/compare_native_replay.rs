@@ -9209,6 +9209,44 @@ mod tests {
     }
 
     #[test]
+    fn source_budget96_cover_uses_declared_budget_and_refuses_other_cover() {
+        let (original, mut raw) = sealed_loss_fixture();
+        let mut metadata = serde_json::to_value(original).unwrap();
+        metadata["rows"] = json!(1_000_000);
+        metadata["source_get_budget"] = json!(96);
+        let inputs: Inputs = serde_json::from_value(metadata.clone()).unwrap();
+        let pages = (0_usize..130).map(|n| 2 * n).collect::<Vec<_>>();
+        raw["trace"] = json!({"ranked_candidate_pages":pages,"primary_page":0,
+            "discoveries":[],"semantic_leaves":[0],
+            "semantic_units":pages.iter().map(|p| p*8).collect::<Vec<_>>(),
+            "semantic_seed_additions":[1,2,3,4,5,6,7],
+            "nomination_evaluated_units":pages.iter().flat_map(|p| p*8..(p+1)*8).collect::<Vec<_>>()});
+        // 130 isolated pages require 34 one-page bridges to fit 96 GETs.
+        // Each D1024 SOURCE page is 256 * 264 = 67584 bytes.
+        raw["charges"]["source"] = json!({"submitted_gets":96,
+            "verified_bytes":11_083_776,"failed_gets":0});
+        raw["charges"]["sq8"] = json!({"submitted_gets":1,
+            "verified_bytes":265_216,"failed_gets":0});
+        raw["plan"] = json!({"selected_pages":[0],"ranges":[[0,265_216]],
+            "planned_bytes":265_216});
+        let query: Query = serde_json::from_value(raw.clone()).unwrap();
+        let coverage = loss_coverage(&serde_json::to_vec(&raw).unwrap(), &query, &inputs)
+            .expect("declared96 cover must be checked as96, not128");
+        assert_eq!(coverage.scored_units.len(), 1040);
+        assert_eq!(coverage.sq8_rows, vec![[0, 256]]);
+        let mut wrong = raw.clone();
+        // The 128-GET policy joins just two gaps: 132 * 67584 bytes.
+        wrong["charges"]["source"] = json!({"submitted_gets":128,
+            "verified_bytes":8_921_088,"failed_gets":0});
+        let query: Query = serde_json::from_value(wrong.clone()).unwrap();
+        assert!(loss_coverage(&serde_json::to_vec(&wrong).unwrap(), &query, &inputs).is_err());
+        metadata["source_get_budget"] = json!(128);
+        let inputs: Inputs = serde_json::from_value(metadata).unwrap();
+        let query: Query = serde_json::from_value(raw.clone()).unwrap();
+        assert!(loss_coverage(&serde_json::to_vec(&raw).unwrap(), &query, &inputs).is_err());
+    }
+
+    #[test]
     fn source_intervals_report_authenticates_full_population_and_noop_geometry() {
         let dir = tempfile::tempdir().unwrap();
         let mut rows = paired_scale_fixture(64);
