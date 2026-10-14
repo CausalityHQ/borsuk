@@ -475,3 +475,188 @@ mod tests {
         assert_eq!(plan.selected_pages, vec![0, 2]);
     }
 }
+
+#[cfg(test)]
+mod selected_sq8_rows_contract {
+    use super::BudgetedPageError;
+    use crate::sq8_page_authority::PageAuthority;
+    use sha2::{Digest, Sha256};
+    use std::ops::Range;
+
+    // Test-only RED surface; the production API is not implemented yet.
+    #[derive(Clone, Copy)]
+    struct SelectedSq8Limits {
+        max_gets: usize,
+        max_bytes: usize,
+        max_planner_bytes: usize,
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    struct SelectedSq8Plan {
+        selected_pages: Vec<usize>,
+        ranges: Vec<Range<usize>>,
+        planned_bytes: usize,
+        modeled_planner_bytes: usize,
+    }
+    fn plan_selected_sq8_rows(
+        _authority: &PageAuthority,
+        _selected_ordinals: &[usize],
+        limits: SelectedSq8Limits,
+    ) -> Result<SelectedSq8Plan, BudgetedPageError> {
+        let _ = (limits.max_gets, limits.max_bytes, limits.max_planner_bytes);
+        Err(BudgetedPageError::InsufficientBudget)
+    }
+    fn selected_sq8_planner_payload(_rows: usize) -> Result<usize, BudgetedPageError> {
+        Err(BudgetedPageError::InsufficientBudget)
+    }
+    fn authority(rows: usize, dimensions: usize, page_rows: usize) -> PageAuthority {
+        let width = dimensions + 12;
+        let mut object = vec![1_u8; rows * width];
+        for row in 0..rows {
+            let first = row * width;
+            let logical_id = 10_000 + (rows - row) as i64;
+            object[first..first + 8].copy_from_slice(&logical_id.to_le_bytes());
+            object[first + 8..first + 12].copy_from_slice(&(dimensions as f32).to_le_bytes());
+        }
+        let mut sidecar = Vec::new();
+        for bytes in object.chunks(page_rows * width) {
+            sidecar.extend_from_slice(&Sha256::digest(bytes));
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":rows, "dimensions":dimensions, "page_rows":page_rows,
+            "object_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar))
+        }))
+        .unwrap();
+        PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap()
+    }
+
+    // Dropped nominees, uncharged bridges, fixed block width and a truncated
+    // final block must each break these hand-derived physical expectations.
+    #[test]
+    fn selected_sq8_rows_authenticated_geometry_parity_and_bridges() {
+        let auth = authority(769, 64, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 2,
+            max_bytes: 9_804,
+            max_planner_bytes: 6_144,
+        };
+        let plan = plan_selected_sq8_rows(&auth, &[0, 32, 96, 768], limits)
+            .expect("selected physical rows should fit their exact cover budgets");
+        assert_eq!(plan.selected_pages, vec![0, 1, 3, 24]);
+        assert_eq!(plan.ranges, vec![0..9_728, 58_368..58_444]);
+        assert_eq!(plan.planned_bytes, 9_804);
+        assert_eq!(plan.modeled_planner_bytes, 6_144);
+
+        let tie = plan_selected_sq8_rows(
+            &auth,
+            &[0, 64, 128],
+            SelectedSq8Limits {
+                max_gets: 2,
+                max_bytes: 9_728,
+                max_planner_bytes: 5_632,
+            },
+        )
+        .unwrap();
+        assert_eq!(tie.ranges, vec![0..7_296, 9_728..12_160]);
+        assert_eq!(tie.planned_bytes, 9_728);
+
+        let selected = (0..256).collect::<Vec<_>>();
+        for block in [32, 256] {
+            let covered = plan_selected_sq8_rows(
+                &authority(769, 64, block),
+                &selected,
+                SelectedSq8Limits {
+                    max_gets: 1,
+                    max_bytes: 19_456,
+                    max_planner_bytes: 135_168,
+                },
+            )
+            .unwrap();
+            assert_eq!(covered.ranges, vec![0..19_456]);
+            assert_eq!(covered.planned_bytes, 19_456);
+        }
+        let tail = plan_selected_sq8_rows(
+            &authority(257, 1, 32),
+            &[256],
+            SelectedSq8Limits {
+                max_gets: 1,
+                max_bytes: 13,
+                max_planner_bytes: 4_608,
+            },
+        )
+        .unwrap();
+        assert_eq!(tail.selected_pages, vec![8]);
+        assert_eq!(tail.ranges, vec![3_328..3_341]);
+        assert_eq!(tail.planned_bytes, 13);
+    }
+
+    // Missing roster validation, unchecked scratch arithmetic or admitting one
+    // byte below the required physical/planner budget must break this contract.
+    #[test]
+    fn selected_sq8_rows_refuse_roster_overflow_and_planner_budget() {
+        let auth = authority(769, 64, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 2,
+            max_bytes: 9_804,
+            max_planner_bytes: 6_144,
+        };
+        for rows in [&[][..], &[2, 1][..], &[0, 0][..], &[769][..], &[10_000][..]] {
+            assert_eq!(
+                plan_selected_sq8_rows(&auth, rows, limits),
+                Err(BudgetedPageError::InvalidCandidate)
+            );
+        }
+        for bad in [
+            SelectedSq8Limits {
+                max_gets: 0,
+                ..limits
+            },
+            SelectedSq8Limits {
+                max_bytes: 0,
+                ..limits
+            },
+            SelectedSq8Limits {
+                max_planner_bytes: 0,
+                ..limits
+            },
+        ] {
+            assert_eq!(
+                plan_selected_sq8_rows(&auth, &[0, 32, 96, 768], bad),
+                Err(BudgetedPageError::InvalidGeometry)
+            );
+        }
+        assert_eq!(
+            plan_selected_sq8_rows(
+                &auth,
+                &[0, 32, 96, 768],
+                SelectedSq8Limits {
+                    max_bytes: 9_803,
+                    ..limits
+                }
+            ),
+            Err(BudgetedPageError::InsufficientBudget)
+        );
+        assert_eq!(
+            plan_selected_sq8_rows(
+                &auth,
+                &[0, 32, 96, 768],
+                SelectedSq8Limits {
+                    max_planner_bytes: 6_143,
+                    ..limits
+                }
+            ),
+            Err(BudgetedPageError::InsufficientBudget)
+        );
+        assert_eq!(
+            selected_sq8_planner_payload(usize::MAX),
+            Err(BudgetedPageError::ArithmeticOverflow)
+        );
+        assert!(plan_selected_sq8_rows(&auth, &[0, 32, 96, 768], limits).is_ok());
+    }
+}
