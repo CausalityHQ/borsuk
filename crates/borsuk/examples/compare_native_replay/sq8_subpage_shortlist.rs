@@ -111,6 +111,60 @@ mod tests {
             BTreeSet::from([0, 2])
         );
         assert!(!plan.ranges.is_empty());
+        let flat = records.concat();
+        let (captured_plan, captured_trace, captured_scores) = super::capture_scored_rows(
+            rows,
+            2,
+            2,
+            &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
+            &prepared,
+            &flat,
+            records[0].len(),
+            257,
+            257 * 32 + 4096,
+            1,
+            1 << 20,
+        )
+        .unwrap();
+        assert_eq!(captured_plan.ranges, plan.ranges);
+        assert_eq!(captured_plan.selected_pages, plan.selected_pages);
+        assert_eq!(
+            serde_json::to_value(captured_trace).unwrap(),
+            serde_json::to_value(&trace).unwrap()
+        );
+        assert_eq!(captured_scores, scored);
+        assert!(
+            super::capture_scored_rows(
+                rows,
+                2,
+                2,
+                &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
+                &prepared,
+                &flat,
+                records[0].len(),
+                256,
+                1 << 20,
+                1,
+                1 << 20
+            )
+            .is_err()
+        );
+        assert!(
+            super::capture_scored_rows(
+                rows,
+                2,
+                2,
+                &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
+                &prepared,
+                &flat,
+                records[0].len(),
+                257,
+                257 * 32 + 4095,
+                1,
+                1 << 20
+            )
+            .is_err()
+        );
         assert_eq!(
             shortlist(rows, &scored, 2, 1 << 20)
                 .expect("bounded shortlist should retain tied best physical rows"),
@@ -411,4 +465,68 @@ mod digest_tests {
         std::fs::remove_file(path).unwrap();
         outcome.expect("whole-object authenticated sidecar with exact partial tail");
     }
+}
+
+// Replay nomination with the production scorer and capture only rows requested
+// by its record callback. Physical SOURCE cover gaps are not eligible rows.
+#[allow(clippy::too_many_arguments)]
+fn capture_scored_rows(
+    rows: usize,
+    dimensions: usize,
+    nomination_page_limit: usize,
+    walks: &[(usize, Vec<usize>)],
+    prepared: &borsuk::rotated_two_bit::PreparedTwoBit,
+    records: &[u8],
+    record_bytes: usize,
+    capture_row_cap: usize,
+    max_capture_bytes: usize,
+    max_gets: usize,
+    max_bytes: usize,
+) -> super::Result<(
+    borsuk::budgeted_page_rank::BudgetedPagePlan,
+    borsuk::two_bit_generation::TwoBitPlanTrace,
+    Vec<(usize, f64)>,
+)> {
+    super::require(
+        rows > 0 && record_bytes > 0 && capture_row_cap > 0,
+        "capture geometry",
+    )?;
+    super::require(
+        rows.checked_mul(record_bytes) == Some(records.len()),
+        "capture exact source bytes",
+    )?;
+    let modeled = capture_row_cap
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("capture workspace overflow")?;
+    super::require(modeled <= max_capture_bytes, "capture workspace")?;
+    let mut captured = Vec::new();
+    captured.try_reserve_exact(capture_row_cap)?;
+    let mut trace = borsuk::two_bit_generation::TwoBitPlanTrace::default();
+    let plan = borsuk::two_bit_generation::plan_two_bit_source_walks(
+        rows,
+        dimensions,
+        nomination_page_limit,
+        Some(borsuk::semantic_unit_router::SemanticProfile::Scale1m),
+        walks,
+        prepared,
+        |row| {
+            if captured.len() == capture_row_cap {
+                return None;
+            }
+            let start = row.checked_mul(record_bytes)?;
+            let record = records.get(start..start.checked_add(record_bytes)?)?;
+            let score = prepared.score(record).ok()?;
+            if !score.is_finite() {
+                return None;
+            }
+            captured.push((row, score));
+            Some(record)
+        },
+        max_gets,
+        max_bytes,
+        Some(&mut trace),
+    )?;
+    super::require(!captured.is_empty(), "capture empty roster")?;
+    Ok((plan, trace, captured))
 }
