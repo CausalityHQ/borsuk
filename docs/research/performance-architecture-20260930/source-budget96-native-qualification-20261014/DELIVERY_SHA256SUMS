@@ -1,3 +1,4 @@
+6fd7686d4c0674dc2d1c9e318a6d0722131c947e03056dc1ecf99f490525e03e  ./.gitattributes
 99fe1c0f1bb4b768f3d1709b5848229ff3e9d04fda6c1a8c6ab0e43fa681ad1b  ./abba-refusals/SHA256SUMS
 0761b3601518d5ae0fa5d0fc510a644a70052397e8a144fed9e50b29c3375afe  ./abba-refusals/build-configuration.txt
 bd8ea316d63ccab47af9329b4b4b427cb510d04fe500195f5aa332d211d9fd3f  ./abba-refusals/cpu.max.before

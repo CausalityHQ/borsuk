@@ -1,0 +1,5 @@
+# Preserve exact native/compiler/reviewer evidence, including terminal newlines.
+abba-refusals/native.log -whitespace
+abba-test/native.log -whitespace
+example-regressions/native.log -whitespace
+header-window-engineering-review.5766735895de4cdb.md -whitespace
