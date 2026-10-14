@@ -656,11 +656,13 @@ fn rank_local_cover(
         body.resize(range.len(), 0);
         snapshot.file.seek(SeekFrom::Start(range.start as u64))?;
         snapshot.file.read_exact(&mut body)?;
-        authority.verify_payload(
-            range.start / (32 * width),
-            (range.end - 1) / (32 * width),
-            &body,
-        )?;
+        authority
+            .verify_payload(
+                range.start / (32 * width),
+                (range.end - 1) / (32 * width),
+                &body,
+            )
+            .map_err(|e| format!("SQ8 payload authentication {e:?}"))?;
         bodies.push(body);
     }
     snapshot.recheck()?;
@@ -680,7 +682,8 @@ fn rank_local_cover(
         step,
         super::K,
         max_bytes,
-    )?)
+    )
+    .map_err(|e| format!("SQ8 returned ranking {e:?}"))?)
 }
 
 struct ShortlistArm {
@@ -754,6 +757,34 @@ fn reduce_shortlist(
     )?;
     header_pin(&c.mean, (i.dimensions * 4) as u64)?;
     header_pin(&c.source_digests, (i.rows.div_ceil(32) * 32) as u64)?;
+    header_pin(&c.completed.input, super::FILE_CAP)?;
+    header_pin(&c.generation_manifest, 64 * 1024)?;
+    header_pin(&c.plane_manifest, 64 * 1024)?;
+    header_pin(&c.requests, i.requests_bytes)?;
+    header_pin(&c.truth, i.truth_bytes)?;
+    header_pin(&c.sq8, (i.rows * (i.dimensions + 12)) as u64)?;
+    require(
+        c.records.bytes == (i.rows * super::source_record_bytes(i.dimensions)?) as u64
+            && c.mean.bytes == (i.dimensions * 4) as u64
+            && c.source_digests.bytes == (i.rows.div_ceil(32) * 32) as u64
+            && c.sq8.bytes == (i.rows * (i.dimensions + 12)) as u64
+            && c.requests.bytes == i.requests_bytes
+            && c.truth.bytes == i.truth_bytes,
+        "shortlist exact descriptor geometry",
+    )?;
+    // Admit retained caller payload before opening the baseline or allocating
+    // source/candidate bodies. Allocator/runtime RSS is a separate native gate.
+    let caller_bytes = c.records.bytes as usize
+        + c.requests.bytes as usize
+        + c.source_digests.bytes as usize
+        + i.rows.div_ceil(32) * 32
+        + 8 * super::FILE_CAP as usize
+        + 1000 * 15360 * 8
+        + 128 * 1024 * 1024;
+    require(
+        caller_bytes < c.max_payload_bytes,
+        "shortlist retained caller payload",
+    )?;
     let mut originals = Vec::<(Value, Value, super::LossCoverage)>::with_capacity(i.count);
     let run = read_run_observed(
         &c.completed.input.path,
@@ -803,8 +834,11 @@ fn reduce_shortlist(
         &c.plane_manifest.sha256,
         g["generation"].as_u64().ok_or("shortlist generation")?,
         &source_sidecar,
-    )?;
-    source_authority.verify_payload(0, i.rows.div_ceil(32) - 1, &records)?;
+    )
+    .map_err(|e| format!("SOURCE authority {e:?}"))?;
+    source_authority
+        .verify_payload(0, i.rows.div_ceil(32) - 1, &records)
+        .map_err(|e| format!("SOURCE payload authentication {e:?}"))?;
     let mean = mean_body
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
@@ -830,7 +864,8 @@ fn reduce_shortlist(
         &authority_body,
         &format!("{:x}", Sha256::digest(&authority_body)),
         &sidecar,
-    )?;
+    )
+    .map_err(|e| format!("SQ8 authority {e:?}"))?;
     let low: Vec<f32> = serde_json::from_value(g["low"].clone())?;
     let step: Vec<f32> = serde_json::from_value(g["step"].clone())?;
     require(
@@ -841,19 +876,6 @@ fn reduce_shortlist(
         "shortlist SQ8 calibration",
     )?;
     let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(i.dimensions)?;
-    // Reserve caller-held source, sealed-query Value trees and all retained arm rosters.
-    // This is payload admission; measured RSS must still include allocator/runtime.
-    let caller_bytes = records.len()
-        + request_body.len()
-        + source_sidecar.len()
-        + sidecar.len()
-        + 8 * super::FILE_CAP as usize
-        + 1000 * 15360 * 8
-        + 128 * 1024 * 1024;
-    require(
-        caller_bytes < c.max_payload_bytes,
-        "shortlist retained caller payload",
-    )?;
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: c.max_payload_bytes as u64,
         max_active_queries: 1,
@@ -1277,6 +1299,18 @@ mod driver_tests {
         let mut c = base.clone();
         c["records"]["path"] = json!(root.join("foreign.bin"));
         negatives.push(c);
+        for role in [
+            "records",
+            "mean",
+            "source_digests",
+            "sq8",
+            "requests",
+            "truth",
+        ] {
+            let mut c = base.clone();
+            c[role]["bytes"] = json!(1);
+            negatives.push(c);
+        }
         for c in negatives {
             let (path, sha) = write_config(&root, &c);
             let error = reduce_shortlist(&path, &sha).unwrap_err().to_string();
