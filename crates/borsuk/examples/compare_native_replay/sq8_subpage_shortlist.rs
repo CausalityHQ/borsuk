@@ -216,7 +216,7 @@ mod tests {
         };
         use sha2::{Digest, Sha256};
         let rows = 257;
-        let width = 14;
+        let width = 14_usize;
         let mut object = Vec::new();
         for row in 0..rows {
             let id = 1_234_i64 + (rows - row) as i64;
@@ -224,7 +224,7 @@ mod tests {
             object.extend_from_slice(&1_f32.to_le_bytes());
             object.extend_from_slice(if row % 7 == 0 { &[1, 0] } else { &[0, 1] });
         }
-        let authorize = |block| {
+        let authorize = |block: usize| {
             let sidecar = object
                 .chunks(block * width)
                 .flat_map(|part| Sha256::digest(part).to_vec())
