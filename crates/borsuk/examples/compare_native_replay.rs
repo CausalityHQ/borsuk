@@ -1763,7 +1763,7 @@ fn read_run_observed_with_identity(
                 "native range corpus bound",
             )?;
             require(
-                q.charges.source.submitted_gets <= 128
+                q.charges.source.submitted_gets <= inputs.source_get_budget.unwrap_or(128) as u64
                     && q.charges.source.verified_bytes <= 64 * 1024 * 1024
                     && q.charges.sq8.submitted_gets <= 32
                     && q.charges.sq8.verified_bytes <= 16_773_120,
@@ -4767,6 +4767,12 @@ fn reduce_byte_window_abba(config_path: &Path, config_sha: &str) -> Result<Value
         let identity = &run.expected_identity;
         let inputs = &run.expected_bound_inputs;
         require(
+            identity["schema"] == "borsuk-cohere-native-baseline-result-v7"
+                && identity.get("source_get_budget").is_none()
+                && inputs.get("source_get_budget").is_none(),
+            "byte-window historical v7 result required",
+        )?;
+        require(
             run.schema == SCALE_CONFIG_SCHEMA
                 && native["schema"] == "borsuk-cohere-native-baseline-config-v7"
                 && native["fetch_parallelism"] == 64
@@ -6367,6 +6373,13 @@ fn reduce_leaf_coverage_candidate_with(
     read_config::<CoverageConfig>(config_path, config_sha)?;
     let i: Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
     validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+    require(
+        c.completed
+            .expected_bound_inputs
+            .get("source_get_budget")
+            .is_none_or(|v| v.as_u64() == Some(128)),
+        "coverage requires frozen SOURCE128 control",
+    )?;
     let ordinals = scale_ordinals(&c.completed.expected_bound_inputs, i.count)?;
     require(
         i.rows == scope.rows
