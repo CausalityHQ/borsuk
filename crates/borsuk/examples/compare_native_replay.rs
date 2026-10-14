@@ -717,6 +717,24 @@ fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
 fn validate_scale_row(line: &[u8], phase: &str) -> Result<()> {
     let UniqueJson(mut raw) = serde_json::from_slice(line)?;
     if matches!(phase, "identity" | "bound_inputs") {
+        let budget = raw
+            .as_object_mut()
+            .ok_or("scale row object")?
+            .remove("source_get_budget");
+        if phase == "identity" {
+            require(
+                (raw["schema"] == "borsuk-cohere-native-baseline-result-v8") == budget.is_some(),
+                "v8 identity requires explicit SOURCE budget; historical identity forbids it",
+            )?;
+        }
+        if let Some(budget) = budget {
+            require(
+                matches!(budget.as_u64(), Some(96 | 128)),
+                "explicit SOURCE budget must be integer96 or128",
+            )?;
+        }
+    }
+    if matches!(phase, "identity" | "bound_inputs") {
         if let Some(window) = raw
             .as_object_mut()
             .ok_or("scale row object")?
@@ -798,8 +816,14 @@ fn validate_scale_row(line: &[u8], phase: &str) -> Result<()> {
     }
     if phase == "identity" {
         require(
-            raw["schema"] == "borsuk-cohere-native-baseline-result-v7",
-            "scale result v7 required",
+            matches!(
+                raw["schema"].as_str(),
+                Some(
+                    "borsuk-cohere-native-baseline-result-v7"
+                        | "borsuk-cohere-native-baseline-result-v8"
+                )
+            ),
+            "scale result v7/v8 required",
         )?;
         for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
             require(
@@ -1121,6 +1145,8 @@ struct Inputs {
     native_sq8_sha256: String,
     native_order_sha256: String,
     truth_opened: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_get_budget: Option<usize>,
 }
 
 impl Inputs {
@@ -1571,7 +1597,11 @@ fn read_run_observed_with_identity(
         )?;
         if scale {
             require(
-                identity.schema == "borsuk-cohere-native-baseline-result-v7",
+                matches!(
+                    identity.schema.as_str(),
+                    "borsuk-cohere-native-baseline-result-v7"
+                        | "borsuk-cohere-native-baseline-result-v8"
+                ),
                 "scale result schema",
             )?;
             let mut raw = c.expected_identity.clone();
@@ -1585,6 +1615,14 @@ fn read_run_observed_with_identity(
         identity.validate()?;
     }
     let inputs: Inputs = rows.row("bound_inputs")?;
+    if scale {
+        let c = expected.ok_or("scale config")?;
+        require(
+            c.expected_identity.get("source_get_budget")
+                == c.expected_bound_inputs.get("source_get_budget"),
+            "identity/input SOURCE budget mismatch",
+        )?;
+    }
     let local =
         scale && expected.is_some_and(|c| c.expected_bound_inputs["backend"]["kind"] == "local");
     let ordinals = if scale {
@@ -3627,7 +3665,10 @@ fn reduce_source_intervals(config_path: &Path, config_sha: &str) -> Result<Value
             && c.expected_bound_inputs["dimensions"] == 1024
             && c.expected_bound_inputs["execution"]["mode"] == "full"
             && c.expected_bound_inputs["source_cache"] == "off"
-            && c.expected_bound_inputs["fetch_parallelism"] == 64,
+            && c.expected_bound_inputs["fetch_parallelism"] == 64
+            && c.expected_bound_inputs
+                .get("source_get_budget")
+                .is_none_or(|v| v.as_u64() == Some(128)),
         "interval diagnostic requires full width64 cache-off scale input",
     )?;
     let mut intervals = Vec::with_capacity(COUNT);
@@ -3749,7 +3790,10 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
         c.schema == SCALE_CONFIG_SCHEMA
             && c.expected_bound_inputs["rows"] == 1_000_000
             && c.expected_bound_inputs["execution"]["mode"] == "full"
-            && c.expected_bound_inputs["source_cache"] == "off",
+            && c.expected_bound_inputs["source_cache"] == "off"
+            && c.expected_bound_inputs
+                .get("source_get_budget")
+                .is_none_or(|v| v.as_u64() == Some(128)),
         "source cover curve requires full cache-off scale input",
     )?;
     let mut costs: [Vec<(u64, u64, bool, u64)>; 5] =
@@ -5458,11 +5502,18 @@ fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
         "loss trace must score full SOURCE closure",
     )?;
     let record_bytes = source_record_bytes(i.dimensions)?;
+    // Missing budget belongs only to the frozen historical 128-GET protocol.
+    // Current headers admit and bind the explicit integer budget separately.
+    let source_get_budget = i.source_get_budget.unwrap_or(128);
+    require(
+        matches!(source_get_budget, 96 | 128),
+        "SOURCE cover budget must be 96 or 128",
+    )?;
     let (source_ranges, source_bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
         &pages,
         i.rows,
         record_bytes,
-        128,
+        source_get_budget,
         64 * 1024 * 1024,
     )?;
     require(
