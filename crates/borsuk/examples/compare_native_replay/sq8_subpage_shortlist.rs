@@ -394,12 +394,61 @@ mod tests {
 // The sidecar is ephemeral diagnostic metadata; whole-object authentication must
 // finish before any digest is exposed to a candidate planner.
 fn authenticated_sq8_digests(
-    _pin: &super::CompletedInput,
-    _rows: usize,
-    _dimensions: usize,
-    _max_payload_bytes: usize,
+    pin: &super::CompletedInput,
+    rows: usize,
+    dimensions: usize,
+    max_payload_bytes: usize,
 ) -> super::Result<(Vec<u8>, super::HeaderSnapshot)> {
-    Err("authenticated SQ8 sidecar implementation missing".into())
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    super::require(
+        rows > 0 && dimensions > 0 && dimensions <= 1024,
+        "sidecar geometry",
+    )?;
+    let width = dimensions.checked_add(12).ok_or("sidecar record width")?;
+    let object_bytes = rows.checked_mul(width).ok_or("sidecar object bytes")?;
+    let block_bytes = width.checked_mul(32).ok_or("sidecar block bytes")?;
+    let sidecar_bytes = rows
+        .div_ceil(32)
+        .checked_mul(32)
+        .ok_or("sidecar digest bytes")?;
+    let modeled = sidecar_bytes
+        .checked_add(block_bytes)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("sidecar workspace overflow")?;
+    super::require(modeled <= max_payload_bytes, "sidecar workspace")?;
+    super::header_pin(pin, object_bytes as u64)?;
+    super::require(pin.bytes == object_bytes as u64, "sidecar exact geometry")?;
+    let mut file = super::header_file(&pin.path)?;
+    let identity = super::file_identity(&file)?;
+    super::require(identity.len == pin.bytes, "sidecar exact file length")?;
+    let mut sidecar = Vec::new();
+    sidecar.try_reserve_exact(sidecar_bytes)?;
+    let mut block = Vec::new();
+    block.try_reserve_exact(block_bytes)?;
+    block.resize(block_bytes, 0);
+    let mut whole = Sha256::new();
+    let mut remaining = object_bytes;
+    while remaining > 0 {
+        let take = remaining.min(block_bytes);
+        file.read_exact(&mut block[..take])?;
+        whole.update(&block[..take]);
+        sidecar.extend_from_slice(&Sha256::digest(&block[..take]));
+        remaining -= take;
+    }
+    super::require(
+        file.read(&mut [0])? == 0
+            && format!("{:x}", whole.finalize()) == pin.sha256
+            && sidecar.len() == sidecar_bytes,
+        "sidecar complete SHA/EOF",
+    )?;
+    let snapshot = super::HeaderSnapshot {
+        file,
+        path: pin.path.clone(),
+        identity,
+    };
+    snapshot.recheck()?;
+    Ok((sidecar, snapshot))
 }
 
 #[cfg(test)]
