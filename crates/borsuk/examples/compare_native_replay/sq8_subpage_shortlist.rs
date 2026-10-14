@@ -1295,7 +1295,7 @@ mod driver_tests {
     }
     fn config_fixture(root: &std::path::Path) -> Value {
         const COMPLETED: &str = r#"
-{"expected_bound_inputs":{"backend":{"bucket":"borsuk-bench-453182569524-euc1","kind":"s3","physical_prefix":"research/semantic-router/20261010/full1000-local-admission-a0004/retained-source","region":"eu-central-1","sq8_etag":"\"4875c438eb819e00fc58ac993227fb2b\"","sq8_object_key":"semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"},"cohort_receipt_sha256":"e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17","corpus_intervals":[{"end":100000,"start":0},{"end":1001000,"start":101000}],"corpus_source_first":0,"count":1000,"credential_source":"imds_instance_role_only","dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3","derivation_receipt_sha256":"00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e","dimensions":1024,"execution":{"mode":"full"},"fetch_parallelism":64,"generation_prefix":"semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","generation_root_sha256":"80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","k":10,"max_memory_bytes":536870912,"metric":"cosine","native_order_sha256":"1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413","native_source_sha256":"31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d","native_sq8_sha256":"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1","phase":"bound_inputs","producer_authority":{"executable_sha256":"4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66","producer_source_sha256":"a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd","source_commit":"bc3082a8210c4370ebadae4ba093a7c211072b62","source_order_source_sha256":"1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4","sq8_source_sha256":"16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"},"profile":"scale1m","query_source_first":100000,"requests_bytes":4096000,"requests_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_queries_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_query_interval":{"end":101000,"start":100000},"revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","rows":1000000,"selected_count":1000,"serving":{"mode":"baseline"},"source_cache":"off","tie_rule":"corpus_ordinal_ascending","truth_bytes":80000,"truth_opened":false,"truth_sha256":"0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f","source_get_budget":128},"expected_identity":{"billed_bytes":null,"billed_requests":null,"binary_sha256":"59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083","codec_source_sha256":"eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec","config_sha256":"dde73b3893fe5c71b1870f99cccb2bb667e88b57c0065998fa85dba90400ca18","execution":{"mode":"full"},"external_gate_required":true,"fetch_parallelism":64,"generation_source_sha256":"0eec4171d42d42e601ffc473027870f226342e1aae70e28efc9ced4c79f35f9d","io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport","native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT","phase":"identity","physical_s3_measured":false,"returned_source_sha256":"a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b","router_source_sha256":"a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8","runner_source_sha256":"27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3","s3_credential_source":"imds_instance_role_only","schema":"borsuk-cohere-native-baseline-result-v8","scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","serving":{"mode":"baseline"},"source_plane_source_sha256":"dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0","sq8_range_source_sha256":"bf31d4e0b6e53c9e7da88ab8a5d6d27a748d2492d7a915e7df7eb131c41c45e2","truth_opened":false,"unread_bytes":null,"wire_bytes":null,"source_get_budget":128},"input":{"path":"/mnt/borsuk-source-width64/results/admission-width64.jsonl","bytes":0,"sha256":"PENDING_CLOSED_NATIVE_WHOLE_FILE_PIN"},"schema":"borsuk-completed-native-reduction-config-v4"}
+{"expected_bound_inputs":{"backend":{"bucket":"borsuk-bench-453182569524-euc1","kind":"s3","physical_prefix":"research/semantic-router/20261010/full1000-local-admission-a0004/retained-source","region":"eu-central-1","sq8_etag":"\"4875c438eb819e00fc58ac993227fb2b\"","sq8_object_key":"semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"},"cohort_receipt_sha256":"e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17","corpus_intervals":[{"end":100000,"start":0},{"end":1001000,"start":101000}],"corpus_source_first":0,"count":1000,"credential_source":"imds_instance_role_only","dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3","derivation_receipt_sha256":"00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e","dimensions":1024,"execution":{"mode":"full"},"fetch_parallelism":64,"generation_prefix":"semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","generation_root_sha256":"80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","k":10,"max_memory_bytes":536870912,"metric":"cosine","native_order_sha256":"1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413","native_source_sha256":"31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d","native_sq8_sha256":"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1","phase":"bound_inputs","producer_authority":{"executable_sha256":"4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66","producer_source_commit":"a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd","source_commit":"bc3082a8210c4370ebadae4ba093a7c211072b62","source_order_source_sha256":"1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4","sq8_source_sha256":"16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"},"profile":"scale1m","query_source_first":100000,"requests_bytes":4096000,"requests_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_queries_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_query_interval":{"end":101000,"start":100000},"revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","rows":1000000,"selected_count":1000,"serving":{"mode":"baseline"},"source_cache":"off","tie_rule":"corpus_ordinal_ascending","truth_bytes":80000,"truth_opened":false,"truth_sha256":"0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f","source_get_budget":128},"expected_identity":{"billed_bytes":null,"billed_requests":null,"binary_sha256":"59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083","codec_source_sha256":"eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec","config_sha256":"dde73b3893fe5c71b1870f99cccb2bb667e88b57c0065998fa85dba90400ca18","execution":{"mode":"full"},"external_gate_required":true,"fetch_parallelism":64,"generation_source_sha256":"0eec4171d42d42e601ffc473027870f226342e1aae70e28efc9ced4c79f35f9d","io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport","native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT","phase":"identity","physical_s3_measured":false,"returned_source_sha256":"a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b","router_source_sha256":"a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8","runner_source_sha256":"27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3","s3_credential_source":"imds_instance_role_only","schema":"borsuk-cohere-native-baseline-result-v8","scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","serving":{"mode":"baseline"},"source_plane_source_sha256":"dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0","sq8_range_source_sha256":"bf31d4e0b6e53c9e7da88ab8a5d6d27a748d2492d7a915e7df7eb131c41c45e2","truth_opened":false,"unread_bytes":null,"wire_bytes":null,"source_get_budget":128},"input":{"path":"/mnt/borsuk-source-width64/results/admission-width64.jsonl","bytes":0,"sha256":"PENDING_CLOSED_NATIVE_WHOLE_FILE_PIN"},"schema":"borsuk-completed-native-reduction-config-v4"}
 "#;
         let mut completed: Value = serde_json::from_str(COMPLETED).unwrap();
         completed["input"] = json!({"path":root.join("baseline.jsonl"),"bytes":35179156,"sha256":"2b79e015f05de4dc077de099ed423e541efbeeb3d42c93e0a8c6c25a6939d836"});
@@ -2158,5 +2158,360 @@ mod local_stream_tests {
         std::fs::remove_file(root.join("object.bin")).unwrap();
         std::fs::remove_file(root.join("corrupt.bin")).unwrap();
         std::fs::remove_dir(root).unwrap();
+    }
+}
+
+pub(super) const GEOMETRY_SCHEMA: &str = "borsuk-sq8-shortlist-geometry-v1";
+const GEOMETRY_BLOCK_BYTES: u64 = 32 * 1036;
+const GEOMETRY_BYTE_CAP: u64 = 32 * 1024 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeometryConfig {
+    schema: String,
+    report: super::CompletedInput,
+    producer_terminal: super::CompletedInput,
+    producer_source_commit: String,
+    producer_elf_sha256: String,
+    producer_config_sha256: String,
+}
+
+fn geometry_number(value: &serde_json::Value, key: &str) -> super::Result<u64> {
+    value[key]
+        .as_u64()
+        .ok_or_else(|| format!("geometry unsigned {key}").into())
+}
+
+fn geometry_statistics(mut values: Vec<u64>) -> super::Result<serde_json::Value> {
+    super::require(values.len() == 1000, "geometry statistic population")?;
+    let total = values.iter().try_fold(0, |n, &v| super::plus(n, v))?;
+    values.sort_unstable();
+    Ok(serde_json::json!({"count":1000,"total":total,
+        "p50":values[499],"p90":values[899],"p95":values[949],"max":values[999]}))
+}
+
+fn geometry_aggregate(
+    report: &serde_json::Value,
+    expected_config: &str,
+) -> super::Result<serde_json::Value> {
+    use super::require;
+    use serde_json::{Value, json};
+    require(
+        report["schema"] == SHORTLIST_SCHEMA
+            && report["status"] == "MEASURED"
+            && report["complete"] == true
+            && report["config_sha256"] == expected_config
+            && report["query_count"] == 1000
+            && report["shortlist_sizes"] == json!([1024, 2048, 4096, 8192])
+            && report["ephemeral_sq8_block_rows"] == 32
+            && report["baseline_sq8_get_budget"] == 32
+            && report["candidate_sq8_get_budget"] == 30
+            && report["baseline_hits10"] == 9780
+            && report["baseline_sq8_gets_total"] == 29903
+            && report["baseline_sq8_bytes_total"] == 16708608000_u64
+            && report["baseline_exact_plan_trace_charges_ids_scorebits"] == true
+            && report["truth_file_opened_after_all_baseline_controls"] == true
+            && report["recall_floor_hits10"] == 9760
+            && report["nonratcheting_reference_hits10"] == 9780
+            && report["local_file_only"] == true
+            && report["cold_latency_claim"] == false
+            && report["qps_claim"] == false
+            && report["vendor_win_claim"] == false
+            && report["qualified"] == false,
+        "geometry completed report binding",
+    )?;
+    let queries = report["queries"].as_array().ok_or("geometry queries")?;
+    require(queries.len() == 1000, "geometry query population")?;
+    for key in [
+        "admissible_queries",
+        "measured_hit_subtotals",
+        "physical_bytes_totals",
+        "quality_floor_met",
+    ] {
+        require(
+            report[key].as_array().is_some_and(|a| a.len() == 4),
+            "geometry aggregate roster",
+        )?;
+    }
+    let mut result = Vec::with_capacity(4);
+    let baseline_total = queries
+        .iter()
+        .enumerate()
+        .try_fold(0, |sum, (ordinal, query)| {
+            require(
+                geometry_number(query, "ordinal")? == ordinal as u64,
+                "geometry ordered unique query",
+            )?;
+            let hits = geometry_number(query, "baseline_hits10")?;
+            require(hits <= 10, "geometry baseline hits")?;
+            require(
+                query["arms"].as_array().is_some_and(|a| a.len() == 4),
+                "geometry query arms",
+            )?;
+            super::plus(sum, hits)
+        })?;
+    require(baseline_total == 9780, "geometry baseline reconciliation")?;
+    for (index, size) in [1024_u64, 2048, 4096, 8192].into_iter().enumerate() {
+        let mut metrics: [Vec<u64>; 7] = std::array::from_fn(|_| Vec::with_capacity(1000));
+        let (mut admitted, mut hits, mut admitted_bytes, mut nominated_over, mut bridge_over) =
+            (0_u64, 0_u64, 0_u64, 0_u64, 0_u64);
+        for query in queries {
+            let arm = &query["arms"][index];
+            require(geometry_number(arm, "size")? == size, "geometry arm order")?;
+            let cover = geometry_number(arm, "physical_bytes")?;
+            let bridge = geometry_number(arm, "bridge_bytes")?;
+            let nominated = cover
+                .checked_sub(bridge)
+                .ok_or("geometry bridge underflow")?;
+            let blocks = geometry_number(arm, "selected_blocks")?;
+            let selected = geometry_number(arm, "selected_rows")?;
+            let runs = geometry_number(arm, "pre_cap_runs")?;
+            let gets = geometry_number(arm, "gets")?;
+            require(
+                selected > 0
+                    && selected <= size
+                    && blocks > 0
+                    && blocks <= selected
+                    && runs > 0
+                    && runs <= blocks
+                    && gets == runs.min(30)
+                    && nominated
+                        == blocks
+                            .checked_mul(GEOMETRY_BLOCK_BYTES)
+                            .ok_or("geometry block overflow")?
+                    && (runs > 30 || bridge == 0)
+                    && cover <= 1_036_000_000
+                    && cover % GEOMETRY_BLOCK_BYTES == 0,
+                "geometry authenticated full-block shape",
+            )?;
+            let measured = cover <= GEOMETRY_BYTE_CAP;
+            require(
+                if measured {
+                    arm["status"] == "MEASURED" && arm["quality"].is_object()
+                } else {
+                    arm["status"] == "BYTE_CAP_EXCEEDED_GEOMETRY_ONLY" && arm["quality"].is_null()
+                },
+                "geometry admission status",
+            )?;
+            if measured {
+                let qhits = geometry_number(&arm["quality"], "hits10")?;
+                require(qhits <= 10, "geometry candidate hits")?;
+                admitted += 1;
+                hits = super::plus(hits, qhits)?;
+                admitted_bytes = super::plus(admitted_bytes, cover)?;
+            } else if nominated > GEOMETRY_BYTE_CAP {
+                nominated_over += 1;
+            } else {
+                bridge_over += 1;
+            }
+            for (values, value) in metrics.iter_mut().zip([
+                nominated,
+                bridge,
+                cover,
+                blocks,
+                runs,
+                gets,
+                cover / GEOMETRY_BLOCK_BYTES,
+            ]) {
+                values.push(value);
+            }
+        }
+        require(
+            report["admissible_queries"][index] == admitted
+                && report["measured_hit_subtotals"][index] == hits
+                && report["physical_bytes_totals"][index] == admitted_bytes
+                && report["quality_floor_met"][index]
+                    == if admitted == 1000 {
+                        json!(hits >= 9760)
+                    } else {
+                        Value::Null
+                    },
+            "geometry admitted subtotal reconciliation",
+        )?;
+        let mut arm = serde_json::Map::new();
+        for (name, values) in [
+            "nominated_bytes",
+            "bridge_bytes",
+            "cover_bytes",
+            "nominated_blocks",
+            "pre_cap_runs",
+            "gets",
+            "covered_blocks",
+        ]
+        .into_iter()
+        .zip(metrics)
+        {
+            arm.insert(name.to_owned(), geometry_statistics(values)?);
+        }
+        arm.insert("size".into(), json!(size));
+        arm.insert("admitted_queries".into(), json!(admitted));
+        arm.insert("admitted_hit_subtotal".into(), json!(hits));
+        arm.insert("admitted_byte_subtotal".into(), json!(admitted_bytes));
+        arm.insert("nominated_over_cap_queries".into(), json!(nominated_over));
+        arm.insert("bridge_only_over_cap_queries".into(), json!(bridge_over));
+        arm.insert(
+            "full_population_quality".into(),
+            if admitted == 1000 {
+                json!({"hits10":hits,"floor_met":hits>=9760})
+            } else {
+                json!("UNKNOWN")
+            },
+        );
+        result.push(Value::Object(arm));
+    }
+    Ok(
+        json!({"schema":GEOMETRY_SCHEMA,"status":"CLOSED_GEOMETRY_ONLY","complete":true,
+        "query_count":1000,"arms":result,"baseline_hits10":9780,"block_bytes":GEOMETRY_BLOCK_BYTES,
+        "byte_cap":GEOMETRY_BYTE_CAP,"all_query_geometry":true,"ann_search_executed":false,
+        "scientific_inputs_opened":false,"cold_latency_claim":false,"qps_claim":false,
+        "vendor_win_claim":false,"qualified":false}),
+    )
+}
+
+fn geometry_json(
+    pin: &super::CompletedInput,
+    cap: u64,
+) -> super::Result<(serde_json::Value, super::HeaderSnapshot)> {
+    super::header_pin(pin, cap)?;
+    let file = super::header_file(&pin.path)?;
+    let identity = super::file_identity(&file)?;
+    super::require(identity.len == pin.bytes, "geometry pinned input length")?;
+    let (value, _) = super::read_config_file(&file, &pin.path, &pin.sha256, cap)?;
+    let snapshot = super::HeaderSnapshot {
+        file,
+        path: pin.path.clone(),
+        identity,
+    };
+    snapshot.recheck()?;
+    Ok((value, snapshot))
+}
+
+pub(super) fn execute_geometry(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+) -> super::Result<bool> {
+    super::execute_report(output, GEOMETRY_SCHEMA, || {
+        let (c, _): (GeometryConfig, _) = super::read_config(config, sha)?;
+        super::require(
+            c.schema == format!("{GEOMETRY_SCHEMA}-config")
+                && c.producer_source_commit.len() == 40
+                && c.producer_source_commit
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                && [&c.producer_elf_sha256, &c.producer_config_sha256]
+                    .into_iter()
+                    .all(|s| super::valid_sha(s)),
+            "geometry config authority",
+        )?;
+        let (terminal, ts) = geometry_json(&c.producer_terminal, 64 * 1024)?;
+        super::require(
+            terminal["schema"] == "borsuk-shortlist-offline-curve-stage-v1"
+                && terminal["source_commit"] == c.producer_source_commit
+                && terminal["elf_sha256"] == c.producer_elf_sha256
+                && terminal["config_sha256"] == c.producer_config_sha256
+                && terminal["native_exit"] == 0
+                && terminal["manager_exit"] == 0
+                && terminal["owned_cgroup_drained"] == true
+                && terminal["quality_byte_diagnostic"] == true
+                && terminal["cold_performance_run"] == false
+                && terminal["performance_claim"] == false,
+            "geometry producer terminal authority",
+        )?;
+        let (report, rs) = geometry_json(&c.report, super::REPORT_CAP)?;
+        let mut result = geometry_aggregate(&report, &c.producer_config_sha256)?;
+        ts.recheck()?;
+        rs.recheck()?;
+        super::read_config::<GeometryConfig>(config, sha)?;
+        result["input_report_sha256"] = serde_json::json!(c.report.sha256);
+        result["producer_source_commit"] = serde_json::json!(c.producer_source_commit);
+        result["producer_elf_sha256"] = serde_json::json!(c.producer_elf_sha256);
+        result["producer_config_sha256"] = serde_json::json!(c.producer_config_sha256);
+        Ok(result)
+    })
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+    use serde_json::{Value, json};
+    fn fixture() -> Value {
+        let queries=(0..1000).map(|ordinal| {
+            let arms=[1024,2048,4096,8192].map(|size| {
+                let (blocks,runs,cover,bridge,quality):(u64,u64,u64,u64,Value)=if ordinal<500 {(1,1,1,0,json!({"hits10":10}))}
+                    else if ordinal<750 {(1013,1,1013,0,Value::Null)}
+                    else {(31,31,1013,982,Value::Null)};
+                json!({"size":size,"selected_rows":blocks,"selected_blocks":blocks,"pre_cap_runs":runs,"gets":runs.min(30),
+                    "physical_bytes":cover*GEOMETRY_BLOCK_BYTES,"bridge_bytes":bridge*GEOMETRY_BLOCK_BYTES,
+                    "status":if quality.is_null(){"BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"}else{"MEASURED"},"quality":quality})
+            });
+            json!({"ordinal":ordinal,"baseline_hits10":if ordinal<978{10}else{0},"arms":arms})
+        }).collect::<Vec<_>>();
+        json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":"a".repeat(64),"query_count":1000,
+            "shortlist_sizes":[1024,2048,4096,8192],"ephemeral_sq8_block_rows":32,"baseline_sq8_get_budget":32,"candidate_sq8_get_budget":30,
+            "baseline_hits10":9780,"baseline_sq8_gets_total":29903,"baseline_sq8_bytes_total":16708608000_u64,
+            "baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,
+            "recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"local_file_only":true,"cold_latency_claim":false,
+            "qps_claim":false,"vendor_win_claim":false,"qualified":false,"queries":queries,
+            "admissible_queries":vec![500_u64;4],"measured_hit_subtotals":vec![5000_u64;4],"physical_bytes_totals":vec![500*GEOMETRY_BLOCK_BYTES;4],"quality_floor_met":[null,null,null,null]})
+    }
+    #[test]
+    fn closed_shortlist_geometry_full_population_cost_and_disjoint_failures() {
+        let result = geometry_aggregate(&fixture(), &"a".repeat(64)).unwrap();
+        assert_eq!(result["arms"].as_array().unwrap().len(), 4);
+        let arm = &result["arms"][0];
+        assert_eq!(arm["nominated_over_cap_queries"], 250);
+        assert_eq!(arm["bridge_only_over_cap_queries"], 250);
+        assert_eq!(arm["admitted_queries"], 500);
+        assert_eq!(arm["full_population_quality"], "UNKNOWN");
+        assert_eq!(
+            arm["nominated_bytes"]["total"],
+            (500 + 250 * 1013 + 250 * 31) * GEOMETRY_BLOCK_BYTES
+        );
+        assert_eq!(
+            arm["bridge_bytes"]["total"],
+            250 * 982 * GEOMETRY_BLOCK_BYTES
+        );
+        assert_eq!(arm["cover_bytes"]["p50"], GEOMETRY_BLOCK_BYTES);
+        assert_eq!(arm["cover_bytes"]["p90"], 1013 * GEOMETRY_BLOCK_BYTES);
+        assert_eq!(arm["gets"]["max"], 30);
+    }
+    #[test]
+    fn closed_shortlist_geometry_rejects_inconsistent_rosters_and_costs() {
+        let original = fixture();
+        for (pointer, value) in [
+            ("/queries/1/ordinal", json!(0)),
+            ("/queries/0/arms/0/size", json!(2048)),
+            ("/queries/0/arms/0/bridge_bytes", json!(100000)),
+            ("/queries/0/arms/0/selected_blocks", json!(2)),
+            (
+                "/queries/0/arms/0/status",
+                json!("BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"),
+            ),
+            ("/queries/999/arms/0/quality", json!({"hits10":10})),
+            ("/admissible_queries/0", json!(501)),
+            ("/measured_hit_subtotals/0", json!(4999)),
+            ("/physical_bytes_totals/0", json!(1)),
+            ("/quality_floor_met/0", json!(true)),
+            ("/config_sha256", json!("b".repeat(64))),
+            ("/baseline_hits10", json!(9779)),
+            ("/queries/0/arms/0/physical_bytes", json!(33.5)),
+        ] {
+            let mut bad = original.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                geometry_aggregate(&bad, &"a".repeat(64)).is_err(),
+                "{pointer}"
+            );
+        }
+        let mut missing = original.clone();
+        missing["queries"].as_array_mut().unwrap().pop();
+        assert!(geometry_aggregate(&missing, &"a".repeat(64)).is_err());
+        let mut missing_arm = original;
+        missing_arm["queries"][0]["arms"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(geometry_aggregate(&missing_arm, &"a".repeat(64)).is_err());
     }
 }

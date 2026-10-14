@@ -5720,6 +5720,11 @@ fn execute_report(
             && report["status"] == "COUNTERFACTUAL_COST_ONLY"
             && report["complete"] == true);
     }
+    if schema == sq8_subpage_shortlist::GEOMETRY_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "CLOSED_GEOMETRY_ONLY"
+            && report["complete"] == true);
+    }
     if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA {
         return Ok(report["schema"] == schema
             && report["status"] == "READY_ACTUAL_INPUT"
@@ -9123,6 +9128,35 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--sq8-shortlist-geometry")
+    {
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "geometry config SHA UTF-8".into())
+                .and_then(|sha| {
+                    sq8_subpage_shortlist::execute_geometry(
+                        std::path::Path::new(&args[2]),
+                        sha,
+                        std::path::Path::new(&args[4]),
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-shortlist-geometry CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2)
+            }
+        }
+        return;
+    }
+
     let binding = args
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
