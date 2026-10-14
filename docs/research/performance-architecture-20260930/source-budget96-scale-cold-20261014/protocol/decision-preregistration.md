@@ -1,0 +1,13 @@
+# Prospective SOURCE128/96 cold comparison decision
+
+Written before SOURCE96 cold measurements. Runtime drafts remain unfrozen; final source/binary pins, actual-input admission, disposable staging, original order/cost/resource receipt required before execution. This does not authorize a launch by itself.
+
+Single intervention: SOURCE GET budget128(control) versus96(candidate). Download width64, no shared byte window, application SOURCE cacheoff, same frozen1M Cohere D1024 cosine/k10 and1000 request/truth bytes, generation/SQ8/semantic selection identical. Four serial executions A1/B1/B2/A2; each owns distinct create-only output. Interrupted cells INVALID, preserve artifacts; no silent pooling/retry. Cold means application cacheoff, not a claim that S3 server caches are evicted.
+
+Correctness gate: every returned ID/score bit/semantic trace and SQ8 plan/charge identical; all4 runs9780hits/10000, fullk10, no transport errors; SOURCE counts/bytes independently replayed under each actual admitted budget. No quality tolerance for this scheduling-only intervention. Changed algorithm experiments separately retain97.60% preregistered floor without ratcheting.
+
+Retain every valid datapoint, including speed/memory/byte/GET tradeoffs. Modest screen is both matched pairs p95 lower and neither pair p90 or sequential QPS regresses more than5%. A >=10% p95 improvement in both pairs is labelled strong measured improvement, without significance or vendorwin inference. Keep p99, first query, per-stage timing, RSS, bytes/GETs and actual cost alongside screen fields; lower p95 never hides a p99 or throughput regression.
+
+Adoption additionally requires gains distinguishable from this campaign's repeat reference: g1=1-B1.p95/A1.p95 and g2=1-B2.p95/A2.p95; repeat_reference=max(abs(A2.p95/A1.p95-1),abs(B2.p95/B1.p95-1)). If either gain<=repeat_reference, label INCONCLUSIVE_FOR_ADOPTION, retain it as a Pareto datapoint and keep control default. This reference is descriptive, not a confidence interval or significance test. No posthoc recall/time gate adjustment.
+
+Sequential QPS is queries divided by total native query wall; it is not concurrent service throughput or throughput per total lifecycle dollar. Current native query wall excludes startup and client ingress; disclose both. Physical requests/retries/error/drop counters, compiled-source resources and original order remain root evidence, not inferred from four sealed result files. No matched S3 Vectors/Turbopuffer win until identical corpus/query metric/k/filter/cache-region-concurrency and quality/lifecycle cost evidence exists.

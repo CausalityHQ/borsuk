@@ -1,0 +1,1535 @@
+{
+  "schema": "borsuk-native-stage-receipts-v1",
+  "receipts": [
+    {
+      "path": "receipts/stages/admission-candidate.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.config-after.log",
+      "sha256": "d3d019ceda1c2cccc2373b06703af0ea132065e0f3b16a55da036eafd4dda285",
+      "body": "/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.config-before.log",
+      "sha256": "d3d019ceda1c2cccc2373b06703af0ea132065e0f3b16a55da036eafd4dda285",
+      "body": "/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.memory.peak.after",
+      "sha256": "16835924f19cbc508f763a16baec29923ee25b64095a4f61044fa914f1d0b01e",
+      "body": "54820864\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.native-time.txt",
+      "sha256": "3f6eebb359b791bab2042591e15258b008ae677858d867edf0a7e9ac18b1ab11",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 60 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/admission-candidate.config.json e7d448a5745102ccc4e5d7e174aa73fea925b5830125d924206483ea72b823f0 /mnt/borsuk-source-width64/results/admission-candidate.jsonl\"\n\tUser time (seconds): 0.15\n\tSystem time (seconds): 0.04\n\tPercent of CPU this job got: 44%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.44\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 60560\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 13740\n\tVoluntary context switches: 491\n\tInvoluntary context switches: 72\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8616\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/admission-candidate.supervision.json",
+      "sha256": "00b80817634db1a3a836c5bbbd223cf552a0fdadd6f473557336f17d645bbfc0",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"admission-candidate\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.config-after.log",
+      "sha256": "30e7cd081d35c2693224c296930ad03d4145af0903ec8629e02ff39648c59b94",
+      "body": "/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.config-before.log",
+      "sha256": "30e7cd081d35c2693224c296930ad03d4145af0903ec8629e02ff39648c59b94",
+      "body": "/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.memory.peak.after",
+      "sha256": "41dbbee590a5cf30909b9bec9a2f441deae7cd9bd5e62388bbc30c5ba1abcd1f",
+      "body": "55259136\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.native-time.txt",
+      "sha256": "09ffe4f86df46a91d109bab9609eecfa36459435f968bad90c858a9a06cd5caf",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 60 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/admission-original.config.json cfdeaa49eca63faaea8d7b745e07168dafb1b7becdb4eaabaeb6c0b323d859bb /mnt/borsuk-source-width64/results/admission-original.jsonl\"\n\tUser time (seconds): 0.15\n\tSystem time (seconds): 0.04\n\tPercent of CPU this job got: 30%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.66\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 59848\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 13480\n\tVoluntary context switches: 622\n\tInvoluntary context switches: 20\n\tSwaps: 0\n\tFile system inputs: 8\n\tFile system outputs: 8616\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/admission-original.supervision.json",
+      "sha256": "715f4d4d72181be70c5215c7b899d7b9c4dbf6d29d845d5cacfe34a21733593f",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"admission-original\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.config-after.log",
+      "sha256": "0e1b1915e1b48d1f1ceafd6354f58c4dacb1b67e038d44585a7cf95a44b9699d",
+      "body": "/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.config-before.log",
+      "sha256": "0e1b1915e1b48d1f1ceafd6354f58c4dacb1b67e038d44585a7cf95a44b9699d",
+      "body": "/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.memory.peak.after",
+      "sha256": "2904361b7482ee0d0dcbcc6655017071c30ae8eb631d0baa8fc37735687c17bd",
+      "body": "60850176\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.native-time.txt",
+      "sha256": "c9513604b27f75c8174004ae5d209d998cca63253b860b9869671e1e23efd01c",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 60 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/canary-candidate.config.json d69f6e5d2cc631a46e57887f8850852cc3f81fabda81ab5eb16c739d836570e9 /mnt/borsuk-source-width64/results/canary-candidate.jsonl\"\n\tUser time (seconds): 0.15\n\tSystem time (seconds): 0.04\n\tPercent of CPU this job got: 43%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.46\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 62712\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 14223\n\tVoluntary context switches: 434\n\tInvoluntary context switches: 53\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8608\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/canary-candidate.supervision.json",
+      "sha256": "4bda0d1cdb8b617005cdfb68867f7c5399021b8ef8414612e112260afd24300b",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"canary-candidate\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.config-after.log",
+      "sha256": "3962f271084945fecc6328d97fb4ed1cfe3ca99122bf62e82284bf53d333bed7",
+      "body": "/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.config-before.log",
+      "sha256": "3962f271084945fecc6328d97fb4ed1cfe3ca99122bf62e82284bf53d333bed7",
+      "body": "/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.memory.peak.after",
+      "sha256": "d76be1981813a4d6f5182fa61931f2e3e6e6d50d6384de7ecee20bb87ca6e530",
+      "body": "56541184\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.native-time.txt",
+      "sha256": "d69e4a99fd5d18eaadec88db2daef93dfd4392c73007f543da8fc7d0ad9d7bae",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 60 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/canary-original.config.json c61c7a4cd90a39b97c9a16789f1e0f9df394599a611edb37308662bcc43e0c46 /mnt/borsuk-source-width64/results/canary-original.jsonl\"\n\tUser time (seconds): 0.15\n\tSystem time (seconds): 0.04\n\tPercent of CPU this job got: 43%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.46\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 60472\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 13618\n\tVoluntary context switches: 545\n\tInvoluntary context switches: 58\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8608\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/canary-original.supervision.json",
+      "sha256": "f8518246fd58b133f79ee31cdcf9b96c0f3a4ff958859df702e2689469bb6ec4",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"canary-original\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.config-after.log",
+      "sha256": "29687a91fcb70035b99b0e42bfae6afa9b8b3f5d26b5674286151e020f40b781",
+      "body": "/mnt/borsuk-source-width64/dynamic/admission-candidate.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.config-before.log",
+      "sha256": "29687a91fcb70035b99b0e42bfae6afa9b8b3f5d26b5674286151e020f40b781",
+      "body": "/mnt/borsuk-source-width64/dynamic/admission-candidate.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.memory.peak.after",
+      "sha256": "cdd82787443896758b15beba7dfa0405844567269fdf39e4413772ac4c52c72c",
+      "body": "3063808\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.native-time.txt",
+      "sha256": "298bae29464135110a1b32f4ecc890699f250d293b01cdcacf7c82720671ae5f",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/admission-candidate.completed.json 7bfaa778c759723412c61ebdfd766d09d2d58804ccd356d51c14c7d1ef34e0e4 /mnt/borsuk-source-width64/results/completed-admission-candidate.jsonl\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 60%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5732\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 412\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-candidate.supervision.json",
+      "sha256": "82a71926f0c66c7df96e324d82fb4f999e9d46502e454c5f636e2e0f1d054dbf",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-admission-candidate\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.config-after.log",
+      "sha256": "4c0ff43dde06bfbd91c6be4d90a9c3837cd057143180932657f6d17cd9b5961b",
+      "body": "/mnt/borsuk-source-width64/dynamic/admission-original.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.config-before.log",
+      "sha256": "4c0ff43dde06bfbd91c6be4d90a9c3837cd057143180932657f6d17cd9b5961b",
+      "body": "/mnt/borsuk-source-width64/dynamic/admission-original.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.memory.peak.after",
+      "sha256": "f65d93acbd490049542fe2d4050482097e296e3e1f3b3ab3532e11a6d4998b5d",
+      "body": "3207168\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.native-time.txt",
+      "sha256": "0f8f7c11b4fe37dea9fd0f54bb7984b804b507466ec6b5390f4817045b792515",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/admission-original.completed.json 4c2914df6bb7ba22cb9604e851cc0798c90ec2fbe1e5dd73db88bba7a14512af /mnt/borsuk-source-width64/results/completed-admission-original.jsonl\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5844\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 414\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-admission-original.supervision.json",
+      "sha256": "eac577ddab6da671b565d1ee82c9196921c28511ea217c8c705f388579101272",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-admission-original\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.config-after.log",
+      "sha256": "13d8c77e017815e693995b422a5ee247d947e39c3e5d89c2b6ce06025afe4805",
+      "body": "/mnt/borsuk-source-width64/dynamic/canary-candidate.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.config-before.log",
+      "sha256": "13d8c77e017815e693995b422a5ee247d947e39c3e5d89c2b6ce06025afe4805",
+      "body": "/mnt/borsuk-source-width64/dynamic/canary-candidate.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.memory.peak.after",
+      "sha256": "2a8ff17f4ec0c85ec13904f48a89815509d014c2c9c11e4557a23767c8666233",
+      "body": "3043328\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.native-time.txt",
+      "sha256": "3ab5c61adfc696362d04af26f24129239595530b5360748494c368ded35d25d8",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/canary-candidate.completed.json 13ac3b127dd751b45e08a6ecbd73f45c7ebfdb90319a82332c0b93e04168fc86 /mnt/borsuk-source-width64/results/completed-canary-candidate.jsonl\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5844\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 417\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-candidate.supervision.json",
+      "sha256": "094077fa18b00babd8abc4aa2fce7ebbfd3d84e12449bd49ca998eeb356efdff",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-canary-candidate\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.config-after.log",
+      "sha256": "2ba7fbf3657ce4fc4b97ab505ac4066b99f0aa6748925a4ee034b2436ac5608a",
+      "body": "/mnt/borsuk-source-width64/dynamic/canary-original.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.config-before.log",
+      "sha256": "2ba7fbf3657ce4fc4b97ab505ac4066b99f0aa6748925a4ee034b2436ac5608a",
+      "body": "/mnt/borsuk-source-width64/dynamic/canary-original.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.memory.peak.after",
+      "sha256": "5d4ff065f003e76bc289f398f1b3132afd3ccce73fec51f82522f092972b8f80",
+      "body": "3031040\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.native-time.txt",
+      "sha256": "1f50c505950d1a9f7f23f8a56555a5d18d2a3d090bde66481835e47c0eb542cf",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/canary-original.completed.json e1b316a92c45f37a3c80ab1ebdaec2caeb749347e49f39ff5d5e0d09e7b8ed9e /mnt/borsuk-source-width64/results/completed-canary-original.jsonl\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5876\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 415\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-canary-original.supervision.json",
+      "sha256": "5db748a6ce6efc7b04127d31b91d4527bf4ee95c8dd53326ef0e5de21ed1c20e",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-canary-original\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.config-after.log",
+      "sha256": "4b6ee4558ca5f01beeab89d83f7926fb61f7760b256b99ab686435b70f87c230",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-candidate-b1.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.config-before.log",
+      "sha256": "4b6ee4558ca5f01beeab89d83f7926fb61f7760b256b99ab686435b70f87c230",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-candidate-b1.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.memory.peak.after",
+      "sha256": "3db4b4013cd32745f81105a57d6d480fd9eaf583fb9378f956fc876bceffd55d",
+      "body": "3145728\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.native-time.txt",
+      "sha256": "159ea286737a09ccb37d12a620f7e7b02b9918f8a7b4e0e57a09546eeae758ea",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/formal-candidate-b1.completed.json e52f0fc44d5366d9e00fe0c3ca528b14f7d99c64b61475748b3e3976967d4200 /mnt/borsuk-source-width64/results/completed-formal-candidate-b1.jsonl\"\n\tUser time (seconds): 0.94\n\tSystem time (seconds): 0.08\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6704\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 72606\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 4\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b1.supervision.json",
+      "sha256": "127f8033a7cc200b103eebf76dd153acd4acd9027079f7608f75dd1975456c86",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-formal-candidate-b1\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.config-after.log",
+      "sha256": "e0d43ee8b4eb651e2209a6d731f2c21b4b889effdd42c7aa6b11bdb889f49e18",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-candidate-b2.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.config-before.log",
+      "sha256": "e0d43ee8b4eb651e2209a6d731f2c21b4b889effdd42c7aa6b11bdb889f49e18",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-candidate-b2.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.memory.peak.after",
+      "sha256": "75435c9ab6ebaf5a9fee925d7c4e6a18f2d3a2f8130e94ac3823c8f929b72611",
+      "body": "3080192\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.native-time.txt",
+      "sha256": "1cae327c510372beb2b4cde4a8b5ed8a8f577ad00629cacd095a029d23ca1003",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/formal-candidate-b2.completed.json 245701d0a318c1f235ea7782fe868737bc7f13a5fb99b22c05b2c395f23186f1 /mnt/borsuk-source-width64/results/completed-formal-candidate-b2.jsonl\"\n\tUser time (seconds): 0.96\n\tSystem time (seconds): 0.06\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6640\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 72609\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 10\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-candidate-b2.supervision.json",
+      "sha256": "f8ab1089b31725ba7f6d4c94e4d0b4fdd526a6404d31c3a68752228e7b264af7",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-formal-candidate-b2\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.config-after.log",
+      "sha256": "144f7513a0bf5a7a5520793b9a2ea40a0e63941f6748c3617e784088f38f770c",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-original-a1.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.config-before.log",
+      "sha256": "144f7513a0bf5a7a5520793b9a2ea40a0e63941f6748c3617e784088f38f770c",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-original-a1.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.memory.peak.after",
+      "sha256": "aa447dd32c58272c65e1e389d45d29a4a5bb8b0385a4a1862d6ce691378b231c",
+      "body": "3133440\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.native-time.txt",
+      "sha256": "b3992b6f446bb643caad57f9922b75663f0034278e6a559ae56ff35457317c10",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/formal-original-a1.completed.json 02cf389dac94d6d199fca67c5536a3fd675d112356d2fcdf53bef135ddae597d /mnt/borsuk-source-width64/results/completed-formal-original-a1.jsonl\"\n\tUser time (seconds): 0.96\n\tSystem time (seconds): 0.07\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6580\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 72609\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 5\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a1.supervision.json",
+      "sha256": "5be56d5dba1bc9454a7d4c01e06a1b585f5ea49c0e52e900b171b0b18d10e2c2",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-formal-original-a1\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.config-after.log",
+      "sha256": "ffb20aeaf420f7da0ac6717ee5add2da9fd692b6fb79a77e4c122056938d53df",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-original-a2.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.config-before.log",
+      "sha256": "ffb20aeaf420f7da0ac6717ee5add2da9fd692b6fb79a77e4c122056938d53df",
+      "body": "/mnt/borsuk-source-width64/dynamic/formal-original-a2.completed.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.memory.peak.after",
+      "sha256": "cdd82787443896758b15beba7dfa0405844567269fdf39e4413772ac4c52c72c",
+      "body": "3063808\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.native-time.txt",
+      "sha256": "640f9397737fa522786b20ae01306b2cc719eba9d110604e523860f59274cc6c",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --completed-scale /mnt/borsuk-source-width64/dynamic/formal-original-a2.completed.json d02431857284826f03c76291e1bf1aab1c9d74c895cb71cc96992ee8468f1ab3 /mnt/borsuk-source-width64/results/completed-formal-original-a2.jsonl\"\n\tUser time (seconds): 0.93\n\tSystem time (seconds): 0.08\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6576\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 72609\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 8\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/completed-formal-original-a2.supervision.json",
+      "sha256": "cb2a6d1f9c0a415e5527894822203556d5e37ebeb346273d26715c72b04188b9",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"completed-formal-original-a2\",\n  \"kind\": \"completed\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.config-after.log",
+      "sha256": "d7e2a4ef764f383befbf87e560f75687c2d2d9582ab1e878353124ce5edead95",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.config-before.log",
+      "sha256": "d7e2a4ef764f383befbf87e560f75687c2d2d9582ab1e878353124ce5edead95",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.memory.peak.after",
+      "sha256": "64dec85e8670450a72389d09b64303c794c57ec72cb2bdac31cf3b4b2b71f371",
+      "body": "126951424\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.native-time.txt",
+      "sha256": "252563b4bf8eb723c61df819447969b9af53e7c7ff258afdc09386d8f04e91b2",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 1800 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/formal-candidate.config.json cc2365be0acdd17f507b5261d75f9b6b5d419f55554edca09f0680fe92c3b9d1 /mnt/borsuk-source-width64/results/formal-candidate-b1.jsonl\"\n\tUser time (seconds): 84.21\n\tSystem time (seconds): 17.36\n\tPercent of CPU this job got: 63%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:39.22\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 87204\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 198546\n\tVoluntary context switches: 49973\n\tInvoluntary context switches: 7171\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 77264\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b1.supervision.json",
+      "sha256": "f1ec6eba77fff6de83f4479e6030f7f7d18051a3825100fb5d036e90f2b68a05",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"formal-candidate-b1\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.config-after.log",
+      "sha256": "d7e2a4ef764f383befbf87e560f75687c2d2d9582ab1e878353124ce5edead95",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.config-before.log",
+      "sha256": "d7e2a4ef764f383befbf87e560f75687c2d2d9582ab1e878353124ce5edead95",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.memory.peak.after",
+      "sha256": "c1729b85fca385f88689025a437fd5eaa0d5f9c106eec1c2ee61974c5817c971",
+      "body": "116928512\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.native-time.txt",
+      "sha256": "3d62e78f0496dc584bf917772c3f9d57666140b72d8d729e60b6013d6ffb814a",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 1800 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/formal-candidate.config.json cc2365be0acdd17f507b5261d75f9b6b5d419f55554edca09f0680fe92c3b9d1 /mnt/borsuk-source-width64/results/formal-candidate-b2.jsonl\"\n\tUser time (seconds): 84.58\n\tSystem time (seconds): 18.02\n\tPercent of CPU this job got: 63%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:41.70\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 86772\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 473703\n\tVoluntary context switches: 47135\n\tInvoluntary context switches: 7385\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 77264\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/formal-candidate-b2.supervision.json",
+      "sha256": "2fe4dbf60d0ef682c0f290e6af7a00da7ea9536eca482ce2d594f6e8a19174cf",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"formal-candidate-b2\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.config-after.log",
+      "sha256": "8dd4f65567d7ef9deb828065bbde5193a298369018f9d1d89ac3789c480fd335",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.config-before.log",
+      "sha256": "8dd4f65567d7ef9deb828065bbde5193a298369018f9d1d89ac3789c480fd335",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.memory.peak.after",
+      "sha256": "8bb9f40fb354325c8482269f10eebe8c8f315080eb1f32ed33723a0842977476",
+      "body": "113278976\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.native-time.txt",
+      "sha256": "be3224421c7177094460d82cb5b148825385cd477c66ad7803ff8a8059c799e5",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 1800 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/formal-original.config.json dde73b3893fe5c71b1870f99cccb2bb667e88b57c0065998fa85dba90400ca18 /mnt/borsuk-source-width64/results/formal-original-a1.jsonl\"\n\tUser time (seconds): 80.00\n\tSystem time (seconds): 15.19\n\tPercent of CPU this job got: 63%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:29.19\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 76380\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 47702\n\tVoluntary context switches: 83447\n\tInvoluntary context switches: 7571\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 77272\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a1.supervision.json",
+      "sha256": "3cf366b33d0dd3478a362360e320d25c70ca2dcc445d089afb848dd21c0204ee",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"formal-original-a1\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.binary-after.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.binary-before.log",
+      "sha256": "f896f17d3ecde59626c18dd2a313d1cc24c019bcac4d959785bb18155578853b",
+      "body": "/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.config-after.log",
+      "sha256": "8dd4f65567d7ef9deb828065bbde5193a298369018f9d1d89ac3789c480fd335",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.config-before.log",
+      "sha256": "8dd4f65567d7ef9deb828065bbde5193a298369018f9d1d89ac3789c480fd335",
+      "body": "/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.memory.peak.after",
+      "sha256": "a51019661f9bfb7e7415bf784a18fec2bcd1a0c086e399d1f7e88423a69a99bd",
+      "body": "114008064\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.native-time.txt",
+      "sha256": "cfc1e6be8f7d3d5976951e8ec8bda52632a1243a47f68316380820cea6542840",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 1800 /mnt/borsuk-source-width64/bin/check_cohere_native_baseline /mnt/borsuk-source-width64/inputs/formal-original.config.json dde73b3893fe5c71b1870f99cccb2bb667e88b57c0065998fa85dba90400ca18 /mnt/borsuk-source-width64/results/formal-original-a2.jsonl\"\n\tUser time (seconds): 80.52\n\tSystem time (seconds): 15.68\n\tPercent of CPU this job got: 64%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:28.87\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 73344\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 135923\n\tVoluntary context switches: 79700\n\tInvoluntary context switches: 7769\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 77256\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/formal-original-a2.supervision.json",
+      "sha256": "f21a5fbb88875e20222c069ddf5e30a491a1d9be48b6d76be571ce3e6a0cb2c1",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"formal-original-a2\",\n  \"kind\": \"baseline\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.binary-after.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.binary-before.log",
+      "sha256": "f264655b57bae5aa5670722f67fcdd126d05cba8bd7140c8b7f99478dbe0d2b6",
+      "body": "/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.config-after.log",
+      "sha256": "9a7e67d9ff09ccbf720438cfe9edd9e8ae8a05a70daeaa951f22d3df2ddd72ba",
+      "body": "/mnt/borsuk-source-width64/dynamic/source-budget-abba.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.config-before.log",
+      "sha256": "9a7e67d9ff09ccbf720438cfe9edd9e8ae8a05a70daeaa951f22d3df2ddd72ba",
+      "body": "/mnt/borsuk-source-width64/dynamic/source-budget-abba.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.cpu.max.before",
+      "sha256": "261369fa24cb11ef3776980c85360401b9cdc7cf51aaa7a27e7acad94d662607",
+      "body": "100000 100000\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.cpuset.cpus.effective.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.input-after.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.input-before.log",
+      "sha256": "b74d767c37f92031ef71fb2d2e7374fb3a457439004a68b421e167d27f2345e6",
+      "body": "/mnt/borsuk-source-width64/inputs/queries.f32: OK\n/mnt/borsuk-source-width64/inputs/truth.u64: OK\n/mnt/borsuk-source-width64/inputs/cohort-evidence.tar.gz: OK\n/mnt/borsuk-source-width64/bin/check_cohere_native_baseline: OK\n/mnt/borsuk-source-width64/bin/compare_native_replay: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/admission-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/canary-original.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-candidate.config.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.completed.EXPECTED.json: OK\n/mnt/borsuk-source-width64/inputs/formal-original.config.json: OK\n/mnt/borsuk-source-width64/close-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/owned-native-stage.sh: OK\n/mnt/borsuk-source-width64/run-source-budget-campaign.sh: OK\n/mnt/borsuk-source-width64/supervise-native-stage.sh: OK\n/mnt/borsuk-source-width64/transport-panel-inputs.sh: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_cohort_complete.json: OK\n/mnt/borsuk-source-width64/inputs/prepared-parent_derived_derivation.json: OK\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.manager-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.memory.events.after",
+      "sha256": "0a2d4e7982066cc7dc914627e7b195ccba88b82a5a996201809e529142d2f380",
+      "body": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.memory.max.before",
+      "sha256": "6ca8d2dfdb2484b3436a085985b597b617554bd1051e8677dc140f778ea66592",
+      "body": "1073741824\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.memory.peak.after",
+      "sha256": "215536a6dc46963e61cbea3eb30d40d5b0b548b062ed687fb9195e48befbea10",
+      "body": "10895360\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.memory.swap.max.before",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.memory.swap.peak.after",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.native-exit.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "body": "0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.native-time.txt",
+      "sha256": "3e1ca072ae5d8d3b5638363bab378e9419f30312b224fa356b771005531e3df0",
+      "body": "\tCommand being timed: \"/usr/bin/timeout -k 20 180 /mnt/borsuk-source-width64/bin/compare_native_replay --source-budget-abba-scale /mnt/borsuk-source-width64/dynamic/source-budget-abba.json 75374fff4cd7d024692f244587dc3aff2b4b7a7670eb4436f5499b7c7df9edf5 /mnt/borsuk-source-width64/results/source-budget-abba.jsonl\"\n\tUser time (seconds): 6.43\n\tSystem time (seconds): 0.08\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:06.52\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 14460\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 48914\n\tVoluntary context switches: 5\n\tInvoluntary context switches: 38\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 632\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.pids.max.before",
+      "sha256": "56292515f7d3a7110811eb8de26b3f75f82a0766aa5a1fd66ebcfcb84fe6d5ff",
+      "body": "128\n"
+    },
+    {
+      "path": "receipts/stages/source-budget-abba.supervision.json",
+      "sha256": "c1cf00065487507150e2bb79b0f8ea984ed5a7758b23dc66c7edc571c56b1565",
+      "body": "{\n  \"schema\": \"borsuk-paired-returned-stage-supervision-v1\",\n  \"phase\": \"source-budget-abba\",\n  \"kind\": \"abba\",\n  \"manager_exit\": 0,\n  \"native_exit\": 0,\n  \"owned_cgroup_drained\": true,\n  \"forced_cleanup\": false,\n  \"execution_closed\": true,\n  \"quality_decision_pending\": true,\n  \"performance_claim\": false\n}\n"
+    }
+  ]
+}

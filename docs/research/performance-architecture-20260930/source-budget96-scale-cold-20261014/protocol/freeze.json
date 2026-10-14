@@ -1,0 +1,23 @@
+{
+  "status": "FROZEN_SOURCE_BUDGET96_COLD_ABBA",
+  "source": "8910ef50c1cce155eb396d71a2e05dd3b9e906a0",
+  "public_main": "3e534d57a7613a2e8ec71053556ad01d549b45ea",
+  "machine_seconds": 14400,
+  "cost_ceiling_usd": 1.50,
+  "order": [
+    "A1",
+    "B1",
+    "B2",
+    "A2"
+  ],
+  "source_budgets": [
+    128,
+    96
+  ],
+  "source_cache": "off",
+  "active_queries": 1,
+  "input_admission_staging": "EIGHT_STAGE_METADATA_FROZEN_HEADERS_RESOURCES_AND_COMPUTE_CLOSURE_VERIFIED",
+  "attempt": "a0002",
+  "preserved_previous_attempt": "a0001_EXECUTION_INVALID_selected_count_template",
+  "corrected_header_replay_receipt_sha256": "37bb320c05d5bb1fb0305a1046a94f3956804f3acc54454d152411a3e77b5fd7"
+}
