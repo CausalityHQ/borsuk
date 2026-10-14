@@ -13545,6 +13545,7 @@ mod tests {
         for case in [
             "config-binding",
             "runtime-width",
+            "header-window",
             "source-cover",
             "score-bits",
         ] {
@@ -13566,6 +13567,17 @@ mod tests {
                     config["runtime_configs"][1] =
                         json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)});
                     "SOURCE runtime version/budget/width/backend"
+                }
+                "header-window" => {
+                    for run in &mut rows {
+                        for header in &mut run[..2] {
+                            header["shared_byte_window"] = json!({
+                                "max_bytes": 9 * 1024 * 1024,
+                                "max_waiters": 64
+                            });
+                        }
+                    }
+                    "SOURCE runtime/header binding"
                 }
                 "source-cover" => {
                     let query = rows[1]
@@ -13597,7 +13609,7 @@ mod tests {
                 _ => unreachable!(),
             };
             let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
-            if matches!(case, "config-binding" | "runtime-width") {
+            if matches!(case, "config-binding" | "runtime-width" | "header-window") {
                 for index in 0..4 {
                     std::fs::remove_file(dir.path().join(format!("byte-run-{index}.jsonl")))
                         .unwrap();
