@@ -3131,6 +3131,7 @@ mod tests {
             native_sq8_sha256: "3".repeat(64),
             native_order_sha256: "4".repeat(64),
             truth_opened: false,
+            source_get_budget: None,
         }
     }
     fn query_line(a: &CoverageArm, i: &Inputs) -> (Value, Query) {
