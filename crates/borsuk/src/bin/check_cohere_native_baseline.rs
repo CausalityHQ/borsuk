@@ -43,8 +43,8 @@ const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v7";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v7";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v8";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v8";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -301,6 +301,8 @@ struct Config {
     max_memory_bytes: u64,
     #[serde(default = "default_fetch_parallelism")]
     fetch_parallelism: usize,
+    #[serde(default = "default_source_get_budget")]
+    source_get_budget: usize,
     #[serde(default)]
     shared_byte_window: Option<SharedByteWindow>,
     serving: Serving,
@@ -556,6 +558,9 @@ fn ordinal_at(c: &Config, slot: usize) -> usize {
 fn default_fetch_parallelism() -> usize {
     16
 }
+fn default_source_get_budget() -> usize {
+    BASELINE_SOURCE_GETS
+}
 
 fn query_runtime(fetch_parallelism: usize) -> Result<tokio::runtime::Runtime> {
     require(
@@ -719,6 +724,10 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     validate_population(c)?;
     let shape = population(c, shape);
     require(
+        matches!(c.source_get_budget, 96 | 128),
+        "source_get_budget must be integer 96 or 128",
+    )?;
+    require(
         matches!(c.fetch_parallelism, 16 | 32 | 64 | 128),
         "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
@@ -736,7 +745,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v7; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v8; older formats refuse",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -1263,7 +1272,7 @@ fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
         max_query_gets: BASELINE_QUERY_GETS,
         max_parallel_gets: c.fetch_parallelism,
         max_source_bytes: 64 * 1024 * 1024,
-        max_source_gets: BASELINE_SOURCE_GETS,
+        max_source_gets: c.source_get_budget,
         max_parallel_source_gets: c.fetch_parallelism,
         max_query_scratch_bytes: scratch_bytes(c.rows)?,
         already_pinned_bytes: pinned_bytes(c)?,
@@ -2591,6 +2600,7 @@ fn execute_paths_status(
         let configured = config(config_path, config_sha, shape);
         let mut identity = json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
+            "source_get_budget":configured.as_ref().ok().map(|c| c.source_get_budget),
             "serving":configured.as_ref().ok().map(|c| c.serving),
             "binary_sha256":executable_sha()?,"runner_source_sha256":hash(include_bytes!("check_cohere_native_baseline.rs")),
             "generation_source_sha256":hash(include_bytes!("../two_bit_generation.rs")),
@@ -2618,7 +2628,7 @@ fn execute_paths_status(
             ..
         } = validate_receipts(&c)?;
         let mut bound = json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
-            "fetch_parallelism":c.fetch_parallelism,"source_cache":"off","serving":c.serving,
+            "fetch_parallelism":c.fetch_parallelism,"source_get_budget":c.source_get_budget,"source_cache":"off","serving":c.serving,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
             "profile":c.profile,"backend":c.backend,"generation_prefix":c.generation_prefix,
