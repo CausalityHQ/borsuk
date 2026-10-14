@@ -13573,7 +13573,8 @@ mod tests {
                         for header in &mut run[..2] {
                             header["shared_byte_window"] = json!({
                                 "max_bytes": 9 * 1024 * 1024,
-                                "max_waiters": 64
+                                "max_waiters": 64,
+                                "max_state_bytes": 16384
                             });
                         }
                     }
