@@ -111,6 +111,7 @@ const SCALE_WIDTH64_SCHEMA: &str = "borsuk-scale-width64-native-reduction-v1";
 const SCALE_WIDTH128_SCHEMA: &str = "borsuk-scale-width128-native-reduction-v1";
 const MEMBERSHIP_ABBA_SCHEMA: &str = "borsuk-membership-abba-native-reduction-v1";
 const BYTE_WINDOW_ABBA_SCHEMA: &str = "borsuk-byte-window-abba-native-reduction-v1";
+const SOURCE_BUDGET_ABBA_SCHEMA: &str = "borsuk-source-budget-abba-native-reduction-v1";
 const CONFIG_CAP: u64 = 32 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -4700,10 +4701,283 @@ fn recheck_scale_pair(
     Ok(())
 }
 
-// Private RED checkpoint: no SOURCE-budget result may be accepted until the
-// four-run authority and per-query native cover replay are implemented.
-fn reduce_source_budget_abba(_config_path: &Path, _config_sha: &str) -> Result<Value> {
-    Err("SOURCE budget ABBA implementation unavailable".into())
+fn reduce_source_budget_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let config_file = open_input(config_path)?;
+    let config_identity = file_identity(&config_file)?;
+    let (c, config_bytes): (ByteWindowAbbaConfig, _) =
+        read_config_file(&config_file, config_path, config_sha, CONFIG_CAP)?;
+    require(
+        c.schema == "borsuk-source-budget-abba-native-reduction-config-v1",
+        "SOURCE ABBA schema",
+    )?;
+    require(
+        c.runtime_configs[0].sha256 != c.runtime_configs[1].sha256
+            && c.runtime_configs[0].path != c.runtime_configs[1].path,
+        "distinct SOURCE runtime configs",
+    )?;
+    let runtime = [
+        header_json(&c.runtime_configs[0])?,
+        header_json(&c.runtime_configs[1])?,
+    ];
+    let names = "schema dataset revision metric tie_rule corpus_intervals reserved_query_interval cohort_receipt derivation_receipt producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 scratch_parent requests truth native_source max_memory_bytes fetch_parallelism serving execution source_get_budget";
+    for (arm, (native, _)) in runtime.iter().enumerate() {
+        fields(native, names)?;
+        validate_header_descriptors(native)?;
+        require(
+            native["schema"] == "borsuk-cohere-native-baseline-config-v8"
+                && native["source_get_budget"].as_u64() == Some(if arm == 0 { 128 } else { 96 })
+                && native["fetch_parallelism"] == 64
+                && native["backend"]["kind"] == "s3",
+            "SOURCE runtime version/budget/width/backend",
+        )?;
+        header_path(Path::new(
+            native["scratch_parent"]
+                .as_str()
+                .ok_or("SOURCE scratch parent")?,
+        ))?;
+        for role in ["cohort_receipt", "derivation_receipt", "requests", "truth"] {
+            let pin: CompletedInput = serde_json::from_value(native[role].clone())?;
+            header_pin(
+                &pin,
+                if matches!(role, "requests" | "truth") {
+                    4_096_000
+                } else {
+                    HEADER_JSON_CAP
+                },
+            )?;
+        }
+        fields(
+            &native["native_source"],
+            "source_sha256 sq8_sha256 source_order_sha256",
+        )?;
+    }
+    let normalize_budget = |value: &Value| -> Result<Value> {
+        let mut value = value.clone();
+        value
+            .as_object_mut()
+            .ok_or("SOURCE object")?
+            .remove("source_get_budget");
+        Ok(value)
+    };
+    require(
+        normalize_budget(&runtime[0].0)? == normalize_budget(&runtime[1].0)?,
+        "SOURCE runtime unapproved intervention",
+    )?;
+    let normalized_headers = |run: &CompletedConfig| -> Result<[Value; 2]> {
+        let mut identity = normalize_budget(&run.expected_identity)?;
+        identity
+            .as_object_mut()
+            .ok_or("SOURCE identity object")?
+            .remove("config_sha256");
+        Ok([identity, normalize_budget(&run.expected_bound_inputs)?])
+    };
+    let invariant = normalized_headers(&c.runs[0])?;
+    for (index, pin) in c.runs.iter().enumerate() {
+        let arm = usize::from(index == 1 || index == 2);
+        let native = &runtime[arm].0;
+        let identity = &pin.expected_identity;
+        let inputs = &pin.expected_bound_inputs;
+        require(
+            pin.schema == SCALE_CONFIG_SCHEMA
+                && identity["schema"] == "borsuk-cohere-native-baseline-result-v8"
+                && identity["config_sha256"] == c.runtime_configs[arm].sha256
+                && identity["source_get_budget"] == native["source_get_budget"]
+                && inputs["source_get_budget"] == native["source_get_budget"],
+            "SOURCE runtime/header binding",
+        )?;
+        validate_scale_row(&serde_json::to_vec(identity)?, "identity")?;
+        validate_scale_row(&serde_json::to_vec(inputs)?, "bound_inputs")?;
+        let parsed: Inputs = serde_json::from_value(inputs.clone())?;
+        validate_scale_inputs(&parsed, inputs)?;
+        require(
+            parsed.rows == 1_000_000
+                && parsed.dimensions == 1024
+                && parsed.count == COUNT
+                && parsed.k == K
+                && parsed.profile == "scale1m"
+                && inputs["source_cache"] == "off"
+                && inputs["execution"] == json!({"mode":"full"})
+                && inputs["serving"] == json!({"mode":"baseline"})
+                && inputs["corpus_intervals"]
+                    == json!([{"start":0,"end":100000},{"start":101000,"end":1001000}])
+                && inputs["reserved_query_interval"] == json!({"start":100000,"end":101000})
+                && inputs["requests_sha256"]
+                    == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+                && inputs["reserved_queries_sha256"] == inputs["requests_sha256"]
+                && inputs["truth_sha256"]
+                    == "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+            "SOURCE frozen 1M workload",
+        )?;
+        for key in "dataset revision metric tie_rule corpus_intervals reserved_query_interval producer_authority corpus_source_first query_source_first rows dimensions count k profile backend generation_prefix generation_root_sha256 max_memory_bytes fetch_parallelism serving execution source_get_budget".split_whitespace() {
+            require(native[key]==inputs[key],"SOURCE runtime/input field mismatch")?;
+        }
+        require(
+            identity["fetch_parallelism"] == 64
+                && identity["serving"] == native["serving"]
+                && identity["execution"] == native["execution"],
+            "SOURCE runtime/identity field mismatch",
+        )?;
+        for role in ["requests", "truth"] {
+            require(
+                native[role]["bytes"] == inputs[format!("{role}_bytes")]
+                    && native[role]["sha256"] == inputs[format!("{role}_sha256")],
+                "SOURCE runtime input seal",
+            )?;
+        }
+        for (role, bound) in [
+            ("source_sha256", "native_source_sha256"),
+            ("sq8_sha256", "native_sq8_sha256"),
+            ("source_order_sha256", "native_order_sha256"),
+        ] {
+            require(
+                native["native_source"][role] == inputs[bound],
+                "SOURCE native source seal",
+            )?;
+        }
+        require(
+            native["cohort_receipt"]["sha256"] == inputs["cohort_receipt_sha256"]
+                && native["derivation_receipt"]["sha256"] == inputs["derivation_receipt_sha256"],
+            "SOURCE receipt seal",
+        )?;
+        require(
+            normalized_headers(pin)? == invariant,
+            "SOURCE ABBA source/binary/input drift",
+        )?;
+    }
+    let mut runs: Vec<Run> = Vec::with_capacity(4);
+    let mut distinct_queries = 0_usize;
+    for (index, pin) in c.runs.iter().enumerate() {
+        let run = read_run_observed(
+            &pin.input.path,
+            &pin.input.sha256,
+            Some(pin),
+            |line, q, i| {
+                loss_coverage(line, q, i)?;
+                Ok(())
+            },
+        )
+        .map_err(|e| format!("{}: {e}", LABELS[index]))?;
+        require(
+            run.stages.max_leaf_peak_inflight <= 64,
+            "SOURCE leaf peak exceeds width64",
+        )?;
+        require(
+            run.terminal.total_hits10 == 9780 && run.terminal.underfilled_queries == 0,
+            "SOURCE ABBA exact recall9780 and full-k required",
+        )?;
+        let evidence = run
+            .completed
+            .as_ref()
+            .ok_or("missing SOURCE completed evidence")?;
+        let transport = &evidence
+            .last
+            .as_ref()
+            .ok_or("missing SOURCE transport")?
+            .after;
+        require(
+            transport.transport_failures == 0
+                && transport.stream_failures == 0
+                && transport.dropped_error_bodies == 0
+                && run.terminal.sum.failed_gets == 0,
+            "SOURCE transport/logical GET failure",
+        )?;
+        for (old, old_pin) in runs.iter().zip(&c.runs) {
+            require(
+                pin.input.sha256 != old_pin.input.sha256
+                    && (run.file_identity.dev, run.file_identity.ino)
+                        != (old.file_identity.dev, old.file_identity.ino),
+                "duplicate SOURCE run evidence",
+            )?;
+        }
+        if let Some(first) = runs.first() {
+            require(
+                evidence.binding_charge
+                    == first
+                        .completed
+                        .as_ref()
+                        .ok_or("missing SOURCE binding")?
+                        .binding_charge,
+                "SOURCE binding charge mismatch",
+            )?;
+            for (ordinal, (a, b)) in first.samples.iter().zip(&run.samples).enumerate() {
+                require(
+                    a.returned == b.returned
+                        && a.hits10 == b.hits10
+                        && a.trace_sha256 == b.trace_sha256
+                        && a.physical_plan_sha256 == b.physical_plan_sha256
+                        && a.charges.router == b.charges.router
+                        && a.charges.sq8 == b.charges.sq8,
+                    &format!(
+                        "{} query {ordinal}: SOURCE quality/trace/SQ8 drift",
+                        LABELS[index]
+                    ),
+                )?;
+                if index == 1 {
+                    distinct_queries += usize::from(a.charges.source != b.charges.source);
+                }
+                if index == 3 {
+                    require(
+                        a.charges.source == b.charges.source,
+                        "SOURCE control repetition charge drift",
+                    )?;
+                }
+            }
+        }
+        if index == 2 {
+            require(
+                runs[1]
+                    .samples
+                    .iter()
+                    .zip(&run.samples)
+                    .all(|(a, b)| a.charges.source == b.charges.source),
+                "SOURCE candidate repetition charge drift",
+            )?;
+        }
+        runs.push(run);
+    }
+    require(
+        distinct_queries > 0,
+        "SOURCE budget intervention must change an actual cover",
+    )?;
+    for (pin, run) in c.runs.iter().zip(&runs) {
+        recheck_header_file(
+            &open_input(&pin.input.path)?,
+            &pin.input.path,
+            &run.file_identity,
+        )?;
+    }
+    for (_, snapshot) in &runtime {
+        snapshot.recheck()?;
+    }
+    recheck_header_file(&config_file, config_path, &config_identity)?;
+    let comparisons = [
+        byte_window_comparison(&runs[0], &runs[1], "B1-A1")?,
+        byte_window_comparison(&runs[3], &runs[2], "B2-A2")?,
+    ];
+    let noise = [
+        byte_window_comparison(&runs[0], &runs[3], "A2-A1 noise reference")?,
+        byte_window_comparison(&runs[1], &runs[2], "B2-B1 noise reference")?,
+    ];
+    let reports=c.runs.iter().zip(&runs).enumerate().map(|(index,(pin,run))| {
+        let mut report=completed_report(pin,run)?;
+        report["run"]=json!(LABELS[index]);
+        report["first_query"]=json!({"ordinal":0,"query_wall_ns":run.samples[0].wall_ns,"charges":run.samples[0].charges,"hits10":run.samples[0].hits10});
+        Ok(report)
+    }).collect::<Result<Vec<_>>>()?;
+    let passed = comparisons
+        .iter()
+        .all(|pair| pair["timing_gate_passed"] == true);
+    Ok(
+        json!({"schema":"borsuk-source-budget-abba-native-reduction-v1","status":"MEASURED","complete":true,
+        "config_path":config_path,"config_sha256":config_sha,"config_bytes":config_bytes,"runtime_configs":c.runtime_configs,
+        "declared_run_order":LABELS,"execution_order_verified":false,"source_binary_qualification_verified":false,
+        "external_authority":"root original run-order, frozen binary/source, cache/resource/transport/cost receipts required",
+        "quality_trace_sq8_parity":true,"source_cover_replay_verified":true,"distinct_source_cover_verified":true,
+        "source_cover_changed_queries":distinct_queries,"source_cover_scope":"native planner replay of authenticated nomination closure and logical counts/bytes; not an independently captured wire request roster",
+        "recall_anchor_hits10":9780,"recall_denominator":10000,"recall_anchor_verified":true,
+        "runs":reports,"comparisons":comparisons,"within_arm_noise_references":noise,
+        "performance_screen_passed":passed,"source_cache":"off","cache_resources_cost_and_transport_qualified":false,"vendor_win_claim":false}),
+    )
 }
 
 fn reduce_byte_window_abba(config_path: &Path, config_sha: &str) -> Result<Value> {
@@ -9027,6 +9301,21 @@ fn main() {
         }
         if args
             .get(1)
+            .is_some_and(|arg| arg == "--source-budget-abba-scale")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --source-budget-abba-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), SOURCE_BUDGET_ABBA_SCHEMA, || {
+                reduce_source_budget_abba(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("SOURCE config SHA encoding")?,
+                )
+            });
+        }
+        if args
+            .get(1)
             .is_some_and(|arg| arg == "--byte-window-abba-scale")
         {
             require(
@@ -13155,10 +13444,8 @@ mod tests {
         (path, sha(&bytes))
     }
 
-    #[test]
-    fn source_budget_abba_replays_distinct_cover_with_identical_quality_and_sq8() {
-        let dir = tempfile::tempdir().unwrap();
-        let (mut config, mut runs) = byte_window_abba_fixture(dir.path());
+    fn source_budget_abba_fixture(dir: &Path) -> (Value, [Vec<Value>; 4]) {
+        let (mut config, mut runs) = byte_window_abba_fixture(dir);
         config["schema"] = json!("borsuk-source-budget-abba-native-reduction-config-v1");
         let pages = (0_usize..130).map(|n| 2 * n).collect::<Vec<_>>();
         let trace = json!({"ranked_candidate_pages":pages,"primary_page":0,
@@ -13235,6 +13522,13 @@ mod tests {
                 .unwrap()
                 .remove("shared_byte_window_state_bytes");
         }
+        (config, runs)
+    }
+
+    #[test]
+    fn source_budget_abba_replays_distinct_cover_with_identical_quality_and_sq8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, runs) = source_budget_abba_fixture(dir.path());
         let (path, pin) = write_byte_window_abba(dir.path(), config, &runs);
         let report = reduce_source_budget_abba(&path, &pin)
             .expect("four sealed SOURCE128/96 runs need authenticated cover authority");
@@ -13244,6 +13538,79 @@ mod tests {
         assert_eq!(report["distinct_source_cover_verified"], true);
         assert_eq!(report["recall_anchor_verified"], true);
         assert_eq!(report["vendor_win_claim"], false);
+    }
+
+    #[test]
+    fn source_budget_abba_refuses_config_drift_before_results_and_wrong_late_cover() {
+        for case in [
+            "config-binding",
+            "runtime-width",
+            "source-cover",
+            "score-bits",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut config, mut rows) = source_budget_abba_fixture(dir.path());
+            let expected = match case {
+                "config-binding" => {
+                    rows[1][0]["config_sha256"] = json!("0".repeat(64));
+                    "SOURCE runtime/header binding"
+                }
+                "runtime-width" => {
+                    let path =
+                        PathBuf::from(config["runtime_configs"][1]["path"].as_str().unwrap());
+                    let mut runtime: Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    runtime["fetch_parallelism"] = json!(128);
+                    let bytes = serde_json::to_vec(&runtime).unwrap();
+                    std::fs::write(&path, &bytes).unwrap();
+                    config["runtime_configs"][1] =
+                        json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)});
+                    "SOURCE runtime version/budget/width/backend"
+                }
+                "source-cover" => {
+                    let query = rows[1]
+                        .iter_mut()
+                        .find(|q| q["phase"] == "query" && q["ordinal"] == 999)
+                        .unwrap();
+                    let bytes = query["charges"]["source"]["verified_bytes"]
+                        .as_u64()
+                        .unwrap();
+                    query["charges"]["source"]["verified_bytes"] = json!(bytes + 1);
+                    let charge: Charges = serde_json::from_value(query["charges"].clone()).unwrap();
+                    query["sum"] = serde_json::to_value(charge.sum().unwrap()).unwrap();
+                    "B1: loss SOURCE cover charges"
+                }
+                "score-bits" => {
+                    let query = rows[1]
+                        .iter_mut()
+                        .find(|q| q["phase"] == "query" && q["ordinal"] == 999)
+                        .unwrap();
+                    let hit = query["returned"]
+                        .as_array_mut()
+                        .unwrap()
+                        .last_mut()
+                        .unwrap();
+                    let bits = hit["score_bits"].as_u64().unwrap();
+                    hit["score_bits"] = json!(bits + 1);
+                    "B1 query 999: SOURCE quality/trace/SQ8 drift"
+                }
+                _ => unreachable!(),
+            };
+            let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+            if matches!(case, "config-binding" | "runtime-width") {
+                for index in 0..4 {
+                    std::fs::remove_file(dir.path().join(format!("byte-run-{index}.jsonl")))
+                        .unwrap();
+                }
+            }
+            assert_eq!(
+                reduce_source_budget_abba(&path, &pin)
+                    .unwrap_err()
+                    .to_string(),
+                expected,
+                "{case}"
+            );
+        }
     }
 
     #[test]
