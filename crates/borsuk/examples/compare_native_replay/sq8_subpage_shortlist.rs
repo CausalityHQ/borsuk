@@ -581,6 +581,9 @@ fn capture_scored_rows(
 }
 
 const SHORTLIST_SCHEMA: &str = "borsuk-sq8-subpage-shortlist-v1";
+const BASELINE_SQ8_GETS: usize = 32;
+const CANDIDATE_SQ8_GETS: usize = 30;
+const MAX_SCORED_UNITS: usize = 24_576;
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -733,6 +736,20 @@ fn reduce_shortlist(
             && c.max_payload_bytes == 2 * 1024 * 1024 * 1024,
         "shortlist preregistered curve/envelope",
     )?;
+    for header in [
+        &c.completed.expected_identity,
+        &c.completed.expected_bound_inputs,
+    ] {
+        require(
+            header["fetch_parallelism"].as_u64() == Some(64)
+                && header.get("shared_byte_window").is_none(),
+            "shortlist fixed fetch64/windowoff headers",
+        )?;
+    }
+    require(
+        c.completed.expected_bound_inputs["source_cache"] == "off",
+        "shortlist source cache off",
+    )?;
     super::header_path(&c.store_root)?;
     super::header_path(&c.scratch_parent)?;
     let generation_dir = c.store_root.join(&i.generation_prefix);
@@ -778,14 +795,16 @@ fn reduce_shortlist(
         + c.requests.bytes as usize
         + c.source_digests.bytes as usize
         + i.rows.div_ceil(32) * 32
-        + 8 * super::FILE_CAP as usize
+        + i.count
+            * (MAX_SCORED_UNITS * std::mem::size_of::<usize>() + std::mem::size_of::<Vec<usize>>())
+        + 32 * 1024 * 1024
         + 1000 * 15360 * 8
         + 128 * 1024 * 1024;
     require(
         caller_bytes < c.max_payload_bytes,
         "shortlist retained caller payload",
     )?;
-    let mut originals = Vec::<(Value, Value, super::LossCoverage)>::with_capacity(i.count);
+    let mut originals = Vec::<Vec<usize>>::with_capacity(i.count);
     let run = read_run_observed(
         &c.completed.input.path,
         &c.completed.input.sha256,
@@ -796,11 +815,18 @@ fn reduce_shortlist(
                 "shortlist baseline full query order",
             )?;
             let raw: Value = serde_json::from_slice(line)?;
-            originals.push((
-                raw["plan"].clone(),
-                raw["trace"].clone(),
-                loss_coverage(line, q, inputs)?,
-            ));
+            require(
+                raw["trace"]["semantic_leaves"]
+                    .as_array()
+                    .is_some_and(|leaves| !leaves.is_empty() && leaves.len() <= 48),
+                "shortlist bounded semantic leaves",
+            )?;
+            let coverage = loss_coverage(line, q, inputs)?;
+            require(
+                coverage.scored_units.len() <= MAX_SCORED_UNITS,
+                "shortlist retained scored-unit cap",
+            )?;
+            originals.push(coverage.scored_units);
             Ok(())
         },
     )?;
@@ -880,7 +906,7 @@ fn reduce_shortlist(
         max_memory_bytes: c.max_payload_bytes as u64,
         max_active_queries: 1,
         max_query_bytes: 16_773_120,
-        max_query_gets: 30,
+        max_query_gets: BASELINE_SQ8_GETS,
         max_parallel_gets: 64,
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
@@ -901,7 +927,7 @@ fn reduce_shortlist(
         &c.scratch_parent,
     ))?;
     let mut candidate_queries = Vec::with_capacity(1000);
-    for (slot, (original_plan, original_trace, _)) in originals.iter().enumerate() {
+    for slot in 0..originals.len() {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
@@ -912,12 +938,19 @@ fn reduce_shortlist(
         )?;
         let (plan, trace, source, router) =
             runtime.block_on(generation.diagnostic_plan_with_store(&store, &query))?;
+        let sample = &run.samples[slot];
         require(
-            plan_value(&plan, i.dimensions) == *original_plan
-                && serde_json::to_value(&trace)? == *original_trace,
+            <[u8; 32]>::from(Sha256::digest(serde_json::to_vec(&plan_value(
+                &plan,
+                i.dimensions,
+            ))?))
+                == sample.physical_plan_sha256
+                && <[u8; 32]>::from(Sha256::digest(serde_json::to_vec(&serde_json::to_value(
+                    &trace,
+                )?)?))
+                    == sample.trace_sha256,
             "shortlist full production plan/trace parity",
         )?;
-        let sample = &run.samples[slot];
         require(
             source.submitted_gets as u64 == sample.charges.source.submitted_gets
                 && source.verified_bytes as u64 == sample.charges.source.verified_bytes
@@ -975,7 +1008,7 @@ fn reduce_shortlist(
             plane.record_bytes,
             cap,
             32 * cap + 4096,
-            30,
+            BASELINE_SQ8_GETS,
             16_773_120,
         )?;
         require(
@@ -994,7 +1027,7 @@ fn reduce_shortlist(
             &authority,
             &witnesses,
             SelectedSq8Limits {
-                max_gets: 30,
+                max_gets: BASELINE_SQ8_GETS,
                 max_bytes: 16_773_120,
                 max_planner_bytes: 4 * 1024 * 1024 + 4096,
             },
@@ -1031,44 +1064,32 @@ fn reduce_shortlist(
                 64 * scored.len() + 16 * maximum.min(scored.len()) + 4096,
             )
             .map_err(|e| e.to_string())?;
-            let candidate = plan_selected_sq8_rows(
+            // Compute geometry once. Workspace/shape errors are INVALID;
+            // an excessive physical byte count is geometry-only, never fetched.
+            let cover = plan_selected_sq8_rows(
                 &authority,
                 &selected,
                 SelectedSq8Limits {
-                    max_gets: 30,
-                    max_bytes: 32 * 1024 * 1024,
+                    max_gets: CANDIDATE_SQ8_GETS,
+                    max_bytes: usize::MAX,
                     max_planner_bytes: 4 * 1024 * 1024 + 4096,
                 },
-            );
-            let (cover, returned) = match candidate {
-                Ok(p) => {
-                    let ranked = rank_local_cover(
-                        &mut sq8_snapshot,
-                        &authority,
-                        &p.ranges,
-                        i.rows,
-                        i.dimensions,
-                        &normalized,
-                        &low,
-                        &step,
-                        32 * 1024 * 1024,
-                    )?;
-                    (p, Some(ranked))
-                }
-                Err(borsuk::budgeted_page_rank::BudgetedPageError::InsufficientBudget) => {
-                    let p = plan_selected_sq8_rows(
-                        &authority,
-                        &selected,
-                        SelectedSq8Limits {
-                            max_gets: 30,
-                            max_bytes: usize::MAX,
-                            max_planner_bytes: 4 * 1024 * 1024 + 4096,
-                        },
-                    )
-                    .map_err(|e| format!("candidate geometry {e:?}"))?;
-                    (p, None)
-                }
-                Err(e) => return Err(format!("candidate invalid {e:?}").into()),
+            )
+            .map_err(|e| format!("candidate geometry {e:?}"))?;
+            let returned = if cover.planned_bytes <= 32 * 1024 * 1024 {
+                Some(rank_local_cover(
+                    &mut sq8_snapshot,
+                    &authority,
+                    &cover.ranges,
+                    i.rows,
+                    i.dimensions,
+                    &normalized,
+                    &low,
+                    &step,
+                    32 * 1024 * 1024,
+                )?)
+            } else {
+                None
             };
             arms.push(ShortlistArm {
                 maximum,
@@ -1104,6 +1125,19 @@ fn reduce_shortlist(
         )?;
         wanted.extend(ids.iter().copied());
     }
+    for arms in &candidate_queries {
+        for arm in arms {
+            if let Some(returned) = &arm.returned {
+                for point in returned {
+                    require(
+                        point.id >= 0 && (point.id as usize) < i.rows,
+                        "shortlist returned ID domain",
+                    )?;
+                    wanted.insert(point.id as u64);
+                }
+            }
+        }
+    }
     let (positions, positions_snapshot) = scan_loss_sq8(
         &c.sq8,
         i.rows,
@@ -1131,47 +1165,21 @@ fn reduce_shortlist(
         baseline_hits += hits as u64;
         let mut reports = Vec::with_capacity(4);
         for (arm_index, arm) in arms.iter().enumerate() {
-            let selected_blocks = arm.selected.iter().map(|r| r / 32).collect::<BTreeSet<_>>();
-            let mut loss = [0_usize; 4];
-            let mut recovered = 0_usize;
-            let mut gain = 0;
-            let mut lost = 0;
-            let mut got = 0;
-            if let Some(returned) = &arm.returned {
+            let quality = assess_arm(
+                arm,
+                ids,
+                &base.returned,
+                &positions,
+                &originals[slot],
+                i.rows,
+                i.dimensions,
+            )?;
+            if let Some(q) = &quality {
                 admissible[arm_index] += 1;
                 physical_bytes[arm_index] += arm.bytes as u64;
-                for id in ids {
-                    let physical = positions[id];
-                    let original = base.returned.iter().any(|h| h.id == *id);
-                    let found = returned.iter().any(|h| h.id >= 0 && h.id as u64 == *id);
-                    got += usize::from(found);
-                    gain += usize::from(found && !original);
-                    lost += usize::from(original && !found);
-                    let source = originals[slot]
-                        .2
-                        .scored_units
-                        .binary_search(&(physical / 32))
-                        .is_ok();
-                    let nominated = selected_blocks.contains(&(physical / 32));
-                    let covered = arm.ranges.iter().any(|r| {
-                        r.start / (i.dimensions + 12) <= physical
-                            && physical < r.end / (i.dimensions + 12)
-                    });
-                    if found {
-                        recovered += usize::from(!nominated);
-                    } else if !covered {
-                        loss[if source { 1 } else { 0 }] += 1;
-                    } else {
-                        loss[if nominated { 2 } else { 3 }] += 1;
-                    }
-                }
-                require(
-                    got + loss.iter().sum::<usize>() == super::K && hits + gain == got + lost,
-                    "shortlist disjoint loss and gain conservation",
-                )?;
-                totals[arm_index] += got;
+                totals[arm_index] += q.hits10;
             }
-            reports.push(json!({"size":arm.maximum,"status":if arm.returned.is_some(){"MEASURED"}else{"BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"},"hits10":if arm.returned.is_some(){Some(got)}else{None},"gets":arm.ranges.len(),"physical_bytes":arm.bytes,"selected_rows":arm.selected.len(),"selected_blocks":selected_blocks.len(),"bridge_bytes":arm.bytes-selected_blocks.iter().map(|p|(((p+1)*32).min(i.rows)-p*32)*(i.dimensions+12)).sum::<usize>(),"gained":gain,"lost":lost,"bridge_rescued_hits":recovered,"miss_buckets":if arm.returned.is_some(){Some(loss)}else{None}}));
+            reports.push(candidate_report(arm, i.rows, i.dimensions, quality)?);
         }
         queries.push(json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports}));
     }
@@ -1199,7 +1207,7 @@ fn reduce_shortlist(
     )?;
     super::read_config::<ShortlistConfig>(config_path, config_sha)?;
     Ok(
-        json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_opened_after_all_baseline_controls":true,"shortlist_sizes":c.shortlist_sizes,"admissible_queries":admissible,"hits10_totals":totals,"physical_bytes_totals":physical_bytes,"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..4).map(|a|admissible[a]==1000 && totals[a]>=9760).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","nominated_covered_ranking_loss","bridge_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false}),
+        json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":c.shortlist_sizes,"admissible_queries":admissible,"measured_hit_subtotals":totals,"physical_bytes_totals":physical_bytes,"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..4).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false}),
     )
 }
 
@@ -1299,6 +1307,16 @@ mod driver_tests {
         let mut c = base.clone();
         c["records"]["path"] = json!(root.join("foreign.bin"));
         negatives.push(c);
+        for header in ["expected_identity", "expected_bound_inputs"] {
+            for width in [16, 32, 128] {
+                let mut c = base.clone();
+                c["completed"][header]["fetch_parallelism"] = json!(width);
+                negatives.push(c);
+            }
+            let mut c = base.clone();
+            c["completed"][header]["shared_byte_window"] = json!({"enabled":true});
+            negatives.push(c);
+        }
         for role in [
             "records",
             "mean",
@@ -1340,5 +1358,239 @@ mod driver_tests {
         assert!(execute(&path, &sha, &output).is_err());
         assert_eq!(std::fs::read(&output).unwrap(), body);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+struct ArmQuality {
+    hits10: usize,
+    gained: usize,
+    lost: usize,
+    bridge_rescued_hits: usize,
+    block_expansion_rescued_hits: usize,
+    shortlist_truth_rows: usize,
+    selected_block_truth_rows: usize,
+    miss_buckets: [usize; 4],
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assess_arm(
+    arm: &ShortlistArm,
+    truth_ids: &[u64],
+    baseline: &[super::Hit],
+    positions: &std::collections::BTreeMap<u64, usize>,
+    scored_units: &[usize],
+    rows: usize,
+    dimensions: usize,
+) -> super::Result<Option<ArmQuality>> {
+    let Some(returned) = &arm.returned else {
+        return Ok(None);
+    };
+    super::require(
+        truth_ids.len() == super::K && returned.len() == super::K,
+        "shortlist full-k accounting",
+    )?;
+    let width = dimensions + 12;
+    let covered = |physical: usize| {
+        arm.ranges
+            .iter()
+            .any(|r| r.start / width <= physical && physical < r.end / width)
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for point in returned {
+        super::require(
+            point.id >= 0
+                && (point.id as usize) < rows
+                && point.score.is_finite()
+                && seen.insert(point.id),
+            "shortlist returned ID/score/uniqueness",
+        )?;
+        let physical = *positions
+            .get(&(point.id as u64))
+            .ok_or("shortlist returned mapping")?;
+        super::require(
+            point.ordinal == physical && covered(physical),
+            "shortlist returned physical ordinal/cover",
+        )?;
+    }
+    let blocks = arm
+        .selected
+        .iter()
+        .map(|r| r / 32)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut q = ArmQuality::default();
+    let mut original_hits = 0;
+    for id in truth_ids {
+        let physical = *positions.get(id).ok_or("shortlist truth mapping")?;
+        let original = baseline.iter().any(|h| h.id == *id);
+        let found = returned.iter().any(|h| h.id as u64 == *id);
+        let selected_row = arm.selected.binary_search(&physical).is_ok();
+        let selected_block = blocks.contains(&(physical / 32));
+        q.shortlist_truth_rows += usize::from(selected_row);
+        q.selected_block_truth_rows += usize::from(selected_block);
+        original_hits += usize::from(original);
+        q.hits10 += usize::from(found);
+        q.gained += usize::from(found && !original);
+        q.lost += usize::from(original && !found);
+        if found {
+            q.bridge_rescued_hits += usize::from(!selected_block);
+            q.block_expansion_rescued_hits += usize::from(selected_block && !selected_row);
+        } else if !covered(physical) {
+            q.miss_buckets[usize::from(scored_units.binary_search(&(physical / 32)).is_ok())] += 1;
+        } else {
+            q.miss_buckets[if selected_row { 2 } else { 3 }] += 1;
+        }
+    }
+    super::require(
+        q.hits10 + q.miss_buckets.iter().sum::<usize>() == super::K
+            && original_hits + q.gained == q.hits10 + q.lost,
+        "shortlist disjoint loss and gain conservation",
+    )?;
+    Ok(Some(q))
+}
+
+fn candidate_report(
+    arm: &ShortlistArm,
+    rows: usize,
+    dimensions: usize,
+    quality: Option<ArmQuality>,
+) -> super::Result<serde_json::Value> {
+    super::require(
+        arm.returned.is_some() == quality.is_some(),
+        "shortlist measured quality state",
+    )?;
+    let blocks = arm
+        .selected
+        .iter()
+        .map(|r| r / 32)
+        .collect::<std::collections::BTreeSet<_>>();
+    let nominated_bytes = blocks
+        .iter()
+        .try_fold(0_usize, |sum, p| {
+            sum.checked_add((((p + 1) * 32).min(rows) - p * 32) * (dimensions + 12))
+        })
+        .ok_or("nominated byte overflow")?;
+    let bridge_bytes = arm
+        .bytes
+        .checked_sub(nominated_bytes)
+        .ok_or("shortlist bridge byte invariant")?;
+    let mut previous = None;
+    let mut runs = 0;
+    for &block in &blocks {
+        if previous.is_none_or(|p| p + 1 != block) {
+            runs += 1;
+        }
+        previous = Some(block);
+    }
+    Ok(
+        serde_json::json!({"size":arm.maximum,"status":if quality.is_some(){"MEASURED"}else{"BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"},
+        "gets":arm.ranges.len(),"physical_bytes":arm.bytes,"selected_rows":arm.selected.len(),
+        "selected_blocks":blocks.len(),"pre_cap_runs":runs,"bridge_bytes":bridge_bytes,"quality":quality}),
+    )
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use borsuk::sq8_page_authority::{PageAuthority, SelectedSq8Limits, plan_selected_sq8_rows};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    #[test]
+    fn shortlist_overcap_geometry_has_unknown_quality_and_bad_mapping_is_refused() {
+        let rows = 1_000_000_usize;
+        let dimensions = 1024;
+        let sidecar = vec![0_u8; rows.div_ceil(32) * 32];
+        let manifest=serde_json::to_vec(&json!({"schema":"borsuk-v115-sq8-page-authority-v2","generation":1,"rows":rows,"dimensions":dimensions,"page_rows":32,"object_sha256":"0".repeat(64),"page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))})).unwrap();
+        let authority = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        let selected = (0..1024).map(|n| n * 960).collect::<Vec<_>>();
+        let plan = plan_selected_sq8_rows(
+            &authority,
+            &selected,
+            SelectedSq8Limits {
+                max_gets: CANDIDATE_SQ8_GETS,
+                max_bytes: usize::MAX,
+                max_planner_bytes: 4 * 1024 * 1024 + 4096,
+            },
+        )
+        .unwrap();
+        assert!(plan.planned_bytes > 32 * 1024 * 1024);
+        let arm = ShortlistArm {
+            maximum: 1024,
+            selected,
+            ranges: plan.ranges,
+            bytes: plan.planned_bytes,
+            returned: None,
+        };
+        let quality = assess_arm(
+            &arm,
+            &[],
+            &[],
+            &std::collections::BTreeMap::new(),
+            &[],
+            rows,
+            dimensions,
+        )
+        .unwrap();
+        assert!(quality.is_none());
+        let report = candidate_report(&arm, rows, dimensions, quality).unwrap();
+        assert_eq!(report["status"], "BYTE_CAP_EXCEEDED_GEOMETRY_ONLY");
+        assert!(report["quality"].is_null());
+        assert_eq!(report["gets"], CANDIDATE_SQ8_GETS);
+        assert_eq!(report["pre_cap_runs"], 1024);
+        assert!(report["bridge_bytes"].as_u64().unwrap() <= arm.bytes as u64);
+        let ids = (0..10_u64).collect::<Vec<_>>();
+        let baseline = ids
+            .iter()
+            .map(|id| super::super::Hit {
+                id: *id,
+                score_bits: 0,
+            })
+            .collect::<Vec<_>>();
+        let mut positions = std::collections::BTreeMap::new();
+        for id in &ids {
+            positions.insert(*id, *id as usize);
+        }
+        positions.insert(50, 33);
+        let returned = (0..9)
+            .map(|id| borsuk::exact_sq8_nominee::ScoredNominee {
+                ordinal: id as usize,
+                id,
+                score: id as f32,
+            })
+            .chain([borsuk::exact_sq8_nominee::ScoredNominee {
+                ordinal: 33,
+                id: 50,
+                score: 10.,
+            }])
+            .collect::<Vec<_>>();
+        let mut arm = ShortlistArm {
+            maximum: 2,
+            selected: vec![0, 64],
+            ranges: vec![0..65 * 14],
+            bytes: 65 * 14,
+            returned: Some(returned),
+        };
+        let quality = assess_arm(&arm, &ids, &baseline, &positions, &[0, 1, 2], 65, 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(quality.shortlist_truth_rows, 1);
+        assert_eq!(quality.selected_block_truth_rows, 10);
+        assert_eq!(quality.block_expansion_rescued_hits, 8);
+        assert_eq!(quality.bridge_rescued_hits, 0);
+        assert_eq!(quality.hits10, 9);
+        assert_eq!(quality.lost, 1);
+        assert_eq!(quality.miss_buckets, [0, 0, 0, 1]);
+        arm.returned.as_mut().unwrap()[0].ordinal = 1;
+        assert!(
+            assess_arm(&arm, &ids, &baseline, &positions, &[0, 1, 2], 65, 2)
+                .unwrap_err()
+                .to_string()
+                .contains("physical ordinal/cover")
+        );
     }
 }
