@@ -336,3 +336,79 @@ mod tests {
         );
     }
 }
+
+// The sidecar is ephemeral diagnostic metadata; whole-object authentication must
+// finish before any digest is exposed to a candidate planner.
+fn authenticated_sq8_digests(
+    _pin: &super::CompletedInput,
+    _rows: usize,
+    _dimensions: usize,
+    _max_payload_bytes: usize,
+) -> super::Result<(Vec<u8>, super::HeaderSnapshot)> {
+    Err("authenticated SQ8 sidecar implementation missing".into())
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::authenticated_sq8_digests;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    #[test]
+    fn shortlist_streamed_sidecar_authenticates_whole_object_and_partial_tail() {
+        let rows = 65_usize;
+        let dimensions = 2_usize;
+        let width = dimensions + 12;
+        let path = std::env::temp_dir().join(format!(
+            "borsuk-shortlist-digests-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let object = (0..rows * width)
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(&object).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let mut pin = super::super::CompletedInput {
+            path: path.clone(),
+            bytes: object.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(&object)),
+        };
+        let outcome = (|| -> super::super::Result<()> {
+            let (digests, snapshot) = authenticated_sq8_digests(&pin, rows, dimensions, 8192)?;
+            let expected = object
+                .chunks(32 * width)
+                .flat_map(|block| Sha256::digest(block).to_vec())
+                .collect::<Vec<_>>();
+            assert_eq!(digests.len(), 96);
+            assert_eq!(digests, expected);
+            assert_eq!(
+                &digests[64..],
+                Sha256::digest(&object[64 * width..]).as_slice()
+            );
+            snapshot.recheck()?;
+            drop(snapshot);
+            pin.sha256 = "0".repeat(64);
+            assert!(authenticated_sq8_digests(&pin, rows, dimensions, 8192).is_err());
+            pin.sha256 = format!("{:x}", Sha256::digest(&object));
+            assert!(authenticated_sq8_digests(&pin, rows, dimensions, 1).is_err());
+            assert!(authenticated_sq8_digests(&pin, rows + 1, dimensions, 8192).is_err());
+            let mut changed = object.clone();
+            *changed.last_mut().unwrap() ^= 1;
+            std::fs::write(&path, changed)?;
+            assert!(authenticated_sq8_digests(&pin, rows, dimensions, 8192).is_err());
+            Ok(())
+        })();
+        std::fs::remove_file(path).unwrap();
+        outcome.expect("whole-object authenticated sidecar with exact partial tail");
+    }
+}
