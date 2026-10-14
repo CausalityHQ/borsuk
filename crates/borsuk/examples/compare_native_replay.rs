@@ -35,6 +35,10 @@ mod paired_partition_coverage;
 #[path = "compare_native_replay/paired_returned_panel.rs"]
 mod paired_returned_panel;
 
+#[cfg(test)]
+#[path = "compare_native_replay/sq8_subpage_shortlist.rs"]
+mod sq8_subpage_shortlist;
+
 // Compile the existing checked arithmetic here because cover_pages is crate-private.
 #[allow(dead_code)]
 #[path = "../src/budgeted_page_rank.rs"]
