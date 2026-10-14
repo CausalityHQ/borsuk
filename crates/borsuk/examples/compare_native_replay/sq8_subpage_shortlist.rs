@@ -1856,7 +1856,22 @@ impl object_store::ObjectStore for DiagnosticLocalStreamStore {
         let range = result.range.clone();
         let attributes = result.attributes.clone();
         let extensions = result.extensions.clone();
-        let stream = result.into_stream();
+        use futures_util::StreamExt;
+        let stream = result
+            .into_stream()
+            .map(|chunk| match chunk {
+                Ok(bytes) if bytes.is_empty() => Err(object_store::Error::Generic {
+                    store: "diagnostic-local-stream",
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "empty local range chunk before EOF",
+                    )
+                    .into(),
+                }),
+                other => other,
+            })
+            .boxed();
+
         Ok(object_store::GetResult {
             payload: object_store::GetResultPayload::Stream(stream),
             meta,
@@ -1928,15 +1943,25 @@ fn diagnostic_local_store(root: &str) -> object_store::Result<DiagnosticLocalStr
 #[cfg(test)]
 mod local_stream_tests {
     use super::*;
+    use futures_util::TryStreamExt;
     use object_store::{ObjectStore, ObjectStoreExt};
     use sha2::{Digest, Sha256};
 
     #[test]
     fn shortlist_local_range_stream_preserves_bounds_metadata_and_authentication() {
-        let root =
-            std::env::temp_dir().join(format!("shortlist-local-stream-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shortlist-local-stream-{}",
+            format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )
+        ));
         std::fs::create_dir(&root).unwrap();
-        let rows = 64_usize;
+        let rows = 2048_usize;
         let dimensions = 2_usize;
         let width = dimensions + 12;
         let mut object = Vec::new();
@@ -2033,7 +2058,10 @@ mod local_stream_tests {
                     .with_if_match(Some("wrong-etag".to_owned())),
             ),
         );
-        assert!(bad_etag.is_err());
+        assert!(matches!(
+            bad_etag,
+            Err(object_store::Error::Precondition { .. })
+        ));
         let mut corrupted = object.clone();
         corrupted[0] ^= 1;
         std::fs::write(root.join("corrupt.bin"), corrupted).unwrap();
@@ -2059,6 +2087,73 @@ mod local_stream_tests {
             failure.error,
             borsuk::sq8_s3_range::RangeFetchError::Page(_)
         ));
+        // A nonzero, page-aligned range spans the 8KiB streaming boundary.
+        let start = 32 * width;
+        let end = 32 * width * 32;
+        let multi = runtime
+            .block_on(
+                store.get_opts(
+                    &location,
+                    object_store::GetOptions::new()
+                        .with_range(Some(start as u64..end as u64))
+                        .with_if_match(Some(etag.to_owned())),
+                ),
+            )
+            .unwrap();
+        assert_eq!(multi.range, start as u64..end as u64);
+        let chunks = runtime
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    let mut body = multi.into_stream();
+                    let mut chunks = Vec::new();
+                    while let Some(chunk) = body.try_next().await? {
+                        assert!(!chunk.is_empty() && chunk.len() <= 8192);
+                        chunks.push(chunk);
+                    }
+                    Ok::<_, object_store::Error>(chunks)
+                })
+                .await
+            })
+            .expect("nonzero multi-chunk range must terminate")
+            .unwrap();
+        assert!(chunks.len() >= 2);
+        let streamed = chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect::<Vec<_>>();
+        assert_eq!(streamed, object[start..end]);
+
+        // Headers were accepted while the file was complete; then its open
+        // inode is truncated. The first body poll must promptly report EOF.
+        std::fs::write(root.join("truncated.bin"), &object).unwrap();
+        let truncated_location = object_store::path::Path::parse("truncated.bin").unwrap();
+        let truncated_meta = runtime.block_on(store.head(&truncated_location)).unwrap();
+        let admitted = runtime
+            .block_on(
+                store.get_opts(
+                    &truncated_location,
+                    object_store::GetOptions::new()
+                        .with_range(Some(0..(32 * width) as u64))
+                        .with_if_match(truncated_meta.e_tag),
+                ),
+            )
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.join("truncated.bin"))
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+        let refused = runtime
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    admitted.into_stream().try_next().await
+                })
+                .await
+            })
+            .expect("truncated admitted stream must promptly refuse rather than loop");
+        assert!(refused.is_err());
+        std::fs::remove_file(root.join("truncated.bin")).unwrap();
         std::fs::remove_file(root.join("object.bin")).unwrap();
         std::fs::remove_file(root.join("corrupt.bin")).unwrap();
         std::fs::remove_dir(root).unwrap();
