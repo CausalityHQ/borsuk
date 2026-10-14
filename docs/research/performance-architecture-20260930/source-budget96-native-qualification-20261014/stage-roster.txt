@@ -1,0 +1,7 @@
+affected-compile
+abba-test
+abba-refusals
+example-regressions
+release-binaries
+workspace-clippy
+workspace-test-build

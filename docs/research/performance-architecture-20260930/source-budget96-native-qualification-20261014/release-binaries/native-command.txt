@@ -1,0 +1,1 @@
+cargo build --release --locked -p borsuk --bin check_cohere_native_baseline --example compare_native_replay

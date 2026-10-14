@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --example compare_native_replay tests::source_budget_abba_replays_distinct_cover_with_identical_quality_and_sq8 -- --exact --test-threads=1

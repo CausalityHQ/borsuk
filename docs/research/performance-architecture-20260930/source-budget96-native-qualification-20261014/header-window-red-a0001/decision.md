@@ -1,0 +1,5 @@
+# Header-window diagnostic a0001: INVALID fixture, not bug reproduction
+
+Frozen1a744a44, original instancei-0c9efffba3dfaa36c/native4db59208. Compile native0/manager0; exact test selected1/native101/manager101/drained. Actual panic header-window: left unknown/missing v2 field, right SOURCE runtime/header binding. Fixture omitted required max_state_bytes; rejection is correct for malformed evidence, so expected missing-result early-binding counterexample was NOT exercised. Driver correctly failed because required No such file or directory was absent. No production change justified by this result. Originallogs/manifests immutable.
+
+Correct fixture with all three existing window fields before new frozen attempt. No algorithm/science/timing claim, no config gate relaxation. Compute original watcher6734exit0: instance terminated, rootvolumevol-0555496f325d31ed1 absent, externaltimerinactive, BGoff. Stage collections28946exit0 authenticated all manifest hashes and exactsource. Native memoryswappeak0, oom/oomkill0, CPU400000/100000. Full source/resource verification follows before final archival acceptance.

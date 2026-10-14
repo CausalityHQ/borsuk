@@ -1,0 +1,25 @@
+affected-compile native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+selector-test native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 1.50s
+header-refusals native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 0.57s
+cap-test native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 5.31s
+historical-test native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 1.89s
+coverage-test native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 2.68s
+abba-test native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 18.36s
+abba-refusals native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 197 filtered out; finished in 35.60s
+bin-regressions native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 64.52s
+example-regressions native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+test result: ok. 198 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 729.47s
+release-binaries native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+workspace-clippy native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+workspace-test-build native0/manager0/source470/hash/drain/CPU0-3/14GiB/swap0/OOMkill0 VERIFIED
+env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
+aws: [ERROR]: An error occurred (InvalidVolume.NotFound) when calling the DescribeVolumes operation (reached max retries: 0): The volume 'vol-09c7bb4bbe4028d67' does not exist.
+THIRTEEN_NATIVE_GATES_EXACT_TESTS_SOURCE_RESOURCES_AND_COMPUTE_CLOSURE_VERIFIED_REVIEW_PENDING

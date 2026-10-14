@@ -1,0 +1,11 @@
+{
+  "source_commit": "8910ef50c1cce155eb396d71a2e05dd3b9e906a0",
+  "reducer_source_sha256": "b5249b650442707cd6d3ed5e6838a67b7cccfa230f0bbeef2b6e3a6570939881",
+  "generation_source_sha256": "0eec4171d42d42e601ffc473027870f226342e1aae70e28efc9ced4c79f35f9d",
+  "cover_planner_source_sha256": "19509a9dccdd5354fc9d6e8018491167bfc18145b9fe65b3c51df895a411ed36",
+  "runtime_runner_source_sha256": "27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3",
+  "binary_qualification": "PENDING",
+  "execution_order_verified": false,
+  "physical_wire_authority_verified": false,
+  "performance_claim": false
+}

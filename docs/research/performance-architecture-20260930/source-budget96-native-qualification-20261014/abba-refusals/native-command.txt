@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --example compare_native_replay tests::source_budget_abba_refuses_config_drift_before_results_and_wrong_late_cover -- --exact --test-threads=1
