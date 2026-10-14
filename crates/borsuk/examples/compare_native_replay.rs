@@ -12166,7 +12166,13 @@ mod tests {
                         let terminal = bad.iter_mut().find(|v| v["phase"] == "terminal").unwrap();
                         terminal["summary"]["diagnostic_prefix"] = json!(!prefix);
                     }
-                    "old" => bad[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v5"),
+                    "old" => {
+                        bad[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v5");
+                        // The historical writer had no explicit budget. Keep
+                        // this falsifier about the old marker, not a v8 field.
+                        bad[0].as_object_mut().unwrap().remove("source_get_budget");
+                        bad[1].as_object_mut().unwrap().remove("source_get_budget");
+                    }
                     _ => unreachable!(),
                 }
                 // Restore surrounding seals for semantic contradictions; leave hash corruption explicit.
@@ -12184,7 +12190,7 @@ mod tests {
                     "producer" => "root-frozen producer SHA256",
                     "reserved" => "selected prefix within full reserved interval",
                     "diagnostic-prefix" => "reserved population and diagnostic prefix scope",
-                    "old" => "scale result v7 required",
+                    "old" => "scale result v7/v8 required",
                     _ => unreachable!(),
                 };
                 let path = dir.path().join(case);
