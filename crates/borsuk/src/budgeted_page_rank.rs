@@ -25,6 +25,90 @@ pub struct BudgetedPagePlan {
     pub target_shortfall: usize,
 }
 
+/// Independent physical-read and owned-planner payload limits.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectedSq8Limits {
+    /// Maximum physical ranges after deterministic gap coalescing.
+    pub max_gets: usize,
+    /// Maximum complete-block response bytes, including bridges.
+    pub max_bytes: usize,
+    /// Maximum modeled transient and returned planner payload.
+    pub max_planner_bytes: usize,
+}
+
+/// Complete authenticated-block cover of a caller-selected physical row roster.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SelectedSq8Plan {
+    /// Distinct nominated blocks in physical order, excluding bridge blocks.
+    pub selected_pages: Vec<usize>,
+    /// Ordered, disjoint byte ranges including every charged bridge block.
+    pub ranges: Vec<Range<usize>>,
+    /// Total physical response bytes, including a possibly partial final block.
+    pub planned_bytes: usize,
+    /// Conservative owned planner payload; not allocator or process RSS.
+    pub modeled_planner_bytes: usize,
+}
+
+fn selected_sq8_planner_payload(selected_count: usize) -> Result<usize, BudgetedPageError> {
+    // Covers tree nodes, growing run vectors, gap table, join set and outputs.
+    selected_count
+        .checked_mul(512)
+        .and_then(|bytes| bytes.checked_add(4096))
+        .ok_or(BudgetedPageError::ArithmeticOverflow)
+}
+
+/// Cover selected physical ordinals using the authority's authenticated geometry.
+///
+/// Rows must be strictly increasing, unique and in bounds. Every nominated
+/// block is retained; an insufficient byte budget refuses the entire plan.
+/// Scratch admission precedes allocations. Borrowed row/authority payloads,
+/// caller shortlist storage and transport/runtime overhead are caller-owned.
+pub fn plan_selected_sq8_rows(
+    authority: &crate::sq8_page_authority::PageAuthority,
+    selected_ordinals: &[usize],
+    limits: SelectedSq8Limits,
+) -> Result<SelectedSq8Plan, BudgetedPageError> {
+    if limits.max_gets == 0 || limits.max_bytes == 0 || limits.max_planner_bytes == 0 {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    if selected_ordinals.is_empty()
+        || selected_ordinals
+            .last()
+            .is_some_and(|&row| row >= authority.rows())
+        || selected_ordinals.windows(2).any(|rows| rows[0] >= rows[1])
+    {
+        return Err(BudgetedPageError::InvalidCandidate);
+    }
+    let modeled_planner_bytes = selected_sq8_planner_payload(selected_ordinals.len())?;
+    if modeled_planner_bytes > limits.max_planner_bytes {
+        return Err(BudgetedPageError::InsufficientBudget);
+    }
+    let row_bytes = authority
+        .dimensions()
+        .checked_add(12)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    let pages = selected_ordinals
+        .iter()
+        .map(|row| row / authority.page_rows())
+        .collect::<BTreeSet<_>>();
+    let (ranges, planned_bytes) = cover_pages(
+        &pages,
+        authority.rows(),
+        row_bytes,
+        authority.page_rows(),
+        limits.max_gets,
+    )?;
+    if planned_bytes > limits.max_bytes {
+        return Err(BudgetedPageError::InsufficientBudget);
+    }
+    Ok(SelectedSq8Plan {
+        selected_pages: pages.into_iter().collect(),
+        ranges,
+        planned_bytes,
+        modeled_planner_bytes,
+    })
+}
+
 pub(crate) fn cover_pages(
     selected: &BTreeSet<usize>,
     rows: usize,
@@ -478,36 +562,11 @@ mod tests {
 
 #[cfg(test)]
 mod selected_sq8_rows_contract {
-    use super::BudgetedPageError;
+    use super::{
+        BudgetedPageError, SelectedSq8Limits, plan_selected_sq8_rows, selected_sq8_planner_payload,
+    };
     use crate::sq8_page_authority::PageAuthority;
     use sha2::{Digest, Sha256};
-    use std::ops::Range;
-
-    // Test-only RED surface; the production API is not implemented yet.
-    #[derive(Clone, Copy)]
-    struct SelectedSq8Limits {
-        max_gets: usize,
-        max_bytes: usize,
-        max_planner_bytes: usize,
-    }
-    #[derive(Debug, PartialEq, Eq)]
-    struct SelectedSq8Plan {
-        selected_pages: Vec<usize>,
-        ranges: Vec<Range<usize>>,
-        planned_bytes: usize,
-        modeled_planner_bytes: usize,
-    }
-    fn plan_selected_sq8_rows(
-        _authority: &PageAuthority,
-        _selected_ordinals: &[usize],
-        limits: SelectedSq8Limits,
-    ) -> Result<SelectedSq8Plan, BudgetedPageError> {
-        let _ = (limits.max_gets, limits.max_bytes, limits.max_planner_bytes);
-        Err(BudgetedPageError::InsufficientBudget)
-    }
-    fn selected_sq8_planner_payload(_rows: usize) -> Result<usize, BudgetedPageError> {
-        Err(BudgetedPageError::InsufficientBudget)
-    }
     fn authority(rows: usize, dimensions: usize, page_rows: usize) -> PageAuthority {
         let width = dimensions + 12;
         let mut object = vec![1_u8; rows * width];
