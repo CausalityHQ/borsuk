@@ -9304,6 +9304,45 @@ mod tests {
     }
 
     #[test]
+    fn scale_replay_enforces_declared_source_budget_on_last_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = paired_scale_fixture(64);
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+        rows[0]["source_get_budget"] = json!(96);
+        rows[1]["source_get_budget"] = json!(96);
+        let (path, _) = write_fixture(dir.path(), "budget-valid", rows.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &rows);
+        reduce_scale(&config, &pin).expect("valid declared96 replay remains admitted");
+
+        for submitted in [97_u64, 128] {
+            let mut bad = rows.clone();
+            let last = bad
+                .iter_mut()
+                .find(|row| row["phase"] == "query" && row["ordinal"] == 999)
+                .unwrap();
+            last["charges"]["source"]["submitted_gets"] = json!(submitted);
+            let charges: Charges = serde_json::from_value(last["charges"].clone()).unwrap();
+            last["sum"] = serde_json::to_value(charges.sum().unwrap()).unwrap();
+            let mut total = Charges::default();
+            for query in bad.iter().filter(|row| row["phase"] == "query") {
+                total
+                    .add(serde_json::from_value(query["charges"].clone()).unwrap())
+                    .unwrap();
+            }
+            let terminal = &mut bad.last_mut().unwrap()["summary"];
+            terminal["charges"] = serde_json::to_value(total).unwrap();
+            terminal["sum"] = serde_json::to_value(total.sum().unwrap()).unwrap();
+            let (path, _) = write_fixture(dir.path(), &format!("budget-{submitted}"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert_eq!(
+                reduce_scale(&config, &pin).unwrap_err().to_string(),
+                "baseline SOURCE/SQ8 query caps",
+                "last query with SOURCE{submitted} must refuse declared96"
+            );
+        }
+    }
+
+    #[test]
     fn source_intervals_report_authenticates_full_population_and_noop_geometry() {
         let dir = tempfile::tempdir().unwrap();
         let mut rows = paired_scale_fixture(64);
