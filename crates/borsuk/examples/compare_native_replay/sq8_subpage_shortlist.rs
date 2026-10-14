@@ -923,7 +923,7 @@ fn reduce_shortlist_mode(
         max_query_scratch_bytes: scratch + TwoBitPlanTrace::scratch_bytes(i.rows),
         already_pinned_bytes: caller_bytes as u64,
     };
-    let store = object_store::local::LocalFileSystem::new_with_prefix(&c.store_root)?;
+    let store = diagnostic_local_store(&c.store_root)?;
     let prefix = object_store::path::Path::parse(&i.generation_prefix)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1828,11 +1828,101 @@ mod admission_tests {
     }
 }
 
-// Test-first seam: bare local files do not satisfy the production stream contract.
-fn diagnostic_local_store(
-    root: &str,
-) -> object_store::Result<object_store::local::LocalFileSystem> {
-    object_store::local::LocalFileSystem::new_with_prefix(root)
+// Diagnostic-only representation adapter: preserve store metadata/preconditions,
+// and stream the requested file range through object_store's bounded 8KiB reader.
+// The production range verifier still rejects unadapted File payloads.
+use object_store::ObjectStore as _;
+
+#[derive(Debug)]
+struct DiagnosticLocalStreamStore {
+    inner: object_store::local::LocalFileSystem,
+}
+
+impl std::fmt::Display for DiagnosticLocalStreamStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("diagnostic-local-stream")
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for DiagnosticLocalStreamStore {
+    async fn get_opts(
+        &self,
+        path: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        let result = self.inner.get_opts(path, options).await?;
+        let meta = result.meta.clone();
+        let range = result.range.clone();
+        let attributes = result.attributes.clone();
+        let extensions = result.extensions.clone();
+        let stream = result.into_stream();
+        Ok(object_store::GetResult {
+            payload: object_store::GetResultPayload::Stream(stream),
+            meta,
+            range,
+            attributes,
+            extensions,
+        })
+    }
+
+    async fn put_opts(
+        &self,
+        path: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        options: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        self.inner.put_opts(path, payload, options).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        path: &object_store::path::Path,
+        options: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_opts(path, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        paths: futures_util::stream::BoxStream<
+            'static,
+            object_store::Result<object_store::path::Path>,
+        >,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::path::Path>>
+    {
+        self.inner.delete_stream(paths)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+    {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+}
+
+fn diagnostic_local_store(root: &str) -> object_store::Result<DiagnosticLocalStreamStore> {
+    Ok(DiagnosticLocalStreamStore {
+        inner: object_store::local::LocalFileSystem::new_with_prefix(root)?,
+    })
 }
 
 #[cfg(test)]
