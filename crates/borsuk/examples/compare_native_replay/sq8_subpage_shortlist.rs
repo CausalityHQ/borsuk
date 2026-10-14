@@ -581,6 +581,7 @@ fn capture_scored_rows(
 }
 
 const SHORTLIST_SCHEMA: &str = "borsuk-sq8-subpage-shortlist-v1";
+pub(super) const ADMISSION_SCHEMA: &str = "borsuk-sq8-subpage-shortlist-input-admission-v1";
 const BASELINE_SQ8_GETS: usize = 32;
 const CANDIDATE_SQ8_GETS: usize = 30;
 const MAX_SCORED_UNITS: usize = 24_576;
@@ -700,6 +701,14 @@ struct ShortlistArm {
 fn reduce_shortlist(
     config_path: &std::path::Path,
     config_sha: &str,
+) -> super::Result<serde_json::Value> {
+    reduce_shortlist_mode(config_path, config_sha, false)
+}
+
+fn reduce_shortlist_mode(
+    config_path: &std::path::Path,
+    config_sha: &str,
+    admission_only: bool,
 ) -> super::Result<serde_json::Value> {
     use super::{
         header_json, header_pin, loss_binary, loss_coverage, read_run_observed, require,
@@ -926,6 +935,43 @@ fn reduce_shortlist(
         limits,
         &c.scratch_parent,
     ))?;
+    if admission_only {
+        let (truth, ts) = loss_binary(&c.truth, (i.count * super::K * 8) as u64)?;
+        admit_payloads(&request_body, &truth, i.rows, i.dimensions, i.count, &codec)?;
+        for snapshot in [
+            &gs,
+            &ps,
+            &rs,
+            &ms,
+            &ds,
+            &qs,
+            &order_snapshot,
+            &sq8_snapshot,
+            &ts,
+        ] {
+            snapshot.recheck()?;
+        }
+        require(
+            super::file_identity(&super::open_input(&c.completed.input.path)?)?
+                == run.file_identity,
+            "shortlist admission baseline lifetime identity",
+        )?;
+        super::read_config::<ShortlistConfig>(config_path, config_sha)?;
+        return Ok(json!({
+            "schema":ADMISSION_SCHEMA,"status":"READY_ACTUAL_INPUT","complete":true,
+            "config_sha256":config_sha,"config_bytes":config_bytes,
+            "rows":i.rows,"dimensions":i.dimensions,"query_count":i.count,"truth_ids_validated":i.count*super::K,
+            "generation_root_sha256":i.generation_root_sha256,
+            "source_records_sha256":c.records.sha256,"source_order_sha256":i.native_order_sha256,
+            "sq8_sha256":c.sq8.sha256,"requests_sha256":c.requests.sha256,"truth_sha256":c.truth.sha256,
+            "generation_opened_through_runtime_validator":true,"all_queries_and_truth_rows_validated":true,
+            "whole_source_and_sq8_authenticated":true,"candidate_queries_executed":0,
+            "truth_file_opened_for_input_validation_only":true,"baseline_replay_parity_checked":false,
+            "payload_model_bytes":caller_bytes,"local_file_only":true,
+            "scientific_qualified":false,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,
+            "qualified":false
+        }));
+    }
     let mut candidate_queries = Vec::with_capacity(1000);
     for slot in 0..originals.len() {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
@@ -1219,6 +1265,16 @@ pub(super) fn execute(
     super::execute_report(output, SHORTLIST_SCHEMA, || reduce_shortlist(config, sha))
 }
 
+pub(super) fn execute_admission(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+) -> super::Result<bool> {
+    super::execute_report(output, ADMISSION_SCHEMA, || {
+        reduce_shortlist_mode(config, sha, true)
+    })
+}
+
 #[cfg(test)]
 mod driver_tests {
     use super::*;
@@ -1277,6 +1333,12 @@ mod driver_tests {
                 .contains("expected result bytes"),
             "literal production metadata should reach the baseline opener"
         );
+        assert!(
+            reduce_shortlist_mode(&path, &sha, true)
+                .unwrap_err()
+                .to_string()
+                .contains("expected result bytes")
+        );
         let mut negatives = Vec::new();
         for (field, value) in [
             ("rows", json!(100000)),
@@ -1332,6 +1394,13 @@ mod driver_tests {
         for c in negatives {
             let (path, sha) = write_config(&root, &c);
             let error = reduce_shortlist(&path, &sha).unwrap_err().to_string();
+            let admission_error = reduce_shortlist_mode(&path, &sha, true)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                admission_error, error,
+                "admission and curve must share pre-open refusals"
+            );
             assert!(
                 !error.contains("expected result bytes"),
                 "invalid metadata reached original baseline: {error}"
@@ -1592,5 +1661,169 @@ mod report_tests {
                 .to_string()
                 .contains("physical ordinal/cover")
         );
+    }
+}
+
+fn admit_payloads(
+    requests: &[u8],
+    truth: &[u8],
+    rows: usize,
+    dimensions: usize,
+    count: usize,
+    codec: &borsuk::rotated_two_bit::RotatedTwoBitCodec,
+) -> super::Result<()> {
+    use super::require;
+    require(
+        rows >= super::K && (1..=1024).contains(&dimensions) && (1..=1000).contains(&count),
+        "shortlist admission payload geometry",
+    )?;
+    let request_bytes = count
+        .checked_mul(dimensions)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or("shortlist admission request byte overflow")?;
+    let truth_bytes = count
+        .checked_mul(super::K)
+        .and_then(|n| n.checked_mul(8))
+        .ok_or("shortlist admission truth byte overflow")?;
+    require(
+        requests.len() == request_bytes && truth.len() == truth_bytes,
+        "shortlist admission exact request/truth bytes",
+    )?;
+    let scratch =
+        borsuk::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(dimensions)?;
+    let mut query = Vec::new();
+    query.try_reserve_exact(dimensions)?;
+    for row in requests.chunks_exact(dimensions * 4) {
+        query.clear();
+        query.extend(
+            row.chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap())),
+        );
+        borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&query)?;
+        codec.prepare_query(&query, scratch)?;
+    }
+    for row in truth.chunks_exact(super::K * 8) {
+        let mut ids = [0_u64; super::K];
+        for (id, bytes) in ids.iter_mut().zip(row.chunks_exact(8)) {
+            *id = u64::from_le_bytes(bytes.try_into().unwrap());
+        }
+        require(
+            ids.iter().all(|id| *id < rows as u64),
+            "shortlist admission truth ID domain",
+        )?;
+        ids.sort_unstable();
+        require(
+            ids.windows(2).all(|w| w[0] != w[1]),
+            "shortlist admission duplicate truth ID",
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::admit_payloads;
+    use borsuk::rotated_two_bit::RotatedTwoBitCodec;
+
+    #[test]
+    fn shortlist_admission_validates_all_query_and_truth_rows() {
+        let codec = RotatedTwoBitCodec::new(&[0., 0.], 7).unwrap();
+        let requests: Vec<u8> = [1_f32, 0., 0., 1.]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let truth: Vec<u8> = (0_u64..20).flat_map(u64::to_le_bytes).collect();
+        admit_payloads(&requests, &truth, 64, 2, 2, &codec)
+            .expect("valid native fixture requests and truth must be admitted");
+
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for index in [0, 3] {
+                let mut bad = requests.clone();
+                bad[index * 4..(index + 1) * 4].copy_from_slice(&value.to_le_bytes());
+                assert!(admit_payloads(&bad, &truth, 64, 2, 2, &codec).is_err());
+            }
+        }
+        let mut zero_last = requests.clone();
+        zero_last[8..16].fill(0);
+        assert!(admit_payloads(&zero_last, &truth, 64, 2, 2, &codec).is_err());
+        for len in [0, 1, 15] {
+            assert!(admit_payloads(&requests[..len], &truth, 64, 2, 2, &codec).is_err());
+        }
+        let mut extra_request = requests.clone();
+        extra_request.push(0);
+        assert!(admit_payloads(&extra_request, &truth, 64, 2, 2, &codec).is_err());
+        for len in [0, 1, 159] {
+            assert!(admit_payloads(&requests, &truth[..len], 64, 2, 2, &codec).is_err());
+        }
+        let mut extra_truth = truth.clone();
+        extra_truth.push(0);
+        assert!(admit_payloads(&requests, &extra_truth, 64, 2, 2, &codec).is_err());
+        let mut out_of_domain = truth.clone();
+        out_of_domain[19 * 8..20 * 8].copy_from_slice(&64_u64.to_le_bytes());
+        assert!(admit_payloads(&requests, &out_of_domain, 64, 2, 2, &codec).is_err());
+        let mut duplicate_last = truth.clone();
+        duplicate_last[19 * 8..20 * 8].copy_from_slice(&18_u64.to_le_bytes());
+        assert!(admit_payloads(&requests, &duplicate_last, 64, 2, 2, &codec).is_err());
+        for (rows, dimensions, count) in [(0, 2, 2), (64, 0, 2), (64, 2, 0), (64, 1025, 2)] {
+            assert!(admit_payloads(&requests, &truth, rows, dimensions, count, &codec).is_err());
+        }
+        assert!(admit_payloads(&requests, &truth, 64, 2, usize::MAX, &codec).is_err());
+    }
+
+    #[test]
+    fn shortlist_admission_publisher_requires_ready_complete_and_no_science() {
+        use serde_json::json;
+        let root = std::env::temp_dir().join(format!(
+            "borsuk-admission-publisher-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        // Synthetic publisher-only fixture, never actual-input admission evidence.
+        let ready = json!({"schema":super::ADMISSION_SCHEMA,"status":"READY_ACTUAL_INPUT",
+            "complete":true,"candidate_queries_executed":0,"scientific_qualified":false,"mock_fixture":true});
+        let out = root.join("ready.json");
+        assert!(
+            super::super::execute_report(&out, super::ADMISSION_SCHEMA, || Ok(ready.clone()))
+                .unwrap()
+        );
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(
+            super::super::execute_report(&out, super::ADMISSION_SCHEMA, || Ok(ready.clone()))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&out).unwrap(), bytes);
+        for (index, field, value) in [
+            (0, "status", json!("MEASURED")),
+            (1, "complete", json!(false)),
+            (2, "candidate_queries_executed", json!(1)),
+            (3, "scientific_qualified", json!(true)),
+            (4, "schema", json!("wrong")),
+        ] {
+            let mut bad = ready.clone();
+            bad[field] = value;
+            assert!(
+                !super::super::execute_report(
+                    &root.join(format!("bad-{index}.json")),
+                    super::ADMISSION_SCHEMA,
+                    || Ok(bad)
+                )
+                .unwrap()
+            );
+        }
+        let invalid = root.join("invalid.json");
+        assert!(
+            !super::execute_admission(&root.join("missing-config"), &"0".repeat(64), &invalid)
+                .unwrap()
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&invalid).unwrap()).unwrap();
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["vendor_or_scientific_win_claim"], false);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

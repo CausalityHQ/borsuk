@@ -5720,6 +5720,13 @@ fn execute_report(
             && report["status"] == "COUNTERFACTUAL_COST_ONLY"
             && report["complete"] == true);
     }
+    if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "READY_ACTUAL_INPUT"
+            && report["complete"] == true
+            && report["candidate_queries_executed"] == 0
+            && report["scientific_qualified"] == false);
+    }
     Ok(report["status"] == "MEASURED"
         || (schema == SCALE_PARITY_REPORT_SCHEMA
             && report["schema"] == SCALE_PARITY_REPORT_SCHEMA
@@ -9120,6 +9127,22 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--sq8-subpage-shortlist-admit")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --sq8-subpage-shortlist-admit CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return sq8_subpage_shortlist::execute_admission(
+                Path::new(&args[2]),
+                args[3]
+                    .to_str()
+                    .ok_or("shortlist admission config SHA encoding")?,
+                Path::new(&args[4]),
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--sq8-subpage-shortlist")
