@@ -1838,7 +1838,7 @@ fn diagnostic_local_store(
 #[cfg(test)]
 mod local_stream_tests {
     use super::*;
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use sha2::{Digest, Sha256};
 
     #[test]
