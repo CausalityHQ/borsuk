@@ -1,0 +1,7 @@
+Running as unit: borsuk-loss-release-binaries.service; invocation ID: e00fb3abf8ee44b1b95294fdb7e5ff39
+Finished with result: success
+Main processes terminated with: code=exited/status=0
+Service runtime: 14min 22.831s
+CPU time consumed: 13min 48.764s
+Memory peak: 7.4M
+Memory swap peak: 0B

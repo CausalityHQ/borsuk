@@ -3617,13 +3617,92 @@ mod scale_prefix_parity_tests {
 
 const SOURCE_COVER_CURVE_SCHEMA: &str = "borsuk-source-cover-cost-curve-v1";
 const SOURCE_COVER_CURVE_CAPS: [usize; 5] = [128, 96, 64, 48, 32];
+const SOURCE_INTERVAL_SCHEMA: &str = "borsuk-native-fetch-intervals-v1";
+
+fn reduce_source_intervals(config_path: &Path, config_sha: &str) -> Result<Value> {
+    let (c, config_bytes): (CompletedConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.schema == SCALE_CONFIG_SCHEMA
+            && c.expected_bound_inputs["rows"] == 1_000_000
+            && c.expected_bound_inputs["dimensions"] == 1024
+            && c.expected_bound_inputs["execution"]["mode"] == "full"
+            && c.expected_bound_inputs["source_cache"] == "off"
+            && c.expected_bound_inputs["fetch_parallelism"] == 64,
+        "interval diagnostic requires full width64 cache-off scale input",
+    )?;
+    let mut intervals = Vec::with_capacity(COUNT);
+    let run = read_run_observed(
+        &c.input.path,
+        &c.input.sha256,
+        Some(&c),
+        |line, q, inputs| {
+            let costs = source_cover_costs(line, q, inputs, &[128])?;
+            let &(gets, source_bytes, _, max_source_range) =
+                costs.first().ok_or("interval source plan")?;
+            let raw: Value = serde_json::from_slice(line)?;
+            let ranges: Vec<[u64; 2]> = serde_json::from_value(raw["plan"]["ranges"].clone())?;
+            let max_sq8_range = ranges
+                .iter()
+                .map(|range| range[1] - range[0])
+                .max()
+                .ok_or("interval SQ8 plan")?;
+            require(
+                max_source_range > 0 && max_sq8_range > 0,
+                "interval nonempty ranges",
+            )?;
+            intervals.push(json!({"ordinal":q.ordinal,"source_gets":gets,
+            "source_phase_bytes":source_bytes,"max_source_range_bytes":max_source_range,
+            "sq8_gets":q.charges.sq8.submitted_gets,"sq8_phase_bytes":q.charges.sq8.verified_bytes,
+            "max_sq8_range_bytes":max_sq8_range}));
+            Ok(())
+        },
+    )?;
+    require(
+        run.inputs.count == COUNT && intervals.len() == COUNT,
+        "interval complete population",
+    )?;
+    let maximum = |keys: &[&str]| {
+        intervals
+            .iter()
+            .flat_map(|row| keys.iter().map(move |key| row[*key].as_u64().unwrap_or(0)))
+            .max()
+            .unwrap_or(0)
+    };
+    let minimum = maximum(&["max_source_range_bytes", "max_sq8_range_bytes"]);
+    let phase_max = maximum(&["source_phase_bytes", "sq8_phase_bytes"]);
+    require(
+        minimum > 0 && phase_max >= minimum,
+        "interval geometry bounds",
+    )?;
+    require(
+        file_identity(&open_input(&c.input.path)?)? == run.file_identity,
+        "interval input changed before publication",
+    )?;
+    read_config::<CompletedConfig>(config_path, config_sha)?;
+    Ok(
+        json!({"schema":SOURCE_INTERVAL_SCHEMA,"status":"INTERVAL_GEOMETRY_ONLY","complete":true,
+        "config_path":config_path,"config_bytes":config_bytes,"config_sha256":config_sha,
+        "input":{"path":c.input.path,"bytes":c.input.bytes,"sha256":c.input.sha256},
+        "identity":c.expected_identity,"inputs":c.expected_bound_inputs,"count":COUNT,
+        "source_get_budget":128,"max_source_range_bytes":maximum(&["max_source_range_bytes"]),
+        "max_sq8_range_bytes":maximum(&["max_sq8_range_bytes"]),
+        "minimum_feasible_capacity_bytes":minimum,"maximum_phase_bytes":phase_max,
+        "distinct_binding_arm":phase_max>minimum,
+        "capacity_upper_exclusive_bytes":phase_max,
+        "selection":if phase_max>minimum {"FEASIBLE_POTENTIALLY_BINDING_WINDOW"} else {"NO_DISTINCT_BINDING_ARM"},
+        "queries":intervals,"waiting_observed":false,"native_ann_called":false,
+        "corpus_queries_truth_bodies_opened":false,"claims_latency":false,"claims_quality":false,
+        "claims_bill":false,"qualified":false,"root_producer_provenance_and_resource_admission_required":true,
+        "reducer_source_sha256":format!("{:x}",Sha256::digest(include_bytes!("compare_native_replay.rs")))}),
+    )
+}
 
 fn source_cover_costs(
     line: &[u8],
     q: &Query,
     inputs: &Inputs,
     caps: &[usize],
-) -> Result<Vec<(u64, u64, bool)>> {
+) -> Result<Vec<(u64, u64, bool, u64)>> {
     // Validate recorded nomination, completion, original SOURCE charges and SQ8
     // plan before deriving any counterfactual. Never substitute selected SQ8
     // pages for the full discovered SOURCE closure.
@@ -3649,7 +3728,17 @@ fn source_cover_costs(
                 cap,
                 geometry_bytes,
             )?;
-            Ok((ranges.len() as u64, bytes as u64, bytes <= 64 * 1024 * 1024))
+            let max_range_bytes = ranges
+                .iter()
+                .map(|range| range.end - range.start)
+                .max()
+                .unwrap_or(0);
+            Ok((
+                ranges.len() as u64,
+                bytes as u64,
+                bytes <= 64 * 1024 * 1024,
+                max_range_bytes as u64,
+            ))
         })
         .collect()
 }
@@ -3663,7 +3752,8 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
             && c.expected_bound_inputs["source_cache"] == "off",
         "source cover curve requires full cache-off scale input",
     )?;
-    let mut costs: [Vec<(u64, u64, bool)>; 5] = std::array::from_fn(|_| Vec::with_capacity(COUNT));
+    let mut costs: [Vec<(u64, u64, bool, u64)>; 5] =
+        std::array::from_fn(|_| Vec::with_capacity(COUNT));
     let run = read_run_observed(
         &c.input.path,
         &c.input.sha256,
@@ -3688,16 +3778,16 @@ fn reduce_source_cover_curve(config_path: &Path, config_sha: &str) -> Result<Val
         .iter()
         .zip(&costs)
         .map(|(&cap, values)| {
-            let gets = values.iter().map(|&(gets, _, _)| gets).sum::<u64>();
-            let bytes = values.iter().map(|&(_, bytes, _)| bytes).sum::<u64>();
-            let inside = values.iter().filter(|&&(_, _, inside)| inside).count();
+            let gets = values.iter().map(|&(gets, _, _, _)| gets).sum::<u64>();
+            let bytes = values.iter().map(|&(_, bytes, _, _)| bytes).sum::<u64>();
+            let inside = values.iter().filter(|&&(_, _, inside, _)| inside).count();
             json!({"get_cap":cap,"predicted_queries":values.len(),
                 "inside_historical_byte_cap_queries":inside,
                 "outside_historical_byte_cap_queries":COUNT-inside,
                 "all_queries_inside_historical_byte_cap":inside==COUNT,
                 "totals_population":"all authenticated queries, including outside historical envelope",
                 "predicted_total_gets":gets,"predicted_total_bytes":bytes,
-                "predicted_max_query_bytes":values.iter().map(|&(_,bytes,_)|bytes).max()})
+                "predicted_max_query_bytes":values.iter().map(|&(_,bytes,_,_)|bytes).max()})
         })
         .collect::<Vec<_>>();
     require(
@@ -5285,6 +5375,11 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
+    if schema == SOURCE_INTERVAL_SCHEMA {
+        return Ok(report["schema"] == SOURCE_INTERVAL_SCHEMA
+            && report["status"] == "INTERVAL_GEOMETRY_ONLY"
+            && report["complete"] == true);
+    }
     if schema == SOURCE_COVER_CURVE_SCHEMA {
         return Ok(report["schema"] == SOURCE_COVER_CURVE_SCHEMA
             && report["status"] == "COUNTERFACTUAL_COST_ONLY"
@@ -8821,6 +8916,21 @@ fn main() {
             )?;
             return publish_bound_headers(output, config);
         }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--source-intervals-scale")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --source-intervals-scale CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), SOURCE_INTERVAL_SCHEMA, || {
+                reduce_source_intervals(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("interval config SHA encoding")?,
+                )
+            });
+        }
         if args.get(1).is_some_and(|arg| arg == "--source-cover-scale") {
             require(
                 args.len() == 5,
@@ -9099,6 +9209,154 @@ mod tests {
     }
 
     #[test]
+    fn source_intervals_report_authenticates_full_population_and_noop_geometry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = paired_scale_fixture(64);
+        let (_, fixture) = sealed_loss_fixture();
+        let sq8_page = 256 * (1024 + 12);
+        let mut totals = Charges::default();
+        for row in &mut rows {
+            if row["phase"] == "query" {
+                row["trace"] = fixture["trace"].clone();
+                row["charges"]["source"] = fixture["charges"]["source"].clone();
+                row["charges"]["sq8"] = json!({"submitted_gets":2,
+                    "verified_bytes":2*sq8_page,"failed_gets":0});
+                row["plan"] = json!({"selected_pages":[0,2],
+                    "ranges":[[0,sq8_page],[2*sq8_page,3*sq8_page]],
+                    "planned_bytes":2*sq8_page,"target_pages":2,"target_shortfall":0,
+                    "primary_pages_retained":1,"covered_pages":2,"bridge_pages":0});
+                let charges: Charges = serde_json::from_value(row["charges"].clone()).unwrap();
+                row["sum"] = serde_json::to_value(charges.sum().unwrap()).unwrap();
+                totals.add(charges).unwrap();
+            }
+        }
+        rows.last_mut().unwrap()["summary"]["charges"] = serde_json::to_value(totals).unwrap();
+        rows.last_mut().unwrap()["summary"]["sum"] =
+            serde_json::to_value(totals.sum().unwrap()).unwrap();
+        authenticate(&mut rows);
+        let (path, _) = write_fixture(dir.path(), "interval-full", rows.clone());
+        let (config, hash) = scale_config(dir.path(), &path, &rows);
+        let report = reduce_source_intervals(&config, &hash).unwrap();
+        assert_eq!(report["count"], 1000);
+        assert_eq!(report["queries"].as_array().unwrap().len(), 1000);
+        assert_eq!(report["max_source_range_bytes"], 135168);
+        assert_eq!(report["max_sq8_range_bytes"], sq8_page);
+        assert_eq!(report["minimum_feasible_capacity_bytes"], sq8_page);
+        assert_eq!(report["maximum_phase_bytes"], 2 * sq8_page);
+        assert_eq!(report["distinct_binding_arm"], true);
+        assert_eq!(report["waiting_observed"], false);
+        // One joined SQ8 range includes the bridge and raises minimum to phase total.
+        for row in &mut rows {
+            if row["phase"] == "query" {
+                row["plan"] = json!({"selected_pages":[0,2],
+                    "ranges":[[0,3*sq8_page]],"planned_bytes":3*sq8_page,
+                    "target_pages":2,"target_shortfall":0,"primary_pages_retained":1,
+                    "covered_pages":3,"bridge_pages":1});
+                row["charges"]["sq8"] = fixture["charges"]["sq8"].clone();
+                let charges: Charges = serde_json::from_value(row["charges"].clone()).unwrap();
+                row["sum"] = serde_json::to_value(charges.sum().unwrap()).unwrap();
+            }
+        }
+        let mut totals = Charges::default();
+        for row in &rows {
+            if row["phase"] == "query" {
+                totals
+                    .add(serde_json::from_value(row["charges"].clone()).unwrap())
+                    .unwrap();
+            }
+        }
+        rows.last_mut().unwrap()["summary"]["charges"] = serde_json::to_value(totals).unwrap();
+        rows.last_mut().unwrap()["summary"]["sum"] =
+            serde_json::to_value(totals.sum().unwrap()).unwrap();
+        authenticate(&mut rows);
+        let (path, _) = write_fixture(dir.path(), "interval-noop", rows.clone());
+        let (config, hash) = scale_config(dir.path(), &path, &rows);
+        let report = reduce_source_intervals(&config, &hash).unwrap();
+        assert_eq!(report["distinct_binding_arm"], false);
+        assert_eq!(report["selection"], "NO_DISTINCT_BINDING_ARM");
+    }
+
+    #[test]
+    fn source_intervals_refuse_wrong_authority_before_result_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = v2_fixture();
+        let input = dir.path().join("absent-native-result.jsonl");
+        for (index, (key, value)) in [
+            ("rows", json!(100_000)),
+            ("dimensions", json!(768)),
+            ("fetch_parallelism", json!(32)),
+            ("source_cache", json!("on")),
+            ("execution", json!({"mode":"prefix"})),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut inputs = rows[1].clone();
+            inputs["rows"] = json!(1_000_000);
+            inputs["dimensions"] = json!(1024);
+            inputs["fetch_parallelism"] = json!(64);
+            inputs["source_cache"] = json!("off");
+            inputs["execution"] = json!({"mode":"full"});
+            inputs[key] = value;
+            let config = json!({"schema":SCALE_CONFIG_SCHEMA,
+                "input":{"path":input,"bytes":1,"sha256":"a".repeat(64)},
+                "expected_identity":rows[0],"expected_bound_inputs":inputs});
+            let bytes = serde_json::to_vec(&config).unwrap();
+            let path = dir.path().join(format!("interval-{index}.json"));
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                reduce_source_intervals(&path, &sha(&bytes))
+                    .unwrap_err()
+                    .to_string(),
+                "interval diagnostic requires full width64 cache-off scale input"
+            );
+        }
+    }
+
+    #[test]
+    fn source_intervals_publication_is_geometry_only() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, (status, complete, accepted)) in [
+            ("INTERVAL_GEOMETRY_ONLY", true, true),
+            ("MEASURED", true, false),
+            ("INTERVAL_GEOMETRY_ONLY", false, false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                execute_report(
+                    &dir.path().join(format!("interval-{index}.json")),
+                    SOURCE_INTERVAL_SCHEMA,
+                    || Ok(json!({"schema":SOURCE_INTERVAL_SCHEMA,
+                    "status":status,"complete":complete}))
+                )
+                .unwrap(),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn source_cover_interval_lengths_preserve_bridge_and_separate_ranges() {
+        let (inputs, raw) = sealed_loss_fixture();
+        let query: Query = serde_json::from_value(raw.clone()).unwrap();
+        let costs = source_cover_costs(
+            &serde_json::to_vec(&raw).unwrap(),
+            &query,
+            &inputs,
+            &[128, 1],
+        )
+        .unwrap();
+        let page_bytes = 256 * source_record_bytes(inputs.dimensions).unwrap() as u64;
+        let recorded = serde_json::to_value(costs).unwrap();
+        // Full closure is three pages; its largest separate request is two.
+        // A single GET includes the bridge and must expose four pages.
+        assert_eq!(recorded[0][3], json!(2 * page_bytes));
+        assert_eq!(recorded[1][3], json!(4 * page_bytes));
+    }
+
+    #[test]
     fn source_cover_curve_preserves_full_closure_and_charges_bridge_bytes() {
         let (inputs, raw) = sealed_loss_fixture();
         let query: Query = serde_json::from_value(raw.clone()).unwrap();
@@ -9114,7 +9372,10 @@ mod tests {
         // two runs adds the unselected gap page; it changes no scored units.
         assert_eq!(
             costs,
-            [(2, 3 * page_bytes, true), (1, 4 * page_bytes, true)]
+            [
+                (2, 3 * page_bytes, true, 2 * page_bytes),
+                (1, 4 * page_bytes, true, 4 * page_bytes)
+            ]
         );
         let mut corrupt = raw;
         corrupt["charges"]["source"]["verified_bytes"] = json!(3 * page_bytes - 1);

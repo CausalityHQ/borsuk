@@ -1,0 +1,15 @@
+# Interval diagnostic review reconciliation
+
+Exact source5d85c757; group7e4fb393425948ec; researchaec64c527cc1425d completed0/441s; engineering09963982f2f247a9 completed0/302s. Both full reports read and preserved. No fallback or duplicate review.
+
+Confirmed HOLD: total SOURCE phase bytes exceed possible concurrent byte demand at width64. Source audit confirms buffer_unordered(min(width,range_count)) and permit lifetime ending with each fetch. The three fields distinct_binding_arm, capacity_upper_exclusive_bytes and selection are NOT authoritative and MUST NOT admit a cold arm. Neither source qualification nor report completion cures this limitation.
+
+Selected smallest research remedy (option a), with no source change: use the report as authenticated interval geometry only. Root selects C solely from max individual SOURCE/SQ8 range <= C < an observed SQ8 phase total. SQ8 has <=32 ranges and width64, so this is a potentially concurrent SQ8 opportunity. Record query count with SQ8 phase bytes>C; actual waiting/performance must be measured, never inferred. If global minimum >= maximum SQ8 phase total, root result is NO_DISTINCT_BINDING_ARM regardless of the three report fields. SOURCE-only binding is not established; a later SOURCE-based selector would need first64/top64 accounting and native qualification. Current scope implements the SAME shared SOURCE/SQ8 controller but only SQ8 geometry supplies arm admission.
+
+Intervention authority must bind active queries1, width64, cacheoff, full exact1000 population and generation/source/SQ8/order/request/truth pins, SOURCEGETbudget128/SQ8plan<=32. No additional queries/warmups/concurrency change; runtime configurations differ only by declared window and exact file path transport mapping. Capacity has no generalization claim beyond this sealed workload. Router/leaf fetches remain outside the byte window.
+
+Planner provenance: root freezes exact generation, budgeted_page_rank and comparator source blob SHAs from5d85 plus shared planner name; SOURCEGET/bytes equality alone cannot authenticate alternate tie-breaking. Native geometry diagnostic output is not runtime/scientific acceptance. Historical curve v1 semantics/schema unchanged, but reducer_source_sha256 changes with the new file; do not claim byte-identical reports across revisions.
+
+Native qualification: all7 gates independently passed on5d85, including190regressions, release, Clippy and complete shimunset testbuild; original failures preserved. Real diagnostic remains UNRUN. No production change/requalification is needed for this root protocol remedy. Integration decision is limited to experimental geometry diagnostic with this explicit limitation, not an authoritative SOURCE binding selector or production default.
+
+Reviewer disclosure: research report says it wrote a memory note and MEMORY.md despite the read-only brief. Root did not authorize or repeat that edit; preserve the report. Qualified source and worktree index are independently checked before integration; no reviewer memory note establishes authority.

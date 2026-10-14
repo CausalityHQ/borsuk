@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-sealed-loss-native-stage-v1",
+  "stage": "interval-report",
+  "source_commit": "5e46347afeaa4b672f35bbbc58d0ef1907e7826d",
+  "manager_exit": 101,
+  "native_exit": 101,
+  "owned_cgroup_drained": true,
+  "performance_claim": false
+}

@@ -1,0 +1,34 @@
+**Verdict: HOLD, narrowly.** The code correctly computes the facts it reports. But its three top-level selection fields (`distinct_binding_arm`, `capacity_upper_exclusive_bytes`, `selection`) and the preregistered rule "choose a capacity ≥ the global individual max and < some phase total" treat a phase's total bytes as bytes in flight at once. On this exact input that is false for SOURCE. A capacity chosen that way can be labeled "potentially binding" and still be a no-op, which is the same failure as the earlier 905c8f41 HOLD.
+
+The cheapest fix needs no code and no requalification (option a under blocker 1). Everything below comes from read-only inspection of the 5d85c757 Git objects, the native and library source, and the receipts. I ran nothing: no Cargo, no native job, no raw input decoding. Line numbers are in the file at 5d85c757.
+
+## Blocker 1: SOURCE phase totals overstate concurrent demand
+- Native SOURCE fetches run at most 64 at a time (`max_parallel_source_gets = fetch_parallelism`, `check_cohere_native_baseline.rs:1267`; `buffer_unordered(min(64, n))`, `sq8_s3_range.rs:1087`) against a 128-GET budget (`:61`).
+- The earlier curve reduction on the same A1 input reproduced 107,882 SOURCE GETs over 1000 queries, about 108 per query (`borsuk-source-cover-curve.pending/decision.md`). So nearly every SOURCE phase has more ranges than can be in flight together. Its peak demand is at most the sum of its 64 largest ranges, which is less than the phase total.
+- Effect: any capacity from the largest per-query top-64 SOURCE sum up to the largest SOURCE phase total is reported as potentially binding (`compare_native_replay.rs:3672,3690-3692`) but can never bind.
+- SQ8 does not have this problem. It has at most 32 ranges, all admitted together into a window that is empty when the phase starts (stage order is checked in `StageTotals::add`). So for a query with at least two SQ8 ranges, an SQ8 total above the capacity means some reservation waits.
+
+**Smallest fixes:**
+- **(a) No code change.** Amend the preregistration so the three top-level fields are non-authoritative. Select capacity C only from the per-query `sq8_phase_bytes` already in the report: `minimum_feasible_capacity_bytes ≤ C < sq8_phase_bytes`. Record the count of queries with `sq8_phase_bytes > C` as the binding population. If the minimum is at least the largest SQ8 total, read the result as NO_DISTINCT_BINDING_ARM, because these fields can't prove SOURCE binding.
+- **(b) Code change, if SOURCE binding is wanted.** Add per query the sum of the first min(n, 64) SOURCE ranges in plan order (exceeding C guarantees a wait) and the sum of the 64 largest (exceeding C is required for any wait). Compute the upper bound and selection from max(top-64 SOURCE sum, SQ8 total), and emit a count of binding queries at the minimum. This needs the full gate set again.
+- **Falsifier, in the existing fixture:** 65 equal SOURCE ranges plus a small SQ8 phase. The current code reports `true`; the correct answer is `false` when a capacity of 64 ranges is at least the 64-range sum.
+
+## Medium
+- **Concurrency scope is not recorded.** The per-query bounds hold only with one query in flight and with SOURCE finishing before SQ8. `ACTIVE_QUERIES = 1` is a compile-time constant (`native.rs:1169`), and full-mode rows don't record it; it is only emitted in panel admission. If the intervention raises concurrency to address the 905c8f41 finding, these numbers don't transfer. Fix: bind the intervention to 1 active query, width 64 and cache off, or add `active_queries_assumed:1` and `fetch_parallelism:64` to the report.
+- **Capacity at the minimum has zero margin.** The window refuses any range larger than its capacity before I/O (`sq8_s3_range.rs:91,1059`), and the whole query then fails. The minimum is feasible only for this sealed 1000-query population, generation root, source/SQ8/order pins, 128-GET SOURCE budget and 32-GET SQ8 plan. The intervention's bound inputs must equal this config except for `shared_byte_window`. Any warm-up or extra query makes the run execution-INVALID.
+
+## Low and nits
+- **Missing provenance.** The interval report omits the `planner_source_sha256`, `generation_source_sha256` and `shared_planner` fields that the curve report emits (`:3805-3807`). Yet `max_source_range_bytes` is replanned, not recorded. `loss_coverage` pins only GET count and total bytes, and when gaps are equal those do not determine one partition. The real risk is low: `cover_pages` sorts gaps by (gap, index) deterministically, and `budgeted_page_rank.rs` hasn't changed since 1764da92 (2026-09-30), before the A1 run. Fix: copy those three lines, or have the root record the hashes from 5d85.
+- **"Historical source-cover-v1 output unchanged"** is true only apart from `reducer_source_sha256` (`:3805`). That field hashes the changed file, so a byte-for-byte comparison of a re-run curve report will differ in it.
+- `phase_max >= minimum` (`:3675`) is always true. The `maximum` helper silently defaults to 0.
+- The report has no top-level totals. The preregistered comparisons (SOURCE 107,882 GETs / 27,428,966,400 B; SQ8 29,903 GETs / 16,708,608,000 B) must be summed from the per-query rows after compute closure.
+- Router reads bypass the window: only the SOURCE and SQ8 fetch paths take it (`two_bit_generation.rs:1781,1820,2472,2688`). The report should say so.
+
+## Verified sound
+- **Authentication:** the per-query callback runs after each row is validated. The full-file SHA, EOF and identity are checked (`:1959`) before any result is returned. Input identity is rechecked and the config re-read before publication. The wrong-authority test rejects before opening the input. A failed reduction publishes INVALID with `complete:false` and exits 2.
+- **SOURCE geometry:** it matches production exactly. Native calls `plan_two_bit_source_cover(closure, rows, width, 128, 64 MiB)` (`two_bit_generation.rs:1885`), and the window reserves `authority.byte_range` lengths, which equal the cover range lengths. The reducer passes a different byte cap, but that cap only gates an error (`:793-799`), so the cover is unchanged.
+- **SQ8 geometry:** maxima come from the recorded `plan.ranges`, checked for alignment and order, and against the charges.
+- **Feasibility floor:** the maximum individual range across both phases is the exact floor for a window shared by SOURCE and SQ8. Requiring waiters ≥ width means at most 63 waiters at width 64, so the waiter limit can't refuse a reservation.
+- **Inputs and resources:** the config SHA `5cd2e59a…` matches. Its metadata is 1M rows, D1024, fetch 64, cache off, full mode, baseline serving and no window. The reducer adds about 1000 small rows to a run previously measured at 1.69 s and 7 MiB; the preregistered limits of 512 MiB and 120 s are ample.
+
+I wrote a memory note for this review and added it to `MEMORY.md`.

@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-root-sq8-window-admission-v1",
+  "active_queries": 1,
+  "fetch_parallelism": 64,
+  "source_cache": "off",
+  "ignored_selection_fields": [
+    "distinct_binding_arm",
+    "capacity_upper_exclusive_bytes",
+    "selection"
+  ],
+  "minimum": 8486912,
+  "maximum_sq8_phase": 16708608,
+  "potential_sq8_queries_at_minimum": 1000,
+  "distinct_sq8_arm": true,
+  "selection": "FEASIBLE_POTENTIAL_SQ8_WINDOW",
+  "waiting_observed": false
+}

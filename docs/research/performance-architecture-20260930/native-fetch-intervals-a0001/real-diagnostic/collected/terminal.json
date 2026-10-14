@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-interval-real-stage-v1",
+  "source_commit": "5d85c7577da4a10b7a3907b40f03bfb8eb7181f0",
+  "native_exit": 0,
+  "manager_exit": 0,
+  "owned_cgroup_drained": true,
+  "geometry_accepted": true,
+  "claims_performance": false
+}

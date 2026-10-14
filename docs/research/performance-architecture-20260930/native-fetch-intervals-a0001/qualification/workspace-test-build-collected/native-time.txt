@@ -1,0 +1,23 @@
+	Command being timed: "timeout --kill-after=30 3809 env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh"
+	User time (seconds): 372.53
+	System time (seconds): 49.66
+	Percent of CPU this job got: 107%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 6:33.62
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 5537648
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 27978
+	Minor (reclaiming a frame) page faults: 25898007
+	Voluntary context switches: 323880
+	Involuntary context switches: 5412
+	Swaps: 0
+	File system inputs: 17080
+	File system outputs: 19207616
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

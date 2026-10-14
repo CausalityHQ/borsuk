@@ -1,0 +1,1 @@
+cargo test --locked -p borsuk --example compare_native_replay tests::source_cover_interval_lengths_preserve_bridge_and_separate_ranges -- --exact --test-threads=1

@@ -1,0 +1,7 @@
+affected-compile	plain	cargo test --locked -p borsuk --example compare_native_replay --no-run
+interval-report	listed	cargo test --locked -p borsuk --example compare_native_replay source_intervals_ -- --test-threads=1
+interval-max	listed	cargo test --locked -p borsuk --example compare_native_replay tests::source_cover_interval_lengths_preserve_bridge_and_separate_ranges -- --exact --test-threads=1
+example-regressions	listed	cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1
+release-binaries	plain	cargo build --release --locked -p borsuk --example compare_native_replay
+workspace-clippy	plain	cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
+workspace-test-build	plain	env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh
