@@ -579,3 +579,732 @@ fn capture_scored_rows(
     super::require(!captured.is_empty(), "capture empty roster")?;
     Ok((plan, trace, captured))
 }
+
+const SHORTLIST_SCHEMA: &str = "borsuk-sq8-subpage-shortlist-v1";
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShortlistConfig {
+    schema: String,
+    completed: super::CompletedConfig,
+    generation_manifest: super::CompletedInput,
+    plane_manifest: super::CompletedInput,
+    records: super::CompletedInput,
+    mean: super::CompletedInput,
+    source_digests: super::CompletedInput,
+    sq8: super::CompletedInput,
+    requests: super::CompletedInput,
+    truth: super::CompletedInput,
+    store_root: std::path::PathBuf,
+    scratch_parent: std::path::PathBuf,
+    shortlist_sizes: [usize; 4],
+    max_payload_bytes: usize,
+}
+
+fn plan_value(
+    plan: &borsuk::budgeted_page_rank::BudgetedPagePlan,
+    dimensions: usize,
+) -> serde_json::Value {
+    let page_bytes = (dimensions + 12) * 256;
+    let covered: usize = plan
+        .ranges
+        .iter()
+        .map(|r| r.len().div_ceil(page_bytes))
+        .sum();
+    serde_json::json!({"selected_pages":plan.selected_pages,
+        "ranges":plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
+        "planned_bytes":plan.planned_bytes,"target_pages":plan.target_pages,
+        "target_shortfall":plan.target_shortfall,"primary_pages_retained":plan.primary_pages_retained,
+        "covered_pages":covered,"bridge_pages":covered.saturating_sub(plan.selected_pages.len())})
+}
+
+fn rank_local_cover(
+    snapshot: &mut super::HeaderSnapshot,
+    authority: &borsuk::sq8_page_authority::PageAuthority,
+    ranges: &[std::ops::Range<usize>],
+    rows: usize,
+    dimensions: usize,
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    max_bytes: usize,
+) -> super::Result<Vec<borsuk::exact_sq8_nominee::ScoredNominee>> {
+    use std::io::{Read, Seek, SeekFrom};
+    snapshot.recheck()?;
+    let width = dimensions + 12;
+    let bytes = ranges
+        .iter()
+        .try_fold(0_usize, |n, r| n.checked_add(r.len()))
+        .ok_or("cover byte overflow")?;
+    super::require(
+        !ranges.is_empty()
+            && bytes <= max_bytes
+            && ranges.windows(2).all(|w| w[0].end <= w[1].start),
+        "admitted ordered local cover",
+    )?;
+    let mut bodies = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        super::require(
+            range.start < range.end
+                && range.start % (32 * width) == 0
+                && range.end <= rows * width
+                && (range.end % (32 * width) == 0 || range.end == rows * width),
+            "local cover block geometry",
+        )?;
+        let mut body = Vec::new();
+        body.try_reserve_exact(range.len())?;
+        body.resize(range.len(), 0);
+        snapshot.file.seek(SeekFrom::Start(range.start as u64))?;
+        snapshot.file.read_exact(&mut body)?;
+        authority.verify_payload(
+            range.start / (32 * width),
+            (range.end - 1) / (32 * width),
+            &body,
+        )?;
+        bodies.push(body);
+    }
+    snapshot.recheck()?;
+    let returned = ranges
+        .iter()
+        .zip(&bodies)
+        .map(|(r, b)| borsuk::returned_sq8::ReturnedRange {
+            start: r.start,
+            bytes: b.as_slice(),
+        })
+        .collect::<Vec<_>>();
+    Ok(borsuk::returned_sq8::rank_returned_ranges(
+        borsuk::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
+        &returned,
+        query,
+        low,
+        step,
+        super::K,
+        max_bytes,
+    )?)
+}
+
+struct ShortlistArm {
+    maximum: usize,
+    selected: Vec<usize>,
+    ranges: Vec<std::ops::Range<usize>>,
+    bytes: usize,
+    returned: Option<Vec<borsuk::exact_sq8_nominee::ScoredNominee>>,
+}
+
+fn reduce_shortlist(
+    config_path: &std::path::Path,
+    config_sha: &str,
+) -> super::Result<serde_json::Value> {
+    use super::{
+        header_json, header_pin, loss_binary, loss_coverage, read_run_observed, require,
+        scan_loss_sq8,
+    };
+    use borsuk::{
+        rotated_two_bit::RotatedTwoBitCodec,
+        sq8_page_authority::{PageAuthority, SelectedSq8Limits, plan_selected_sq8_rows},
+        two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace},
+    };
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeSet;
+    let (c, config_bytes): (ShortlistConfig, _) = super::read_config(config_path, config_sha)?;
+    require(
+        c.schema == "borsuk-sq8-subpage-shortlist-config-v1"
+            && c.completed.schema == super::SCALE_CONFIG_SCHEMA,
+        "shortlist schema",
+    )?;
+    let i: super::Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
+    super::validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+    require(
+        i.rows == 1_000_000
+            && i.dimensions == 1024
+            && i.count == 1000
+            && i.k == 10
+            && i.metric == "cosine"
+            && i.profile == "scale1m"
+            && i.source_get_budget.unwrap_or(128) == 128,
+        "shortlist frozen population/protocol",
+    )?;
+    require(
+        c.shortlist_sizes == [1024, 2048, 4096, 8192]
+            && c.max_payload_bytes == 2 * 1024 * 1024 * 1024,
+        "shortlist preregistered curve/envelope",
+    )?;
+    super::header_path(&c.store_root)?;
+    super::header_path(&c.scratch_parent)?;
+    let generation_dir = c.store_root.join(&i.generation_prefix);
+    require(
+        c.generation_manifest.path == generation_dir.join("manifest.json")
+            && c.plane_manifest.path == generation_dir.join("plane/manifest.json")
+            && c.records.path == generation_dir.join("plane/records.bin")
+            && c.mean.path == generation_dir.join("plane/mean.bin")
+            && c.source_digests.path == generation_dir.join("plane/page_digests.bin"),
+        "shortlist actual store descriptor paths",
+    )?;
+    require(
+        c.generation_manifest.sha256 == i.generation_root_sha256
+            && c.sq8.sha256 == i.native_sq8_sha256
+            && c.requests.sha256 == i.requests_sha256
+            && c.truth.sha256 == i.truth_sha256,
+        "shortlist original artifact bindings",
+    )?;
+    header_pin(
+        &c.records,
+        (i.rows * super::source_record_bytes(i.dimensions)?) as u64,
+    )?;
+    header_pin(&c.mean, (i.dimensions * 4) as u64)?;
+    header_pin(&c.source_digests, (i.rows.div_ceil(32) * 32) as u64)?;
+    let mut originals = Vec::<(Value, Value, super::LossCoverage)>::with_capacity(i.count);
+    let run = read_run_observed(
+        &c.completed.input.path,
+        &c.completed.input.sha256,
+        Some(&c.completed),
+        |line, q, inputs| {
+            require(
+                originals.len() < 1000 && q.ordinal == originals.len(),
+                "shortlist baseline full query order",
+            )?;
+            let raw: Value = serde_json::from_slice(line)?;
+            originals.push((
+                raw["plan"].clone(),
+                raw["trace"].clone(),
+                loss_coverage(line, q, inputs)?,
+            ));
+            Ok(())
+        },
+    )?;
+    require(
+        originals.len() == 1000 && run.samples.len() == 1000,
+        "shortlist full baseline seal",
+    )?;
+    let (g, gs) = header_json(&c.generation_manifest)?;
+    let (plane_body, ps) = loss_binary(&c.plane_manifest, c.plane_manifest.bytes)?;
+    let plane: borsuk::two_bit_source::SourcePlaneReceipt = serde_json::from_slice(&plane_body)?;
+    require(
+        g["plane_manifest_sha256"] == c.plane_manifest.sha256
+            && g["sq8_object_sha256"] == c.sq8.sha256
+            && plane.rows == i.rows
+            && plane.dimensions == i.dimensions
+            && plane.record_bytes == super::source_record_bytes(i.dimensions)?
+            && plane.records_sha256 == c.records.sha256
+            && plane.mean_sha256 == c.mean.sha256
+            && plane.page_digest_sha256 == c.source_digests.sha256
+            && plane.source_order_sha256 == i.native_order_sha256
+            && plane.source_sha256 == i.native_source_sha256
+            && plane.sq8_sha256 == i.native_sq8_sha256
+            && !plane.query_or_truth_used,
+        "shortlist authenticated plane/generation binding",
+    )?;
+    let (records, rs) = loss_binary(&c.records, (i.rows * plane.record_bytes) as u64)?;
+    let (mean_body, ms) = loss_binary(&c.mean, (i.dimensions * 4) as u64)?;
+    let (source_sidecar, ds) = loss_binary(&c.source_digests, (i.rows.div_ceil(32) * 32) as u64)?;
+    let source_authority = PageAuthority::load_two_bit(
+        &plane_body,
+        &c.plane_manifest.sha256,
+        g["generation"].as_u64().ok_or("shortlist generation")?,
+        &source_sidecar,
+    )?;
+    source_authority.verify_payload(0, i.rows.div_ceil(32) - 1, &records)?;
+    let mean = mean_body
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    require(mean.iter().all(|x| x.is_finite()), "shortlist finite mean")?;
+    let codec = RotatedTwoBitCodec::new(&mean, plane.seed)?;
+    let (request_body, qs) = loss_binary(&c.requests, (i.count * i.dimensions * 4) as u64)?;
+    // Validate ID bijection and frozen physical order separately from digest derivation.
+    let (_, order_snapshot) = scan_loss_sq8(
+        &c.sq8,
+        i.rows,
+        i.dimensions,
+        &i.native_order_sha256,
+        &BTreeSet::new(),
+        |_, _| Ok(()),
+    )?;
+    let (sidecar, mut sq8_snapshot) =
+        authenticated_sq8_digests(&c.sq8, i.rows, i.dimensions, 4 * 1024 * 1024)?;
+    let authority_body = serde_json::to_vec(
+        &json!({"schema":"borsuk-v115-sq8-page-authority-v2","generation":g["generation"],"rows":i.rows,"dimensions":i.dimensions,"page_rows":32,"object_sha256":c.sq8.sha256,"page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))}),
+    )?;
+    let authority = PageAuthority::load(
+        &authority_body,
+        &format!("{:x}", Sha256::digest(&authority_body)),
+        &sidecar,
+    )?;
+    let low: Vec<f32> = serde_json::from_value(g["low"].clone())?;
+    let step: Vec<f32> = serde_json::from_value(g["step"].clone())?;
+    require(
+        low.len() == i.dimensions
+            && step.len() == i.dimensions
+            && low.iter().all(|x| x.is_finite())
+            && step.iter().all(|x| x.is_finite() && *x > 0.),
+        "shortlist SQ8 calibration",
+    )?;
+    let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(i.dimensions)?;
+    // Reserve caller-held source, sealed-query Value trees and all retained arm rosters.
+    // This is payload admission; measured RSS must still include allocator/runtime.
+    let caller_bytes = records.len()
+        + request_body.len()
+        + source_sidecar.len()
+        + sidecar.len()
+        + 8 * super::FILE_CAP as usize
+        + 1000 * 15360 * 8
+        + 128 * 1024 * 1024;
+    require(
+        caller_bytes < c.max_payload_bytes,
+        "shortlist retained caller payload",
+    )?;
+    let limits = TwoBitGenerationLimits {
+        max_memory_bytes: c.max_payload_bytes as u64,
+        max_active_queries: 1,
+        max_query_bytes: 16_773_120,
+        max_query_gets: 30,
+        max_parallel_gets: 64,
+        max_source_bytes: 64 * 1024 * 1024,
+        max_source_gets: 128,
+        max_parallel_source_gets: 64,
+        max_query_scratch_bytes: scratch + TwoBitPlanTrace::scratch_bytes(i.rows),
+        already_pinned_bytes: caller_bytes as u64,
+    };
+    let store = object_store::local::LocalFileSystem::new_with_prefix(&c.store_root)?;
+    let prefix = object_store::path::Path::parse(&i.generation_prefix)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let generation = runtime.block_on(TwoBitGeneration::open_remote(
+        &store,
+        &prefix,
+        &i.generation_root_sha256,
+        limits,
+        &c.scratch_parent,
+    ))?;
+    let mut candidate_queries = Vec::with_capacity(1000);
+    for (slot, (original_plan, original_trace, _)) in originals.iter().enumerate() {
+        let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        require(
+            query.iter().all(|x| x.is_finite()),
+            "shortlist finite query",
+        )?;
+        let (plan, trace, source, router) =
+            runtime.block_on(generation.diagnostic_plan_with_store(&store, &query))?;
+        require(
+            plan_value(&plan, i.dimensions) == *original_plan
+                && serde_json::to_value(&trace)? == *original_trace,
+            "shortlist full production plan/trace parity",
+        )?;
+        let sample = &run.samples[slot];
+        require(
+            source.submitted_gets as u64 == sample.charges.source.submitted_gets
+                && source.verified_bytes as u64 == sample.charges.source.verified_bytes
+                && source.failed_gets == 0
+                && router.submitted_gets as u64 == sample.charges.router.submitted_gets
+                && router.verified_bytes as u64 == sample.charges.router.verified_bytes
+                && router.failed_gets == 0
+                && plan.ranges.len() as u64 == sample.charges.sq8.submitted_gets
+                && plan.planned_bytes as u64 == sample.charges.sq8.verified_bytes,
+            "shortlist full charge parity",
+        )?;
+        let normalized = borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&query)?;
+        let baseline = rank_local_cover(
+            &mut sq8_snapshot,
+            &authority,
+            &plan.ranges,
+            i.rows,
+            i.dimensions,
+            &normalized,
+            &low,
+            &step,
+            16_773_120,
+        )?;
+        require(
+            baseline.len() == sample.returned.len()
+                && baseline.iter().zip(&sample.returned).all(|(a, b)| {
+                    a.id >= 0 && a.id as u64 == b.id && a.score.to_bits() == b.score_bits
+                }),
+            "shortlist original ordered IDs/score bits",
+        )?;
+        let mut walked = trace.semantic_units.clone();
+        walked.extend_from_slice(&trace.semantic_seed_additions);
+        walked.sort_unstable();
+        walked.dedup();
+        let seed = trace
+            .semantic_units
+            .first()
+            .ok_or("shortlist semantic seed")?
+            / 8;
+        let prepared = codec.prepare_query(&query, scratch)?;
+        let cap = trace
+            .nomination_evaluated_units
+            .iter()
+            .try_fold(0_usize, |n, u| {
+                n.checked_add(((u + 1) * 32).min(i.rows) - u * 32)
+            })
+            .ok_or("capture count overflow")?;
+        let (capture_plan, capture_trace, scored) = capture_scored_rows(
+            i.rows,
+            i.dimensions,
+            trace.ranked_candidate_pages.len(),
+            &[(seed, walked)],
+            &prepared,
+            &records,
+            plane.record_bytes,
+            cap,
+            32 * cap + 4096,
+            30,
+            16_773_120,
+        )?;
+        require(
+            capture_plan == plan
+                && capture_trace.nomination_evaluated_units == trace.nomination_evaluated_units
+                && capture_trace.ranked_candidate_pages == trace.ranked_candidate_pages
+                && capture_trace.primary_page == trace.primary_page,
+            "shortlist capture exact production nomination",
+        )?;
+        let witnesses = plan
+            .ranges
+            .iter()
+            .flat_map(|r| (r.start / (i.dimensions + 12)..r.end / (i.dimensions + 12)).step_by(32))
+            .collect::<Vec<_>>();
+        let control = plan_selected_sq8_rows(
+            &authority,
+            &witnesses,
+            SelectedSq8Limits {
+                max_gets: 30,
+                max_bytes: 16_773_120,
+                max_planner_bytes: 4 * 1024 * 1024 + 4096,
+            },
+        )
+        .map_err(|e| format!("block control {e:?}"))?;
+        require(
+            control.ranges == plan.ranges && control.planned_bytes == plan.planned_bytes,
+            "shortlist 32-block control exact physical bytes",
+        )?;
+        let control_ranked = rank_local_cover(
+            &mut sq8_snapshot,
+            &authority,
+            &control.ranges,
+            i.rows,
+            i.dimensions,
+            &normalized,
+            &low,
+            &step,
+            16_773_120,
+        )?;
+        require(
+            control_ranked.len() == baseline.len()
+                && control_ranked.iter().zip(&baseline).all(|(a, b)| {
+                    a.ordinal == b.ordinal && a.id == b.id && a.score.to_bits() == b.score.to_bits()
+                }),
+            "shortlist block-only control ordered ID/score-bit parity",
+        )?;
+        let mut arms = Vec::with_capacity(4);
+        for maximum in c.shortlist_sizes {
+            let selected = shortlist(
+                i.rows,
+                &scored,
+                maximum,
+                64 * scored.len() + 16 * maximum.min(scored.len()) + 4096,
+            )
+            .map_err(|e| e.to_string())?;
+            let candidate = plan_selected_sq8_rows(
+                &authority,
+                &selected,
+                SelectedSq8Limits {
+                    max_gets: 30,
+                    max_bytes: 32 * 1024 * 1024,
+                    max_planner_bytes: 4 * 1024 * 1024 + 4096,
+                },
+            );
+            let (cover, returned) = match candidate {
+                Ok(p) => {
+                    let ranked = rank_local_cover(
+                        &mut sq8_snapshot,
+                        &authority,
+                        &p.ranges,
+                        i.rows,
+                        i.dimensions,
+                        &normalized,
+                        &low,
+                        &step,
+                        32 * 1024 * 1024,
+                    )?;
+                    (p, Some(ranked))
+                }
+                Err(borsuk::budgeted_page_rank::BudgetedPageError::InsufficientBudget) => {
+                    let p = plan_selected_sq8_rows(
+                        &authority,
+                        &selected,
+                        SelectedSq8Limits {
+                            max_gets: 30,
+                            max_bytes: usize::MAX,
+                            max_planner_bytes: 4 * 1024 * 1024 + 4096,
+                        },
+                    )
+                    .map_err(|e| format!("candidate geometry {e:?}"))?;
+                    (p, None)
+                }
+                Err(e) => return Err(format!("candidate invalid {e:?}").into()),
+            };
+            arms.push(ShortlistArm {
+                maximum,
+                selected,
+                ranges: cover.ranges,
+                bytes: cover.planned_bytes,
+                returned,
+            });
+        }
+        candidate_queries.push(arms);
+    }
+    // Every complete original query/control has passed before truth opens.
+    let (truth, ts) = loss_binary(&c.truth, (i.count * super::K * 8) as u64)?;
+    require(
+        truth.len() == i.count * super::K * 8,
+        "shortlist full truth geometry",
+    )?;
+    let mut wanted = BTreeSet::new();
+    let truth_rows = truth
+        .chunks_exact(super::K * 8)
+        .map(|row| {
+            row.chunks_exact(8)
+                .map(|id| u64::from_le_bytes(id.try_into().unwrap()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for ids in &truth_rows {
+        require(
+            ids.len() == 10
+                && ids.iter().all(|id| *id < i.rows as u64)
+                && ids.iter().copied().collect::<BTreeSet<_>>().len() == 10,
+            "shortlist truth domain/duplicates",
+        )?;
+        wanted.extend(ids.iter().copied());
+    }
+    let (positions, positions_snapshot) = scan_loss_sq8(
+        &c.sq8,
+        i.rows,
+        i.dimensions,
+        &i.native_order_sha256,
+        &wanted,
+        |_, _| Ok(()),
+    )?;
+    let mut queries = Vec::with_capacity(1000);
+    let mut totals = [0_usize; 4];
+    let mut admissible = [0_usize; 4];
+    let mut physical_bytes = [0_u64; 4];
+    let mut baseline_hits = 0_u64;
+    for (slot, arms) in candidate_queries.iter().enumerate() {
+        let ids = &truth_rows[slot];
+        let base = &run.samples[slot];
+        let hits = ids
+            .iter()
+            .filter(|id| base.returned.iter().any(|h| h.id == **id))
+            .count();
+        require(
+            hits as u64 == base.hits10,
+            "shortlist original truth reconciliation",
+        )?;
+        baseline_hits += hits as u64;
+        let mut reports = Vec::with_capacity(4);
+        for (arm_index, arm) in arms.iter().enumerate() {
+            let selected_blocks = arm.selected.iter().map(|r| r / 32).collect::<BTreeSet<_>>();
+            let mut loss = [0_usize; 4];
+            let mut recovered = 0_usize;
+            let mut gain = 0;
+            let mut lost = 0;
+            let mut got = 0;
+            if let Some(returned) = &arm.returned {
+                admissible[arm_index] += 1;
+                physical_bytes[arm_index] += arm.bytes as u64;
+                for id in ids {
+                    let physical = positions[id];
+                    let original = base.returned.iter().any(|h| h.id == *id);
+                    let found = returned.iter().any(|h| h.id >= 0 && h.id as u64 == *id);
+                    got += usize::from(found);
+                    gain += usize::from(found && !original);
+                    lost += usize::from(original && !found);
+                    let source = originals[slot]
+                        .2
+                        .scored_units
+                        .binary_search(&(physical / 32))
+                        .is_ok();
+                    let nominated = selected_blocks.contains(&(physical / 32));
+                    let covered = arm.ranges.iter().any(|r| {
+                        r.start / (i.dimensions + 12) <= physical
+                            && physical < r.end / (i.dimensions + 12)
+                    });
+                    if found {
+                        recovered += usize::from(!nominated);
+                    } else if !covered {
+                        loss[if source { 1 } else { 0 }] += 1;
+                    } else {
+                        loss[if nominated { 2 } else { 3 }] += 1;
+                    }
+                }
+                require(
+                    got + loss.iter().sum::<usize>() == super::K && hits + gain == got + lost,
+                    "shortlist disjoint loss and gain conservation",
+                )?;
+                totals[arm_index] += got;
+            }
+            reports.push(json!({"size":arm.maximum,"status":if arm.returned.is_some(){"MEASURED"}else{"BYTE_CAP_EXCEEDED_GEOMETRY_ONLY"},"hits10":if arm.returned.is_some(){Some(got)}else{None},"gets":arm.ranges.len(),"physical_bytes":arm.bytes,"selected_rows":arm.selected.len(),"selected_blocks":selected_blocks.len(),"bridge_bytes":arm.bytes-selected_blocks.iter().map(|p|(((p+1)*32).min(i.rows)-p*32)*(i.dimensions+12)).sum::<usize>(),"gained":gain,"lost":lost,"bridge_rescued_hits":recovered,"miss_buckets":if arm.returned.is_some(){Some(loss)}else{None}}));
+        }
+        queries.push(json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports}));
+    }
+    require(
+        baseline_hits == run.terminal.total_hits10,
+        "shortlist baseline total recall",
+    )?;
+    for snapshot in [
+        &gs,
+        &ps,
+        &rs,
+        &ms,
+        &ds,
+        &qs,
+        &order_snapshot,
+        &sq8_snapshot,
+        &ts,
+        &positions_snapshot,
+    ] {
+        snapshot.recheck()?;
+    }
+    require(
+        super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
+        "shortlist baseline lifetime identity",
+    )?;
+    super::read_config::<ShortlistConfig>(config_path, config_sha)?;
+    Ok(
+        json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_opened_after_all_baseline_controls":true,"shortlist_sizes":c.shortlist_sizes,"admissible_queries":admissible,"hits10_totals":totals,"physical_bytes_totals":physical_bytes,"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..4).map(|a|admissible[a]==1000 && totals[a]>=9760).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","nominated_covered_ranking_loss","bridge_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false}),
+    )
+}
+
+pub(super) fn execute(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+) -> super::Result<bool> {
+    super::execute_report(output, SHORTLIST_SCHEMA, || reduce_shortlist(config, sha))
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+
+    fn directory() -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "borsuk-shortlist-driver-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&p).unwrap();
+        p
+    }
+    fn config_fixture(root: &std::path::Path) -> Value {
+        const COMPLETED: &str = r#"
+{"expected_bound_inputs":{"backend":{"bucket":"borsuk-bench-453182569524-euc1","kind":"s3","physical_prefix":"research/semantic-router/20261010/full1000-local-admission-a0004/retained-source","region":"eu-central-1","sq8_etag":"\"4875c438eb819e00fc58ac993227fb2b\"","sq8_object_key":"semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"},"cohort_receipt_sha256":"e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17","corpus_intervals":[{"end":100000,"start":0},{"end":1001000,"start":101000}],"corpus_source_first":0,"count":1000,"credential_source":"imds_instance_role_only","dataset":"CohereLabs/wikipedia-2023-11-embed-multilingual-v3","derivation_receipt_sha256":"00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e","dimensions":1024,"execution":{"mode":"full"},"fetch_parallelism":64,"generation_prefix":"semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","generation_root_sha256":"80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638","k":10,"max_memory_bytes":536870912,"metric":"cosine","native_order_sha256":"1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413","native_source_sha256":"31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d","native_sq8_sha256":"cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1","phase":"bound_inputs","producer_authority":{"executable_sha256":"4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66","producer_source_sha256":"a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd","source_commit":"bc3082a8210c4370ebadae4ba093a7c211072b62","source_order_source_sha256":"1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4","sq8_source_sha256":"16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"},"profile":"scale1m","query_source_first":100000,"requests_bytes":4096000,"requests_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_queries_sha256":"8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e","reserved_query_interval":{"end":101000,"start":100000},"revision":"ade45fb52bd549f5e8c065636fe4160a43c2af36","rows":1000000,"selected_count":1000,"serving":{"mode":"baseline"},"source_cache":"off","tie_rule":"corpus_ordinal_ascending","truth_bytes":80000,"truth_opened":false,"truth_sha256":"0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f","source_get_budget":128},"expected_identity":{"billed_bytes":null,"billed_requests":null,"binary_sha256":"59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083","codec_source_sha256":"eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec","config_sha256":"dde73b3893fe5c71b1870f99cccb2bb667e88b57c0065998fa85dba90400ca18","execution":{"mode":"full"},"external_gate_required":true,"fetch_parallelism":64,"generation_source_sha256":"0eec4171d42d42e601ffc473027870f226342e1aae70e28efc9ced4c79f35f9d","io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport","native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT","phase":"identity","physical_s3_measured":false,"returned_source_sha256":"a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b","router_source_sha256":"a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8","runner_source_sha256":"27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3","s3_credential_source":"imds_instance_role_only","schema":"borsuk-cohere-native-baseline-result-v8","scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","serving":{"mode":"baseline"},"source_plane_source_sha256":"dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0","sq8_range_source_sha256":"bf31d4e0b6e53c9e7da88ab8a5d6d27a748d2492d7a915e7df7eb131c41c45e2","truth_opened":false,"unread_bytes":null,"wire_bytes":null,"source_get_budget":128},"input":{"path":"/mnt/borsuk-source-width64/results/admission-width64.jsonl","bytes":0,"sha256":"PENDING_CLOSED_NATIVE_WHOLE_FILE_PIN"},"schema":"borsuk-completed-native-reduction-config-v4"}
+"#;
+        let mut completed: Value = serde_json::from_str(COMPLETED).unwrap();
+        completed["input"] = json!({"path":root.join("baseline.jsonl"),"bytes":35179156,"sha256":"2b79e015f05de4dc077de099ed423e541efbeeb3d42c93e0a8c6c25a6939d836"});
+        let inputs = completed["expected_bound_inputs"].clone();
+        let prefix = inputs["generation_prefix"].as_str().unwrap();
+        let generation = root.join(prefix);
+        let pin = |path: std::path::PathBuf, bytes: u64, sha: Value| json!({"path":path,"bytes":bytes,"sha256":sha});
+        json!({"schema":"borsuk-sq8-subpage-shortlist-config-v1","completed":completed,
+            "generation_manifest":pin(generation.join("manifest.json"),27501,inputs["generation_root_sha256"].clone()),
+            "plane_manifest":pin(generation.join("plane/manifest.json"),653,json!("e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6")),
+            "records":pin(generation.join("plane/records.bin"),264000000,json!("e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90")),
+            "mean":pin(generation.join("plane/mean.bin"),4096,json!("7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985")),
+            "source_digests":pin(generation.join("plane/page_digests.bin"),1000000,json!("63c07feff1b370753008a4ed6e1bc05cd9844ef7a411b22ccc1e97a76ce9aa41")),
+            "sq8":pin(root.join("sq8.bin"),1036000000,inputs["native_sq8_sha256"].clone()),
+            "requests":pin(root.join("requests.f32"),4096000,inputs["requests_sha256"].clone()),
+            "truth":pin(root.join("truth.u64"),80000,inputs["truth_sha256"].clone()),
+            "store_root":root,"scratch_parent":root,"shortlist_sizes":[1024,2048,4096,8192],"max_payload_bytes":2147483648_u64})
+    }
+    fn write_config(root: &std::path::Path, value: &Value) -> (std::path::PathBuf, String) {
+        let path = root.join("config.json");
+        let body = serde_json::to_vec(value).unwrap();
+        std::fs::write(&path, &body).unwrap();
+        (path, format!("{:x}", Sha256::digest(&body)))
+    }
+    #[test]
+    fn shortlist_driver_fixed_input_and_unknown_field_refusals_precede_baseline_open() {
+        let root = directory();
+        std::fs::write(root.join("baseline.jsonl"), b"BASELINE_OPEN_TRIPWIRE").unwrap();
+        let base = config_fixture(&root);
+        let (path, sha) = write_config(&root, &base);
+        assert!(
+            reduce_shortlist(&path, &sha)
+                .unwrap_err()
+                .to_string()
+                .contains("expected result bytes"),
+            "literal production metadata should reach the baseline opener"
+        );
+        let mut negatives = Vec::new();
+        for (field, value) in [
+            ("rows", json!(100000)),
+            ("dimensions", json!(768)),
+            ("count", json!(32)),
+            ("k", json!(100)),
+            ("metric", json!("l2")),
+            ("profile", json!("native100k")),
+            ("source_get_budget", json!(96)),
+        ] {
+            let mut c = base.clone();
+            c["completed"]["expected_bound_inputs"][field] = value;
+            negatives.push(c);
+        }
+        for (field, value) in [
+            ("schema", json!("wrong")),
+            ("max_payload_bytes", json!(1)),
+            ("shortlist_sizes", json!([1024, 2048, 4096, 16384])),
+            ("unexpected", json!(true)),
+        ] {
+            let mut c = base.clone();
+            c[field] = value;
+            negatives.push(c);
+        }
+        let mut c = base.clone();
+        c["generation_manifest"]["sha256"] = json!("0".repeat(64));
+        negatives.push(c);
+        let mut c = base.clone();
+        c["records"]["path"] = json!(root.join("foreign.bin"));
+        negatives.push(c);
+        for c in negatives {
+            let (path, sha) = write_config(&root, &c);
+            let error = reduce_shortlist(&path, &sha).unwrap_err().to_string();
+            assert!(
+                !error.contains("expected result bytes"),
+                "invalid metadata reached original baseline: {error}"
+            );
+            assert!(
+                !error.contains("No such file"),
+                "invalid metadata reached an artifact opener: {error}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn shortlist_driver_invalid_report_is_durable_and_existing_output_is_preserved() {
+        let root = directory();
+        let (path, sha) = write_config(&root, &json!({"schema":"wrong"}));
+        let output = root.join("report.json");
+        assert!(!execute(&path, &sha, &output).unwrap());
+        let body = std::fs::read(&output).unwrap();
+        let report: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(report["status"], "INVALID");
+        assert_eq!(report["complete"], false);
+        assert_eq!(report["qualified"], false);
+        assert_eq!(report["vendor_or_scientific_win_claim"], false);
+        assert!(execute(&path, &sha, &output).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), body);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

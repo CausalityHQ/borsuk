@@ -35,7 +35,6 @@ mod paired_partition_coverage;
 #[path = "compare_native_replay/paired_returned_panel.rs"]
 mod paired_returned_panel;
 
-#[cfg(test)]
 #[path = "compare_native_replay/sq8_subpage_shortlist.rs"]
 mod sq8_subpage_shortlist;
 
@@ -9121,6 +9120,20 @@ fn main() {
         .get(1)
         .is_some_and(|arg| arg == "--bind-completed-scale");
     let result = (|| -> Result<bool> {
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--sq8-subpage-shortlist")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --sq8-subpage-shortlist CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return sq8_subpage_shortlist::execute(
+                Path::new(&args[2]),
+                args[3].to_str().ok_or("shortlist config SHA encoding")?,
+                Path::new(&args[4]),
+            );
+        }
         if args
             .get(1)
             .is_some_and(|arg| arg == "--paired-returned-panel")
