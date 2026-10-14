@@ -2976,6 +2976,48 @@ mod tests {
     }
 
     #[test]
+    fn source_get_budget96_is_explicit_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let original: Config = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(limits(&original).unwrap().max_source_gets, 128);
+        for budget in [96, 128] {
+            value["source_get_budget"] = json!(budget);
+            let config: Config = serde_json::from_value(value.clone())
+                .expect("explicit SOURCE get budget must be admitted");
+            validate_config(&config, shape).unwrap();
+            let admission = limits(&config).unwrap();
+            assert_eq!(admission.max_source_gets, budget);
+            assert_eq!(admission.max_parallel_source_gets, 16);
+            assert_eq!(admission.max_parallel_gets, 16);
+            assert_eq!(admission.max_query_gets, 32);
+            assert_eq!(admission.max_source_bytes, 64 * 1024 * 1024);
+            assert_eq!(admission.max_query_bytes, 16_773_120);
+            assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
+            assert_eq!(admission.max_active_queries, 1);
+        }
+        for invalid in [
+            json!(0),
+            json!(95),
+            json!(97),
+            json!(129),
+            json!(true),
+            json!(null),
+            json!("96"),
+            json!(96.5),
+        ] {
+            value["source_get_budget"] = invalid;
+            if let Ok(config) = serde_json::from_value::<Config>(value.clone()) {
+                assert!(
+                    validate_config(&config, shape).is_err(),
+                    "unapproved SOURCE budget"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cold_fetch_parallelism64_preserves_caps_and_bounded_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
