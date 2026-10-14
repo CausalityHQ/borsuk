@@ -3006,6 +3006,22 @@ mod tests {
             assert_eq!(admission.max_query_bytes, 16_773_120);
             assert_eq!(admission.max_memory_bytes, MEMORY_CAP);
             assert_eq!(admission.max_active_queries, 1);
+            let (path, pin) = write_config(dir.path(), &value);
+            let output = dir.path().join(format!("source-budget-{budget}.jsonl"));
+            // Exercise the actual production header writer. This injected query
+            // refusal is an INVALID fixture, never an ANN or performance result.
+            assert!(
+                !execute_paths_with(&path, &pin, &output, shape, |_, _, _, _| {
+                    Err("header-only SOURCE budget fixture".into())
+                })
+                .unwrap()
+            );
+            let emitted = records(&output);
+            assert_eq!(emitted[0]["schema"], RESULT_SCHEMA);
+            assert_eq!(emitted[0]["config_sha256"], pin);
+            assert_eq!(emitted[0]["source_get_budget"], budget);
+            assert_eq!(emitted[1]["source_get_budget"], budget);
+            assert_eq!(emitted[1]["source_cache"], "off");
         }
         for invalid in [
             json!(0),

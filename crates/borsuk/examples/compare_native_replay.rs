@@ -9349,6 +9349,82 @@ mod tests {
     }
 
     #[test]
+    fn source_budget_headers_and_fixed_diagnostics_reject_contradictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rows = paired_scale_fixture(64);
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+        for budget in [96, 128] {
+            rows[0]["source_get_budget"] = json!(budget);
+            rows[1]["source_get_budget"] = json!(budget);
+            for (index, phase) in [(0, "identity"), (1, "bound_inputs")] {
+                validate_scale_row(&serde_json::to_vec(&rows[index]).unwrap(), phase).unwrap();
+            }
+        }
+        for budget in [
+            json!(97),
+            json!(96.0),
+            json!("96"),
+            Value::Null,
+            json!(true),
+        ] {
+            for (index, phase) in [(0, "identity"), (1, "bound_inputs")] {
+                let mut header = rows[index].clone();
+                header["source_get_budget"] = budget.clone();
+                assert_eq!(
+                    validate_scale_row(&serde_json::to_vec(&header).unwrap(), phase)
+                        .unwrap_err()
+                        .to_string(),
+                    "explicit SOURCE budget must be integer96 or128"
+                );
+            }
+        }
+        let mut identity = rows[0].clone();
+        identity
+            .as_object_mut()
+            .unwrap()
+            .remove("source_get_budget");
+        assert_eq!(
+            validate_scale_row(&serde_json::to_vec(&identity).unwrap(), "identity")
+                .unwrap_err()
+                .to_string(),
+            "v8 identity requires explicit SOURCE budget; historical identity forbids it"
+        );
+        identity["schema"] = json!("borsuk-cohere-native-baseline-result-v7");
+        identity["source_get_budget"] = json!(128);
+        assert_eq!(
+            validate_scale_row(&serde_json::to_vec(&identity).unwrap(), "identity")
+                .unwrap_err()
+                .to_string(),
+            "v8 identity requires explicit SOURCE budget; historical identity forbids it"
+        );
+        rows[0]["source_get_budget"] = json!(96);
+        rows[1]["source_get_budget"] = json!(128);
+        let (path, _) = write_fixture(dir.path(), "budget-mismatch", rows.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &rows);
+        assert_eq!(
+            reduce_scale(&config, &pin).unwrap_err().to_string(),
+            "identity/input SOURCE budget mismatch"
+        );
+        rows[1]["source_get_budget"] = json!(96);
+        // Keep an absent producer: both historical diagnostics must reject the
+        // declared budget before opening result contents or applying 128 covers.
+        let (config, pin) = scale_config(dir.path(), &path, &rows);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            reduce_source_intervals(&config, &pin)
+                .unwrap_err()
+                .to_string(),
+            "interval diagnostic requires full width64 cache-off scale input"
+        );
+        assert_eq!(
+            reduce_source_cover_curve(&config, &pin)
+                .unwrap_err()
+                .to_string(),
+            "source cover curve requires full cache-off scale input"
+        );
+    }
+
+    #[test]
     fn source_intervals_report_authenticates_full_population_and_noop_geometry() {
         let dir = tempfile::tempdir().unwrap();
         let mut rows = paired_scale_fixture(64);
