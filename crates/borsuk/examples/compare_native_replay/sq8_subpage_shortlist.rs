@@ -1840,7 +1840,6 @@ mod local_stream_tests {
     use super::*;
     use object_store::ObjectStore;
     use sha2::{Digest, Sha256};
-    use std::sync::Arc;
 
     #[test]
     fn shortlist_local_range_stream_preserves_bounds_metadata_and_authentication() {
@@ -1876,7 +1875,8 @@ mod local_stream_tests {
             .unwrap();
         let meta = runtime.block_on(bare.head(&location)).unwrap();
         let etag = meta.e_tag.as_deref().unwrap();
-        let budget = Arc::new(borsuk::sq8_s3_range::InFlightBytes::new(32 * width).unwrap());
+        let budget =
+            borsuk::sq8_s3_range::InFlightBytes::with_waiter_limit(32 * width, 1, 4096).unwrap();
         let bare_error = runtime
             .block_on(
                 borsuk::sq8_s3_range::fetch_verified_ranges_with_byte_window(
@@ -1891,7 +1891,8 @@ mod local_stream_tests {
                     &budget,
                 ),
             )
-            .unwrap_err();
+            .err()
+            .expect("expected strict reader refusal");
         assert!(matches!(
             bare_error.error,
             borsuk::sq8_s3_range::RangeFetchError::UnexpectedMetadata
@@ -1916,7 +1917,7 @@ mod local_stream_tests {
             .expect("diagnostic local body must satisfy unchanged production stream verification");
         assert_eq!(result.0.len(), 1);
         assert_eq!(result.1.submitted_gets, 1);
-        assert_eq!(result.1.verified_bytes, (32 * width) as u64);
+        assert_eq!(result.1.verified_bytes, 32 * width);
         let headers = runtime
             .block_on(
                 store.get_opts(
@@ -1962,7 +1963,8 @@ mod local_stream_tests {
                     &budget,
                 ),
             )
-            .unwrap_err();
+            .err()
+            .expect("expected strict reader refusal");
         assert!(matches!(
             failure.error,
             borsuk::sq8_s3_range::RangeFetchError::Page(_)
