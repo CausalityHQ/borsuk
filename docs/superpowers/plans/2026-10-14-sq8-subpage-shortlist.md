@@ -23,7 +23,8 @@
 5. Candidate setup accepted withoutbaselineparity or corruptpins: authenticate allinputs, nativebaselineexactness gate first.
 
 ### Task1: Bounded selected-row SQ8 library planner
-**Files:** Modify/test crates/borsuk/src/budgeted_page_rank.rs only.
+**Files:** Modify/test crates/borsuk/src/sq8_page_authority.rs; reuse crate-private cover_pages from budgeted_page_rank.rs. Restore budgeted_page_rank.rs byte-for-byte to base because the comparator includes it by path.
+**Review reconciliation:** Reject non-SQ8 authority before allocation; use private authenticated record_bytes, not dimensions-derived width. Preserve the native SOURCE-plane regression and add byte_range parity and a no-bridge cover case.
 **Interface:** `SelectedSq8Limits { max_gets: usize, max_bytes: usize, max_planner_bytes: usize }`; `SelectedSq8Plan { selected_pages: Vec<usize>, ranges: Vec<Range<usize>>, planned_bytes: usize, modeled_planner_bytes: usize }`; `plan_selected_sq8_rows(authority: &PageAuthority, selected_ordinals: &[usize], limits: SelectedSq8Limits) -> Result<SelectedSq8Plan, BudgetedPageError>`.
 - [ ] Write tests `selected_sq8_rows_authenticated_geometry_parity_and_bridges` and `selected_sq8_rows_refuse_roster_overflow_and_planner_budget`. Cover32/256-authority, partialtail, deterministicequalgap, allselectedrows retained, exactbytes, unsorted/duplicate/out-of-range/empty rows,0limits and below/exact allocation boundary.
 - [ ] Execute affectedtarget on frozen test-onlysource oncausalityEC2, retainRED cause before implementation.
