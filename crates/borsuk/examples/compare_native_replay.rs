@@ -9332,6 +9332,12 @@ mod tests {
             let terminal = &mut bad.last_mut().unwrap()["summary"];
             terminal["charges"] = serde_json::to_value(total).unwrap();
             terminal["sum"] = serde_json::to_value(total.sum().unwrap()).unwrap();
+            let mut allowed128 = bad.clone();
+            allowed128[0]["source_get_budget"] = json!(128);
+            allowed128[1]["source_get_budget"] = json!(128);
+            let (path, _) = write_fixture(dir.path(), "budget128-valid", allowed128.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &allowed128);
+            reduce_scale(&config, &pin).expect("same count remains admissible under128");
             let (path, _) = write_fixture(dir.path(), &format!("budget-{submitted}"), bad.clone());
             let (config, pin) = scale_config(dir.path(), &path, &bad);
             assert_eq!(
@@ -10298,6 +10304,51 @@ mod tests {
                 original_coverage: 10,
             },
         )
+    }
+
+    #[test]
+    fn fixed128_coverage_refuses_declared96_before_producer_or_truth_open() {
+        for boundary in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut c, scope) = leaf_coverage_orchestration_fixture(dir.path(), false);
+            if boundary {
+                c.schema = BOUNDARY_CONFIG_SCHEMA.to_owned();
+            }
+            c.completed.expected_identity["schema"] =
+                json!("borsuk-cohere-native-baseline-result-v8");
+            c.completed.expected_identity["source_get_budget"] = json!(96);
+            c.completed.expected_bound_inputs["source_get_budget"] = json!(96);
+            // An absent producer makes the ordering observable: the fixed128
+            // diagnostic must reject its incompatible control before opening it.
+            c.completed.input.path = dir.path().join("producer-must-not-open");
+            let config = dir.path().join("fixed128-config.json");
+            let bytes = serde_json::to_vec(&c).unwrap();
+            std::fs::write(&config, &bytes).unwrap();
+            let seal = dir.path().join("selection-must-not-exist");
+            let boundary_seal = dir.path().join("boundary-must-not-exist");
+            let mut truth_opens = 0;
+            let error = reduce_leaf_coverage_candidate_with(
+                &config,
+                &sha(&bytes),
+                &seal,
+                boundary.then_some(boundary_seal.as_path()),
+                &scope,
+                |file, _| file.sync_all(),
+                |pin, bytes| {
+                    truth_opens += 1;
+                    loss_binary(pin, bytes)
+                },
+            )
+            .err()
+            .expect("fixed128 diagnostic must refuse a declared96 control");
+            assert_eq!(
+                error.to_string(),
+                "coverage requires frozen SOURCE128 control"
+            );
+            assert_eq!(truth_opens, 0);
+            assert!(!seal.exists());
+            assert!(!boundary_seal.exists());
+        }
     }
 
     #[test]
@@ -13135,6 +13186,24 @@ mod tests {
             assert_eq!(pair["p95_improved"], true);
             assert_eq!(pair["p95_at_least_5_percent_lower"], false);
         }
+    }
+
+    #[test]
+    fn historical_byte_window_refuses_current_budget_headers_with_v7_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, mut rows) = byte_window_abba_fixture(dir.path());
+        for run in &mut rows {
+            run[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+            run[0]["source_get_budget"] = json!(96);
+            run[1]["source_get_budget"] = json!(96);
+        }
+        let (path, pin) = write_byte_window_abba(dir.path(), config, &rows);
+        assert_eq!(
+            reduce_byte_window_abba(&path, &pin)
+                .unwrap_err()
+                .to_string(),
+            "byte-window historical v7 result required"
+        );
     }
 
     #[test]
