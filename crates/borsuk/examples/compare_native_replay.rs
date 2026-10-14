@@ -4782,7 +4782,9 @@ fn reduce_source_budget_abba(config_path: &Path, config_sha: &str) -> Result<Val
                 && identity["schema"] == "borsuk-cohere-native-baseline-result-v8"
                 && identity["config_sha256"] == c.runtime_configs[arm].sha256
                 && identity["source_get_budget"] == native["source_get_budget"]
-                && inputs["source_get_budget"] == native["source_get_budget"],
+                && inputs["source_get_budget"] == native["source_get_budget"]
+                && identity.get("shared_byte_window") == native.get("shared_byte_window")
+                && inputs.get("shared_byte_window") == native.get("shared_byte_window"),
             "SOURCE runtime/header binding",
         )?;
         validate_scale_row(&serde_json::to_vec(identity)?, "identity")?;
