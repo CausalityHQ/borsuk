@@ -1,23 +1,65 @@
 //! Native shortlist diagnostic fixtures. No performance or adoption claim.
 
+// Offline diagnostic workspace only. Borrowed capture storage and allocator
+// overhead are caller-funded; admission precedes copying/sorting payload.
+fn shortlist(
+    rows: usize,
+    scored: &[(usize, f64)],
+    maximum: usize,
+    max_payload_bytes: usize,
+) -> Result<Vec<usize>, &'static str> {
+    if rows == 0 || maximum == 0 || max_payload_bytes == 0 {
+        return Err("shortlist shape");
+    }
+    if scored.is_empty()
+        || scored.len() > rows
+        || scored
+            .iter()
+            .any(|&(row, score)| row >= rows || !score.is_finite())
+    {
+        return Err("shortlist roster");
+    }
+    let keep = maximum.min(scored.len());
+    let modeled = scored
+        .len()
+        .checked_mul(64)
+        .and_then(|bytes| {
+            keep.checked_mul(16)
+                .and_then(|output| bytes.checked_add(output))
+        })
+        .and_then(|bytes| bytes.checked_add(4096))
+        .ok_or("shortlist payload")?;
+    if modeled > max_payload_bytes {
+        return Err("shortlist payload");
+    }
+    let mut ranked = Vec::new();
+    ranked
+        .try_reserve_exact(scored.len())
+        .map_err(|_| "shortlist payload")?;
+    ranked.extend_from_slice(scored);
+    ranked.sort_unstable_by_key(|&(row, _)| row);
+    if ranked.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("shortlist roster");
+    }
+    ranked.sort_unstable_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(keep)
+        .map_err(|_| "shortlist payload")?;
+    selected.extend(ranked[..keep].iter().map(|&(row, _)| row));
+    selected.sort_unstable();
+    Ok(selected)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::shortlist;
     use borsuk::{
         rotated_two_bit::RotatedTwoBitCodec,
         semantic_unit_router::SemanticProfile,
         two_bit_generation::{TwoBitPlanTrace, plan_two_bit_source_walks},
     };
     use std::collections::BTreeSet;
-
-    // Test-only RED stub; no production implementation or runnable CLI yet.
-    fn shortlist(
-        _rows: usize,
-        _scored: &[(usize, f64)],
-        _maximum: usize,
-        _max_payload_bytes: usize,
-    ) -> Result<Vec<usize>, &'static str> {
-        Err("shortlist implementation missing")
-    }
 
     #[test]
     fn shortlist_captures_production_scored_rows_excludes_gap_and_breaks_ties() {
