@@ -1827,3 +1827,148 @@ mod admission_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+// Test-first seam: bare local files do not satisfy the production stream contract.
+fn diagnostic_local_store(
+    root: &str,
+) -> object_store::Result<object_store::local::LocalFileSystem> {
+    object_store::local::LocalFileSystem::new_with_prefix(root)
+}
+
+#[cfg(test)]
+mod local_stream_tests {
+    use super::*;
+    use object_store::ObjectStore;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+
+    #[test]
+    fn shortlist_local_range_stream_preserves_bounds_metadata_and_authentication() {
+        let root =
+            std::env::temp_dir().join(format!("shortlist-local-stream-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let rows = 64_usize;
+        let dimensions = 2_usize;
+        let width = dimensions + 12;
+        let mut object = Vec::new();
+        for row in 0..rows {
+            object.extend_from_slice(&(row as i64).to_le_bytes());
+            object.extend_from_slice(&1_f32.to_le_bytes());
+            object.extend_from_slice(&[1, 0]);
+        }
+        std::fs::write(root.join("object.bin"), &object).unwrap();
+        let digests = object
+            .chunks(32 * width)
+            .flat_map(|body| Sha256::digest(body).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({"schema":"borsuk-v115-sq8-page-authority-v2","generation":1,"rows":rows,"dimensions":dimensions,"page_rows":32,"object_sha256":format!("{:x}",Sha256::digest(&object)),"page_digest_sha256":format!("{:x}",Sha256::digest(&digests))})).unwrap();
+        let authority = borsuk::sq8_page_authority::PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &digests,
+        )
+        .unwrap();
+        let location = object_store::path::Path::parse("object.bin").unwrap();
+        let bare = object_store::local::LocalFileSystem::new_with_prefix(&root).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let meta = runtime.block_on(bare.head(&location)).unwrap();
+        let etag = meta.e_tag.as_deref().unwrap();
+        let budget = Arc::new(borsuk::sq8_s3_range::InFlightBytes::new(32 * width).unwrap());
+        let bare_error = runtime
+            .block_on(
+                borsuk::sq8_s3_range::fetch_verified_ranges_with_byte_window(
+                    &bare,
+                    &location,
+                    &authority,
+                    &[(0, 0)],
+                    etag,
+                    1,
+                    32 * width,
+                    1,
+                    &budget,
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            bare_error.error,
+            borsuk::sq8_s3_range::RangeFetchError::UnexpectedMetadata
+        ));
+        assert_eq!(bare_error.stats.submitted_gets, 1);
+        assert_eq!(bare_error.stats.verified_bytes, 0);
+        let store = diagnostic_local_store(root.to_str().unwrap()).unwrap();
+        let result = runtime
+            .block_on(
+                borsuk::sq8_s3_range::fetch_verified_ranges_with_byte_window(
+                    &store,
+                    &location,
+                    &authority,
+                    &[(0, 0)],
+                    etag,
+                    1,
+                    32 * width,
+                    1,
+                    &budget,
+                ),
+            )
+            .expect("diagnostic local body must satisfy unchanged production stream verification");
+        assert_eq!(result.0.len(), 1);
+        assert_eq!(result.1.submitted_gets, 1);
+        assert_eq!(result.1.verified_bytes, (32 * width) as u64);
+        let headers = runtime
+            .block_on(
+                store.get_opts(
+                    &location,
+                    object_store::GetOptions::new()
+                        .with_range(Some(0..(32 * width) as u64))
+                        .with_if_match(Some(etag.to_owned())),
+                ),
+            )
+            .unwrap();
+        assert_eq!(headers.range, 0..(32 * width) as u64);
+        assert_eq!(headers.meta.size, object.len() as u64);
+        assert_eq!(headers.meta.e_tag, meta.e_tag);
+        assert!(matches!(
+            headers.payload,
+            object_store::GetResultPayload::Stream(_)
+        ));
+        let bad_etag = runtime.block_on(
+            store.get_opts(
+                &location,
+                object_store::GetOptions::new()
+                    .with_range(Some(0..(32 * width) as u64))
+                    .with_if_match(Some("wrong-etag".to_owned())),
+            ),
+        );
+        assert!(bad_etag.is_err());
+        let mut corrupted = object.clone();
+        corrupted[0] ^= 1;
+        std::fs::write(root.join("corrupt.bin"), corrupted).unwrap();
+        let corrupt_location = object_store::path::Path::parse("corrupt.bin").unwrap();
+        let corrupt_meta = runtime.block_on(store.head(&corrupt_location)).unwrap();
+        let failure = runtime
+            .block_on(
+                borsuk::sq8_s3_range::fetch_verified_ranges_with_byte_window(
+                    &store,
+                    &corrupt_location,
+                    &authority,
+                    &[(0, 0)],
+                    corrupt_meta.e_tag.as_deref().unwrap(),
+                    1,
+                    32 * width,
+                    1,
+                    &budget,
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            failure.error,
+            borsuk::sq8_s3_range::RangeFetchError::Page(_)
+        ));
+        std::fs::remove_file(root.join("object.bin")).unwrap();
+        std::fs::remove_file(root.join("corrupt.bin")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+}
