@@ -1,0 +1,20 @@
+{
+  "status": "FROZEN_BYTE_WINDOW_COLD_ABBA",
+  "source": "806a452022b55199df5e3b0a96a84121a3048a67",
+  "machine_seconds": 14400,
+  "cost_ceiling_usd": 1.50,
+  "input_admission_staging": "EIGHT_NATIVE_STAGES_REAL_INPUT_PINS_RESOURCE_AND_COMPUTE_CLOSURE_VERIFIED",
+  "order": [
+    "A1",
+    "B1",
+    "B2",
+    "A2"
+  ],
+  "candidate": {
+    "max_bytes": 9437184,
+    "max_waiters": 64,
+    "max_state_bytes": 1048576
+  },
+  "source_cache": "off",
+  "active_queries": 1
+}

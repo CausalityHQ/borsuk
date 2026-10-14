@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-byte-window-campaign-terminal-v1",
+  "decision": "BYTE_WINDOW_ABBA_MEASURED",
+  "original_campaign_exit": 0,
+  "terminal_exit": 0,
+  "cleanup_error": 0,
+  "forced_cleanup": false,
+  "compute_termination_pending": true,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false,
+  "product_ready": false
+}

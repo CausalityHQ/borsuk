@@ -1,0 +1,378 @@
+[
+  {
+    "run": "A1",
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 141.838611,
+      "p90_ms": 173.827857,
+      "p90_ns": 173827857,
+      "p95_ms": 192.374104,
+      "p95_ns": 192374104,
+      "p99_ms": 242.183108,
+      "query_wall_ns": 148100324341,
+      "sequential_qps": 6.752179675835866
+    },
+    "recall": 0.978,
+    "rss_bytes": 83226624,
+    "query_cpu_ns": 91982799242,
+    "logical_charges": {
+      "failed_gets": 0,
+      "submitted_gets": 137785,
+      "verified_bytes": 44137574400
+    },
+    "transport": {
+      "attempts": 137802,
+      "consumed_payload_bytes": 44141928264,
+      "dropped_error_bodies": 0,
+      "method_counts": [
+        137797,
+        4,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "status_counts": null,
+      "status_counts_entries": 2,
+      "stream_failures": 0,
+      "transport_failures": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.493484,
+        "p50_ns": 1493484,
+        "p90_ms": 1.533442,
+        "p90_ns": 1533442,
+        "p95_ms": 1.547166,
+        "p95_ns": 1547166,
+        "p99_ms": 1.569184,
+        "p99_ns": 1569184,
+        "total_ns": 1495950533
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 18.538515,
+        "p50_ns": 18538515,
+        "p90_ms": 20.456479,
+        "p90_ns": 20456479,
+        "p95_ms": 20.923916,
+        "p95_ns": 20923916,
+        "p99_ms": 22.112173,
+        "p99_ns": 22112173,
+        "total_ns": 18454391268
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 69.62797,
+        "p50_ns": 69627970,
+        "p90_ms": 87.790663,
+        "p90_ns": 87790663,
+        "p95_ms": 94.665631,
+        "p95_ns": 94665631,
+        "p99_ms": 164.899901,
+        "p99_ns": 164899901,
+        "total_ns": 73179911928
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 48.695492,
+        "p50_ns": 48695492,
+        "p90_ms": 72.890478,
+        "p90_ns": 72890478,
+        "p95_ms": 81.778437,
+        "p95_ns": 81778437,
+        "p99_ms": 116.416523,
+        "p99_ns": 116416523,
+        "total_ns": 54908262895
+      }
+    },
+    "first_query": 170966897
+  },
+  {
+    "run": "B1",
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 201.364769,
+      "p90_ms": 233.769719,
+      "p90_ns": 233769719,
+      "p95_ms": 250.79394,
+      "p95_ns": 250793940,
+      "p99_ms": 296.838161,
+      "query_wall_ns": 206414457345,
+      "sequential_qps": 4.8446218974313675
+    },
+    "recall": 0.978,
+    "rss_bytes": 78630912,
+    "query_cpu_ns": 101043684045,
+    "logical_charges": {
+      "failed_gets": 0,
+      "submitted_gets": 137785,
+      "verified_bytes": 44137574400
+    },
+    "transport": {
+      "attempts": 137802,
+      "consumed_payload_bytes": 44141928264,
+      "dropped_error_bodies": 0,
+      "method_counts": [
+        137797,
+        4,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "status_counts": null,
+      "status_counts_entries": 2,
+      "stream_failures": 0,
+      "transport_failures": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.547619,
+        "p50_ns": 1547619,
+        "p90_ms": 1.586004,
+        "p90_ns": 1586004,
+        "p95_ms": 1.600365,
+        "p95_ns": 1600365,
+        "p99_ms": 1.626203,
+        "p99_ns": 1626203,
+        "total_ns": 1549379942
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 18.985072,
+        "p50_ns": 18985072,
+        "p90_ms": 20.859992,
+        "p90_ns": 20859992,
+        "p95_ms": 21.352718,
+        "p95_ns": 21352718,
+        "p99_ms": 22.474786,
+        "p99_ns": 22474786,
+        "total_ns": 18884459237
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 102.3357,
+        "p50_ns": 102335700,
+        "p90_ms": 123.432338,
+        "p90_ns": 123432338,
+        "p95_ms": 134.551208,
+        "p95_ns": 134551208,
+        "p99_ms": 162.982533,
+        "p99_ns": 162982533,
+        "total_ns": 105367450161
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 75.727318,
+        "p50_ns": 75727318,
+        "p90_ms": 95.633871,
+        "p90_ns": 95633871,
+        "p95_ms": 102.13171,
+        "p95_ns": 102131710,
+        "p99_ms": 144.039279,
+        "p99_ns": 144039279,
+        "total_ns": 80538865084
+      }
+    },
+    "first_query": 221008274
+  },
+  {
+    "run": "B2",
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 201.054072,
+      "p90_ms": 233.702362,
+      "p90_ns": 233702362,
+      "p95_ms": 251.890786,
+      "p95_ns": 251890786,
+      "p99_ms": 288.871462,
+      "query_wall_ns": 205753723333,
+      "sequential_qps": 4.860179362983192
+    },
+    "recall": 0.978,
+    "rss_bytes": 75857920,
+    "query_cpu_ns": 98820637781,
+    "logical_charges": {
+      "failed_gets": 0,
+      "submitted_gets": 137785,
+      "verified_bytes": 44137574400
+    },
+    "transport": {
+      "attempts": 137802,
+      "consumed_payload_bytes": 44141928264,
+      "dropped_error_bodies": 0,
+      "method_counts": [
+        137797,
+        4,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "status_counts": null,
+      "status_counts_entries": 2,
+      "stream_failures": 0,
+      "transport_failures": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.525129,
+        "p50_ns": 1525129,
+        "p90_ms": 1.563925,
+        "p90_ns": 1563925,
+        "p95_ms": 1.575422,
+        "p95_ns": 1575422,
+        "p99_ms": 1.605386,
+        "p99_ns": 1605386,
+        "total_ns": 1523481736
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 18.999984,
+        "p50_ns": 18999984,
+        "p90_ms": 20.928877,
+        "p90_ns": 20928877,
+        "p95_ms": 21.453591,
+        "p95_ns": 21453591,
+        "p99_ms": 22.581701,
+        "p99_ns": 22581701,
+        "total_ns": 18920153375
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 101.925764,
+        "p50_ns": 101925764,
+        "p90_ms": 123.515084,
+        "p90_ns": 123515084,
+        "p95_ms": 135.67972,
+        "p95_ns": 135679720,
+        "p99_ms": 163.733966,
+        "p99_ns": 163733966,
+        "total_ns": 105192612421
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 75.459051,
+        "p50_ns": 75459051,
+        "p90_ms": 96.756091,
+        "p90_ns": 96756091,
+        "p95_ms": 105.244599,
+        "p95_ns": 105244599,
+        "p99_ms": 130.114494,
+        "p99_ns": 130114494,
+        "total_ns": 80049296429
+      }
+    },
+    "first_query": 215270645
+  },
+  {
+    "run": "A2",
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 143.023069,
+      "p90_ms": 170.483828,
+      "p90_ns": 170483828,
+      "p95_ms": 185.014933,
+      "p95_ns": 185014933,
+      "p99_ms": 246.699244,
+      "query_wall_ns": 147691649378,
+      "sequential_qps": 6.770863513350125
+    },
+    "recall": 0.978,
+    "rss_bytes": 78249984,
+    "query_cpu_ns": 96556060879,
+    "logical_charges": {
+      "failed_gets": 0,
+      "submitted_gets": 137785,
+      "verified_bytes": 44137574400
+    },
+    "transport": {
+      "attempts": 137802,
+      "consumed_payload_bytes": 44141928264,
+      "dropped_error_bodies": 0,
+      "method_counts": [
+        137797,
+        4,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "status_counts": null,
+      "status_counts_entries": 2,
+      "stream_failures": 0,
+      "transport_failures": 0
+    },
+    "stage_statistics": {
+      "discovery": {
+        "count": 1000,
+        "p50_ms": 1.541218,
+        "p50_ns": 1541218,
+        "p90_ms": 1.587296,
+        "p90_ns": 1587296,
+        "p95_ms": 1.599745,
+        "p95_ns": 1599745,
+        "p99_ms": 1.62785,
+        "p99_ns": 1627850,
+        "total_ns": 1542553944
+      },
+      "planning": {
+        "count": 1000,
+        "p50_ms": 18.96702,
+        "p50_ns": 18967020,
+        "p90_ms": 20.887487,
+        "p90_ns": 20887487,
+        "p95_ms": 21.3103,
+        "p95_ns": 21310300,
+        "p99_ms": 22.614255,
+        "p99_ns": 22614255,
+        "total_ns": 18856815004
+      },
+      "source": {
+        "count": 1000,
+        "p50_ms": 70.423298,
+        "p50_ns": 70423298,
+        "p90_ms": 86.427998,
+        "p90_ns": 86427998,
+        "p95_ms": 97.87892,
+        "p95_ns": 97878920,
+        "p99_ms": 152.815685,
+        "p99_ns": 152815685,
+        "total_ns": 73337039938
+      },
+      "sq8": {
+        "count": 1000,
+        "p50_ms": 50.112772,
+        "p50_ns": 50112772,
+        "p90_ms": 64.770204,
+        "p90_ns": 64770204,
+        "p95_ms": 72.036703,
+        "p95_ns": 72036703,
+        "p99_ms": 98.141096,
+        "p99_ns": 98141096,
+        "total_ns": 53880638024
+      }
+    },
+    "first_query": 193323146
+  }
+]
