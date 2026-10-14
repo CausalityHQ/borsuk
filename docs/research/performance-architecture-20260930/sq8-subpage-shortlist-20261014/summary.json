@@ -1,0 +1,39 @@
+{
+   "actual_input_admitted" : false,
+   "cold_claim" : false,
+   "comparator_tests" : 206,
+   "exact_shortlist_fixtures" : 8,
+   "expected_admission_red" : {
+      "implementation_qualified" : false,
+      "native_exit" : 101,
+      "selected" : 1,
+      "source" : "89ef873773194f8c8c9fd1aacc28a79313681995"
+   },
+   "native_qualified" : true,
+   "prior_attempt" : {
+      "classification" : "EXECUTION_BUDGET_INVALID",
+      "passed" : 13,
+      "workspace_test_build_exit" : 124
+   },
+   "product_complete" : false,
+   "qualified_gate_count" : 14,
+   "recorded_stage_count" : 17,
+   "release_example" : {
+      "binary_retained" : false,
+      "bytes" : 11914224,
+      "sha256" : "4141dbd2ce590f8da4bc081308b300f6752a57f0e8d69c252897be710e231653"
+   },
+   "release_shortlist_fixtures" : 8,
+   "schema" : "borsuk-shortlist-driver-delivery-v1",
+   "science_run" : false,
+   "source_commit" : "fde98a39778c5fb76277327cd2b4bb224838cdc7",
+   "status" : "NATIVE_CODE_QUALIFIED_ACTUAL_INPUT_UNRUN",
+   "targeted_attempt" : {
+      "compiler_jobs" : 1,
+      "elapsed_seconds" : 636,
+      "test_build_shim_unset" : true,
+      "workspace_test_build_exit" : 0
+   },
+   "vendor_win_claim" : false,
+   "workspace_clippy_correctness_suspicious_exit" : 0
+}

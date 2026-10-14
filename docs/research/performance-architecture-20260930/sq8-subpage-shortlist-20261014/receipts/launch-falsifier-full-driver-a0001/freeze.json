@@ -1,0 +1,12 @@
+{
+   "cost_ceiling_usd" : 0.42,
+   "external_seconds" : 3720,
+   "machine_seconds" : 3600,
+   "native_count" : 438,
+   "native_qualified" : false,
+   "performance_claim" : false,
+   "source_commit" : "fde98a39778c5fb76277327cd2b4bb224838cdc7",
+   "source_count" : 471,
+   "stage_count" : 14,
+   "status" : "FROZEN_NATIVE_FULL_SHORTLIST_DRIVER_QUALIFICATION"
+}

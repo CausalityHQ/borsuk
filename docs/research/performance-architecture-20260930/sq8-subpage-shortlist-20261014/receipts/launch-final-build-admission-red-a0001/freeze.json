@@ -1,0 +1,14 @@
+{
+   "cost_ceiling_usd" : 0.42,
+   "external_seconds" : 3720,
+   "machine_seconds" : 3600,
+   "native_count" : 438,
+   "native_qualified" : false,
+   "performance_claim" : false,
+   "prior_passed_gates" : 13,
+   "red_source_commit" : "89ef873773194f8c8c9fd1aacc28a79313681995",
+   "source_commit" : "fde98a39778c5fb76277327cd2b4bb224838cdc7",
+   "source_count" : 471,
+   "stage_count" : 3,
+   "status" : "FROZEN_FINAL_WORKSPACE_BUILD_AND_ADMISSION_RED"
+}
