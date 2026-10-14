@@ -1831,7 +1831,6 @@ mod admission_tests {
 // Diagnostic-only representation adapter: preserve store metadata/preconditions,
 // and stream the requested file range through object_store's bounded 8KiB reader.
 // The production range verifier still rejects unadapted File payloads.
-use object_store::ObjectStore as _;
 
 #[derive(Debug)]
 struct DiagnosticLocalStreamStore {
@@ -1934,7 +1933,9 @@ impl object_store::ObjectStore for DiagnosticLocalStreamStore {
     }
 }
 
-fn diagnostic_local_store(root: &str) -> object_store::Result<DiagnosticLocalStreamStore> {
+fn diagnostic_local_store(
+    root: impl AsRef<std::path::Path>,
+) -> object_store::Result<DiagnosticLocalStreamStore> {
     Ok(DiagnosticLocalStreamStore {
         inner: object_store::local::LocalFileSystem::new_with_prefix(root)?,
     })
