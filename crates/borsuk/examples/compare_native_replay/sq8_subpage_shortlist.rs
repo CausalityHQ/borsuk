@@ -705,10 +705,42 @@ fn reduce_shortlist(
     reduce_shortlist_mode(config_path, config_sha, false)
 }
 
+pub(super) const BLOCK_ADMISSION_SCHEMA: &str = "borsuk-sq8-block-admission-v1";
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlockAdmissionConfig {
+    schema: String,
+    shortlist: ShortlistConfig,
+}
+fn read_shortlist_config(
+    path: &std::path::Path,
+    sha: &str,
+    budgeted: bool,
+) -> super::Result<(ShortlistConfig, u64)> {
+    if budgeted {
+        let (c, bytes): (BlockAdmissionConfig, _) = super::read_config(path, sha)?;
+        super::require(
+            c.schema == "borsuk-sq8-block-admission-config-v1",
+            "block admission config schema",
+        )?;
+        Ok((c.shortlist, bytes))
+    } else {
+        super::read_config(path, sha)
+    }
+}
 fn reduce_shortlist_mode(
+    path: &std::path::Path,
+    sha: &str,
+    admission_only: bool,
+) -> super::Result<serde_json::Value> {
+    reduce_shortlist_mode_inner(path, sha, admission_only, false)
+}
+
+fn reduce_shortlist_mode_inner(
     config_path: &std::path::Path,
     config_sha: &str,
     admission_only: bool,
+    budgeted: bool,
 ) -> super::Result<serde_json::Value> {
     use super::{
         header_json, header_pin, loss_binary, loss_coverage, read_run_observed, require,
@@ -722,7 +754,7 @@ fn reduce_shortlist_mode(
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
-    let (c, config_bytes): (ShortlistConfig, _) = super::read_config(config_path, config_sha)?;
+    let (c, config_bytes) = read_shortlist_config(config_path, config_sha, budgeted)?;
     require(
         c.schema == "borsuk-sq8-subpage-shortlist-config-v1"
             && c.completed.schema == super::SCALE_CONFIG_SCHEMA,
@@ -808,7 +840,8 @@ fn reduce_shortlist_mode(
             * (MAX_SCORED_UNITS * std::mem::size_of::<usize>() + std::mem::size_of::<Vec<usize>>())
         + 32 * 1024 * 1024
         + 1000 * 15360 * 8
-        + 128 * 1024 * 1024;
+        + 128 * 1024 * 1024
+        + if budgeted { 1024 * 1024 } else { 0 };
     require(
         caller_bytes < c.max_payload_bytes,
         "shortlist retained caller payload",
@@ -956,7 +989,7 @@ fn reduce_shortlist_mode(
                 == run.file_identity,
             "shortlist admission baseline lifetime identity",
         )?;
-        super::read_config::<ShortlistConfig>(config_path, config_sha)?;
+        read_shortlist_config(config_path, config_sha, budgeted)?;
         return Ok(json!({
             "schema":ADMISSION_SCHEMA,"status":"READY_ACTUAL_INPUT","complete":true,
             "config_sha256":config_sha,"config_bytes":config_bytes,
@@ -1102,7 +1135,11 @@ fn reduce_shortlist_mode(
             "shortlist block-only control ordered ID/score-bit parity",
         )?;
         let mut arms = Vec::with_capacity(4);
-        for maximum in c.shortlist_sizes {
+        for maximum in c
+            .shortlist_sizes
+            .into_iter()
+            .take(if budgeted { 1 } else { 4 })
+        {
             let selected = shortlist(
                 i.rows,
                 &scored,
@@ -1110,6 +1147,21 @@ fn reduce_shortlist_mode(
                 64 * scored.len() + 16 * maximum.min(scored.len()) + 4096,
             )
             .map_err(|e| e.to_string())?;
+            let selected = if budgeted {
+                budget_admit_shortlist_blocks(
+                    &authority,
+                    &scored,
+                    &selected,
+                    SelectedSq8Limits {
+                        max_gets: CANDIDATE_SQ8_GETS,
+                        max_bytes: 32 * 1024 * 1024,
+                        max_planner_bytes: 4 * 1024 * 1024 + 4096,
+                    },
+                    1024 * 1024,
+                )?
+            } else {
+                selected
+            };
             // Compute geometry once. Workspace/shape errors are INVALID;
             // an excessive physical byte count is geometry-only, never fetched.
             let cover = plan_selected_sq8_rows(
@@ -1251,10 +1303,16 @@ fn reduce_shortlist_mode(
         super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
         "shortlist baseline lifetime identity",
     )?;
-    super::read_config::<ShortlistConfig>(config_path, config_sha)?;
-    Ok(
-        json!({"schema":SHORTLIST_SCHEMA,"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":c.shortlist_sizes,"admissible_queries":admissible,"measured_hit_subtotals":totals,"physical_bytes_totals":physical_bytes,"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..4).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false}),
-    )
+    read_shortlist_config(config_path, config_sha, budgeted)?;
+    let arm_count = if budgeted { 1 } else { 4 };
+    let mut result = json!({"schema":if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
+    if budgeted {
+        result["selection_rule"] = json!("MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION");
+        result["input_shortlist_size"] = json!(1024);
+        result["single_causal_selection_change"] = json!(true);
+        result["source_to_shortlist_cover_loss_includes_budgeted_block_drops"] = json!(true);
+    }
+    Ok(result)
 }
 
 pub(super) fn execute(
@@ -2668,5 +2726,298 @@ mod geometry_tests {
             );
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+fn budget_admit_shortlist_blocks(
+    authority: &borsuk::sq8_page_authority::PageAuthority,
+    scored: &[(usize, f64)],
+    nominees: &[usize],
+    limits: borsuk::sq8_page_authority::SelectedSq8Limits,
+    max_payload_bytes: usize,
+) -> super::Result<Vec<usize>> {
+    use super::require;
+    use borsuk::{
+        budgeted_page_rank::BudgetedPageError, sq8_page_authority::plan_selected_sq8_rows,
+    };
+    require(
+        !nominees.is_empty()
+            && nominees.len() <= 1024
+            && nominees.last().is_some_and(|&row| row < authority.rows())
+            && nominees.windows(2).all(|p| p[0] < p[1]),
+        "block admission nominee roster",
+    )?;
+    let modeled = nominees
+        .len()
+        .checked_mul(640)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("block admission payload overflow")?;
+    require(
+        modeled <= max_payload_bytes
+            && nominees
+                .len()
+                .checked_mul(512)
+                .and_then(|n| n.checked_add(4096))
+                .is_some_and(|n| n <= limits.max_planner_bytes),
+        "block admission simultaneous payload",
+    )?;
+    let mut ranked = Vec::with_capacity(nominees.len());
+    for &(row, score) in scored {
+        require(
+            row < authority.rows() && score.is_finite(),
+            "block admission SOURCE score",
+        )?;
+        if nominees.binary_search(&row).is_ok() {
+            require(
+                ranked.len() < nominees.len(),
+                "block admission bounded nominee score count",
+            )?;
+            ranked.push((row, score));
+        }
+    }
+    require(
+        ranked.len() == nominees.len(),
+        "block admission complete nominee scores",
+    )?;
+    ranked.sort_unstable_by_key(|&(row, _)| row);
+    require(
+        ranked.windows(2).all(|p| p[0].0 < p[1].0),
+        "block admission unique scored nominees",
+    )?;
+    let block_rows = authority.page_rows();
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        (a / block_rows)
+            .cmp(&(b / block_rows))
+            .then(sb.total_cmp(&sa))
+            .then(a.cmp(&b))
+    });
+    ranked.dedup_by(|a, b| a.0 / block_rows == b.0 / block_rows);
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        sb.total_cmp(&sa)
+            .then((a / block_rows).cmp(&(b / block_rows)))
+    });
+    let mut accepted = Vec::<usize>::with_capacity(ranked.len());
+    for &(row, _) in &ranked {
+        let block = row / block_rows;
+        let representative = block
+            .checked_mul(block_rows)
+            .ok_or("block admission representative overflow")?;
+        let position = accepted
+            .binary_search(&representative)
+            .unwrap_or_else(|p| p);
+        accepted.insert(position, representative);
+        match plan_selected_sq8_rows(authority, &accepted, limits) {
+            Ok(_) => (),
+            Err(BudgetedPageError::InsufficientBudget) => {
+                accepted.remove(position);
+            }
+            Err(e) => return Err(format!("block admission canonical planner {e:?}").into()),
+        }
+    }
+    require(!accepted.is_empty(), "block admission no affordable block")?;
+    let selected = nominees
+        .iter()
+        .copied()
+        .filter(|row| {
+            accepted
+                .binary_search(&(row / block_rows * block_rows))
+                .is_ok()
+        })
+        .collect::<Vec<_>>();
+    let final_plan = plan_selected_sq8_rows(authority, &selected, limits)
+        .map_err(|e| format!("block admission final cover {e:?}"))?;
+    require(
+        final_plan.ranges.len() <= limits.max_gets && final_plan.planned_bytes <= limits.max_bytes,
+        "block admission final cap parity",
+    )?;
+    Ok(selected)
+}
+
+#[cfg(test)]
+mod budget_block_tests {
+    use super::*;
+    use borsuk::sq8_page_authority::{PageAuthority, SelectedSq8Limits, plan_selected_sq8_rows};
+    use sha2::{Digest, Sha256};
+    fn authority(rows: usize, page_rows: usize) -> PageAuthority {
+        let body = vec![0_u8; rows * 14];
+        let digests = body
+            .chunks(page_rows * 14)
+            .flat_map(|b| Sha256::digest(b).to_vec())
+            .collect::<Vec<_>>();
+        let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-v115-sq8-page-authority-v2","generation":1,"rows":rows,"dimensions":2,"page_rows":page_rows,"object_sha256":format!("{:x}",Sha256::digest(&body)),"page_digest_sha256":format!("{:x}",Sha256::digest(&digests))})).unwrap();
+        PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &digests,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn budget_shortlist_block_admission_skips_expensive_cover_keeps_later_feasible_and_ties() {
+        for page_rows in [32, 256] {
+            let a = authority(page_rows * 5 + 1, page_rows);
+            let limits = SelectedSq8Limits {
+                max_gets: 1,
+                max_bytes: page_rows * 14 * 2,
+                max_planner_bytes: 1024 * 1024,
+            };
+            let nominees = vec![0, page_rows, page_rows * 4];
+            let scores = vec![(0, 10.0), (page_rows * 4, 9.0), (page_rows, 8.0)];
+            let selected =
+                budget_admit_shortlist_blocks(&a, &scores, &nominees, limits, 1 << 20).unwrap();
+            assert_eq!(selected, vec![0, page_rows]);
+            let plan = plan_selected_sq8_rows(&a, &selected, limits).unwrap();
+            assert_eq!(plan.selected_pages, vec![0, 1]);
+            assert_eq!(plan.planned_bytes, page_rows * 14 * 2);
+            assert_eq!(plan.ranges, vec![0..page_rows * 14 * 2]);
+            let tied = vec![(page_rows * 4, 8.0), (page_rows, 8.0), (0, 10.0)];
+            assert_eq!(
+                budget_admit_shortlist_blocks(&a, &tied, &nominees, limits, 1 << 20).unwrap(),
+                selected
+            );
+        }
+    }
+    #[test]
+    fn budget_shortlist_block_admission_retains_membership_and_partial_tail() {
+        let a = authority(65, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 14,
+            max_planner_bytes: 1 << 20,
+        };
+        assert_eq!(
+            budget_admit_shortlist_blocks(&a, &[(64, 1.0)], &[64], limits, 1 << 20).unwrap(),
+            vec![64]
+        );
+        let full = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 32 * 14,
+            max_planner_bytes: 1 << 20,
+        };
+        let selected = budget_admit_shortlist_blocks(
+            &a,
+            &[(3, 4.0), (1, 1.0), (0, 2.0), (32, 3.0)],
+            &[0, 1, 3, 32],
+            full,
+            1 << 20,
+        )
+        .unwrap();
+        assert_eq!(selected, vec![0, 1, 3]);
+        assert_eq!(
+            plan_selected_sq8_rows(&a, &selected, full)
+                .unwrap()
+                .selected_pages,
+            vec![0]
+        );
+    }
+    #[test]
+    fn budget_shortlist_block_admission_refuses_bad_scores_rosters_and_modeled_minus_one() {
+        let a = authority(65, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 32 * 14,
+            max_planner_bytes: 1 << 20,
+        };
+        assert!(
+            budget_admit_shortlist_blocks(&a, &[(0, 1.0)], &[0], limits, 640 + 4096 - 1).is_err()
+        );
+        for (scores, rows) in [
+            (vec![(0, f64::NAN)], vec![0]),
+            (vec![(0, 1.0), (0, 2.0)], vec![0]),
+            (vec![(0, 1.0)], vec![0, 1]),
+            (vec![(0, 1.0)], vec![0, 0]),
+            (vec![(65, 1.0)], vec![65]),
+        ] {
+            assert!(budget_admit_shortlist_blocks(&a, &scores, &rows, limits, 1 << 20).is_err());
+        }
+    }
+}
+
+pub(super) fn execute_block_admission(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+    admission_only: bool,
+) -> super::Result<bool> {
+    super::execute_report(
+        output,
+        if admission_only {
+            ADMISSION_SCHEMA
+        } else {
+            BLOCK_ADMISSION_SCHEMA
+        },
+        || reduce_shortlist_mode_inner(config, sha, admission_only, true),
+    )
+}
+
+#[cfg(test)]
+mod block_config_tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+    #[test]
+    fn budget_shortlist_config_mode_is_explicit_strict_and_opens_no_scientific_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "block-config-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("config.json");
+        let pin = json!({"path":"/nonexistent-block-test-input","bytes":1,"sha256":"a".repeat(64)});
+        let mut historical = json!({"schema":"borsuk-sq8-subpage-shortlist-config-v1","completed":{"schema":super::super::SCALE_CONFIG_SCHEMA,"input":pin,"expected_identity":{},"expected_bound_inputs":{}},"store_root":"/nonexistent-block-test-store","scratch_parent":"/nonexistent-block-test-scratch","shortlist_sizes":[1024,2048,4096,8192],"max_payload_bytes":2147483648_u64});
+        for name in [
+            "generation_manifest",
+            "plane_manifest",
+            "records",
+            "mean",
+            "source_digests",
+            "sq8",
+            "requests",
+            "truth",
+        ] {
+            historical[name] = pin.clone();
+        }
+        let nested =
+            json!({"schema":"borsuk-sq8-block-admission-config-v1","shortlist":historical});
+        let parse = |value: &Value, budgeted: bool| {
+            let bytes = serde_json::to_vec(value).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            read_shortlist_config(&path, &format!("{:x}", Sha256::digest(&bytes)), budgeted)
+        };
+        let old = parse(&historical, false).unwrap();
+        let new = parse(&nested, true).unwrap();
+        assert_eq!(old.0.shortlist_sizes, new.0.shortlist_sizes);
+        assert_eq!(old.0.requests.sha256, new.0.requests.sha256);
+        assert_eq!(new.0.max_payload_bytes, 2147483648);
+        assert!(parse(&historical, true).is_err());
+        assert!(parse(&nested, false).is_err());
+        let mut wrong = nested.clone();
+        wrong["schema"] = json!("borsuk-sq8-subpage-shortlist-config-v1");
+        assert!(parse(&wrong, true).is_err());
+        let mut unknown = nested.clone();
+        unknown["extra"] = json!(true);
+        assert!(parse(&unknown, true).is_err());
+        let mut inner = nested.clone();
+        inner["shortlist"]["extra"] = json!(true);
+        assert!(parse(&inner, true).is_err());
+        let bytes = serde_json::to_vec(&nested).unwrap();
+        let duplicate = format!(
+            "{{\"schema\":\"borsuk-sq8-block-admission-config-v1\",{}",
+            std::str::from_utf8(&bytes[1..]).unwrap()
+        );
+        std::fs::write(&path, duplicate.as_bytes()).unwrap();
+        assert!(
+            read_shortlist_config(
+                &path,
+                &format!("{:x}", Sha256::digest(duplicate.as_bytes())),
+                true
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

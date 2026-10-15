@@ -9130,6 +9130,37 @@ fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if args
         .get(1)
+        .is_some_and(|arg| arg == "--sq8-block-admission" || arg == "--sq8-block-admission-admit")
+    {
+        let admission_only = args[1] == "--sq8-block-admission-admit";
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "block admission config SHA UTF-8".into())
+                .and_then(|sha| {
+                    sq8_subpage_shortlist::execute_block_admission(
+                        std::path::Path::new(&args[2]),
+                        sha,
+                        std::path::Path::new(&args[4]),
+                        admission_only,
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-block-admission[-admit] CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2)
+            }
+        }
+        return;
+    }
+
+    if args
+        .get(1)
         .is_some_and(|arg| arg == "--sq8-shortlist-geometry")
     {
         let result = if args.len() == 5 {
