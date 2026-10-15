@@ -3116,6 +3116,185 @@ mod source_walk_tests {
         assert_eq!(plan.planned_bytes, 256 * (dimensions + 12));
     }
 
+    #[tokio::test]
+    async fn source_shortlist_v9_nonuniform_serving_matches_full_sort_and_bridge_oracle() {
+        use sha2::{Digest, Sha256};
+        let hash = |body: &[u8]| format!("{:x}", Sha256::digest(body));
+        let (rows, dimensions, width) = (4097_usize, 5_usize, 17_usize);
+        let low = [-1_f32; 5];
+        let step = [2_f32 / 255.; 5];
+        let query = [1_f32, 0., 0., 0., 0.];
+        let mut observed_bridge_winner = false;
+        let mut observed_tail = false;
+        // Fixed deterministic panels, all checked. No panel is selected or
+        // discarded based on the production plan or returned quality.
+        for panel in 1..=4_u64 {
+            let temp = tempfile::tempdir().unwrap();
+            let mut random = panel;
+            let mut raw = Vec::with_capacity(rows * dimensions * 4);
+            let mut sq8 = Vec::with_capacity(rows * width);
+            for row in 0..rows {
+                let mut vector = [0_f32; 5];
+                if row == 0 || row + 1 == rows {
+                    vector[0] = 1.;
+                } else {
+                    let mut values = [0_f64; 5];
+                    for value in &mut values {
+                        random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        *value = f64::from((random >> 32) as u32) / f64::from(u32::MAX) * 2. - 1.;
+                    }
+                    let norm = values.iter().map(|x| x * x).sum::<f64>().sqrt();
+                    for (out, value) in vector.iter_mut().zip(values) {
+                        *out = (value / norm) as f32;
+                    }
+                }
+                for value in vector {
+                    raw.extend_from_slice(&value.to_le_bytes());
+                }
+                let codes = vector
+                    .iter()
+                    .enumerate()
+                    .map(|(d, value)| ((value - low[d]) / step[d]).round().clamp(0., 255.) as u8)
+                    .collect::<Vec<_>>();
+                let norm = codes
+                    .iter()
+                    .enumerate()
+                    .map(|(d, &code)| (low[d] + f32::from(code) * step[d]).powi(2))
+                    .sum::<f32>();
+                let id = 100_000_i64 + ((row * 257) % rows) as i64;
+                sq8.extend_from_slice(&id.to_le_bytes());
+                sq8.extend_from_slice(&norm.to_le_bytes());
+                sq8.extend_from_slice(&codes);
+            }
+            let raw_path = temp.path().join("raw");
+            let sq8_path = temp.path().join("sq8");
+            fs::write(&raw_path, &raw).unwrap();
+            fs::write(&sq8_path, &sq8).unwrap();
+            let store = RecordedStore::default();
+            let sq8_sha = hash(&sq8);
+            let key = ObjectPath::from(format!("oracle/objects/{sq8_sha}"));
+            store.put(&key, sq8.clone().into()).await.unwrap();
+            let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+            let root = temp.path().join("generation");
+            let order = (0..rows as u64).collect::<Vec<_>>();
+            let root_sha = crate::two_bit_build::TwoBitGenerationBuilder {
+                source: crate::two_bit_source::TwoBitSource {
+                    raw: &raw_path,
+                    raw_sha256: &hash(&raw),
+                    sq8: &sq8_path,
+                    sq8_sha256: &sq8_sha,
+                    rows,
+                    dimensions,
+                },
+                base_epoch: 0,
+                generation: 1,
+                low: &low,
+                step: &step,
+                sq8_object_key: key.as_ref(),
+                sq8_etag: &etag,
+            }
+            .build_with_order(&order, &root, 64_000_000)
+            .unwrap();
+            let limits = TwoBitGenerationLimits {
+                max_memory_bytes: 128 * 1024 * 1024,
+                max_active_queries: 1,
+                max_query_bytes: sq8.len(),
+                max_query_gets: 1,
+                max_parallel_gets: 1,
+                max_source_bytes: 1024 * 1024,
+                max_source_gets: 128,
+                max_parallel_source_gets: 4,
+                max_query_scratch_bytes: 400_000,
+                already_pinned_bytes: 4096,
+            };
+            let generation = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+            store.reads.lock().unwrap().clear();
+            let (result, trace) = generation
+                .diagnostic_search_with_store(&store, &query, 257)
+                .await
+                .unwrap();
+            let prepared = generation.plane.prepare_query(&query, 400_000).unwrap();
+            let mut visited = Vec::new();
+            for unit in trace.nomination_evaluated_units {
+                for row in unit * 32..((unit + 1) * 32).min(rows) {
+                    visited.push((
+                        row,
+                        prepared
+                            .score(generation.plane.record(row).unwrap())
+                            .unwrap(),
+                    ));
+                }
+            }
+            let unique = visited.iter().map(|entry| entry.0).collect::<BTreeSet<_>>();
+            assert_eq!(unique.len(), visited.len());
+            visited.sort_by(|&(a, sa), &(b, sb)| sb.total_cmp(&sa).then(a.cmp(&b)));
+            assert!(visited.windows(2).any(|pair| pair[0].1 != pair[1].1));
+            visited.truncate(256);
+            let blocks = visited
+                .iter()
+                .map(|entry| entry.0 / 32)
+                .collect::<BTreeSet<_>>();
+            let first = *blocks.first().unwrap();
+            let last = *blocks.last().unwrap();
+            let range = first * 32 * width..((last + 1) * 32).min(rows) * width;
+            assert_eq!(result.plan.page_rows, 32);
+            assert_eq!(
+                result.plan.selected_pages,
+                blocks.iter().copied().collect::<Vec<_>>()
+            );
+            assert_eq!(result.plan.ranges, vec![range.clone()]);
+            assert_eq!(result.ranked.stats.submitted_gets, 1);
+            assert_eq!(result.ranked.stats.verified_bytes, range.len());
+            let oracle = scalar_rank(
+                &sq8,
+                dimensions,
+                range.start / width..range.end / width,
+                &query,
+                &low,
+                &step,
+            );
+            assert_eq!(
+                result.ranked.candidates.len(),
+                257,
+                "expanded blocks support k>256"
+            );
+            assert_hits_match(&result.ranked.candidates, &oracle);
+            observed_bridge_winner |= oracle[..257]
+                .iter()
+                .any(|entry| !blocks.contains(&(entry.0 / 32)));
+            observed_tail |= blocks.contains(&(rows / 32));
+            let reads = store.reads.lock().unwrap().clone();
+            assert_eq!(reads.len(), 1);
+            assert_eq!(reads[0].0, key.as_ref());
+            assert!(!reads[0].1);
+            if let Some(bridge) = (first..=last).find(|block| !blocks.contains(block)) {
+                let mut damaged = sq8[range.clone()].to_vec();
+                damaged[bridge * 32 * width - range.start + 12] ^= 1;
+                assert!(matches!(
+                    generation.pages.verify_payload(first, last, &damaged),
+                    Err(PageError::HashMismatch)
+                ));
+            }
+            let mut excluded = oracle[..10].iter().map(|entry| entry.1).collect::<Vec<_>>();
+            excluded.sort_unstable();
+            let filtered = generation
+                .search_with_store(&store, &query, 257, Some(&excluded))
+                .await
+                .unwrap();
+            assert_eq!(filtered.plan, result.plan);
+            assert_eq!(filtered.ranked.candidates.len(), 257);
+            assert_hits_match(&filtered.ranked.candidates, &oracle[10..]);
+        }
+        assert!(
+            observed_bridge_winner,
+            "must score a bridge row into returned top-k"
+        );
+        assert!(
+            observed_tail,
+            "ordinary serving must select the one-row proof tail"
+        );
+    }
+
     fn assert_metadata_waves(startup: &RemoteOpenStats, names: &[&str]) {
         assert_eq!(
             startup
