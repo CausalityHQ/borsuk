@@ -323,6 +323,26 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value, current: bool) -> 
         view["sq8_get_budget"] = json!(32);
     }
     super::v9_panel::validate_admission(raw, &view)?;
+    let diagnostic_pinned = if raw["trace"] == true {
+        use std::mem::{align_of, size_of};
+        require(
+            cfg!(target_pointer_width = "64")
+                && (size_of::<Option<u64>>(), align_of::<Option<u64>>()) == (16, 8)
+                && (size_of::<std::path::PathBuf>(), align_of::<std::path::PathBuf>()) == (24, 8)
+                && (size_of::<Vec<u8>>(), align_of::<Vec<u8>>()) == (24, 8),
+            "panel pinned producer host sampler ABI",
+        )?;
+        // Source-derived for both pinned actors: two 49-option snapshots plus PathBuf and Vec.
+        let host_sampler_bytes = 2 * (1 + HOST_FIELDS.len()) * 16 + 24 + 24;
+        2 * 65536 + host_sampler_bytes + 131072 + 1 + 8192 + 262144
+    } else {
+        2 * 65536
+    };
+    // Shared admission already reconciles the total with the modeled trace peak.
+    require(
+        raw["diagnostic_pinned_bytes"] == diagnostic_pinned,
+        "panel pinned diagnostic reservation",
+    )?;
     require(
         raw["panel_line_cap_bytes"] == 65536
             && raw["max_active_queries"] == 1
@@ -447,7 +467,7 @@ fn nullable(v: &Value) -> Result<Option<u64>> {
         Ok(Some(number(v)?))
     }
 }
-fn host(diag: &Value) -> Result<Value> {
+fn host(diag: &Value, query_cpu_ns: u64) -> Result<Value> {
     let h = &diag["host"];
     fields(
         h,
@@ -485,7 +505,10 @@ fn host(diag: &Value) -> Result<Value> {
         number(&diag["process_cpu_start_ns"])?,
         number(&diag["process_cpu_end_ns"])?,
     ];
-    duration(cpu[0], cpu[1])?;
+    require(
+        duration(cpu[0], cpu[1])? == query_cpu_ns,
+        "panel process CPU reconciliation",
+    )?;
     Ok(
         json!({"deltas":deltas,"unavailable":missing,"monotonic_brackets_ns":anchors,"process_cpu_brackets_ns":cpu}),
     )
@@ -509,7 +532,7 @@ fn decompose(raw: &Value, current: bool) -> Result<Decomposition> {
     validate_plan(raw, current)?;
     let diag = &raw["diagnostic"];
     diagnostic_shape(diag)?;
-    let host = host(diag)?;
+    let host = host(diag, number(&raw["query_process_cpu_ns"])?)?;
     let trace = &diag["sq8_range_trace"];
     fields(
         trace,
@@ -567,17 +590,36 @@ fn decompose(raw: &Value, current: bool) -> Result<Decomposition> {
         if index == 0 || n(14)? > latest.0 {
             latest = (n(14)?, index);
         }
+        let chunks = n(15)?;
+        require(
+            chunks != 1 || n(9)? == n(10)?,
+            "panel single chunk boundaries",
+        )?;
         let gap = n(17)?;
         let gap_end = nullable(&row[18])?;
+        let copy = n(19)?;
         let body = duration(n(8)?, n(11)?)?;
         require(
-            n(19)? <= body && plus(gap, n(19)?)? <= body,
+            copy <= body && plus(gap, copy)? <= body,
             "panel copy/body duration",
+        )?;
+        // After the first arrival, each chunk contributes one copy and one wait, including EOF.
+        let covered = chunks
+            .checked_mul(gap)
+            .and_then(|wait| copy.checked_add(wait))
+            .ok_or("panel body gap bound overflow")?;
+        require(
+            duration(n(9)?, n(11)?)? <= covered,
+            "panel body gap coverage",
         )?;
         if gap == 0 {
             require(gap_end.is_none(), "zero body gap boundary")?;
         } else {
             let end = gap_end.ok_or("missing body gap boundary")?;
+            require(
+                chunks > 2 || end == n(9)? || end == n(11)? || (chunks == 2 && end == n(10)?),
+                "panel body gap endpoint",
+            )?;
             let start = end.checked_sub(gap).ok_or("body gap underflow")?;
             require(
                 start >= n(8)?
@@ -830,11 +872,11 @@ mod tests {
         if current {
             plan["page_rows"] = json!(32);
         }
-        json!({"plan":plan,"charges":{"sq8":{"submitted_gets":2,"verified_bytes":2*bytes,"failed_gets":0}},
+        json!({"query_process_cpu_ns":1,"plan":plan,"charges":{"sq8":{"submitted_gets":2,"verified_bytes":2*bytes,"failed_gets":0}},
         "trace":{"primary_page":0},"stages":{"sq8":{"start_ns":100,"end_ns":550}},
         "diagnostic":{"schema":"borsuk-sq8-range-attribution-diagnostic-v2",
             "query_monotonic_start_ns":1000,"query_monotonic_end_ns":2000,
-            "process_cpu_start_ns":100,"process_cpu_end_ns":200,
+            "process_cpu_start_ns":100,"process_cpu_end_ns":101,
             "host":{"scope":"host_wide_counter_deltas_not_per_flow_or_per_s3_connection",
                 "window":"between_untimed_snapshots_that_bracket_the_query_and_include_runner_bookkeeping",
                 "before_monotonic_ns":900,"after_monotonic_ns":2100,"unavailable":47,"deltas":deltas},
@@ -909,7 +951,7 @@ mod tests {
             } else {
                 0
             };
-        let diagnostic_pinned = if traced { 540672 } else { 131072 };
+        let diagnostic_pinned = if traced { 534097 } else { 131072 };
         rows.push(json!({"phase":"diagnostic_admission","execution":execution,
             "selected_count":32,"population_count":1000,"trace":traced,"truth_opened":false,
             "population_percentiles_valid":false,"full_cohort_qualification":false,
@@ -1135,6 +1177,91 @@ mod tests {
             assert_eq!(diff["post_barrier_at_least_80_percent"], post);
             assert_eq!(b.sq8_ns - a.sq8_ns, body + rank);
             assert_eq!(difference(&b, &a).unwrap()["at_least_20ms"], false);
+        }
+        for (chunks, first, last, eof, gap, gap_end, copy, valid) in [
+            (2, 160, 230, 310, 70, Some(230), 10, true),
+            (2, 160, 230, 310, 69, Some(230), 10, false),
+            (2, 160, 230, 310, 80, Some(310), 10, true),
+            (2, 160, 300, 310, 10, Some(160), 140, true),
+            (2, 160, 300, 310, 0, None, 10, false),
+            (2, 160, 300, 310, 0, None, 150, true),
+            (2, 160, 300, 310, 100, Some(260), 10, false),
+            (3, 160, 300, 310, 100, Some(260), 10, true),
+            (1, 160, 300, 310, 140, Some(300), 10, false),
+            (1, 160, 160, 310, 140, Some(310), 10, true),
+            (1, 160, 160, 310, 10, Some(160), 140, true),
+            (1, 160, 160, 310, 0, None, 150, true),
+            (1, 160, 160, 310, 100, Some(260), 50, false),
+        ] {
+            let mut raw = query(true);
+            let row = &mut raw["diagnostic"]["sq8_range_trace"]["ranges"][0];
+            for (column, value) in [
+                (9, first),
+                (10, last),
+                (11, eof),
+                (15, chunks),
+                (17, gap),
+                (19, copy),
+                (20, chunks),
+            ] {
+                row[column] = json!(value);
+            }
+            row[18] = json!(gap_end);
+            assert_eq!(
+                decompose(&raw, true).is_ok(),
+                valid,
+                "{chunks} chunks, gap {gap}"
+            );
+        }
+        for (gap, copy, valid) in [
+            (u64::MAX / 2, 1, true),
+            (u64::MAX / 2, 2, false),
+            (u64::MAX / 2 + 1, 1, false),
+        ] {
+            let mut raw = query(true);
+            raw["stages"]["sq8"]["end_ns"] = json!(u64::MAX);
+            let trace = &mut raw["diagnostic"]["sq8_range_trace"];
+            for key in [
+                "all_ranges_complete_ns",
+                "rank_start_ns",
+                "rank_end_ns",
+                "release_end_ns",
+            ] {
+                trace[key] = json!(u64::MAX);
+            }
+            for key in ["score_ns", "roster_ns", "sort_ns", "finish_ns"] {
+                trace["rank"][key] = json!(0);
+            }
+            let row = &mut trace["ranges"][0];
+            row[10] = json!(160 + gap);
+            for column in 11..=14 {
+                row[column] = json!(u64::MAX);
+            }
+            row[17] = json!(gap);
+            row[18] = row[10].clone();
+            row[19] = json!(copy);
+            let result = decompose(&raw, true);
+            if valid {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(
+                    result.err().unwrap().to_string(),
+                    "panel body gap bound overflow"
+                );
+            }
+        }
+        for (start, end, cpu, valid) in [
+            (0, 0, 0, true),
+            (0, u64::MAX, u64::MAX, true),
+            (u64::MAX - 1, u64::MAX, 1, true),
+            (u64::MAX, 0, 1, false),
+            (100, 200, 1, false),
+        ] {
+            let mut raw = query(true);
+            raw["diagnostic"]["process_cpu_start_ns"] = json!(start);
+            raw["diagnostic"]["process_cpu_end_ns"] = json!(end);
+            raw["query_process_cpu_ns"] = json!(cpu);
+            assert_eq!(decompose(&raw, true).is_ok(), valid);
         }
     }
 
@@ -1391,6 +1518,79 @@ mod tests {
             config["runs"][2]["completed"]["input"] = serde_json::to_value(&c.input).unwrap();
             let (p, s) = save_config(dir.path(), &config);
             assert!(reduce(&p, &s).is_err(), "{pointer}");
+        }
+        for slot in 0..6 {
+            let original = fixture(slot);
+            let peak = original[2]["trace_peak_bytes"].as_u64().unwrap_or(0);
+            let pinned = if slot >= 2 { 534097_u64 } else { 131072 };
+            let mut cases = Vec::new();
+            for wrong in [1, pinned - 1, pinned + 1] {
+                cases.push((
+                    vec![
+                        ("/2/diagnostic_pinned_bytes", json!(wrong)),
+                        ("/2/diagnostic_bytes_per_active_query", json!(wrong + peak)),
+                    ],
+                    "panel pinned diagnostic reservation",
+                ));
+            }
+            if slot >= 2 {
+                cases.extend([
+                    (
+                        vec![
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/17", json!(0)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/18", Value::Null),
+                        ],
+                        "panel body gap coverage",
+                    ),
+                    (
+                        vec![("/6/diagnostic/sq8_range_trace/ranges/0/17", json!(1))],
+                        "panel body gap coverage",
+                    ),
+                    (
+                        vec![
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/15", json!(1)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/20", json!(1)),
+                        ],
+                        "panel single chunk boundaries",
+                    ),
+                    (
+                        vec![
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/17", json!(100)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/18", json!(260)),
+                        ],
+                        "panel body gap endpoint",
+                    ),
+                    (
+                        vec![
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/10", json!(160)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/15", json!(1)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/17", json!(100)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/18", json!(260)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/19", json!(50)),
+                            ("/6/diagnostic/sq8_range_trace/ranges/0/20", json!(1)),
+                        ],
+                        "panel body gap endpoint",
+                    ),
+                    (
+                        vec![("/6/diagnostic/process_cpu_end_ns", json!(200))],
+                        "panel process CPU reconciliation",
+                    ),
+                ]);
+            }
+            for (changes, expected_error) in cases {
+                let mut rows = serde_json::to_value(&original).unwrap();
+                for (pointer, value) in changes {
+                    *rows.pointer_mut(pointer).unwrap() = value;
+                }
+                let mut rows: Vec<Value> = serde_json::from_value(rows).unwrap();
+                authenticate(&mut rows);
+                let c = completed(dir.path(), "semantic-mutation", &rows);
+                let mut config = good.clone();
+                config["runs"][slot]["completed"]["input"] = serde_json::to_value(&c.input).unwrap();
+                let (p, s) = save_config(dir.path(), &config);
+                let error = reduce(&p, &s).err().expect("resealed contradiction accepted");
+                assert!(error.to_string().contains(expected_error), "{slot}: {error}");
+            }
         }
     }
 
