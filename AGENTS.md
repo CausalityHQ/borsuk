@@ -117,6 +117,11 @@ constraints and acceptance checks. The root reconciles proposals with prior
 experiments, verifies results and integrates changes. Keep experiment and
 spending authority with the root; do not duplicate children or consultations.
 
+Configure a specialist's sparse checkout before checking out its exact base.
+Include assigned files and necessary source, not historical benchmark archives.
+Preserve edits and collect original Git writers before checkout recovery; never
+remove a live index lock or delete another worker's material.
+
 For exploration, ask which relevant expert or stakeholder groups would examine
 the problem, and what arguments, predictions and objections each would offer.
 Do not treat generic personal-opinion answers as authority. Simulated viewpoints
