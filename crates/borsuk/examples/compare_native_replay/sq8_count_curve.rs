@@ -301,6 +301,7 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
                     && number(arm, "size")? == counts[a] as u64
                     && h <= 10
                     && gain <= h
+                    && gain <= 10 - base
                     && loss <= base
                     && miss.iter().all(|n| *n <= 10)
                     && h + miss.iter().sum::<u64>() == 10
@@ -601,6 +602,20 @@ mod report_tests {
         let mut missing = valid;
         missing["queries"].as_array_mut().unwrap().pop();
         assert!(validate_report(&missing).is_err());
+    }
+
+    #[test]
+    fn curve_finalizer_refuses_gain_beyond_baseline_truth_gap() {
+        let mut control = report_fixture();
+        finalize_report(&mut control).unwrap();
+        let mut impossible = report_fixture();
+        let quality = &mut impossible["queries"][0]["arms"][0]["quality"];
+        quality["gained"] = json!(1);
+        quality["lost"] = json!(2);
+        assert!(
+            finalize_report(&mut impossible).is_err(),
+            "a perfect baseline cannot gain an unseen truth hit"
+        );
     }
 
     #[test]

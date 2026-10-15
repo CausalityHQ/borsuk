@@ -1,0 +1,15 @@
+{
+  "source_commit": "90508968a7296b9cb777dd7a16543ddf3d5d6853",
+  "verifier_exit": 0,
+  "compute_closed": true,
+  "classification": "CURRENT_V9_READER_INTEGRATION_MISSING",
+  "converter_and_gain_tests_passed": true,
+  "full_example": {
+    "passed": 247,
+    "failed": 5,
+    "ignored": 0
+  },
+  "remaining_stages": "UNRUN",
+  "source_unchanged": true,
+  "performance_claim": false
+}

@@ -420,7 +420,7 @@ mod tests {
 
 // The sidecar is ephemeral diagnostic metadata; whole-object authentication must
 // finish before any digest is exposed to a candidate planner.
-fn authenticated_sq8_digests(
+pub(super) fn authenticated_sq8_digests(
     pin: &super::CompletedInput,
     rows: usize,
     dimensions: usize,
@@ -3874,6 +3874,7 @@ fn validate_block_admission_report(report: &serde_json::Value) -> super::Result<
             bucket.len() == 4
                 && h <= 10
                 && gained <= h
+                && gained <= 10 - base
                 && lost <= base
                 && base + gained == h + lost,
             "block report gain loss conservation",
@@ -3941,6 +3942,22 @@ mod block_report_tests {
             "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,
             "qualified":false,"queries":queries,"measured_hit_subtotals":[9780],
             "physical_bytes_totals":[33152000],"quality_floor_met":[true]})
+    }
+
+    #[test]
+    fn block_report_refuses_gain_beyond_baseline_truth_gap() {
+        let mut impossible = report_fixture();
+        assert!(validate_block_admission_report(&impossible).unwrap());
+        let quality = &mut impossible["queries"][0]["arms"][0]["quality"];
+        quality["hits10"] = json!(9);
+        quality["gained"] = json!(1);
+        quality["lost"] = json!(2);
+        quality["miss_buckets"] = json!([0, 0, 0, 1]);
+        impossible["measured_hit_subtotals"] = json!([9779]);
+        assert!(
+            validate_block_admission_report(&impossible).is_err(),
+            "a perfect baseline cannot gain an unseen truth hit"
+        );
     }
 
     #[test]

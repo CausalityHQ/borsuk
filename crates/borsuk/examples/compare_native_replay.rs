@@ -24,7 +24,15 @@
 //! Query-free construction: --partition-reconstruction CONFIG CONFIG_SHA APPROVAL
 //! APPROVAL_SHA. Independent approval pins original metadata; optional historical
 //! radial parity requires actual regeneration and two literal root exceptions.
+//! SOURCE-preserving v9 fixture: --prepare-v9-fixture CONFIG CONFIG_SHA NEW_DIR
+//! NEW_REPORT. Rebinds proof metadata; no canonical publication or serving claim.
 #![recursion_limit = "256"]
+
+#[path = "compare_native_replay/v9_fixture.rs"]
+mod v9_fixture;
+
+#[path = "compare_native_replay/v9_panel.rs"]
+mod v9_panel;
 
 #[path = "compare_native_replay/partition_reconstruction.rs"]
 mod partition_reconstruction;
@@ -537,6 +545,10 @@ fn scale_ordinals(raw: &Value, count: usize) -> Result<Vec<usize>> {
 }
 
 fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
+    validate_scale_inputs_for_version(i, raw, false)
+}
+
+fn validate_scale_inputs_for_version(i: &Inputs, raw: &Value, current: bool) -> Result<()> {
     require(
         i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
             && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
@@ -628,7 +640,11 @@ fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
             "historical query exclusion",
         )?;
     }
-    let ordinals = scale_ordinals(raw, i.count)?;
+    let ordinals = if current {
+        v9_panel::ordinals(raw, i.count)?
+    } else {
+        scale_ordinals(raw, i.count)?
+    };
     require(
         raw["selected_count"] == ordinals.len(),
         "explicit selected query count",
@@ -1466,6 +1482,8 @@ struct Rows {
     original: FileIdentity,
     v2: bool,
     scale: bool,
+    current: bool,
+    line_cap: usize,
 }
 
 impl Rows {
@@ -1484,6 +1502,8 @@ impl Rows {
             original,
             v2: false,
             scale: false,
+            current: false,
+            line_cap: LINE_CAP,
         })
     }
 
@@ -1493,12 +1513,12 @@ impl Rows {
 
     fn row<T: DeserializeOwned>(&mut self, phase: &str) -> Result<T> {
         self.line.clear();
-        let n = Read::take(&mut self.reader, (LINE_CAP + 1) as u64)
+        let n = Read::take(&mut self.reader, (self.line_cap + 1) as u64)
             .read_until(b'\n', &mut self.line)?;
         self.bytes = plus(self.bytes, n as u64)?;
         require(
             n > 0
-                && n <= LINE_CAP
+                && n <= self.line_cap
                 && self.line.last() == Some(&b'\n')
                 && self.bytes <= self.original.len,
             "row cap/truncation/file length",
@@ -1512,7 +1532,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
-        if self.scale {
+        if self.current {
+            v9_panel::validate_row(&self.line, phase)?;
+        } else if self.scale {
             validate_scale_row(&self.line, phase)?;
         } else if self.v2 {
             validate_v2_row(&self.line, phase)?;
@@ -1595,6 +1617,17 @@ fn read_run_observed_with_identity(
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
+    let current = scale
+        && expected.is_some_and(|c| {
+            c.expected_identity["schema"] == "borsuk-cohere-native-baseline-result-v9"
+        });
+    rows.current = current;
+    if current
+        && expected
+            .is_some_and(|c| c.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel")
+    {
+        rows.line_cap = 65_536;
+    }
     if let Some(c) = expected {
         require(rows.original.len == c.input.bytes, "expected result bytes")?;
     }
@@ -1610,7 +1643,7 @@ fn read_run_observed_with_identity(
                     identity.schema.as_str(),
                     "borsuk-cohere-native-baseline-result-v7"
                         | "borsuk-cohere-native-baseline-result-v8"
-                ),
+                ) || current,
                 "scale result schema",
             )?;
             let mut raw = c.expected_identity.clone();
@@ -1635,10 +1668,12 @@ fn read_run_observed_with_identity(
     let local =
         scale && expected.is_some_and(|c| c.expected_bound_inputs["backend"]["kind"] == "local");
     let ordinals = if scale {
-        scale_ordinals(
-            &expected.ok_or("scale config")?.expected_bound_inputs,
-            inputs.count,
-        )?
+        let raw = &expected.ok_or("scale config")?.expected_bound_inputs;
+        if current {
+            v9_panel::ordinals(raw, inputs.count)?
+        } else {
+            scale_ordinals(raw, inputs.count)?
+        }
     } else {
         (0..COUNT).collect()
     };
@@ -1652,7 +1687,10 @@ fn read_run_observed_with_identity(
             "expected v2 input/root/backend pins",
         )?;
         if scale {
-            validate_scale_inputs(&inputs, &c.expected_bound_inputs)?;
+            validate_scale_inputs_for_version(&inputs, &c.expected_bound_inputs, current)?;
+            if current {
+                v9_panel::budgets(&c.expected_identity, &c.expected_bound_inputs)?;
+            }
             require(
                 c.expected_identity["execution"] == c.expected_bound_inputs["execution"]
                     && c.expected_identity["serving"] == c.expected_bound_inputs["serving"],
@@ -1669,12 +1707,20 @@ fn read_run_observed_with_identity(
         if panel {
             // The native untraced panel emits admission before any source or generation open.
             let admission: Value = rows.row("diagnostic_admission")?;
+            if current {
+                v9_panel::validate_admission(&admission, &c.expected_bound_inputs)?;
+            }
             require(
                 admission["truth_opened"] == false
                     && admission["selected_count"] == count
                     && admission["population_count"] == inputs.count
                     && admission["execution"] == c.expected_bound_inputs["execution"]
-                    && admission["trace"] == false
+                    && admission["trace"]
+                        == if current {
+                            c.expected_bound_inputs["execution"]["trace"].clone()
+                        } else {
+                            json!(false)
+                        }
                     && admission["population_percentiles_valid"] == false
                     && admission["full_cohort_qualification"] == false,
                 "panel admission geometry/scope",
@@ -1749,7 +1795,7 @@ fn read_run_observed_with_identity(
         if scale {
             let raw: Value = serde_json::from_slice(&rows.line)?;
             let plan = &raw["plan"];
-            let page_count = inputs.rows.div_ceil(256) as u64;
+            let page_count = inputs.rows.div_ceil(if current { 32 } else { 256 }) as u64;
             let pages = plan["selected_pages"].as_array().ok_or("native pages")?;
             let mut unique = BTreeSet::new();
             require(
@@ -1774,8 +1820,18 @@ fn read_run_observed_with_identity(
             require(
                 q.charges.source.submitted_gets <= inputs.source_get_budget.unwrap_or(128) as u64
                     && q.charges.source.verified_bytes <= 64 * 1024 * 1024
-                    && q.charges.sq8.submitted_gets <= 32
-                    && q.charges.sq8.verified_bytes <= 16_773_120,
+                    && q.charges.sq8.submitted_gets
+                        <= if current {
+                            expected.ok_or("current config")?.expected_bound_inputs["sq8_get_budget"].as_u64().ok_or("current GET budget")?
+                        } else {
+                            32
+                        }
+                    && q.charges.sq8.verified_bytes
+                        <= if current {
+                            expected.ok_or("current config")?.expected_bound_inputs["sq8_byte_budget"].as_u64().ok_or("current byte budget")?
+                        } else {
+                            16_773_120
+                        },
                 "baseline SOURCE/SQ8 query caps",
             )?;
             require(
@@ -1786,6 +1842,33 @@ fn read_run_observed_with_identity(
                 },
                 "selected slot sequence",
             )?;
+            if current {
+                let c = expected.ok_or("current config")?;
+                require(
+                    q.returned.len() == K && q.charges.sum()?.failed_gets == 0,
+                    "current complete query and zero failures",
+                )?;
+                v9_panel::validate_geometry(
+                    &raw,
+                    inputs.rows,
+                    inputs.dimensions,
+                    usize::try_from(
+                        c.expected_bound_inputs["sq8_get_budget"]
+                            .as_u64()
+                            .ok_or("current GET budget")?,
+                    )?,
+                    usize::try_from(
+                        c.expected_bound_inputs["sq8_byte_budget"]
+                            .as_u64()
+                            .ok_or("current byte budget")?,
+                    )?,
+                )?;
+                require(
+                    raw.get("diagnostic").is_some()
+                        == (panel && c.expected_bound_inputs["execution"]["trace"] == true),
+                    "current diagnostic trace presence",
+                )?;
+            }
         }
         let trace_sha256 = if completed.is_some() {
             // Native v2 Record emits transport AFTER trace. Hash the complete
@@ -4376,6 +4459,10 @@ fn source_utilization_report(
 
 fn reduce_source_utilization(config_path: &Path, config_sha: &str) -> Result<Value> {
     let (c, config_bytes): (SourceUtilizationConfig, _) = read_config(config_path, config_sha)?;
+    require(
+        c.expected_identity["schema"] != "borsuk-cohere-native-baseline-result-v9",
+        "historical 256-row analysis only; v9 requires current-format analysis",
+    )?;
     c.validate()?;
     let completed = CompletedConfig {
         schema: "borsuk-completed-native-reduction-config-v1".into(),
@@ -5730,6 +5817,14 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
+    if schema == v9_fixture::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "IDENTITY_REBOUND_PROOFS_ONLY"
+            && report["complete"] == true
+            && report["serving_qualified"] == false
+            && report["canonical_body_authenticated"] == false
+            && report["query_or_truth_opened"] == false);
+    }
     if schema == SOURCE_INTERVAL_SCHEMA {
         return Ok(report["schema"] == SOURCE_INTERVAL_SCHEMA
             && report["status"] == "INTERVAL_GEOMETRY_ONLY"
@@ -6039,6 +6134,10 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
         c.schema == "borsuk-sealed-scale-loss-config-v2"
             && c.completed.schema == SCALE_CONFIG_SCHEMA,
         "sealed loss config/schema",
+    )?;
+    require(
+        c.completed.expected_identity["schema"] != "borsuk-cohere-native-baseline-result-v9",
+        "historical 256-row analysis only; v9 requires current-format analysis",
     )?;
     let i: Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
     validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
@@ -9174,6 +9273,32 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--prepare-v9-fixture") {
+        let result = if args.len() == 6 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "v9 fixture config SHA UTF-8".into())
+                .and_then(|sha| {
+                    v9_fixture::execute(
+                        Path::new(&args[2]),
+                        sha,
+                        Path::new(&args[4]),
+                        Path::new(&args[5]),
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --prepare-v9-fixture CONFIG CONFIG_SHA NEW_DIRECTORY NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| {
         a == "--sq8-shortlist-count-curve"
             || a == "--sq8-shortlist-count-curve-admit"
@@ -10740,6 +10865,15 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
+        // The boundary fixture below synthesizes the historical v8 generation
+        // and 256-row SQ8 cover. Do not mislabel that synthetic envelope as the
+        // current producer's v9/32-row protocol. Direct current-runner tests
+        // elsewhere retain the unmodified v9 output and exact serving oracles.
+        records[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+        for header in &mut records[..2] {
+            header.as_object_mut().unwrap().remove("sq8_get_budget");
+            header.as_object_mut().unwrap().remove("sq8_byte_budget");
+        }
         let requests = std::fs::read(native_dir.path().join("requests.f32")).unwrap();
         let truth = std::fs::read(native_dir.path().join("truth.u64")).unwrap();
         let put = |name: &str, body: &[u8]| {
@@ -11534,11 +11668,41 @@ mod tests {
     #[test]
     fn sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth() {
         let (dir, result) = scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
-        let body = std::fs::read_to_string(&result).unwrap();
-        let rows = body
+        let current_body = std::fs::read_to_string(&result).unwrap();
+        let mut rows = current_body
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
+        let (current_path, current_sha) = scale_config(dir.path(), &result, &rows);
+        let (current, _): (CompletedConfig, _) = read_config(&current_path, &current_sha).unwrap();
+        let refused = json!({"schema":"borsuk-sealed-scale-loss-config-v2",
+            "completed":current,"sq8":{"path":dir.path().join("unopened-sq8"),"bytes":1,"sha256":"0".repeat(64)},
+            "truth":{"path":dir.path().join("unopened-truth"),"bytes":1,"sha256":"0".repeat(64)},
+            "max_payload_bytes":67108864});
+        let refused_bytes = serde_json::to_vec(&refused).unwrap();
+        let refused_path = dir.path().join("v9-loss-refusal.json");
+        std::fs::write(&refused_path, &refused_bytes).unwrap();
+        assert_eq!(
+            reduce_loss(&refused_path, &sha(&refused_bytes))
+                .unwrap_err()
+                .to_string(),
+            "historical 256-row analysis only; v9 requires current-format analysis"
+        );
+        // Explicit historical envelope: this 32-row partial tail has identical
+        // byte ranges under 32/256 geometry. It does not qualify v9 loss analysis.
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
+        for header in &mut rows[..2] {
+            header.as_object_mut().unwrap().remove("sq8_get_budget");
+            header.as_object_mut().unwrap().remove("sq8_byte_budget");
+        }
+        for row in &mut rows {
+            if row["phase"] == "query" {
+                row["plan"].as_object_mut().unwrap().remove("page_rows");
+            }
+        }
+        authenticate(&mut rows);
+        let body = String::from_utf8(encode(&rows)).unwrap();
+        std::fs::write(&result, &body).unwrap();
         let (completed_path, completed_sha) = scale_config(dir.path(), &result, &rows);
         let (completed, _): (CompletedConfig, _) =
             read_config(&completed_path, &completed_sha).unwrap();
@@ -15972,6 +16136,317 @@ mod tests {
             b"{\"outer\":{\"a\":0,\"trace\":{}}}\n",
         ] {
             assert!(trace_fingerprint(raw).is_err());
+        }
+    }
+
+    // Metadata-only current-native schema fixture; no corpus or truth is read.
+    fn v9_panel_fixture() -> Vec<Value> {
+        let full = paired_scale_fixture(64);
+        let ordinals = [0, 1, 127, 255, 511, 767, 998, 999];
+        let execution = json!({"mode":"diagnostic_panel","ordinals":ordinals,"trace":true});
+        let mut rows = full[..2].to_vec();
+        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v9");
+        for header in &mut rows[..2] {
+            header["execution"] = execution.clone();
+            header["source_get_budget"] = json!(128);
+            header["sq8_get_budget"] = json!(30);
+            header["sq8_byte_budget"] = json!(33554432);
+        }
+        rows[1]["selected_count"] = json!(8);
+        use borsuk::sq8_s3_range::Sq8RangeTrace;
+        let width = rows[1]["fetch_parallelism"].as_u64().unwrap() as usize;
+        let peak = Sq8RangeTrace::modeled_bytes(30, width);
+        let both = Sq8RangeTrace::pending_futures_bytes(128, width);
+        let pinned = both - Sq8RangeTrace::pending_futures_bytes(30, width);
+        rows.push(json!({"phase":"diagnostic_admission","execution":execution,
+            "selected_count":8,"population_count":1000,"trace":true,"truth_opened":false,
+            "population_percentiles_valid":false,"full_cohort_qualification":false,
+            "diagnostic_bytes_per_active_query":540672 + peak,"diagnostic_cap_bytes":1048576,
+            "max_active_queries":1,"charged_in_caller_pinned_bytes":true,
+            "caller_pinned_bytes":2097152,"panel_line_cap_bytes":65536,
+            "host_read_cap_bytes":131072,"trace_ranges":30,
+            "trace_retained_bytes":Sq8RangeTrace::retained_bytes(30),"trace_peak_bytes":peak,
+            "diagnostic_pinned_bytes":540672,"trace_peak_charged_by_library_at_traced_admission":true,
+            "range_state_pinned_by_runner_bytes":pinned,"range_state_both_paths_bytes":both,
+            "semantics":{"headers_interval":"get_opts_client_queue_connect_tls_server_combined",
+                "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
+                "ranges":"overlap_in_time_never_sum_intervals",
+                "host_counters":"host_wide_not_per_flow_null_means_unavailable",
+                "unset":"a boundary never reached is null, never a fabricated timestamp"}}));
+        rows.extend_from_slice(&full[2..5]);
+        let mut wall = 0_u64;
+        for (slot, ordinal) in ordinals.into_iter().enumerate() {
+            let mut query = full[5 + ordinal].clone();
+            query["selected_slot"] = json!(slot);
+            query["plan"] = json!({"page_rows":32,"selected_pages":[0],
+                "ranges":[[0,33152]],"planned_bytes":33152,"target_pages":1,
+                "target_shortfall":0,"primary_pages_retained":0,"covered_pages":1,"bridge_pages":0});
+            query["charges"]["source"]["verified_bytes"] = json!(8448);
+            query["charges"]["sq8"]["verified_bytes"] = json!(33152);
+            query["sum"]["verified_bytes"] = json!(41700);
+            query["transport"] = full[5 + slot]["transport"].clone();
+            query["transport"]["ordinal"] = json!(ordinal);
+            query["transport"]["before"]["consumed_payload_bytes"] = json!(500 + slot * 41700);
+            query["transport"]["after"]["consumed_payload_bytes"] = json!(500 + (slot + 1) * 41700);
+            query["trace"] = json!({"primary_page":0,"nomination_evaluated_units":[0],
+                "ranked_candidate_pages":[0],"discoveries":[],"semantic_leaves":[0],
+                "semantic_units":[0],"semantic_seed_additions":[]});
+            query["diagnostic"] = json!({"schema":"borsuk-sq8-range-attribution-diagnostic-v2",
+                "query_monotonic_start_ns":null,"query_monotonic_end_ns":null,
+                "process_cpu_start_ns":1,"process_cpu_end_ns":2,
+                "sq8_range_trace":{},"host":{}});
+            wall += query["query_wall_ns"].as_u64().unwrap();
+            rows.push(query);
+        }
+        let mut seal = full
+            .iter()
+            .find(|r| r["phase"] == "all_queries_sealed")
+            .unwrap()
+            .clone();
+        seal["count"] = json!(8);
+        seal["selected_count"] = json!(8);
+        rows.push(seal);
+        for ordinal in ordinals {
+            rows.push(
+                full.iter()
+                    .find(|r| r["phase"] == "recall" && r["ordinal"] == ordinal)
+                    .unwrap()
+                    .clone(),
+            );
+        }
+        let span: TransportSpan = serde_json::from_value(rows[13]["transport"].clone()).unwrap();
+        let mut terminal = full.last().unwrap().clone();
+        let summary = &mut terminal["summary"];
+        for key in ["queries", "selected_count", "executed_count"] {
+            summary[key] = json!(8);
+        }
+        for key in ["total_hits10", "recall_numerator"] {
+            summary[key] = json!(72);
+        }
+        summary["recall_denominator"] = json!(80);
+        summary["execution"] = execution;
+        summary["diagnostic_panel"] = json!(true);
+        summary["population_percentiles_valid"] = json!(false);
+        summary["query_wall_ns"] = json!(wall);
+        summary["process_wall_ns"] = json!(wall + 100);
+        summary["query_process_cpu_ns"] = json!(8);
+        summary["process_cpu_ns"] = json!(108);
+        summary["charges"] = json!({"router":{"submitted_gets":8,"verified_bytes":800,"failed_gets":0},
+            "source":{"submitted_gets":8,"verified_bytes":67584,"failed_gets":0},
+            "sq8":{"submitted_gets":8,"verified_bytes":265216,"failed_gets":0}});
+        summary["sum"] = json!({"submitted_gets":24,"verified_bytes":333600,"failed_gets":0});
+        summary["transport_last_boundary"] = span.compact();
+        rows.push(terminal);
+        authenticate(&mut rows);
+        rows
+    }
+
+    #[test]
+    fn v9_panel_reader_authenticates_sealed_native_sequence_and_rejects_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = v9_panel_fixture();
+        let check = |mut values: Vec<Value>| {
+            authenticate(&mut values);
+            let bytes = encode(&values);
+            let path = dir.path().join("panel.jsonl");
+            std::fs::write(&path, &bytes).unwrap();
+            v9_panel::read_candidate(
+                &CompletedInput {
+                    path,
+                    bytes: bytes.len() as u64,
+                    sha256: sha(&bytes),
+                },
+                &values[0],
+                &values[1],
+                &[0, 1, 127, 255, 511, 767, 998, 999],
+                8 * 1024 * 1024,
+            )
+        };
+        let valid = check(rows.clone()).expect("accept sealed current v9 native panel");
+        assert_eq!(valid["selected_count"], 8);
+        assert_eq!(valid["recall_denominator"], 80);
+        assert_eq!(valid["exact_range_oracle_qualified"], false);
+        let mut changed_header = rows.clone();
+        changed_header[0]["config_sha256"] = json!("7".repeat(64));
+        authenticate(&mut changed_header);
+        let changed_bytes = encode(&changed_header);
+        let changed_path = dir.path().join("independent-header.jsonl");
+        std::fs::write(&changed_path, &changed_bytes).unwrap();
+        assert!(
+            v9_panel::read_candidate(
+                &CompletedInput {
+                    path: changed_path,
+                    bytes: changed_bytes.len() as u64,
+                    sha256: sha(&changed_bytes)
+                },
+                &rows[0],
+                &rows[1],
+                &[0, 1, 127, 255, 511, 767, 998, 999],
+                8 * 1024 * 1024,
+            )
+            .is_err(),
+            "resealing must not replace independently supplied expected headers"
+        );
+        let mut oversized = rows.clone();
+        oversized[6]["trace"]["nomination_evaluated_units"] = json!(vec![0_u64; 40000]);
+        let error = check(oversized).unwrap_err().to_string();
+        assert!(error.contains("row cap"), "oversized native panel: {error}");
+        let check_raw = |bytes: &[u8], expected_sha: String| {
+            let path = dir.path().join("raw-panel.jsonl");
+            std::fs::write(&path, bytes).unwrap();
+            v9_panel::read_candidate(
+                &CompletedInput {
+                    path,
+                    bytes: bytes.len() as u64,
+                    sha256: expected_sha,
+                },
+                &rows[0],
+                &rows[1],
+                &[0, 1, 127, 255, 511, 767, 998, 999],
+                8 * 1024 * 1024,
+            )
+        };
+        for (row, pointer, value) in [
+            (14, "/prefix_bytes", json!(0)),
+            (14, "/prefix_sha256", json!("0".repeat(64))),
+            (23, "/summary/sealed_bytes", json!(0)),
+            (23, "/summary/sealed_sha256", json!("0".repeat(64))),
+        ] {
+            let mut changed = rows.clone();
+            *changed[row].pointer_mut(pointer).unwrap() = value;
+            let bytes = encode(&changed);
+            // Authenticate the changed whole file, deliberately not its old seal.
+            assert!(check_raw(&bytes, sha(&bytes)).is_err(), "{pointer}");
+        }
+        let bytes = encode(&rows);
+        assert!(check_raw(&bytes, "0".repeat(64)).is_err());
+        let truncated = &bytes[..bytes.len() - 1];
+        assert!(check_raw(truncated, sha(truncated)).is_err());
+        let duplicate = String::from_utf8(bytes)
+            .unwrap()
+            .replacen(
+                "\"phase\":\"identity\"",
+                "\"phase\":\"identity\",\"phase\":\"identity\"",
+                1,
+            )
+            .into_bytes();
+        assert!(check_raw(&duplicate, sha(&duplicate)).is_err());
+        for (row, pointer, value) in [
+            (
+                2,
+                "/trace_peak_charged_by_library_at_traced_admission",
+                json!(false),
+            ),
+            (2, "/trace_peak_bytes", Value::Null),
+            (2, "/trace_peak_bytes", json!(1)),
+            (2, "/trace_retained_bytes", json!(1)),
+            (2, "/trace_ranges", json!(128)),
+            (2, "/host_read_cap_bytes", json!(16384)),
+            (2, "/range_state_both_paths_bytes", json!(0)),
+            (2, "/diagnostic_bytes_per_active_query", json!(1048577)),
+            (
+                0,
+                "/schema",
+                json!("borsuk-cohere-native-baseline-result-v8"),
+            ),
+            (1, "/rows", json!(100000)),
+            (1, "/sq8_byte_budget", json!(33554433)),
+            (1, "/truth_sha256", json!("0".repeat(64))),
+            (6, "/selected_slot", json!(1)),
+            (6, "/ordinal", json!(1)),
+            (6, "/truth_opened", json!(true)),
+            (6, "/underfill", json!(true)),
+            (6, "/plan/page_rows", json!(256)),
+            (6, "/charges/sq8/verified_bytes", json!(33151)),
+            (14, "/truth_opened", json!(true)),
+            (15, "/ordinal", json!(1)),
+            (23, "/summary/status", json!("INVALID")),
+            (23, "/summary/complete", json!(false)),
+            (23, "/summary/recall_denominator", json!(10000)),
+        ] {
+            let mut changed = rows.clone();
+            *changed[row].pointer_mut(pointer).unwrap() = value;
+            assert!(check(changed).is_err(), "row{row}{pointer}");
+        }
+        let mut duplicate = rows.clone();
+        duplicate.insert(7, duplicate[6].clone());
+        assert!(check(duplicate).is_err());
+        let mut missing = rows.clone();
+        missing.remove(6);
+        assert!(check(missing).is_err());
+        let mut trailing = rows;
+        trailing.push(json!({"phase":"terminal","summary":{}}));
+        // Trailing rows must not be repaired into a new valid terminal by the helper.
+        let bytes = encode(&trailing);
+        let path = dir.path().join("trailing.jsonl");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            v9_panel::read_candidate(
+                &CompletedInput {
+                    path,
+                    bytes: bytes.len() as u64,
+                    sha256: sha(&bytes)
+                },
+                &trailing[0],
+                &trailing[1],
+                &[0, 1, 127, 255, 511, 767, 998, 999],
+                8 * 1024 * 1024
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v9_panel_reader_refuses_production_policy_before_opening_results() {
+        let rows = v9_panel_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        let pin = CompletedInput {
+            path: dir.path().join("MUST_REMAIN_UNOPENED"),
+            bytes: 4096,
+            sha256: "9".repeat(64),
+        };
+        let mut oversized_identity = rows[0].clone();
+        oversized_identity["oversized"] = json!("x".repeat(CONFIG_CAP as usize));
+        let error = v9_panel::read_candidate(
+            &pin,
+            &oversized_identity,
+            &rows[1],
+            &[0, 1, 127, 255, 511, 767, 998, 999],
+            8 * 1024 * 1024,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("header cap/serialization"), "{error}");
+        for (pointer, value) in [
+            ("/rows", json!(100000)),
+            ("/dimensions", json!(768)),
+            ("/count", json!(8)),
+            ("/k", json!(100)),
+            ("/source_cache", json!("on")),
+            ("/source_get_budget", json!(129)),
+            ("/sq8_get_budget", json!(31)),
+            ("/sq8_byte_budget", json!(33554433)),
+            ("/truth_sha256", json!("0".repeat(64))),
+            ("/requests_sha256", json!("0".repeat(64))),
+            ("/native_source_sha256", json!("0".repeat(64))),
+            ("/native_sq8_sha256", json!("0".repeat(64))),
+            ("/native_order_sha256", json!("0".repeat(64))),
+        ] {
+            let mut inputs = rows[1].clone();
+            *inputs.pointer_mut(pointer).unwrap() = value;
+            let error = v9_panel::read_candidate(
+                &pin,
+                &rows[0],
+                &inputs,
+                &[0, 1, 127, 255, 511, 767, 998, 999],
+                8 * 1024 * 1024,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.starts_with("v9 panel admission:"),
+                "{pointer}: {error}"
+            );
         }
     }
 
