@@ -4283,7 +4283,7 @@ mod source_walk_tests {
                     )
                     .unwrap();
                 drop(verified);
-                let page_bytes = 256 * (2 + 12);
+                let page_bytes = SQ8_PAGE_ROWS * (2 + 12);
                 let ranges = plan
                     .ranges
                     .iter()
@@ -4666,7 +4666,12 @@ mod source_walk_tests {
                     .iter()
                     .any(|hit| hit.ordinal == rows - 1)
             );
-            assert_eq!(direct.plan.selected_pages, [0, 1]);
+            // The257-row fixture nominates the tail plus255 of the first256
+            // rows: every32-row block is covered, not two SOURCE256 pages.
+            assert_eq!(
+                direct.plan.selected_pages,
+                (0..rows.div_ceil(SQ8_PAGE_ROWS)).collect::<Vec<_>>()
+            );
             assert_eq!(direct.plan, diagnosed.plan);
             assert_eq!(direct.source_stats, diagnosed.source_stats);
             assert_eq!(direct.router_stats, diagnosed.router_stats);
