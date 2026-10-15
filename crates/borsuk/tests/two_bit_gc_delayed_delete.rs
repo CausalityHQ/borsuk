@@ -392,6 +392,15 @@ mod session_tests {
                 release: Semaphore::new(0),
             }
         }
+        async fn wait(&self) -> object_store::Result<()> {
+            self.entered.notify_one();
+            let permit = tokio::time::timeout(DEADLINE, self.release.acquire())
+                .await
+                .map_err(|_| injected())?
+                .map_err(|_| injected())?;
+            permit.forget();
+            Ok(())
+        }
     }
     // A panic must not strand the accepted worker on a fixture gate.
     struct ReleaseOnDrop(Arc<Gate>);
@@ -407,10 +416,13 @@ mod session_tests {
         polls: AtomicUsize,
         list_drops: AtomicUsize,
         drop_in_runtime: AtomicBool,
+        drop_on_list_thread: AtomicBool,
         deletes: AtomicUsize,
         delete_not_found: AtomicUsize,
+        #[cfg(target_os = "linux")]
+        threads: Mutex<Vec<OsThread>>,
     }
-    struct ListLifetime(Arc<Observed>);
+    struct ListLifetime(Arc<Observed>, std::thread::ThreadId);
     impl Drop for ListLifetime {
         fn drop(&mut self) {
             self.0.drop_in_runtime.store(
@@ -418,6 +430,90 @@ mod session_tests {
                 Ordering::SeqCst,
             );
             self.0.list_drops.fetch_add(1, Ordering::SeqCst);
+            self.0
+                .drop_on_list_thread
+                .store(std::thread::current().id() == self.1, Ordering::SeqCst);
+        }
+    }
+
+    // A retained store Arc or a TLS destructor alone does not prove OS-thread exit.
+    #[cfg(target_os = "linux")]
+    #[derive(Debug)]
+    struct OsThread {
+        rust_id: std::thread::ThreadId,
+        name: String,
+        stat: std::path::PathBuf,
+        start_time: String,
+    }
+    #[cfg(target_os = "linux")]
+    impl OsThread {
+        fn start_time(stat: &std::path::Path) -> std::io::Result<String> {
+            let text = std::fs::read_to_string(stat)?;
+            // /proc stat field 22, after the parenthesized comm (which may contain spaces).
+            text.rsplit_once(')')
+                .and_then(|(_, fields)| fields.split_whitespace().nth(19))
+                .map(str::to_owned)
+                .ok_or_else(|| std::io::Error::other("invalid thread stat"))
+        }
+        fn current() -> std::io::Result<Self> {
+            let task = std::fs::read_link("/proc/thread-self")?;
+            let stat = std::path::Path::new("/proc").join(task).join("stat");
+            Ok(Self {
+                rust_id: std::thread::current().id(),
+                name: std::thread::current().name().unwrap_or("").to_owned(),
+                start_time: Self::start_time(&stat)?,
+                stat,
+            })
+        }
+        fn exited(&self) -> std::io::Result<bool> {
+            match Self::start_time(&self.stat) {
+                Ok(start_time) => Ok(start_time != self.start_time),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(error),
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn probe_runtime_threads(observed: &Arc<Observed>) -> object_store::Result<()> {
+        let worker = OsThread::current().map_err(|_| injected())?;
+        observed.threads.lock().unwrap().push(worker);
+        let mut releases = Vec::new();
+        let mut jobs = Vec::new();
+        // Hold two jobs concurrently to identify both slots of the real runtime's pool.
+        for _ in 0..2 {
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            releases.push(release);
+            let observed = observed.clone();
+            jobs.push(tokio::task::spawn_blocking(move || {
+                let identity = OsThread::current()?;
+                observed.threads.lock().unwrap().push(identity);
+                match wait.recv_timeout(DEADLINE * 2) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) | Ok(()) => Ok(()),
+                    Err(error) => Err(std::io::Error::other(error)),
+                }
+            }));
+        }
+        let ready = tokio::time::timeout(DEADLINE, async {
+            while observed.threads.lock().unwrap().len() != 3 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        // Dropping senders also releases both helpers on unwind or cancelled polling.
+        drop(releases);
+        let drained = tokio::time::timeout(DEADLINE, async {
+            let mut succeeded = true;
+            for job in jobs {
+                succeeded &= matches!(job.await, Ok(Ok(())));
+            }
+            succeeded
+        })
+        .await;
+        if ready.is_ok() && matches!(drained, Ok(true)) {
+            Ok(())
+        } else {
+            Err(injected())
         }
     }
 
@@ -429,10 +525,14 @@ mod session_tests {
         script: Arc<Mutex<Option<Vec<ObjectMeta>>>>,
         observed: Arc<Observed>,
         list_error_at: Arc<AtomicUsize>,
-        delete_error: Arc<AtomicUsize>, // 1 before effect, 2 after effect
+        delete_error: Arc<AtomicUsize>, // errors: 1 before/2 after; panics: 3 before/4 after
         release_error: Arc<AtomicUsize>, // 1 before, 2 after, 3 after + failed reread
         head_read_error: Arc<AtomicBool>,
         gate: Arc<Mutex<Option<Arc<Gate>>>>,
+        list_gate: Arc<Mutex<Option<Arc<Gate>>>>,
+        get_gate: Arc<Mutex<Option<(Path, Arc<Gate>)>>>,
+        #[cfg(target_os = "linux")]
+        probe_threads: Arc<AtomicBool>,
     }
     impl SessionStore {
         fn new(data: Arc<dyn ObjectStore>) -> Self {
@@ -446,6 +546,10 @@ mod session_tests {
                 release_error: Arc::new(AtomicUsize::new(0)),
                 head_read_error: Arc::new(AtomicBool::new(false)),
                 gate: Arc::new(Mutex::new(None)),
+                list_gate: Arc::new(Mutex::new(None)),
+                get_gate: Arc::new(Mutex::new(None)),
+                #[cfg(target_os = "linux")]
+                probe_threads: Arc::new(AtomicBool::new(false)),
             }
         }
         fn at(&self, path: &Path) -> &dyn ObjectStore {
@@ -512,6 +616,17 @@ mod session_tests {
             path: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
+            let gate = {
+                let mut slot = self.get_gate.lock().unwrap();
+                if slot.as_ref().is_some_and(|(target, _)| target == path) {
+                    slot.take().map(|(_, gate)| gate)
+                } else {
+                    None
+                }
+            };
+            if let Some(gate) = gate {
+                gate.wait().await?;
+            }
             if path.as_ref().ends_with("/head.json")
                 && self.head_read_error.swap(false, Ordering::SeqCst)
             {
@@ -532,14 +647,10 @@ mod session_tests {
                         this.observed.deletes.fetch_add(1, Ordering::SeqCst);
                         let gate = this.gate.lock().unwrap().take();
                         if let Some(gate) = gate {
-                            gate.entered.notify_one();
-                            let permit = tokio::time::timeout(DEADLINE, gate.release.acquire())
-                                .await
-                                .map_err(|_| injected())?
-                                .map_err(|_| injected())?;
-                            permit.forget();
+                            gate.wait().await?;
                         }
                         let fault = this.delete_error.swap(0, Ordering::SeqCst);
+                        assert_ne!(fault, 3, "injected worker panic before DELETE effect");
                         if fault == 1 {
                             return Err(injected());
                         }
@@ -550,6 +661,7 @@ mod session_tests {
                                 .fetch_add(1, Ordering::SeqCst);
                         }
                         result?;
+                        assert_ne!(fault, 4, "injected worker panic after DELETE effect");
                         if fault == 2 {
                             return Err(injected());
                         }
@@ -567,13 +679,31 @@ mod session_tests {
                 Some(objects) => stream::iter(objects.into_iter().map(Ok)).boxed(),
                 None => self.data.list(prefix),
             };
-            let guard = ListLifetime(self.observed.clone());
+            let guard = ListLifetime(self.observed.clone(), std::thread::current().id());
             let error_at = self.list_error_at.clone();
+            let list_gate = self.list_gate.clone();
+            #[cfg(target_os = "linux")]
+            let probe_threads = self.probe_threads.clone();
             stream::unfold(
                 (objects, guard, 0usize),
                 move |(mut objects, guard, index)| {
                     let error_at = error_at.clone();
+                    let list_gate = list_gate.clone();
+                    #[cfg(target_os = "linux")]
+                    let probe_threads = probe_threads.clone();
                     async move {
+                        #[cfg(target_os = "linux")]
+                        if probe_threads.swap(false, Ordering::SeqCst) {
+                            if let Err(error) = probe_runtime_threads(&guard.0).await {
+                                return Some((Err(error), (objects, guard, index)));
+                            }
+                        }
+                        let gate = list_gate.lock().unwrap().take();
+                        if let Some(gate) = gate {
+                            if let Err(error) = gate.wait().await {
+                                return Some((Err(error), (objects, guard, index)));
+                            }
+                        }
                         // Continuation requires a live timer driver on the owning runtime.
                         tokio::time::sleep(Duration::from_millis(1)).await;
                         let item = if error_at
@@ -651,6 +781,11 @@ mod session_tests {
             .await
         }
         async fn finish(&self, session: TwoBitGcSession) {
+            self.close(session)
+                .await
+                .expect("session worker must drain and tear down");
+        }
+        async fn close(&self, session: TwoBitGcSession) -> Result<(), tokio::time::error::Elapsed> {
             drop(session);
             tokio::time::timeout(DEADLINE, async {
                 while Arc::strong_count(&self.store) != 1 {
@@ -658,7 +793,6 @@ mod session_tests {
                 }
             })
             .await
-            .expect("session worker must drain and tear down");
         }
     }
 
@@ -671,6 +805,13 @@ mod session_tests {
             .expect("bounded GC call")
     }
     async fn drain(session: &mut TwoBitGcSession) -> Result<TwoBitGcReport, TwoBitGcFailure> {
+        drain_bounded(session)
+            .await
+            .expect("accepted request must finish")
+    }
+    async fn drain_bounded(
+        session: &mut TwoBitGcSession,
+    ) -> Result<Result<TwoBitGcReport, TwoBitGcFailure>, tokio::time::error::Elapsed> {
         tokio::time::timeout(DEADLINE, async {
             loop {
                 let result = collect_two_bit_garbage(session, caps()).await;
@@ -680,7 +821,7 @@ mod session_tests {
                     break result;
                 }
             }
-        }).await.expect("accepted request must finish")
+        }).await
     }
 
     #[tokio::test]
@@ -1282,6 +1423,343 @@ mod session_tests {
         }
     }
 
+    async fn cancelled_before_delete(validation: bool) {
+        let (f, orphan, snapshot) = tokio::time::timeout(DEADLINE, async {
+            let f = Fixture::new().await;
+            let base = read_two_bit_head(f.store.as_ref(), &f.prefix)
+                .await
+                .unwrap()
+                .unwrap();
+            let snapshot = apply_two_bit_mutations(
+                f.store.as_ref(),
+                &base,
+                2,
+                None,
+                &[TwoBitMutation {
+                    id: 7,
+                    vector: Some(vec![1., 0.]),
+                }],
+                caps().mutations,
+            )
+            .await
+            .unwrap();
+            let snapshot = base
+                .metadata_prefix()
+                .join("mutations")
+                .join(snapshot.sha256());
+            let unknown = f.object("unknown", b"k").await;
+            let orphan = f.orphan(1, b"x").await;
+            f.store
+                .script(&[unknown, orphan.clone(), f.root.clone(), snapshot.clone()])
+                .await;
+            (f, orphan, snapshot)
+        })
+        .await
+        .expect("bounded cancellation fixture");
+        let mut session = f.session();
+        let first = tokio::time::timeout(
+            DEADLINE,
+            collect_two_bit_garbage(
+                &mut session,
+                TwoBitGcLimits {
+                    max_objects_scanned: 1,
+                    ..caps()
+                },
+            ),
+        )
+        .await;
+        let gate = Arc::new(Gate::new());
+        let release = ReleaseOnDrop(gate.clone());
+        if validation {
+            *f.store.get_gate.lock().unwrap() = Some((snapshot.clone(), gate.clone()));
+        } else {
+            *f.store.list_gate.lock().unwrap() = Some(gate.clone());
+        }
+        let blocked = tokio::time::timeout(DEADLINE, async {
+            let mut request = Box::pin(collect_two_bit_garbage(
+                &mut session,
+                TwoBitGcLimits {
+                    max_objects_scanned: 1,
+                    ..caps()
+                },
+            ));
+            let dispatched = futures_util::poll!(&mut request).is_pending();
+            gate.entered.notified().await;
+            drop(request);
+            let busy = collect_two_bit_garbage(&mut session, caps()).await;
+            let reader = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(f.directory.path().join("lifecycle.lock"));
+            let excluded = reader
+                .as_ref()
+                .is_ok_and(|lock| lock.try_lock_shared().is_err());
+            drop(reader);
+            let fenced = matches!(
+                read_two_bit_head(f.store.as_ref(), &f.prefix).await,
+                Err(TwoBitStoreError::Invalid("writes fenced for reclamation"))
+            );
+            let progress = || {
+                (
+                    f.store.observed.lists.load(Ordering::SeqCst),
+                    f.store.observed.polls.load(Ordering::SeqCst),
+                    f.store.observed.deletes.load(Ordering::SeqCst),
+                )
+            };
+            let before = progress();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let after = progress();
+            let present = f.store.head(&orphan).await.is_ok();
+            (dispatched, busy, excluded, fenced, before, after, present)
+        })
+        .await;
+        // Release and drain on timeout/error too; no assertion may strand accepted work.
+        drop(release);
+        let drained = drain_bounded(&mut session).await;
+        let closed = f.close(session).await;
+        let readable = tokio::time::timeout(DEADLINE, async {
+            let head = read_two_bit_head(f.store.as_ref(), &f.prefix)
+                .await?
+                .unwrap();
+            let snapshot = read_two_bit_mutations(f.store.as_ref(), &head, 2, caps().mutations)
+                .await?
+                .unwrap();
+            Ok::<_, TwoBitStoreError>((
+                snapshot.rows().to_vec(),
+                f.store.head(&orphan).await.is_err(),
+            ))
+        })
+        .await;
+        assert!(
+            matches!(first, Ok(Ok(report)) if report.objects_scanned == 1 && !report.scan_complete)
+        );
+        let (dispatched, busy, excluded, fenced, before, after, present) = blocked.unwrap();
+        assert!(dispatched && excluded && fenced && present);
+        assert!(
+            matches!(busy, Err(e) if matches!(e.error, TwoBitStoreError::Invalid("GC session busy")))
+        );
+        assert_eq!(before, (1, 1, 0));
+        assert_eq!(after, before);
+        assert!(matches!(drained, Ok(Ok(_))) && closed.is_ok());
+        let (rows, absent) = readable.unwrap().unwrap();
+        assert_eq!(
+            rows,
+            vec![TwoBitMutation {
+                id: 7,
+                vector: Some(vec![1., 0.])
+            }]
+        );
+        assert!(absent);
+        assert_eq!(f.store.observed.deletes.load(Ordering::SeqCst), 1);
+        assert_eq!(f.store.observed.lists.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dropped_waiter_during_list_poll_keeps_lock_and_progress() {
+        cancelled_before_delete(false).await;
+    }
+
+    #[tokio::test]
+    async fn dropped_waiter_during_keep_validation_keeps_lock_and_progress() {
+        cancelled_before_delete(true).await;
+    }
+
+    #[cfg(panic = "unwind")]
+    #[tokio::test]
+    async fn worker_panic_reports_unknown_progress_and_recreation_recovers() {
+        for fault in [3, 4] {
+            let (f, orphan) = tokio::time::timeout(DEADLINE, async {
+                let f = Fixture::new().await;
+                let orphan = f.orphan(1, b"x").await;
+                f.store.script(&[orphan.clone(), f.root.clone()]).await;
+                (f, orphan)
+            })
+            .await
+            .expect("bounded panic fixture");
+            f.store.delete_error.store(fault, Ordering::SeqCst);
+            let mut session = f.session();
+            let failed =
+                tokio::time::timeout(DEADLINE, collect_two_bit_garbage(&mut session, caps())).await;
+            // Receiver teardown may trail reply destruction during unwinding, but cannot stay busy.
+            let failed_again = drain_bounded(&mut session).await;
+            let closed = f.close(session).await;
+            let before_recovery = tokio::time::timeout(DEADLINE, async {
+                let fenced = matches!(
+                    read_two_bit_head(f.store.as_ref(), &f.prefix).await,
+                    Err(TwoBitStoreError::Invalid("writes fenced for reclamation"))
+                );
+                let present = f.store.head(&orphan).await.is_ok();
+                let reader = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(f.directory.path().join("lifecycle.lock"));
+                let unlocked = reader
+                    .as_ref()
+                    .is_ok_and(|lock| lock.try_lock_shared().is_ok());
+                (
+                    fenced,
+                    present,
+                    unlocked,
+                    f.store.observed.deletes.load(Ordering::SeqCst),
+                )
+            })
+            .await;
+            assert!(closed.is_ok());
+            let mut recreated = f.session();
+            let recovered =
+                tokio::time::timeout(DEADLINE, collect_two_bit_garbage(&mut recreated, caps()))
+                    .await;
+            let recovered_closed = f.close(recreated).await;
+            let after_recovery = tokio::time::timeout(DEADLINE, async {
+                (
+                    read_two_bit_head(f.store.as_ref(), &f.prefix).await.is_ok(),
+                    f.store.head(&f.root).await.is_ok(),
+                    f.store.head(&orphan).await.is_err(),
+                )
+            })
+            .await;
+            assert!(recovered_closed.is_ok());
+            for failure in [
+                failed.unwrap().unwrap_err(),
+                failed_again.unwrap().unwrap_err(),
+            ] {
+                assert!(matches!(
+                    failure.error,
+                    TwoBitStoreError::Invalid("GC worker failed; progress unknown")
+                ));
+                let report = failure.report;
+                assert!(report.restart_required && report.delete_outcome_unknown);
+                assert!(!report.scan_complete);
+                assert_eq!(
+                    (
+                        report.objects_scanned,
+                        report.unknown_objects,
+                        report.delete_attempts,
+                        report.objects_deleted,
+                        report.deleted_object_bytes
+                    ),
+                    (0, 0, 0, 0, 0)
+                );
+                assert_eq!(
+                    (
+                        report.pending_object_bytes,
+                        report.required_deleted_object_bytes
+                    ),
+                    (None, None)
+                );
+            }
+            assert_eq!(before_recovery.unwrap(), (true, fault == 3, true, 1));
+            let recovered = recovered.unwrap().unwrap();
+            // InMemory acknowledges an idempotent delete even after the first DELETE took effect.
+            assert_eq!(
+                (
+                    recovered.objects_scanned,
+                    recovered.delete_attempts,
+                    recovered.objects_deleted,
+                    recovered.deleted_object_bytes
+                ),
+                (2, 1, 1, 1)
+            );
+            assert!(
+                recovered.scan_complete
+                    && !recovered.restart_required
+                    && !recovered.delete_outcome_unknown
+            );
+            assert_eq!(after_recovery.unwrap(), (true, true, true));
+            assert_eq!(f.store.observed.deletes.load(Ordering::SeqCst), 2);
+            assert_eq!(f.store.observed.lists.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn session_drop_terminates_recorded_worker_and_runtime_helpers() {
+        let f = tokio::time::timeout(DEADLINE, Fixture::new())
+            .await
+            .unwrap();
+        let unknown = f.object("unknown", b"k").await;
+        f.store.script(&[unknown, f.root.clone()]).await;
+        f.store.probe_threads.store(true, Ordering::SeqCst);
+        let mut session = f.session();
+        let capped = tokio::time::timeout(
+            DEADLINE,
+            collect_two_bit_garbage(
+                &mut session,
+                TwoBitGcLimits {
+                    max_objects_scanned: 1,
+                    ..caps()
+                },
+            ),
+        )
+        .await;
+        let retained = f.store.observed.list_drops.load(Ordering::SeqCst);
+        let alive = f
+            .store
+            .observed
+            .threads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|thread| matches!(thread.exited(), Ok(false)));
+        let gate = Arc::new(Gate::new());
+        let release = ReleaseOnDrop(gate.clone());
+        *f.store.list_gate.lock().unwrap() = Some(gate.clone());
+        let blocked = tokio::time::timeout(DEADLINE, async {
+            let mut request = Box::pin(collect_two_bit_garbage(&mut session, caps()));
+            let dispatched = futures_util::poll!(&mut request).is_pending();
+            gate.entered.notified().await;
+            drop(request);
+            dispatched
+        })
+        .await;
+        let started = std::time::Instant::now();
+        drop(session);
+        let drop_elapsed = started.elapsed();
+        drop(release);
+        // Observe complete worker + runtime shutdown after accepted work drains, without joining.
+        let exited = tokio::time::timeout(DEADLINE, async {
+            loop {
+                let gone = f
+                    .store
+                    .observed
+                    .threads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(OsThread::exited)
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                if gone.iter().all(|gone| *gone) {
+                    break Ok::<_, std::io::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert!(
+            matches!(capped, Ok(Ok(report)) if report.objects_scanned == 1 && !report.scan_complete)
+        );
+        assert_eq!(retained, 0);
+        assert!(alive && matches!(blocked, Ok(true)) && matches!(exited, Ok(Ok(()))));
+        assert!(drop_elapsed < Duration::from_secs(1));
+        assert_eq!(Arc::strong_count(&f.store), 1);
+        let threads = f.store.observed.threads.lock().unwrap();
+        eprintln!("GC worker/runtime thread identities: {threads:?}");
+        assert_eq!(threads.len(), 3);
+        assert_eq!(threads[0].name, "two-bit-gc");
+        assert_eq!(threads[1].name, "two-bit-gc-io");
+        assert_eq!(threads[2].name, "two-bit-gc-io");
+        for (index, thread) in threads.iter().enumerate() {
+            assert_ne!(thread.rust_id, std::thread::current().id());
+            for other in &threads[..index] {
+                assert_ne!(thread.rust_id, other.rust_id);
+                assert_ne!(thread.stat, other.stat);
+            }
+        }
+        assert_eq!(f.store.observed.list_drops.load(Ordering::SeqCst), 1);
+        assert!(f.store.observed.drop_in_runtime.load(Ordering::SeqCst));
+        assert!(f.store.observed.drop_on_list_thread.load(Ordering::SeqCst));
+    }
+
     #[tokio::test]
     async fn recreation_restarts_safely_and_invalid_prefix_never_starts_io() {
         let f = Fixture::new().await;
@@ -1353,6 +1831,190 @@ mod session_tests {
         assert_eq!(f.store.observed.lists.load(Ordering::SeqCst), 1);
         assert!(f.store.head(&orphan).await.is_err());
         assert!(f.store.head(&f.root).await.is_ok());
+    }
+
+    #[test]
+    fn real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata() {
+        // The sole >16-object fixture: 1033 one-byte orphans cross SDK 0.14.1's 1024 batch.
+        const ORPHANS: usize = 1033;
+        struct CallerRuntime(Option<tokio::runtime::Runtime>);
+        impl Drop for CallerRuntime {
+            fn drop(&mut self) {
+                if let Some(runtime) = self.0.take() {
+                    runtime.shutdown_timeout(DEADLINE);
+                }
+            }
+        }
+        let runtime = CallerRuntime(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .max_blocking_threads(2)
+                .build()
+                .unwrap(),
+        ));
+        runtime.0.as_ref().unwrap().block_on(async {
+            let data_dir = tempfile::tempdir().unwrap();
+            let (f, unknown, snapshot, root_sha, snapshot_sha, payload_bytes) =
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    let mut store = SessionStore::new(Arc::new(
+                        object_store::local::LocalFileSystem::new_with_prefix(data_dir.path())
+                            .unwrap(),
+                    ));
+                    store.head = Some(Arc::new(InMemory::new()));
+                    let f = Fixture::with_store(store).await;
+                    let base = read_two_bit_head(f.store.as_ref(), &f.prefix)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    let snapshot = apply_two_bit_mutations(
+                        f.store.as_ref(),
+                        &base,
+                        2,
+                        None,
+                        &[TwoBitMutation {
+                            id: 7,
+                            vector: Some(vec![1., 0.]),
+                        }],
+                        caps().mutations,
+                    )
+                    .await
+                    .unwrap();
+                    let snapshot_sha = snapshot.sha256().to_owned();
+                    let snapshot = base
+                        .metadata_prefix()
+                        .join("mutations")
+                        .join(snapshot.sha256());
+                    let unknown = f.object("unknown", b"k").await;
+                    for id in 0..ORPHANS {
+                        f.object(
+                            &format!("maintenance/{}/objects/{id:064x}", "a".repeat(48)),
+                            b"x",
+                        )
+                        .await;
+                    }
+                    let payload_bytes = ORPHANS as u64
+                        + 1
+                        + f.store.head(&f.root).await.unwrap().size
+                        + f.store.head(&snapshot).await.unwrap().size
+                        + f.store
+                            .head(&f.prefix.clone().join("head.json"))
+                            .await
+                            .unwrap()
+                            .size;
+                    (
+                        f,
+                        unknown,
+                        snapshot,
+                        base.root_sha256().to_owned(),
+                        snapshot_sha,
+                        payload_bytes,
+                    )
+                })
+                .await
+                .expect("bounded 1033-object fixture setup");
+            assert!(ORPHANS + 4 <= 1100 && payload_bytes < 64 * 1024);
+            let mut session = f.session();
+            let sweep = tokio::time::timeout(Duration::from_secs(30), async {
+                let (mut deleted, mut bytes, mut reads) = (0, 0, 0);
+                let (mut scan_cap, mut delete_cap, mut byte_cap) = (false, false, false);
+                let mut within_caps = true;
+                for pass in 0..=ORPHANS + 4 {
+                    let limits = TwoBitGcLimits {
+                        max_objects_scanned: if pass % 3 == 0 { 1 } else { 7 },
+                        max_objects_deleted: if pass % 3 == 1 { 1 } else { 3 },
+                        max_deleted_object_bytes: 2,
+                        ..caps()
+                    };
+                    let report = tokio::time::timeout(
+                        DEADLINE,
+                        collect_two_bit_garbage(&mut session, limits),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                    within_caps &= report.objects_scanned <= limits.max_objects_scanned
+                        && report.objects_deleted <= limits.max_objects_deleted
+                        && report.deleted_object_bytes <= limits.max_deleted_object_bytes
+                        && report.delete_attempts == report.objects_deleted
+                        && !report.restart_required
+                        && !report.delete_outcome_unknown;
+                    scan_cap |= !report.scan_complete
+                        && report.objects_scanned == limits.max_objects_scanned;
+                    delete_cap |= report.objects_deleted == limits.max_objects_deleted;
+                    byte_cap |=
+                        report.pending_object_bytes == Some(1) && report.deleted_object_bytes == 2;
+                    deleted += report.objects_deleted;
+                    bytes += report.deleted_object_bytes;
+                    // Both caller reads and the next pass's keep-set GETs use real filesystem data.
+                    let fresh = tokio::time::timeout(DEADLINE, async {
+                        let head = read_two_bit_head(f.store.as_ref(), &f.prefix)
+                            .await?
+                            .unwrap();
+                        let current =
+                            read_two_bit_mutations(f.store.as_ref(), &head, 2, caps().mutations)
+                                .await?
+                                .unwrap();
+                        Ok::<_, TwoBitStoreError>(
+                            head.root_sha256() == root_sha && current.sha256() == snapshot_sha,
+                        )
+                    })
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
+                    within_caps &= fresh;
+                    if !report.scan_complete {
+                        reads += 1;
+                        within_caps &= f.store.observed.list_drops.load(Ordering::SeqCst) == 0;
+                    } else {
+                        within_caps &= report.pending_object_bytes.is_none();
+                        return Ok::<_, String>((
+                            deleted,
+                            bytes,
+                            reads,
+                            scan_cap,
+                            delete_cap,
+                            byte_cap,
+                            within_caps,
+                        ));
+                    }
+                }
+                Err("bounded sweep did not reach EOF".to_owned())
+            })
+            .await;
+            let closed = f.close(session).await;
+            let contents = tokio::time::timeout(DEADLINE, async {
+                let mut absent = 0;
+                for id in 0..ORPHANS {
+                    let path = f
+                        .prefix
+                        .clone()
+                        .join(format!("maintenance/{}/objects/{id:064x}", "a".repeat(48)));
+                    absent += usize::from(matches!(
+                        f.store.head(&path).await,
+                        Err(object_store::Error::NotFound { .. })
+                    ));
+                }
+                (
+                    absent,
+                    f.store.head(&f.root).await.is_ok(),
+                    f.store.head(&snapshot).await.is_ok(),
+                    f.store.head(&unknown).await.is_ok(),
+                )
+            })
+            .await;
+            assert!(closed.is_ok());
+            let (deleted, bytes, reads, scan_cap, delete_cap, byte_cap, within_caps) =
+                sweep.unwrap().unwrap();
+            assert_eq!((deleted, bytes), (ORPHANS, ORPHANS as u64));
+            assert!(reads > 1 && scan_cap && delete_cap && byte_cap && within_caps);
+            assert_eq!(contents.unwrap(), (ORPHANS, true, true, true));
+            assert_eq!(f.store.observed.lists.load(Ordering::SeqCst), 1);
+            assert_eq!(f.store.observed.polls.load(Ordering::SeqCst), ORPHANS + 3);
+            assert_eq!(f.store.observed.deletes.load(Ordering::SeqCst), ORPHANS);
+            assert_eq!(f.store.observed.list_drops.load(Ordering::SeqCst), 1);
+            assert!(f.store.observed.drop_in_runtime.load(Ordering::SeqCst));
+            assert!(f.store.observed.drop_on_list_thread.load(Ordering::SeqCst));
+        });
     }
 
     #[tokio::test]
