@@ -781,7 +781,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn source_shortlist_v9_authenticates_32_row_sq8_blocks() {
-        use object_store::{ObjectStore, path::Path as ObjectPath};
+        use object_store::{ObjectStoreExt, path::Path as ObjectPath};
         let temp = tempfile::tempdir().unwrap();
         let rows = 4097_usize;
         let dimensions = 5;
