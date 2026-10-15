@@ -1311,6 +1311,8 @@ fn reduce_shortlist_mode_inner(
         result["input_shortlist_size"] = json!(1024);
         result["single_causal_selection_change"] = json!(true);
         result["source_to_shortlist_cover_loss_includes_budgeted_block_drops"] = json!(true);
+        let eligible = validate_block_admission_report(&result)?;
+        result["quality_advancement_eligible"] = json!(eligible);
     }
     Ok(result)
 }
@@ -2838,6 +2840,146 @@ mod budget_block_tests {
     use super::*;
     use borsuk::sq8_page_authority::{PageAuthority, SelectedSq8Limits, plan_selected_sq8_rows};
     use sha2::{Digest, Sha256};
+    #[test]
+    fn budget_shortlist_authenticated_ranking_and_disjoint_loss_chain() {
+        let root = std::env::temp_dir().join(format!(
+            "budget-ranking-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let rows = 160_usize;
+        let mut object = Vec::new();
+        for row in 0..rows {
+            object.extend_from_slice(&(row as i64).to_le_bytes());
+            object.extend_from_slice(&1_f32.to_le_bytes());
+            object.extend_from_slice(if row < 10 {
+                &[1_u8, 0][..]
+            } else {
+                &[0_u8, 1][..]
+            });
+        }
+        let path = root.join("sq8.bin");
+        std::fs::write(&path, &object).unwrap();
+        let digests = object
+            .chunks(32 * 14)
+            .flat_map(|b| Sha256::digest(b).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(
+            &serde_json::json!({"schema":"borsuk-v115-sq8-page-authority-v2",
+            "generation":1,"rows":rows,"dimensions":2,"page_rows":32,
+            "object_sha256":format!("{:x}",Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&digests))}),
+        )
+        .unwrap();
+        let a = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &digests,
+        )
+        .unwrap();
+        let pin = super::super::CompletedInput {
+            path,
+            bytes: object.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(&object)),
+        };
+        let (_, mut snapshot) = super::super::loss_binary(&pin, object.len() as u64).unwrap();
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 896,
+            max_planner_bytes: 1 << 20,
+        };
+        // Synthetic SOURCE ordering deliberately tries the expensive block first.
+        let selected = budget_admit_shortlist_blocks(
+            &a,
+            &[(0, 10.0), (128, 9.0), (32, 8.0)],
+            &[0, 32, 128],
+            limits,
+            1 << 20,
+        )
+        .unwrap();
+        assert_eq!(selected, vec![0, 32]);
+        let plan = plan_selected_sq8_rows(&a, &selected, limits).unwrap();
+        let returned = rank_local_cover(
+            &mut snapshot,
+            &a,
+            &plan.ranges,
+            rows,
+            2,
+            &[1.0, 0.0],
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            896,
+        )
+        .unwrap();
+        let full = rank_local_cover(
+            &mut snapshot,
+            &a,
+            &[0..object.len()],
+            rows,
+            2,
+            &[1.0, 0.0],
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+            object.len(),
+        )
+        .unwrap();
+        let baseline = full
+            .iter()
+            .map(|p| super::super::Hit {
+                id: p.id as u64,
+                score_bits: p.score.to_bits(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            returned
+                .iter()
+                .map(|p| (p.id, p.score.to_bits()))
+                .collect::<Vec<_>>(),
+            full.iter()
+                .map(|p| (p.id, p.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        let positions = (0..rows).map(|r| (r as u64, r)).collect();
+        let arm = ShortlistArm {
+            maximum: 1024,
+            selected,
+            ranges: plan.ranges,
+            bytes: plan.planned_bytes,
+            returned: Some(returned),
+        };
+        let quality = assess_arm(
+            &arm,
+            &(0..10_u64).collect::<Vec<_>>(),
+            &baseline,
+            &positions,
+            &[0, 1, 4],
+            rows,
+            2,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!((quality.hits10, quality.gained, quality.lost), (10, 0, 0));
+        assert_eq!(
+            (
+                quality.shortlist_truth_rows,
+                quality.selected_block_truth_rows
+            ),
+            (1, 10)
+        );
+        assert_eq!(
+            (
+                quality.bridge_rescued_hits,
+                quality.block_expansion_rescued_hits
+            ),
+            (0, 9)
+        );
+        assert_eq!(quality.miss_buckets, [0; 4]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn authority(rows: usize, page_rows: usize) -> PageAuthority {
         let body = vec![0_u8; rows * 14];
         let digests = body
@@ -2874,6 +3016,47 @@ mod budget_block_tests {
             assert_eq!(
                 budget_admit_shortlist_blocks(&a, &tied, &nominees, limits, 1 << 20).unwrap(),
                 selected
+            );
+            let one = SelectedSq8Limits {
+                max_bytes: page_rows * 14,
+                ..limits
+            };
+            for scores in [
+                vec![(0, 8.0), (page_rows, 8.0)],
+                vec![(page_rows, 8.0), (0, 8.0)],
+            ] {
+                assert_eq!(
+                    budget_admit_shortlist_blocks(&a, &scores, &[0, page_rows], one, 1 << 20)
+                        .unwrap(),
+                    vec![0]
+                );
+            }
+            let all = SelectedSq8Limits {
+                max_bytes: page_rows * 14 * 5,
+                ..limits
+            };
+            let identity =
+                budget_admit_shortlist_blocks(&a, &scores, &nominees, all, 1 << 20).unwrap();
+            assert_eq!(identity, nominees);
+            assert_eq!(
+                plan_selected_sq8_rows(&a, &identity, all).unwrap(),
+                plan_selected_sq8_rows(&a, &nominees, all).unwrap()
+            );
+            let bridge = SelectedSq8Limits {
+                max_bytes: page_rows * 14 * 3,
+                ..limits
+            };
+            let bridge_nominees = vec![0, page_rows, page_rows * 2];
+            assert_eq!(
+                budget_admit_shortlist_blocks(
+                    &a,
+                    &[(0, 10.0), (page_rows * 2, 9.0), (page_rows, 8.0)],
+                    &bridge_nominees,
+                    bridge,
+                    1 << 20
+                )
+                .unwrap(),
+                bridge_nominees
             );
         }
     }
@@ -2920,6 +3103,58 @@ mod budget_block_tests {
         };
         assert!(
             budget_admit_shortlist_blocks(&a, &[(0, 1.0)], &[0], limits, 640 + 4096 - 1).is_err()
+        );
+        assert_eq!(
+            budget_admit_shortlist_blocks(&a, &[(0, 1.0)], &[0], limits, 640 + 4096).unwrap(),
+            vec![0]
+        );
+        let exact = SelectedSq8Limits {
+            max_gets: 2,
+            max_bytes: 64 * 14,
+            max_planner_bytes: 512 * 2 + 4096,
+        };
+        assert_eq!(
+            budget_admit_shortlist_blocks(
+                &a,
+                &[(0, 2.0), (32, 1.0)],
+                &[0, 32],
+                exact,
+                640 * 2 + 4096
+            )
+            .unwrap(),
+            vec![0, 32]
+        );
+        assert!(
+            budget_admit_shortlist_blocks(
+                &a,
+                &[(0, 2.0), (32, 1.0)],
+                &[0, 32],
+                SelectedSq8Limits {
+                    max_planner_bytes: exact.max_planner_bytes - 1,
+                    ..exact
+                },
+                640 * 2 + 4096
+            )
+            .is_err()
+        );
+        let large = authority(1025, 32);
+        let rows = (0..1024).collect::<Vec<_>>();
+        let scores = rows.iter().map(|&row| (row, 1.0)).collect::<Vec<_>>();
+        let generous = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 1025 * 14,
+            max_planner_bytes: 512 * 1024 + 4096,
+        };
+        assert_eq!(
+            budget_admit_shortlist_blocks(&large, &scores, &rows, generous, 640 * 1024 + 4096)
+                .unwrap(),
+            rows
+        );
+        let too_many = (0..1025).collect::<Vec<_>>();
+        let too_many_scores = too_many.iter().map(|&row| (row, 1.0)).collect::<Vec<_>>();
+        assert!(
+            budget_admit_shortlist_blocks(&large, &too_many_scores, &too_many, generous, 1 << 20)
+                .is_err()
         );
         for (scores, rows) in [
             (vec![(0, f64::NAN)], vec![0]),
@@ -3018,6 +3253,238 @@ mod block_config_tests {
             )
             .is_err()
         );
+        // Valid outer config, invalid scientific metadata: both actual driver
+        // modes must publish INVALID before touching any nonexistent input.
+        let bytes = serde_json::to_vec(&nested).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        for admission_only in [false, true] {
+            let error = reduce_shortlist_mode_inner(&path, &sha, admission_only, true)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                !error.contains("No such file"),
+                "scientific opener reached: {error}"
+            );
+            let output = root.join(format!("report-{admission_only}.json"));
+            assert!(!execute_block_admission(&path, &sha, &output, admission_only).unwrap());
+            let body = std::fs::read(&output).unwrap();
+            let report: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(report["status"], "INVALID");
+            assert_eq!(report["complete"], false);
+            assert_eq!(report["qualified"], false);
+            assert_eq!(
+                report["schema"],
+                if admission_only {
+                    ADMISSION_SCHEMA
+                } else {
+                    BLOCK_ADMISSION_SCHEMA
+                }
+            );
+            assert!(execute_block_admission(&path, &sha, &output, admission_only).is_err());
+            assert_eq!(std::fs::read(&output).unwrap(), body);
+        }
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+fn validate_block_admission_report(report: &serde_json::Value) -> super::Result<bool> {
+    use super::require;
+    use serde_json::json;
+    require(
+        report["schema"] == BLOCK_ADMISSION_SCHEMA
+            && report["status"] == "MEASURED"
+            && report["complete"] == true
+            && report["query_count"] == 1000
+            && report["shortlist_sizes"] == json!([1024])
+            && report["admissible_queries"] == json!([1000])
+            && report["baseline_hits10"] == 9780
+            && report["recall_floor_hits10"] == 9760
+            && report["nonratcheting_reference_hits10"] == 9780
+            && report["candidate_sq8_get_budget"] == 30
+            && report["baseline_sq8_get_budget"] == 32
+            && report["ephemeral_sq8_block_rows"] == 32
+            && report["baseline_exact_plan_trace_charges_ids_scorebits"] == true
+            && report["truth_file_opened_after_all_baseline_controls"] == true
+            && report["input_shortlist_size"] == 1024
+            && report["single_causal_selection_change"] == true
+            && report["selection_rule"] == "MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION"
+            && report["source_to_shortlist_cover_loss_includes_budgeted_block_drops"] == true
+            && report["cold_latency_claim"] == false
+            && report["qps_claim"] == false
+            && report["vendor_win_claim"] == false
+            && report["qualified"] == false,
+        "block report population and protocol",
+    )?;
+    let queries = report["queries"].as_array().ok_or("block report queries")?;
+    require(queries.len() == 1000, "block report all1000")?;
+    for name in [
+        "measured_hit_subtotals",
+        "physical_bytes_totals",
+        "quality_floor_met",
+    ] {
+        require(
+            report[name].as_array().is_some_and(|a| a.len() == 1),
+            "block report one-arm totals",
+        )?;
+    }
+    let (mut baseline, mut hits, mut bytes) = (0_u64, 0_u64, 0_u64);
+    for (ordinal, q) in queries.iter().enumerate() {
+        require(
+            geometry_number(q, "ordinal")? == ordinal as u64
+                && q["arms"].as_array().is_some_and(|a| a.len() == 1),
+            "block report ordered query and arm",
+        )?;
+        let base = geometry_number(q, "baseline_hits10")?;
+        require(base <= 10, "block report baseline hits")?;
+        baseline = super::plus(baseline, base)?;
+        let a = &q["arms"][0];
+        let gets = geometry_number(a, "gets")?;
+        let physical = geometry_number(a, "physical_bytes")?;
+        let bridge = geometry_number(a, "bridge_bytes")?;
+        let rows = geometry_number(a, "selected_rows")?;
+        let blocks = geometry_number(a, "selected_blocks")?;
+        let runs = geometry_number(a, "pre_cap_runs")?;
+        require(
+            a["size"] == 1024
+                && a["status"] == "MEASURED"
+                && a["quality"].is_object()
+                && rows > 0
+                && rows <= 1024
+                && blocks > 0
+                && blocks <= rows
+                && blocks
+                    .checked_mul(32)
+                    .is_some_and(|capacity| rows <= capacity)
+                && runs > 0
+                && runs <= blocks
+                && gets == runs.min(30)
+                && physical <= GEOMETRY_BYTE_CAP
+                && physical % GEOMETRY_BLOCK_BYTES == 0
+                && physical.checked_sub(bridge) == blocks.checked_mul(GEOMETRY_BLOCK_BYTES)
+                && runs
+                    .checked_sub(gets)
+                    .is_some_and(|gaps| bridge / GEOMETRY_BLOCK_BYTES >= gaps)
+                && (runs > 30 || bridge == 0),
+            "block report physical cap and geometry",
+        )?;
+        let quality = &a["quality"];
+        let h = geometry_number(quality, "hits10")?;
+        let gained = geometry_number(quality, "gained")?;
+        let lost = geometry_number(quality, "lost")?;
+        let bucket = quality["miss_buckets"]
+            .as_array()
+            .ok_or("block report loss buckets")?;
+        require(
+            bucket.len() == 4
+                && h <= 10
+                && gained <= h
+                && lost <= base
+                && base + gained == h + lost,
+            "block report gain loss conservation",
+        )?;
+        let misses = bucket.iter().try_fold(0_u64, |sum, v| {
+            super::plus(sum, v.as_u64().ok_or("block report unsigned loss bucket")?)
+        })?;
+        require(
+            super::plus(h, misses)? == 10,
+            "block report disjoint loss conservation",
+        )?;
+        let shortlisted = geometry_number(quality, "shortlist_truth_rows")?;
+        let block_truth = geometry_number(quality, "selected_block_truth_rows")?;
+        require(
+            shortlisted <= block_truth
+                && block_truth <= 10
+                && super::plus(
+                    geometry_number(quality, "bridge_rescued_hits")?,
+                    geometry_number(quality, "block_expansion_rescued_hits")?,
+                )? <= h,
+            "block report coverage and rescues",
+        )?;
+        hits = super::plus(hits, h)?;
+        bytes = super::plus(bytes, physical)?;
+    }
+    let eligible = hits >= 9760;
+    require(
+        baseline == 9780
+            && report["measured_hit_subtotals"] == json!([hits])
+            && report["physical_bytes_totals"] == json!([bytes])
+            && report["quality_floor_met"] == json!([eligible]),
+        "block report aggregate reconciliation",
+    )?;
+    Ok(eligible)
+}
+
+#[cfg(test)]
+mod block_report_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn report_fixture() -> Value {
+        let queries: Vec<Value> = (0..1000)
+            .map(|ordinal| {
+                let hits = if ordinal < 978 { 10 } else { 0 };
+                json!({"ordinal":ordinal,"baseline_hits10":hits,"arms":[{
+                "size":1024,"status":"MEASURED","gets":1,"physical_bytes":33152,
+                "bridge_bytes":0,"selected_rows":32,"selected_blocks":1,"pre_cap_runs":1,
+                "quality":{"hits10":hits,"gained":0,"lost":0,
+                    "miss_buckets":[10-hits,0,0,0],"shortlist_truth_rows":hits,
+                    "selected_block_truth_rows":hits,"bridge_rescued_hits":0,
+                    "block_expansion_rescued_hits":0}}]})
+            })
+            .collect();
+        json!({"schema":BLOCK_ADMISSION_SCHEMA,"status":"MEASURED","complete":true,
+            "query_count":1000,"shortlist_sizes":[1024],"admissible_queries":[1000],
+            "baseline_hits10":9780,"recall_floor_hits10":9760,
+            "nonratcheting_reference_hits10":9780,"candidate_sq8_get_budget":30,
+            "baseline_sq8_get_budget":32,"ephemeral_sq8_block_rows":32,
+            "baseline_exact_plan_trace_charges_ids_scorebits":true,
+            "truth_file_opened_after_all_baseline_controls":true,"input_shortlist_size":1024,
+            "single_causal_selection_change":true,
+            "selection_rule":"MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION",
+            "source_to_shortlist_cover_loss_includes_budgeted_block_drops":true,
+            "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,
+            "qualified":false,"queries":queries,"measured_hit_subtotals":[9780],
+            "physical_bytes_totals":[33152000],"quality_floor_met":[true]})
+    }
+
+    #[test]
+    fn budget_shortlist_report_reconciles_population_and_preserves_measured_floor_failure() {
+        let baseline = report_fixture();
+        assert!(validate_block_admission_report(&baseline).unwrap());
+        let mut below = baseline.clone();
+        for ordinal in 0..6 {
+            let q = &mut below["queries"][ordinal]["arms"][0]["quality"];
+            q["hits10"] = json!(0);
+            q["lost"] = json!(10);
+            q["miss_buckets"] = json!([10, 0, 0, 0]);
+        }
+        below["measured_hit_subtotals"] = json!([9720]);
+        below["quality_floor_met"] = json!([false]);
+        assert!(!validate_block_admission_report(&below).unwrap());
+        let mutations = [
+            ("/queries/999/ordinal", json!(998)),
+            ("/queries/999/arms", json!([])),
+            ("/queries/0/arms/0/gets", json!(31)),
+            ("/queries/0/arms/0/selected_blocks", json!(u64::MAX)),
+            ("/queries/0/arms/0/physical_bytes", json!(33587584)),
+            ("/queries/0/arms/0/quality/gained", json!(1)),
+            (
+                "/queries/0/arms/0/quality/miss_buckets",
+                json!([1, 0, 0, 0]),
+            ),
+            ("/physical_bytes_totals/0", json!(33151999)),
+            ("/measured_hit_subtotals/0", json!(9781)),
+            ("/quality_floor_met/0", json!(false)),
+            ("/schema", json!("borsuk-sq8-subpage-shortlist-v1")),
+        ];
+        for (pointer, value) in mutations {
+            let mut bad = baseline.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_block_admission_report(&bad).is_err(),
+                "accepted {pointer}"
+            );
+        }
     }
 }
