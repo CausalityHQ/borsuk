@@ -1239,7 +1239,7 @@ fn reduce_shortlist_engine(
                     max_bytes: 32 * 1024 * 1024,
                     max_planner_bytes: 4 * 1024 * 1024 + 4096,
                 },
-                64 * scored.len() + 16 * 1024 + 4096,
+                count_curve::workspace_bytes(scored.len())?,
             )?;
             for arm in &mut arms {
                 arm.returned = Some(rank_local_cover(
@@ -1695,7 +1695,10 @@ pub(super) fn execute_count_curve(
             "admissible_queries":report["admissible_queries"],"hits10":report["measured_hit_subtotals"],
             "planned_target_gets":report["planned_target_gets_totals"],"planned_target_bytes":report["planned_target_bytes_totals"],
             "native_quality_io_totals":report["native_quality_io_totals"],"quality_floor_met":report["quality_floor_met"],
-            "control_parity":report["closed_selector_control_parity"],"cold_latency_claim":false,"vendor_win_claim":false}),
+            "control_parity":report["closed_selector_control_parity"],
+            "control_parity_scope":report["closed_selector_control_parity_scope"],
+            "historical_returned_rank_parity":report["historical_returned_rank_parity"],
+            "cold_latency_claim":false,"vendor_win_claim":false}),
         );
         Ok(report)
     })?;

@@ -28,6 +28,13 @@ fn validate_counts(counts: &[usize; 4]) -> Result<()> {
         "count curve bounded increasing counts and1024 control",
     )
 }
+pub(super) fn workspace_bytes(scored_rows: usize) -> Result<usize> {
+    let shortlist = scored_rows
+        .checked_mul(64)
+        .and_then(|n| n.checked_add(16 * 1024 + 4096))
+        .ok_or("count workspace overflow")?;
+    Ok(shortlist.max(1024 * 1024))
+}
 pub(super) fn plan_arms(
     a: &PageAuthority,
     scored: &[(usize, f64)],
@@ -126,7 +133,26 @@ mod tests {
             max_bytes: 1 << 20,
             max_planner_bytes: 1 << 20,
         };
-        let arms = plan_arms(&a, &scored, &[256, 512, 768, 1024], limits, 8 << 20).unwrap();
+        let arms = plan_arms(
+            &a,
+            &scored,
+            &[256, 512, 768, 1024],
+            limits,
+            workspace_bytes(scored.len()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            plan_arms(
+                &a,
+                &scored,
+                &[256, 512, 768, 1024],
+                limits,
+                64 * scored.len() + 16 * 1024 + 4096
+            )
+            .is_err(),
+            "old caller budget must expose short-roster refusal"
+        );
+        assert!(workspace_bytes(usize::MAX).is_err());
         assert_eq!(arms.len(), 4, "all four SOURCE prefixes must be planned");
         for (arm, (count, bytes)) in
             arms.iter()
@@ -166,6 +192,7 @@ impl Control {
         self.snapshot.recheck()
     }
     pub(super) fn verify(&self, queries: &[serde_json::Value]) -> Result<()> {
+        // The immutable historical report has summaries, not ordered returned ranks.
         self.recheck()?;
         let (bytes, snapshot) = crate::loss_binary(&self.pin, self.pin.bytes)?;
         let old: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -182,7 +209,7 @@ impl Control {
                 now["ordinal"] == old["ordinal"]
                     && now["baseline_hits10"] == old["baseline_hits10"]
                     && now["arms"][3] == old["arms"][0],
-                "count1024 exact closed-selector parity",
+                "count1024 exact closed-selector summary parity",
             )?;
         }
         snapshot.recheck()?;
@@ -245,13 +272,36 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
             let b = number(arm, "physical_bytes")?;
             let gain = number(quality, "gained")?;
             let loss = number(quality, "lost")?;
+            let bridge = number(arm, "bridge_bytes")?;
+            let selected = number(arm, "selected_rows")?;
+            let blocks = number(arm, "selected_blocks")?;
+            let runs = number(arm, "pre_cap_runs")?;
+            crate::require(
+                selected > 0
+                    && selected <= counts[a] as u64
+                    && blocks > 0
+                    && blocks <= selected
+                    && blocks
+                        .checked_mul(32)
+                        .is_some_and(|capacity| selected <= capacity)
+                    && runs > 0
+                    && runs <= blocks
+                    && g == runs.min(30)
+                    && b % super::GEOMETRY_BLOCK_BYTES == 0
+                    && b.checked_sub(bridge) == blocks.checked_mul(super::GEOMETRY_BLOCK_BYTES)
+                    && runs
+                        .checked_sub(g)
+                        .is_some_and(|gaps| bridge / super::GEOMETRY_BLOCK_BYTES >= gaps)
+                    && (runs > 30 || bridge == 0),
+                "count arm physical geometry",
+            )?;
             let miss: [u64; 4] = serde_json::from_value(quality["miss_buckets"].clone())?;
             crate::require(
                 arm["status"] == "MEASURED"
                     && number(arm, "size")? == counts[a] as u64
                     && h <= 10
-                    && gain <= 10
-                    && loss <= 10
+                    && gain <= h
+                    && loss <= base
                     && miss.iter().all(|n| *n <= 10)
                     && h + miss.iter().sum::<u64>() == 10
                     && base + gain == h + loss
@@ -260,6 +310,16 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
                     && b > 0
                     && b <= 32 * 1024 * 1024,
                 "count arm quality/cover conservation",
+            )?;
+            let shortlisted = number(quality, "shortlist_truth_rows")?;
+            let block_truth = number(quality, "selected_block_truth_rows")?;
+            crate::require(
+                shortlisted <= block_truth
+                    && block_truth <= 10
+                    && number(quality, "bridge_rescued_hits")?
+                        .checked_add(number(quality, "block_expansion_rescued_hits")?)
+                        .is_some_and(|rescued| rescued <= h),
+                "count arm coverage and rescues",
             )?;
             let rows = points[a].as_array().ok_or("count returned rows")?;
             crate::require(rows.len() == 10, "count returned k")?;
@@ -284,7 +344,7 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
             add(&mut bytes[a], b)?;
             add(&mut gained[a], gain)?;
             add(&mut lost[a], loss)?;
-            add(&mut bridges[a], number(arm, "bridge_bytes")?)?;
+            add(&mut bridges[a], bridge)?;
             for j in 0..4 {
                 add(&mut misses[a][j], miss[j])?;
             }
@@ -307,6 +367,9 @@ pub(super) fn finalize_report(report: &mut serde_json::Value) -> Result<()> {
     report["planned_target_bytes_totals"] = totals["bytes"].clone();
     report["native_quality_io_totals"] = totals;
     report["closed_selector_control_parity"] = json!(true);
+    report["closed_selector_control_parity_scope"] =
+        json!("PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES");
+    report["historical_returned_rank_parity"] = json!(false);
     report["original_physical_layout"] = json!(true);
     report["source_capture_routing_scoring_unchanged"] = json!(true);
     report["single_causal_source_count_change"] = json!(true);
@@ -334,11 +397,17 @@ pub(super) fn validate_report(report: &serde_json::Value) -> Result<()> {
             && report["admissible_queries"] == json!([1000, 1000, 1000, 1000])
             && report["control_arm_index"] == 3
             && report["closed_selector_control_parity"] == true
+            && report["closed_selector_control_parity_scope"]
+                == "PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES"
+            && report["historical_returned_rank_parity"] == false
             && report["original_physical_layout"] == true
             && report["source_capture_routing_scoring_unchanged"] == true
             && report["single_causal_source_count_change"] == true
             && report["recall_floor_hits10"] == 9760
             && report["cold_latency_claim"] == false
+            && report["qps_claim"] == false
+            && report["qualified"] == false
+            && report["physical_s3_or_billed_bytes"] == false
             && report["vendor_win_claim"] == false,
         "count complete native report",
     )?;
@@ -375,8 +444,11 @@ mod report_tests {
                     .map(|(a, count)| {
                         let hits = if a < 2 { 9 } else { 10 };
                         json!({"status":"MEASURED","size":count,"gets":1,
-                    "physical_bytes":4096,"bridge_bytes":0,
+                    "physical_bytes":33152,"bridge_bytes":0,
+                    "selected_rows":10,"selected_blocks":1,"pre_cap_runs":1,
                     "quality":{"hits10":hits,"gained":0,"lost":10-hits,
+                        "shortlist_truth_rows":hits,"selected_block_truth_rows":hits,
+                        "bridge_rescued_hits":0,"block_expansion_rescued_hits":0,
                         "miss_buckets":[10-hits,0,0,0]}})
                     })
                     .collect::<Vec<_>>();
@@ -396,7 +468,8 @@ mod report_tests {
             "admissible_queries":[1000,1000,1000,1000],
             "measured_hit_subtotals":[9000,9000,10000,10000],
             "quality_floor_met":[false,false,true,true],"recall_floor_hits10":9760,
-            "cold_latency_claim":false,"vendor_win_claim":false})
+            "cold_latency_claim":false,"vendor_win_claim":false,"qps_claim":false,
+            "qualified":false,"physical_s3_or_billed_bytes":false})
     }
 
     #[test]
@@ -414,7 +487,7 @@ mod report_tests {
         );
         assert_eq!(
             report["planned_target_bytes_totals"],
-            json!([4096000, 4096000, 4096000, 4096000])
+            json!([33152000, 33152000, 33152000, 33152000])
         );
         assert!(validate_report(&report).is_ok());
     }
@@ -464,15 +537,21 @@ mod report_tests {
             .iter_mut()
             .take(760)
         {
-            query["arms"][0]["quality"] =
-                json!({"hits10":10,"gained":0,"lost":0,"miss_buckets":[0,0,0,0]});
+            query["arms"][0]["quality"]["hits10"] = json!(10);
+            query["arms"][0]["quality"]["lost"] = json!(0);
+            query["arms"][0]["quality"]["miss_buckets"] = json!([0, 0, 0, 0]);
+            query["arms"][0]["quality"]["shortlist_truth_rows"] = json!(10);
+            query["arms"][0]["quality"]["selected_block_truth_rows"] = json!(10);
         }
         report["measured_hit_subtotals"][0] = json!(9760);
         report["quality_floor_met"][0] = json!(true);
         finalize_report(&mut report).unwrap();
         assert_eq!(report["quality_advancement_eligible"][0], true);
-        report["queries"][0]["arms"][0]["quality"] =
-            json!({"hits10":9,"gained":0,"lost":1,"miss_buckets":[1,0,0,0]});
+        report["queries"][0]["arms"][0]["quality"]["hits10"] = json!(9);
+        report["queries"][0]["arms"][0]["quality"]["lost"] = json!(1);
+        report["queries"][0]["arms"][0]["quality"]["miss_buckets"] = json!([1, 0, 0, 0]);
+        report["queries"][0]["arms"][0]["quality"]["shortlist_truth_rows"] = json!(9);
+        report["queries"][0]["arms"][0]["quality"]["selected_block_truth_rows"] = json!(9);
         report["measured_hit_subtotals"][0] = json!(9759);
         report["quality_floor_met"][0] = json!(false);
         finalize_report(&mut report).unwrap();
@@ -501,6 +580,10 @@ mod report_tests {
             ("/closed_selector_control_parity", json!(false)),
             ("/cold_latency_claim", json!(true)),
             ("/vendor_win_claim", json!(true)),
+            ("/qps_claim", json!(true)),
+            ("/qualified", json!(true)),
+            ("/physical_s3_or_billed_bytes", json!(true)),
+            ("/historical_returned_rank_parity", json!(true)),
         ] {
             let mut bad = valid.clone();
             *bad.pointer_mut(pointer).unwrap() = value;
@@ -509,8 +592,53 @@ mod report_tests {
                 "accepted corruption {pointer}"
             );
         }
+        let mut missing_arm = valid.clone();
+        missing_arm["queries"][999]["arms"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        assert!(validate_report(&missing_arm).is_err());
         let mut missing = valid;
         missing["queries"].as_array_mut().unwrap().pop();
         assert!(validate_report(&missing).is_err());
+    }
+
+    #[test]
+    fn curve_finalizer_rejects_impossible_geometry_before_totals_are_resealed() {
+        for (pointer, value) in [
+            ("/queries/999/arms/0/bridge_bytes", json!(33153)),
+            ("/queries/999/arms/0/physical_bytes", json!(4096)),
+            ("/queries/999/arms/0/selected_rows", json!(257)),
+            ("/queries/999/arms/0/selected_rows", json!(0)),
+            ("/queries/999/arms/0/selected_blocks", json!(2)),
+            ("/queries/999/arms/0/pre_cap_runs", json!(0)),
+            ("/queries/999/arms/0/quality/bridge_rescued_hits", json!(10)),
+            (
+                "/queries/999/arms/0/quality/selected_block_truth_rows",
+                json!(8),
+            ),
+        ] {
+            let mut report = report_fixture();
+            *report.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                finalize_report(&mut report).is_err(),
+                "accepted impossible geometry {pointer}"
+            );
+        }
+        let mut report = report_fixture();
+        report["baseline_hits10"] = json!(9999);
+        let query = &mut report["queries"][999];
+        query["baseline_hits10"] = json!(9);
+        query["arms"][0]["quality"]["gained"] = json!(10);
+        query["arms"][0]["quality"]["lost"] = json!(10);
+        query["arms"][1]["quality"]["lost"] = json!(0);
+        for arm in [2, 3] {
+            query["arms"][arm]["quality"]["gained"] = json!(1);
+            query["arms"][arm]["quality"]["lost"] = json!(0);
+        }
+        assert!(
+            finalize_report(&mut report).is_err(),
+            "gain/loss equality alone cannot admit impossible set differences"
+        );
     }
 }
