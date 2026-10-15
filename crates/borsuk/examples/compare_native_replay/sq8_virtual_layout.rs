@@ -213,3 +213,107 @@ mod mapped_quality_tests {
         assert!(assess_arm_mapped(&arm, &truth, &baseline, &positions, &[0], &layout, 2).is_err());
     }
 }
+
+// Intentional missing-authentication/payload-order scaffold, not production.
+fn layout_from_router_leaves<R: std::io::Read + std::io::Seek>(
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    _input: &mut R,
+    cap: usize,
+) -> super::super::Result<UnitLayout> {
+    let m = router.manifest();
+    let identity = (0..m.unit_count).map(|u| u as u32).collect::<Vec<_>>();
+    Ok(UnitLayout::from_destination_order(
+        m.rows,
+        m.unit_rows,
+        &identity,
+        cap,
+    )?)
+}
+// Prospective query-free preparation fixture. Not in current a655 run.
+#[cfg(test)]
+mod router_payload_order_tests {
+    use super::*;
+    use crate::unit_layout::{SourceRow, Sq8Row};
+    use borsuk::{
+        semantic_unit_router::{self, SemanticProfile, SemanticUnitRouter, SourceIdentity},
+        unit_centroid_pages::UnitCentroidPages,
+    };
+    use sha2::{Digest, Sha256};
+    use std::io::Cursor;
+
+    fn actual_router() -> (SemanticUnitRouter, Vec<u8>) {
+        let mut sq8 = Vec::new();
+        // Four unit means [0,1],[3,1],[2,1],[1,1] around [1.5,1].
+        // Actual native radial payload order is 2,3,0,1; membership is 0,0,0,0.
+        for row in 0..97_usize {
+            sq8.extend_from_slice(&((row as i64 * 13) - 1000).to_le_bytes());
+            sq8.extend_from_slice(&1_f32.to_le_bytes());
+            sq8.extend_from_slice(&[[0, 1], [3, 1], [2, 1], [1, 1]][row / 32]);
+        }
+        let centroids = UnitCentroidPages::build_from_sq8_reader(
+            &mut Cursor::new(sq8),
+            97,
+            2,
+            32,
+            256,
+            &[0.0, 0.0],
+            &[1.0, 1.0],
+        )
+        .unwrap();
+        let centroid_sha = format!("{:x}", Sha256::digest(&centroids));
+        let root_sha = "1".repeat(64);
+        let identity = SourceIdentity {
+            profile: SemanticProfile::Native100k,
+            schema: "unit-locality-fixture",
+            root_sha256: &root_sha,
+            centroids_sha256: &centroid_sha,
+            rows: 97,
+            dimensions: 2,
+        };
+        let artifacts = semantic_unit_router::build(
+            &centroids,
+            &identity,
+            SemanticProfile::Native100k.allocation_cap(),
+        )
+        .unwrap();
+        let hash = format!("{:x}", Sha256::digest(&artifacts.manifest));
+        let router = SemanticUnitRouter::open(
+            &artifacts.manifest,
+            &artifacts.membership,
+            &hash,
+            &identity,
+            1 << 20,
+        )
+        .unwrap();
+        assert_eq!(router.manifest().leaves.len(), 1);
+        assert_eq!(router.unit_membership(), &[0, 0, 0, 0]);
+        assert_eq!(
+            router.validate_leaf(0, &artifacts.leaves).unwrap(),
+            vec![2, 3, 0, 1]
+        );
+        (router, artifacts.leaves)
+    }
+
+    #[test]
+    fn router_layout_uses_authenticated_payload_order_and_moves_only_partial_tail_last() {
+        let (router, leaves) = actual_router();
+        let layout = layout_from_router_leaves(&router, &mut Cursor::new(leaves), 1 << 20).unwrap();
+        // Literal three-cycle after removing partial unit3 and appending it.
+        for (target, source) in [2, 0, 1, 3].into_iter().enumerate() {
+            assert_eq!(
+                layout.source_row(Sq8Row(target * 32)),
+                Some(SourceRow(source * 32))
+            );
+        }
+    }
+    #[test]
+    fn router_layout_refuses_corrupt_or_trailing_leaf_payloads() {
+        let (router, leaves) = actual_router();
+        let mut corrupt = leaves.clone();
+        corrupt[4] ^= 1;
+        assert!(layout_from_router_leaves(&router, &mut Cursor::new(corrupt), 1 << 20).is_err());
+        let mut extra = leaves;
+        extra.push(0);
+        assert!(layout_from_router_leaves(&router, &mut Cursor::new(extra), 1 << 20).is_err());
+    }
+}
