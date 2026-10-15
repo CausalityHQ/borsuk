@@ -12,8 +12,8 @@ readonly code_pin
 code_checks=0
 verify_code() {
  code_checks=$((code_checks+1))
- printf '%s  %s\n' "$code_pin" "$root/runtime-code.sha256" | sha256sum --strict -c - >/dev/null
- (cd "$root" && sha256sum --strict -c runtime-code.sha256) > "$root/evidence/runtime-code-$code_checks.log"
+ printf '%s  %s\n' "$code_pin" "$root/runtime-code.sha256" | sha256sum --strict -c - >/dev/null || return 1
+ (cd "$root" && sha256sum --strict -c runtime-code.sha256) > "$root/evidence/runtime-code-$code_checks.log" || return 1
 }
 finish() {
  original=$?; trap - EXIT

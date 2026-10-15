@@ -30,6 +30,14 @@ set +e
 rc=$?
 set -e
 [[ $rc != 0 && ! -e $sand/released ]] || exit 1
+# Conditional calls must reject a rewritten manifest despite errexit suppression.
+(cd "$sand" && sha256sum run-v9-stage.sh > runtime-code.sha256)
+sed 's/^verify_code$/if verify_code; then exit 0; else exit 73; fi/' "$sand/check.sh" > "$sand/conditional.sh"
+set +e
+/bin/bash "$sand/conditional.sh" > "$sand/manifest-mutation.out" 2>&1
+rc=$?
+set -e
+[[ $rc == 73 && ! -e $sand/released ]] || exit 1
 # Exact formal-cell admission fragment: equality refuses, next second releases.
 mkdir -m 700 "$ev/budget-bin"
 printf '#!/bin/bash\nprintf "10000\\n"\n' > "$ev/budget-bin/date"
