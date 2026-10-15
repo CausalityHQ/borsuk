@@ -1,0 +1,62 @@
+{
+  "schema": "borsuk-source-shortlist-full-native-qualification-v1",
+  "source_commit": "bf7ada2457d51cebb78d2295d0d14d841c24e8eb",
+  "instance_id": "i-0676750a554a602c4",
+  "native_command_id": "3e54793d-7d31-4a92-8e99-159fe92bfc14",
+  "compile_lib_exit": 0,
+  "shortlist": {
+    "passed": 7,
+    "failed": 0
+  },
+  "exact_geometry_falsifiers": {
+    "passed": 3,
+    "failed": 0
+  },
+  "two_bit_regressions": {
+    "passed": 46,
+    "failed": 0
+  },
+  "authority": {
+    "passed": 8,
+    "failed": 0
+  },
+  "budget": {
+    "passed": 10,
+    "failed": 0
+  },
+  "baseline": {
+    "passed": 48,
+    "failed": 0
+  },
+  "generation_integration": {
+    "passed": 10,
+    "failed": 0
+  },
+  "application_id_integration": {
+    "passed": 13,
+    "failed": 0,
+    "ignored": 1
+  },
+  "ignored_real_s3_gc_test_is_not_qualified": true,
+  "workspace_clippy_exit": 0,
+  "actual_shim_unset_workspace_testbuild_exit": 0,
+  "release_exit": 0,
+  "release_retention_exit": 0,
+  "source_files_unchanged": 475,
+  "stage_count": 15,
+  "peak_cgroup_bytes_including_compilation_and_file_cache": 15032385536,
+  "memory_max_events": 1013,
+  "swap_peak_bytes": 0,
+  "oom_kills": 0,
+  "archive": {
+    "sha256": "974a03807e9fb1cef9873e445310d852b4751bf05c478d99e6589d1e9f237ab4",
+    "bytes": 54886400
+  },
+  "archive_head_length": 54886400,
+  "retained_archive_body_verified_locally": false,
+  "retained_binary_sha_table": "retained-release/binaries.sha256",
+  "compute_closed": true,
+  "verifier_exit": 0,
+  "performance_claim": false,
+  "product_complete": false
+}

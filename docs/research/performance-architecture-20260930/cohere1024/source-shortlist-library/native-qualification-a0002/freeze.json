@@ -1,0 +1,98 @@
+{
+   "additional_gates" : [
+      {
+         "command" : "cargo test --locked -p borsuk --test two_bit_generation pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_budget -- --test-threads=1 --exact",
+         "name" : "integration-geometry-falsifier"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_100k_d1024_generation_serving_scalar_oracle -- --test-threads=1 --exact",
+         "name" : "scalar-geometry-falsifier"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib two_bit_generation::source_walk_tests::native_membership_discovery_leaf_authorized_parity -- --test-threads=1 --exact",
+         "name" : "membership-geometry-falsifier"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib two_bit_ -- --test-threads=1",
+         "name" : "two-bit-regressions"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib sq8_page_authority:: -- --test-threads=1",
+         "name" : "authority-regressions"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --lib budgeted_page_rank:: -- --test-threads=1",
+         "name" : "budget-regressions"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --bin check_cohere_native_baseline -- --test-threads=1",
+         "name" : "baseline-regressions"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --test two_bit_generation -- --test-threads=1",
+         "name" : "generation-integration"
+      },
+      {
+         "command" : "cargo test --locked -p borsuk --test two_bit_application_ids -- --test-threads=1",
+         "name" : "application-id-integration"
+      },
+      {
+         "command" : "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+         "name" : "workspace-clippy"
+      },
+      {
+         "command" : "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh",
+         "name" : "workspace-testbuild"
+      },
+      {
+         "command" : "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --bin repackage_semantic_generation --bin build_two_bit_graph_variant --example compare_native_replay --example two_bit_http",
+         "name" : "release"
+      },
+      {
+         "command" : "bash /mnt/borsuk-paired-qualification/retain-source-shortlist-release.sh",
+         "name" : "release-retention"
+      }
+   ],
+   "compile_must_pass" : true,
+   "cpu" : "0-3/400%",
+   "expected_failed" : 0,
+   "expected_native_exit" : 0,
+   "expected_passed" : 7,
+   "expected_selected" : 7,
+   "external_seconds" : 3720,
+   "instance_type" : "m6a.2xlarge",
+   "interruption" : "INVALID; preserve original evidence; no automatic retry",
+   "jobs" : 1,
+   "machine_seconds" : 3600,
+   "market" : "spot",
+   "max_collected_artifacts" : 96,
+   "memory_bytes" : 15032385536,
+   "native_files" : 442,
+   "pids" : 512,
+   "prerequisite_source" : "6fb66100c6b9c98bc8892b8c2a6585bd6e6c90d4",
+   "profile" : "causality",
+   "region" : "eu-central-1",
+   "required_tests" : [
+      "sq8_page_authority::selected_sq8_rows_contract::source_shortlist_cover_matches_independent_greedy_oracle",
+      "sq8_page_authority::selected_sq8_rows_contract::source_shortlist_block_budget_keeps_later_affordable_tail",
+      "sq8_page_authority::selected_sq8_rows_contract::source_shortlist_block_cover_charges_bridges_and_refuses_invalid_nominees",
+      "two_bit_build::tests::source_shortlist_v9_authenticates_32_row_sq8_blocks",
+      "two_bit_generation::source_walk_tests::source_shortlist_heap_matches_full_sort_with_signed_zero_and_negative_scores",
+      "two_bit_generation::source_walk_tests::source_shortlist_v9_uses_score_then_physical_ordinal",
+      "two_bit_generation::source_walk_tests::source_shortlist_v9_nonuniform_serving_matches_full_sort_and_bridge_oracle"
+   ],
+   "retained_release" : {
+      "asset_sha256" : "8af91d690a97bd53f8a943a4e5a4c076d1913d3ef23b0c58c06a89616c076805",
+      "primary_job_binding" : "root original SSM receipt; source and create-only campaign prefix",
+      "seconds" : 90,
+      "separate_native_job" : false
+   },
+   "schema" : "borsuk-source-shortlist-library-green-freeze-v1",
+   "scientific_measurement" : false,
+   "source_commit" : "bf7ada2457d51cebb78d2295d0d14d841c24e8eb",
+   "source_files" : 475,
+   "stage_count" : 15,
+   "swap_bytes" : 0,
+   "test_filter" : "source_shortlist_",
+   "total_ceiling_usd" : 0.42
+}

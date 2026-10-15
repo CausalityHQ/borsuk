@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-source-shortlist-retained-release-v1",
+  "source_commit": "bf7ada2457d51cebb78d2295d0d14d841c24e8eb",
+  "native_command_id": null,
+  "release_exit": 0,
+  "primary_qualification": "REQUIRES_INDEPENDENT_VERIFICATION",
+  "archive": {
+    "sha256": "974a03807e9fb1cef9873e445310d852b4751bf05c478d99e6589d1e9f237ab4",
+    "bytes": 54886400
+  },
+  "performance_claim": false
+}
