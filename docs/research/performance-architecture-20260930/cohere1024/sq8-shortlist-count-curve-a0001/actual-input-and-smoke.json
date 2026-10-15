@@ -1,0 +1,18 @@
+{
+  "source_commit": "6fb66100c6b9c98bc8892b8c2a6585bd6e6c90d4",
+  "instance_id": "i-04bbd85d95b2678ef",
+  "command_id": "3ec31dad-e1a6-4265-a6b0-7f5aa0736ec5",
+  "verifier_exit": 0,
+  "verifier_invocation": "0d736a5d3b5a4768b140ef6d0e1f0037",
+  "actual_input_pass": true,
+  "smoke_pass": true,
+  "compute_closed": true,
+  "candidate_queries": 1,
+  "arms_executed": 4,
+  "quality_evaluated": false,
+  "truth_opened_in_smoke": false,
+  "cold_performance_claim": false,
+  "elf_sha256": "9027abb7e8b208e9e6e4a3687ed9cf22c0468eae45795484a2b8c5b538c10015",
+  "config_sha256": "faeb92a0679f1aac568165298ec1e989106a56f3949fcafd2f0de56501980f51",
+  "transport_sha256": "74750f2ab9af1210ac2c9105bd659d06748321cd5eed6b99677a4081278bc66f"
+}

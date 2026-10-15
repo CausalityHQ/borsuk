@@ -1,0 +1,50 @@
+{
+   "actions" : [
+      "full"
+   ],
+   "actual_input_canary_receipt_sha256" : "f14ad2989a22e772ae932435a54752270d1eb8a40379d5bab7f097a4caed611d",
+   "ancillary_ceiling_usd" : 0.15,
+   "arm_query_cells" : 4000,
+   "candidate_queries" : 1000,
+   "compute_price_ceiling_usd_per_hour" : 0.25,
+   "config_sha256" : "faeb92a0679f1aac568165298ec1e989106a56f3949fcafd2f0de56501980f51",
+   "control_arm_index" : 3,
+   "control_parity_scope" : "PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES",
+   "elf" : {
+      "bytes" : 12349968,
+      "sha256" : "9027abb7e8b208e9e6e4a3687ed9cf22c0468eae45795484a2b8c5b538c10015"
+   },
+   "external_stop_seconds" : 3720,
+   "host" : "m6a.2xlarge",
+   "input_objects" : 15,
+   "interruption" : "INVALID; preserve original terminal and cleanup; no automatic repeat",
+   "machine_stop_seconds" : 3600,
+   "market" : "spot",
+   "native" : {
+      "allowed_cpus" : "0-3",
+      "cpu_quota_percent" : 400,
+      "memory_bytes" : 8589934592,
+      "pids" : 512,
+      "runtime_seconds" : 1800,
+      "swap_bytes" : 0
+   },
+   "no_arbitrary_byte_ratio_gate" : true,
+   "nonratcheting_reference_hits10" : 9780,
+   "original_physical_layout" : true,
+   "profile" : "causality",
+   "qualification_receipt_sha256" : "e567e7da03d2d716ba6a1e9c3123a86ae1dc4b648a08682acf4ba19c5ceb149d",
+   "recall_floor_hits10" : 9760,
+   "region" : "eu-central-1",
+   "schema" : "borsuk-source-count-full1000-freeze-v1",
+   "scientific_qualified" : false,
+   "shortlist_sizes" : [
+      256,
+      512,
+      768,
+      1024
+   ],
+   "source_commit" : "6fb66100c6b9c98bc8892b8c2a6585bd6e6c90d4",
+   "total_ceiling_usd" : 0.42,
+   "transport_bytes" : 1403187142,
+   "transport_sha256" : "74750f2ab9af1210ac2c9105bd659d06748321cd5eed6b99677a4081278bc66f"
+}

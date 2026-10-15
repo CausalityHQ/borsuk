@@ -1,0 +1,27 @@
+{
+  "source_commit": "6fb66100c6b9c98bc8892b8c2a6585bd6e6c90d4",
+  "instance_id": "i-08ab5cc0abdf052e1",
+  "command_id": "c9937ddf-fcd7-43e1-a7a6-27d3a298f877",
+  "verifier_exit": 0,
+  "verifier_invocation": "74e768a518a64c31a9e108d0cac1d93d",
+  "stage_count": 8,
+  "stage_exit_statuses": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "compute_closed": true,
+  "count_tests": 7,
+  "selector_tests": 36,
+  "release": {
+    "bytes": 12349968,
+    "sha256": "9027abb7e8b208e9e6e4a3687ed9cf22c0468eae45795484a2b8c5b538c10015"
+  },
+  "scientific_qualified": false,
+  "cold_performance_claim": false
+}

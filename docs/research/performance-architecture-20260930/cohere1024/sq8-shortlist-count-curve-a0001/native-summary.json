@@ -1,0 +1,149 @@
+{
+  "admissible_queries": [
+    1000,
+    1000,
+    1000,
+    1000
+  ],
+  "baseline_exact_plan_trace_charges_ids_scorebits": true,
+  "baseline_hits10": 9780,
+  "baseline_sq8_bytes_total": 16708608000,
+  "baseline_sq8_get_budget": 32,
+  "baseline_sq8_gets_total": 29903,
+  "block_control_rerank_is_determinism_check": true,
+  "candidate_sq8_get_budget": 30,
+  "closed_selector_control_parity": true,
+  "closed_selector_control_parity_scope": "PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES",
+  "cold_latency_claim": false,
+  "complete": true,
+  "config_bytes": 8074,
+  "config_sha256": "faeb92a0679f1aac568165298ec1e989106a56f3949fcafd2f0de56501980f51",
+  "control_arm_index": 3,
+  "covered_ranking_loss_combines_sq8_quantization_and_ties": true,
+  "ephemeral_sq8_block_rows": 32,
+  "historical_returned_rank_parity": false,
+  "local_file_only": true,
+  "measured_hit_subtotals": [
+    9786,
+    9789,
+    9789,
+    9789
+  ],
+  "miss_bucket_order": [
+    "outside_source_and_cover",
+    "source_to_shortlist_cover_loss",
+    "shortlisted_covered_ranking_loss",
+    "unshortlisted_covered_ranking_loss"
+  ],
+  "native_quality_io_totals": {
+    "bridge_bytes": [
+      7463741824,
+      14162368640,
+      16995074432,
+      17867668224
+    ],
+    "bytes": [
+      11497411968,
+      20971524224,
+      25994947328,
+      28671109376
+    ],
+    "gained": [
+      6,
+      9,
+      9,
+      9
+    ],
+    "gets": [
+      28358,
+      29716,
+      29944,
+      29982
+    ],
+    "hits": [
+      9786,
+      9789,
+      9789,
+      9789
+    ],
+    "lost": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "miss_buckets": [
+      [
+        147,
+        0,
+        67,
+        0
+      ],
+      [
+        144,
+        0,
+        67,
+        0
+      ],
+      [
+        144,
+        0,
+        67,
+        0
+      ],
+      [
+        144,
+        0,
+        67,
+        0
+      ]
+    ]
+  },
+  "nonratcheting_reference_hits10": 9780,
+  "original_physical_layout": true,
+  "payload_model_bytes": 892646464,
+  "physical_s3_or_billed_bytes": false,
+  "planned_target_bytes_totals": [
+    11497411968,
+    20971524224,
+    25994947328,
+    28671109376
+  ],
+  "planned_target_gets_totals": [
+    28358,
+    29716,
+    29944,
+    29982
+  ],
+  "qps_claim": false,
+  "qualified": false,
+  "quality_advancement_eligible": [
+    true,
+    true,
+    true,
+    true
+  ],
+  "quality_floor_met": [
+    true,
+    true,
+    true,
+    true
+  ],
+  "quantization_isolated": false,
+  "query_count": 1000,
+  "recall_floor_hits10": 9760,
+  "schema": "borsuk-sq8-shortlist-count-curve-v1",
+  "shortlist_sizes": [
+    256,
+    512,
+    768,
+    1024
+  ],
+  "single_causal_source_count_change": true,
+  "source_capture_routing_scoring_unchanged": true,
+  "status": "MEASURED",
+  "truth_file_opened_after_all_baseline_controls": true,
+  "vendor_win_claim": false,
+  "native_report_sha256": "31dfa30cbf176254e7bec7cc8eb5288071f85cfbb9bb98455b61b3c87f5ec786",
+  "summary_is_native_aggregate_passthrough": true
+}

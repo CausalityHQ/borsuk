@@ -1,0 +1,107 @@
+[
+   {
+      "bytes" : 27501,
+      "role" : "generation",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/manifest.json",
+      "sha256" : "80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/manifest.json"
+   },
+   {
+      "bytes" : 281,
+      "role" : "sq8_page_manifest",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/page_manifest.json",
+      "sha256" : "84e57ba2ed436c8f526ae87b749ed5f9ae117137b4100766218cebd623e370e6",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/page_manifest.json"
+   },
+   {
+      "bytes" : 125024,
+      "role" : "sq8_page_digests",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/page_digests.bin",
+      "sha256" : "65a3e5322191ee77090da76cdec60337047d37613cd910ec04ac4a59831c2cd0",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/page_digests.bin"
+   },
+   {
+      "bytes" : 653,
+      "role" : "plane_manifest",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/manifest.json",
+      "sha256" : "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/manifest.json"
+   },
+   {
+      "bytes" : 264000000,
+      "role" : "source_records",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/records.bin",
+      "sha256" : "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/records.bin"
+   },
+   {
+      "bytes" : 4096,
+      "role" : "mean",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/mean.bin",
+      "sha256" : "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/mean.bin"
+   },
+   {
+      "bytes" : 1000000,
+      "role" : "source_page_digests",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/page_digests.bin",
+      "sha256" : "63c07feff1b370753008a4ed6e1bc05cd9844ef7a411b22ccc1e97a76ce9aa41",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/page_digests.bin"
+   },
+   {
+      "bytes" : 3041472,
+      "role" : "router_root",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/root.bin",
+      "sha256" : "41b027e5101c140efdc91e60e52f5da28ca0ff3c7c8707759945eb188991289f",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/root.bin"
+   },
+   {
+      "bytes" : 125000,
+      "role" : "router_membership",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/membership.bin",
+      "sha256" : "67c9cdb976803ef5388d981a9f7bffea4d5b605362397c9fdb774e78e7c34446",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/membership.bin"
+   },
+   {
+      "bytes" : 64125000,
+      "role" : "router_leaves",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/leaves.bin",
+      "sha256" : "fb2e978f00e69b4bdb04e28b4774dcb40a0df885641ef3ce9a5d5f456eaa7766",
+      "target" : "store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/router/leaves.bin"
+   },
+   {
+      "bytes" : 1036000000,
+      "role" : "sq8",
+      "s3_key" : "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+      "sha256" : "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+      "target" : "store/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+   },
+   {
+      "bytes" : 4096000,
+      "role" : "requests",
+      "s3_key" : "research/semantic-router/20261010/full1000-preparation-a0002/prepared/queries.f32",
+      "sha256" : "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+      "target" : "inputs/queries.f32"
+   },
+   {
+      "bytes" : 80000,
+      "role" : "truth",
+      "s3_key" : "research/semantic-router/20261010/full1000-preparation-a0002/prepared/truth.u64",
+      "sha256" : "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+      "target" : "inputs/truth.u64"
+   },
+   {
+      "bytes" : 30177305,
+      "role" : "baseline_archive",
+      "s3_key" : "research/semantic-router/20261014/source-budget96-scale-cold-a0002/terminal/evidence.tar.gz",
+      "sha256" : "7aff789079d9bccbb57ad6023758f5de9245c16ff7090f1c457fa46aefdefef7",
+      "target" : "inputs/baseline-evidence.tar.gz"
+   },
+   {
+      "bytes" : 384810,
+      "role" : "closed_selector_control",
+      "s3_key" : "research/semantic-router/20261015/sq8-virtual-locality-actual-a0001/inputs/closed-selector-control.json",
+      "sha256" : "e92aa4948cda22386e8e3795324490822319cef18383dcc69be36cb74d68b620",
+      "target" : "inputs/closed-selector-control.json"
+   }
+]
