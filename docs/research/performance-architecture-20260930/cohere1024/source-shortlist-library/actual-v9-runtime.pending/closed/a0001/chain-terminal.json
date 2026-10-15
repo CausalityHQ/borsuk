@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-v9-actual-correctness-chain-v1",
+  "source_commit": "ee598553b227660d9e78500086411481456e1a0e",
+  "support_archive_sha256": "b9fd8d0eb6a52351254111589724ab4225851c63894b2068bb63ebb58c2c03f5",
+  "original_exit": 0,
+  "last_phase": "complete",
+  "execution_closed": true,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false,
+  "compute_closure_pending": true
+}

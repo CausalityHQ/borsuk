@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-correctness-stage-v1",
+  "phase": "smoke-panel",
+  "config_sha256": "3de637bdbbb75e9fcd90c97a41df3fcf1db4c8aa7ddd646fec1d906607f991bb",
+  "binary_sha256": "912f23d34dd175f365aab2797896da2c45306bf9dd4faf7d44723c8bdce50995",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "timeout_wrapper_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "performance_claim": false
+}

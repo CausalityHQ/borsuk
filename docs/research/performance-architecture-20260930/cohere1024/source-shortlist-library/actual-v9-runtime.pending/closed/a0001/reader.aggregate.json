@@ -1,0 +1,20 @@
+{
+  "cold_performance_claim": false,
+  "complete": true,
+  "exact_range_oracle_qualified": false,
+  "historical_rank_parity_qualified": false,
+  "panel_input_bytes": 345663,
+  "panel_input_sha256": "2e443fd2f93a9c5ba3e4592aca6c8a9066943f56b413867fdde55e130954d002",
+  "population_count": 1000,
+  "producer_provenance_qualified": false,
+  "recall_denominator": 80,
+  "recall_numerator": 75,
+  "reduction_config_bytes": 5617,
+  "reduction_config_sha256": "e8960afbb22e0108c386edec5b26f738d72779de2d4b904ecf86881cf550bb7a",
+  "schema": "borsuk-current-v9-panel-reader-v1",
+  "selected_count": 8,
+  "status": "VALIDATED_PANEL",
+  "vendor_win_claim": false,
+  "per_query_details_omitted": true,
+  "original_full_report_in_authenticated_archive": true
+}

@@ -1,0 +1,32 @@
+{
+  "schema": "borsuk-v9-actual-input-root-acceptance-v1",
+  "status": "ACTUAL8_CORRECTNESS_PASS",
+  "library_source": "ee598553b227660d9e78500086411481456e1a0e",
+  "support_source": "1c4616c772c39c0b0ba1fe1cc8aa9d57ff517c38",
+  "instance": "i-0492d73d5303f4041",
+  "native_command": "4c27b102-d8dd-438a-80f5-7419371ca125",
+  "archive_sha256": "f18d72d4d8308c03f846f7f82ee0c0f829d070892a964bc9acf6b5ae5d8881a4",
+  "archive_bytes": 226264,
+  "authenticated_payload_files": 382,
+  "selected_count": 8,
+  "population_count": 1000,
+  "recall_numerator": 75,
+  "recall_denominator": 80,
+  "new_root_sha256": "460d095ac98f2dba70ff765907ba89d3bd7bbdb03e1cb4781da637ef5d19baf6",
+  "reader_status": "VALIDATED_PANEL",
+  "parity_status": "EXACT_SELECTED_RANK_PARITY",
+  "oracle_status": "EXACT_RECORDED_SOURCE_COVER",
+  "oracle_recorded_source_frontier_only": true,
+  "independent_router_qualified": false,
+  "all_seven_native_stages_closed_zero": true,
+  "compute_closed": true,
+  "independent_audit": {
+    "id": "3b1532c09fa642b9",
+    "exit": 0,
+    "sha256": "2c0e6c1e13f33c35f5c97f3e70b9ceaba0164a5ff14a5a21fd43812aba0bf8bb"
+  },
+  "cold_measurement_admitted": false,
+  "performance_claim": false,
+  "vendor_win_claim": false,
+  "lifecycle_snapshot_reconciliation": "Original freeze actual_input_verified=false and terminal compute_closure_pending=true remain immutable; later native and infrastructure receipts establish actual8 correctness and compute closure only"
+}

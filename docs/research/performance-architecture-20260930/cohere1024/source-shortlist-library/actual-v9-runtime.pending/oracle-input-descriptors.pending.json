@@ -1,0 +1,34 @@
+{
+  "schema": "borsuk-v9-oracle-input-descriptors-draft-v1",
+  "status": "NOT_EXECUTION_ADMITTED",
+  "plane_manifest": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/manifest.json",
+    "bytes": 653,
+    "sha256": "e0e3af73fd40db57df54a453ede016b20e4fb5d63e3a075685c82132474467c6"
+  },
+  "records": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/records.bin",
+    "bytes": 264000000,
+    "sha256": "e61ffa621fedc44d3cea19ed6c47a73222a9b33c2e567567d21c048cdc826e90"
+  },
+  "mean": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/mean.bin",
+    "bytes": 4096,
+    "sha256": "7875df6ca5726ad2baf2d5565deac6f6db2fadfdadc22d1bb648aea369b30985"
+  },
+  "source_digests": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/plane/page_digests.bin",
+    "bytes": 1000000,
+    "sha256": "63c07feff1b370753008a4ed6e1bc05cd9844ef7a411b22ccc1e97a76ce9aa41"
+  },
+  "requests": {
+    "path": "/mnt/borsuk-v9-panel/inputs/queries.f32",
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "path": "/mnt/borsuk-v9-panel/inputs/truth.u64",
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  }
+}

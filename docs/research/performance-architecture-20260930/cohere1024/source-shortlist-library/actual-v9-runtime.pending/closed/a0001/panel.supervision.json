@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-correctness-stage-v1",
+  "phase": "panel",
+  "config_sha256": "e5c429b5e869a6be4f87c9a316b04ad4d4302f09bf08ff4b8ecfbee12a6fcdc9",
+  "binary_sha256": "912f23d34dd175f365aab2797896da2c45306bf9dd4faf7d44723c8bdce50995",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "timeout_wrapper_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "performance_claim": false
+}

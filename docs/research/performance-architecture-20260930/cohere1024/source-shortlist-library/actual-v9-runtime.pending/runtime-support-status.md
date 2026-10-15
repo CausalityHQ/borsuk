@@ -1,0 +1,20 @@
+# Actual-input v9 support checkpoint
+
+Status: SOURCE/STATIC ONLY, NOT EXECUTION ADMITTED. No launch, source rebuild or cold measurement is implied.
+
+The SHA/static receipts below describe the initial checkpoint. Subsequent audit `e74ec3515c5a4b41` found four source bugs, fixed before any launch: explicit absence refusal, unconditional prep cleanup/status capture, an exclusive chain claim before its trap, and 360s closeout reservation for every stage. Cleanup now binds random ownership tokens and recorded systemd InvocationIDs. Unverified cleanup prevents terminal archive acceptance. A source-bound real-systemd control canary precedes all native/data work; only its absence-predicate inputs and client-deadline override are synthetic. Final packet hashes supersede initial source hashes.
+
+Qualified native source is `ea3bf2b8c6f81dccf20dbd97023f3fb90bdba342`, delivered with receipts as main `ee598553b227660d9e78500086411481456e1a0e`. The two ELF pins and both retained archive pins are explicit in `run-v9-stage.sh` and `binary-transport.json`.
+
+`run-v9-stage.sh PHASE CONFIG CONFIG_SHA` runs only on the root-owned EC2 host at `/mnt/borsuk-v9-panel`. Phases: fixture, panel, reader, parity, oracle, smoke-panel, smoke-reader. Original native exit is recorded by an inner shell; timeout wrapper and systemd manager have separate receipts. Missing original exit is null, never inferred as a native timeout. Each stage has CPU0/100%, 2 GiB memory, swap0, pids128, core0 and finite runtime. Caps: fixture600s, panel/smoke-panel180s, reader/smoke-reader60s, parity120s, oracle300s; systemd runtime adds40s, manager client90s, kill grace20s. Machine stop must exceed each native cap by180s before release. Existing output, fixture destination, evidence directory or loaded unit is refused. Success requires native/wrapper/manager0, zero OOM/swap peak and drained cgroup without forced cleanup. These are execution checks, not scientific acceptance. All real systemd semantics remain unrun on this adapter.
+
+`transport-v9-inputs.sh MANIFEST SHA` accepts only pinned capped JSON metadata arrays. It streams exact opaque objects with 600s batch deadline, authenticated ContentLength HEAD, ETag-conditional GET, exact length and SHA before no-clobber rename. SQ8 additionally requires the original pinned ETag. Each body is at most1.1GB; no old64MiB staging cap. This is asset staging, not query parallelism. Invoke it inside a bounded EC2 systemd service; its own loop deadline does not bound an uninterruptible local filesystem operation. It performs no scientific decoding. Partial files/evidence remain on failure and cannot be silently retried into the same destination.
+
+Static receipts, CPU100%/AllowedCPUs0/256MiB/swap0/pids128/120s:
+
+- Stage adapter bash-n + ShellCheck0, invocation `e4641ede416b4f57a6c32b6106c8ab5c`, SHA `76154178dab8d6e6acaa02d40b3d508215958cbb025c94e5aad9da280324de09`.
+- Transport bash-n + ShellCheck0, invocation `34ee5d5868bd4662818d21af86909d5d`, SHA `14ce4f3ea02794cfe1fd76da6855b6da8f8eb0013a3a6de9ef75374b14071c18`.
+- Extracted exact transport jq admission program: three real metadata roster positives and twelve mutated metadata refusals, invocation `36ee03c460524eb9be9f4b7b93546ac9`, exit0. No script, AWS or native runtime was exercised by this check.
+- First stage ShellCheck returned1 for intentional child-shell expansion SC2016; the targeted comment documents that boundary. No native execution occurred.
+
+Publication, exact ELF/metadata extraction, chain/closeout and separate smoke are now authored. Specialist freezer source `3a2127ceb541f39bcd6ab176f3d917c311c407ae` is independently inspected and copied from Git, SHA `7836c7778e0d12c63d7aeda471b77810db5ead312000cc6d6228ec345df33895`; its runtime remains unverified. The packet must be repacked and frozen after all review fixes, with final asset/config hashes and fresh quote. Draft `PENDING_*` fields remain a hard refusal. No actual scientific bodies were opened locally. Never use this correctness packet as a cold performance cell or infer population recall from eight ordinals.

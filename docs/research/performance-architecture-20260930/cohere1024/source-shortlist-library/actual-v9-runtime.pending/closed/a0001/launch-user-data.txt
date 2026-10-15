@@ -1,0 +1,6 @@
+#!/bin/bash
+set -eu
+read -r up _ < /proc/uptime
+left=$((3600-${up%%.*}-2))
+((left>0)) || { /usr/sbin/shutdown -h now; exit 1; }
+systemd-run --unit=borsuk-v9-runtime-shutdown --on-active="${left}s" /usr/sbin/shutdown -h now

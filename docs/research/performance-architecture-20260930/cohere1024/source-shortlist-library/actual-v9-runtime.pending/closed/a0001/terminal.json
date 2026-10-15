@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-actual-terminal-publication-v1",
+  "source_commit": "ee598553b227660d9e78500086411481456e1a0e",
+  "support_archive_sha256": "b9fd8d0eb6a52351254111589724ab4225851c63894b2068bb63ebb58c2c03f5",
+  "archive_sha256": "f18d72d4d8308c03f846f7f82ee0c0f829d070892a964bc9acf6b5ae5d8881a4",
+  "archive_bytes": 226264,
+  "original_exit": 0,
+  "last_phase": "complete",
+  "execution_closed": true,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false,
+  "compute_closure_pending": true
+}

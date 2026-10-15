@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-source-preserving-v9-fixture-config-v1",
+  "root": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638/manifest.json",
+    "bytes": 27501,
+    "sha256": "80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638"
+  },
+  "sq8": {
+    "path": "/mnt/borsuk-v9-panel/store/semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+    "bytes": 1036000000,
+    "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+  },
+  "max_payload_bytes": 8388608
+}

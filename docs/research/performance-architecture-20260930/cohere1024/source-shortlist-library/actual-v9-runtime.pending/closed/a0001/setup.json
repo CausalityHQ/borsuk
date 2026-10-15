@@ -1,0 +1,8 @@
+{
+  "schema": "borsuk-v9-runtime-setup-v1",
+  "status": "SETUP_ONLY",
+  "support_sha256": "b9fd8d0eb6a52351254111589724ab4225851c63894b2068bb63ebb58c2c03f5",
+  "machine_stop_epoch": 1792092177,
+  "compiler_installed": false,
+  "native_execution": false
+}
