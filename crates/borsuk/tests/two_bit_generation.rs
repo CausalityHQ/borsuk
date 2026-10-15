@@ -2719,7 +2719,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     assert!(generation.plan(&[0., 0.]).await.is_err());
     assert!(generation.plan(&[f32::NAN, 1.]).await.is_err());
     assert!(generation.plan(&[1.]).await.is_err());
-    assert_eq!(first.planned_bytes, 7168);
+    // All512 SOURCE rows tie. Best256 therefore retains physical0..255,
+    // covering eight proof32 blocks rather than both old256-row pages.
+    assert_eq!(first.page_rows, 32);
+    assert_eq!(first.selected_pages, (0..8).collect::<Vec<_>>());
+    assert_eq!(first.planned_bytes, 256 * (2 + 12));
+    assert_eq!(first.ranges, vec![0..256 * (2 + 12)]);
     assert_eq!(first.ranges.len(), 1);
     let reloaded = TwoBitGeneration::open(root, &hash(&manifest), limits).unwrap();
     assert_eq!(
