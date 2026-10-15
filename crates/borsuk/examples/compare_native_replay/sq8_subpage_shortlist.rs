@@ -745,6 +745,24 @@ fn reduce_shortlist_mode_inner(
     admission_only: bool,
     budgeted: bool,
 ) -> super::Result<serde_json::Value> {
+    reduce_shortlist_engine(
+        config_path,
+        config_sha,
+        admission_only,
+        budgeted,
+        false,
+        None,
+    )
+}
+fn reduce_shortlist_engine(
+    config_path: &std::path::Path,
+    config_sha: &str,
+    admission_only: bool,
+    budgeted: bool,
+    smoke_only: bool,
+    mut virtual_layout: Option<sq8_virtual_layout::Context>,
+) -> super::Result<serde_json::Value> {
+    let virtual_mode = virtual_layout.is_some();
     use super::{
         header_json, header_pin, loss_binary, loss_coverage, read_run_observed, require,
         scan_loss_sq8,
@@ -757,7 +775,13 @@ fn reduce_shortlist_mode_inner(
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
-    let (c, config_bytes) = read_shortlist_config(config_path, config_sha, budgeted)?;
+    let (c, config_bytes) = if virtual_mode {
+        let (v, n) = sq8_virtual_layout::read_config(config_path, config_sha)?;
+        (v.shortlist, n)
+    } else {
+        read_shortlist_config(config_path, config_sha, budgeted)?
+    };
+
     require(
         c.schema == "borsuk-sq8-subpage-shortlist-config-v1"
             && c.completed.schema == super::SCALE_CONFIG_SCHEMA,
@@ -844,7 +868,12 @@ fn reduce_shortlist_mode_inner(
         + 32 * 1024 * 1024
         + 1000 * 15360 * 8
         + 128 * 1024 * 1024
-        + if budgeted { 1024 * 1024 } else { 0 };
+        + if budgeted { 1024 * 1024 } else { 0 }
+        + if virtual_mode {
+            sq8_virtual_layout::EXTRA_PAYLOAD
+        } else {
+            0
+        };
     require(
         caller_bytes < c.max_payload_bytes,
         "shortlist retained caller payload",
@@ -992,9 +1021,16 @@ fn reduce_shortlist_mode_inner(
                 == run.file_identity,
             "shortlist admission baseline lifetime identity",
         )?;
-        read_shortlist_config(config_path, config_sha, budgeted)?;
+        if virtual_mode {
+            sq8_virtual_layout::read_config(config_path, config_sha)?;
+        } else {
+            read_shortlist_config(config_path, config_sha, budgeted)?;
+        }
+        if let Some(layout) = virtual_layout.as_ref() {
+            layout.recheck()?;
+        }
         return Ok(json!({
-            "schema":ADMISSION_SCHEMA,"status":"READY_ACTUAL_INPUT","complete":true,
+            "schema":if virtual_mode{VIRTUAL_LAYOUT_ADMISSION_SCHEMA}else{ADMISSION_SCHEMA},"status":"READY_ACTUAL_INPUT","complete":true,
             "config_sha256":config_sha,"config_bytes":config_bytes,
             "rows":i.rows,"dimensions":i.dimensions,"query_count":i.count,"truth_ids_validated":i.count*super::K,
             "generation_root_sha256":i.generation_root_sha256,
@@ -1009,7 +1045,9 @@ fn reduce_shortlist_mode_inner(
         }));
     }
     let mut candidate_queries = Vec::with_capacity(1000);
-    for slot in 0..originals.len() {
+    let mut placement_proofs = Vec::with_capacity(if virtual_mode { 1000 } else { 0 });
+
+    for slot in 0..(if smoke_only { 1 } else { originals.len() }) {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
@@ -1137,7 +1175,24 @@ fn reduce_shortlist_mode_inner(
                 }),
             "shortlist block-only control ordered ID/score-bit parity",
         )?;
+        if let Some(layout) = virtual_layout.as_mut() {
+            let nominees = shortlist(i.rows, &scored, 1024, 64 * scored.len() + 16 * 1024 + 4096)
+                .map_err(|e| e.to_owned())?;
+            let (arms, proof) = layout.rank(
+                &mut sq8_snapshot,
+                &authority,
+                &scored,
+                &nominees,
+                &normalized,
+                &low,
+                &step,
+            )?;
+            candidate_queries.push(arms);
+            placement_proofs.push(proof);
+            continue;
+        }
         let mut arms = Vec::with_capacity(4);
+
         for maximum in c
             .shortlist_sizes
             .into_iter()
@@ -1202,7 +1257,26 @@ fn reduce_shortlist_mode_inner(
         }
         candidate_queries.push(arms);
     }
+    if smoke_only {
+        let layout = virtual_layout.as_ref().ok_or("virtual smoke context")?;
+        require(
+            candidate_queries.len() == 1 && placement_proofs.len() == 1,
+            "virtual smoke population",
+        )?;
+        layout.recheck()?;
+        for snapshot in [&gs, &ps, &rs, &ms, &ds, &qs, &order_snapshot, &sq8_snapshot] {
+            snapshot.recheck()?;
+        }
+        return Ok(
+            json!({"schema":VIRTUAL_LAYOUT_SMOKE_SCHEMA,"status":"STAGING_SMOKE_CLOSED","complete":true,
+            "candidate_queries_executed":1,"baseline_prefix_exact_plan_trace_ids_scorebits":true,
+            "source_priority_parity":true,"quality_evaluated":false,"truth_file_opened":false,
+            "placement_descriptor":layout.descriptor,"config_sha256":config_sha,
+            "local_file_only":true,"cold_latency_claim":false,"vendor_win_claim":false}),
+        );
+    }
     // Every complete original query/control has passed before truth opens.
+
     let (truth, ts) = loss_binary(&c.truth, (i.count * super::K * 8) as u64)?;
     require(
         truth.len() == i.count * super::K * 8,
@@ -1266,15 +1340,32 @@ fn reduce_shortlist_mode_inner(
         baseline_hits += hits as u64;
         let mut reports = Vec::with_capacity(4);
         for (arm_index, arm) in arms.iter().enumerate() {
-            let quality = assess_arm(
-                arm,
-                ids,
-                &base.returned,
-                &positions,
-                &originals[slot],
-                i.rows,
-                i.dimensions,
-            )?;
+            let quality = if let Some(layout) = virtual_layout.as_ref() {
+                let coordinates = if arm_index == 0 {
+                    &layout.identity
+                } else {
+                    layout.relocated.layout()
+                };
+                sq8_virtual_layout::assess_arm_mapped(
+                    arm,
+                    ids,
+                    &base.returned,
+                    &positions,
+                    &originals[slot],
+                    coordinates,
+                    i.dimensions,
+                )?
+            } else {
+                assess_arm(
+                    arm,
+                    ids,
+                    &base.returned,
+                    &positions,
+                    &originals[slot],
+                    i.rows,
+                    i.dimensions,
+                )?
+            };
             if let Some(q) = &quality {
                 admissible[arm_index] += 1;
                 physical_bytes[arm_index] += arm.bytes as u64;
@@ -1283,6 +1374,16 @@ fn reduce_shortlist_mode_inner(
             reports.push(candidate_report(arm, i.rows, i.dimensions, quality)?);
         }
         queries.push(json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports}));
+    }
+    if let Some(layout) = virtual_layout.as_mut() {
+        layout.verify_control(&queries)?;
+        require(
+            placement_proofs.len() == 1000,
+            "virtual complete placement evidence",
+        )?;
+        for (query, proof) in queries.iter_mut().zip(placement_proofs) {
+            query["placement_evidence"] = proof;
+        }
     }
     require(
         baseline_hits == run.terminal.total_hits10,
@@ -1306,10 +1407,24 @@ fn reduce_shortlist_mode_inner(
         super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
         "shortlist baseline lifetime identity",
     )?;
-    read_shortlist_config(config_path, config_sha, budgeted)?;
-    let arm_count = if budgeted { 1 } else { 4 };
-    let mut result = json!({"schema":if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
-    if budgeted {
+    if virtual_mode {
+        sq8_virtual_layout::read_config(config_path, config_sha)?;
+    } else {
+        read_shortlist_config(config_path, config_sha, budgeted)?;
+    }
+    if let Some(layout) = virtual_layout.as_ref() {
+        layout.recheck()?;
+    }
+    let arm_count = if virtual_mode {
+        2
+    } else if budgeted {
+        1
+    } else {
+        4
+    };
+
+    let mut result = json!({"schema":if virtual_mode {VIRTUAL_LAYOUT_SCHEMA}else if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
+    if budgeted && !virtual_mode {
         result["selection_rule"] = json!("MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION");
         result["input_shortlist_size"] = json!(1024);
         result["single_causal_selection_change"] = json!(true);
@@ -1317,7 +1432,160 @@ fn reduce_shortlist_mode_inner(
         let eligible = validate_block_admission_report(&result)?;
         result["quality_advancement_eligible"] = json!(eligible);
     }
+    if let Some(layout) = virtual_layout.as_ref() {
+        let gets = (0..2)
+            .map(|a| queries_gets(&result["queries"], a))
+            .collect::<super::Result<Vec<_>>>()?;
+        result["shortlist_sizes"] = json!([1024, 1024]);
+        result["arm_order"] = json!(["identity", "leaf_ordered"]);
+        result["planned_target_gets_totals"] = json!(gets);
+        result["planned_target_bytes_totals"] = json!(&physical_bytes[..2]);
+        result
+            .as_object_mut()
+            .ok_or("virtual report object")?
+            .remove("physical_bytes_totals");
+        result["placement_descriptor"] = layout.descriptor.clone();
+        result["source_priority_parity"] = json!(true);
+        result["closed_selector_control_parity"] = json!(true);
+        result["layout_prepared_before_requests_truth_baseline_open"] = json!(true);
+        result["single_causal_placement_change"] = json!(true);
+        result["quality_advancement_eligible"] = json!(admissible[1] == 1000 && totals[1] >= 9760);
+        validate_virtual_report(&result)?;
+    }
     Ok(result)
+}
+/// A complete placement result includes both arms for every fixed query.
+/// Quality failures remain measured Pareto points, rather than INVALID runs.
+pub(super) fn validate_virtual_report(report: &serde_json::Value) -> super::Result<()> {
+    use super::require;
+    use serde_json::json;
+    require(
+        report["schema"] == VIRTUAL_LAYOUT_SCHEMA
+            && report["status"] == "MEASURED"
+            && report["complete"] == true
+            && report["query_count"] == 1000
+            && report["arm_order"] == json!(["identity", "leaf_ordered"])
+            && report["admissible_queries"] == json!([1000, 1000])
+            && report["source_priority_parity"] == true
+            && report["closed_selector_control_parity"] == true,
+        "virtual complete paired report",
+    )?;
+    let queries = report["queries"].as_array().ok_or("virtual query array")?;
+    require(queries.len() == 1000, "virtual complete query population")?;
+    let mut hits = [0_u64; 2];
+    let mut gets = [0_u64; 2];
+    let mut bytes = [0_u64; 2];
+    for (ordinal, q) in queries.iter().enumerate() {
+        require(
+            q["ordinal"].as_u64() == Some(ordinal as u64),
+            "virtual query ordinal",
+        )?;
+        let arms = q["arms"].as_array().ok_or("virtual paired arms")?;
+        let returned = q["placement_evidence"]["returned"]
+            .as_array()
+            .ok_or("virtual returned evidence")?;
+        require(arms.len() == 2 && returned.len() == 2, "virtual two arms")?;
+        for a in 0..2 {
+            require(arms[a]["status"] == "MEASURED", "virtual measured arm")?;
+            let h = arms[a]["quality"]["hits10"]
+                .as_u64()
+                .ok_or("virtual hits")?;
+            let g = arms[a]["gets"].as_u64().ok_or("virtual GETs")?;
+            let b = arms[a]["physical_bytes"].as_u64().ok_or("virtual bytes")?;
+            require(
+                h <= 10 && g > 0 && g <= 30 && b > 0 && b <= 32 * 1024 * 1024,
+                "virtual arm limits",
+            )?;
+            let points = returned[a].as_array().ok_or("virtual returned points")?;
+            require(points.len() == 10, "virtual returned k")?;
+            let mut ids = std::collections::BTreeSet::new();
+            for p in points {
+                let id = p["id"].as_i64().ok_or("virtual returned ID")?;
+                let row = p["target_row"].as_u64().ok_or("virtual returned row")?;
+                let bits = p["score_bits"]
+                    .as_u64()
+                    .ok_or("virtual returned score bits")?;
+                require(
+                    id >= 0
+                        && id < 1_000_000
+                        && row < 1_000_000
+                        && bits <= u32::MAX as u64
+                        && f32::from_bits(bits as u32).is_finite()
+                        && ids.insert(id),
+                    "virtual returned identity/score",
+                )?;
+            }
+            hits[a] += h;
+            gets[a] += g;
+            bytes[a] += b;
+        }
+    }
+    require(
+        report["measured_hit_subtotals"] == json!(hits)
+            && report["planned_target_gets_totals"] == json!(gets)
+            && report["planned_target_bytes_totals"] == json!(bytes),
+        "virtual totals parity",
+    )?;
+    Ok(())
+}
+
+fn queries_gets(queries: &serde_json::Value, arm: usize) -> super::Result<u64> {
+    queries
+        .as_array()
+        .ok_or("virtual report queries")?
+        .iter()
+        .try_fold(0_u64, |total, q| {
+            total
+                .checked_add(
+                    q["arms"][arm]["gets"]
+                        .as_u64()
+                        .ok_or("virtual reported GET count")?,
+                )
+                .ok_or_else(|| "virtual GET total overflow".into())
+        })
+}
+pub(super) const VIRTUAL_LAYOUT_SMOKE_SCHEMA: &str = "borsuk-sq8-virtual-layout-smoke-v1";
+pub(super) const VIRTUAL_LAYOUT_SCHEMA: &str = "borsuk-sq8-virtual-layout-v1";
+pub(super) const VIRTUAL_LAYOUT_ADMISSION_SCHEMA: &str = "borsuk-sq8-virtual-layout-admission-v1";
+pub(super) fn execute_virtual_layout(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+    admission_only: bool,
+    smoke_only: bool,
+) -> super::Result<bool> {
+    use std::io::Write;
+    super::require(!(admission_only && smoke_only), "virtual action")?;
+    let schema = if smoke_only {
+        VIRTUAL_LAYOUT_SMOKE_SCHEMA
+    } else if admission_only {
+        VIRTUAL_LAYOUT_ADMISSION_SCHEMA
+    } else {
+        VIRTUAL_LAYOUT_SCHEMA
+    };
+    let mut summary = None;
+    let good = super::execute_report(output, schema, || {
+        let (c, _) = sq8_virtual_layout::read_config(config, sha)?;
+        let mut context = sq8_virtual_layout::Context::prepare(&c.shortlist, c.selector_control)?;
+        context.admit_control_bytes()?;
+        let report =
+            reduce_shortlist_engine(config, sha, admission_only, true, smoke_only, Some(context))?;
+        summary = Some(
+            serde_json::json!({"schema":schema,"status":report["status"],"complete":report["complete"],
+            "baseline_hits10":report["baseline_hits10"],"query_count":report["query_count"],
+            "admissible_queries":report["admissible_queries"],"hits10":report["measured_hit_subtotals"],
+            "planned_target_gets":report["planned_target_gets_totals"],"planned_target_bytes":report["planned_target_bytes_totals"],
+            "floor_hits10":9760,"quality_floor_met":report["quality_floor_met"],
+            "identity_control_parity":report["closed_selector_control_parity"],"cold_latency_claim":false,"vendor_win_claim":false}),
+        );
+        Ok(report)
+    })?;
+    if good {
+        let mut stdout = std::io::stdout().lock();
+        serde_json::to_writer(&mut stdout, &summary.ok_or("virtual native summary")?)?;
+        stdout.write_all(b"\n")?;
+    }
+    Ok(good)
 }
 
 pub(super) fn execute(
@@ -1382,6 +1650,32 @@ mod driver_tests {
         let body = serde_json::to_vec(value).unwrap();
         std::fs::write(&path, &body).unwrap();
         (path, format!("{:x}", Sha256::digest(&body)))
+    }
+    #[test]
+    fn virtual_config_refuses_unknown_fields_and_oversized_control_before_opening_inputs() {
+        let root = directory();
+        let base = json!({"schema":"borsuk-sq8-virtual-layout-config-v1","shortlist":config_fixture(&root),
+            "selector_control":{"path":root.join("must-not-open"),"bytes":384810,"sha256":"e92aa4948cda22386e8e3795324490822319cef18383dcc69be36cb74d68b620"}});
+        let (path, sha) = write_config(&root, &base);
+        assert!(sq8_virtual_layout::read_config(&path, &sha).is_ok());
+        let mut cases = Vec::new();
+        let mut c = base.clone();
+        c["selector_control"]["bytes"] = json!(1048577);
+        cases.push(c);
+        let mut c = base.clone();
+        c["selector_control"]["bytes"] = json!(0);
+        cases.push(c);
+        let mut c = base.clone();
+        c["schema"] = json!("wrong");
+        cases.push(c);
+        let mut c = base.clone();
+        c["extra"] = json!(true);
+        cases.push(c);
+        for c in cases {
+            let (path, sha) = write_config(&root, &c);
+            assert!(sq8_virtual_layout::read_config(&path, &sha).is_err());
+        }
+        assert!(!root.join("must-not-open").exists());
     }
     #[test]
     fn shortlist_driver_fixed_input_and_unknown_field_refusals_precede_baseline_open() {
@@ -3489,5 +3783,89 @@ mod block_report_tests {
                 "accepted {pointer}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod virtual_report_tests {
+    use super::*;
+    use serde_json::{Value, json};
+    fn report() -> Value {
+        let points = (0..10)
+            .map(|id| json!({"target_row":id,"id":id,"score_bits":(id as f32).to_bits()}))
+            .collect::<Vec<_>>();
+        let arms = json!([{"status":"MEASURED","gets":1,"physical_bytes":33152,"quality":{"hits10":9}},
+            {"status":"MEASURED","gets":1,"physical_bytes":33152,"quality":{"hits10":9}}]);
+        json!({"schema":VIRTUAL_LAYOUT_SCHEMA,"status":"MEASURED","complete":true,"query_count":1000,
+            "arm_order":["identity","leaf_ordered"],"admissible_queries":[1000,1000],
+            "source_priority_parity":true,"closed_selector_control_parity":true,
+            "measured_hit_subtotals":[9000,9000],"planned_target_gets_totals":[1000,1000],
+            "planned_target_bytes_totals":[33152000,33152000],
+            "queries":(0..1000).map(|ordinal|json!({"ordinal":ordinal,"arms":arms,
+                "placement_evidence":{"returned":[points,points]}})).collect::<Vec<_>>()})
+    }
+    #[test]
+    fn virtual_report_keeps_below_floor_points_and_refuses_incomplete_or_inconsistent_evidence() {
+        let base = report();
+        assert!(
+            validate_virtual_report(&base).is_ok(),
+            "quality failure is a measured point"
+        );
+        for (path, value) in [
+            ("/complete", json!(false)),
+            ("/query_count", json!(999)),
+            ("/admissible_queries/1", json!(999)),
+            ("/planned_target_gets_totals/1", json!(999)),
+            ("/planned_target_bytes_totals/0", json!(1)),
+            ("/measured_hit_subtotals/1", json!(9001)),
+            ("/queries/999/ordinal", json!(998)),
+            ("/queries/999/arms/1/gets", json!(31)),
+            ("/queries/999/arms/1/physical_bytes", json!(33554433)),
+            ("/queries/999/placement_evidence/returned/1/9/id", json!(8)),
+            (
+                "/queries/999/placement_evidence/returned/1/9/score_bits",
+                json!(f32::NAN.to_bits()),
+            ),
+            (
+                "/queries/999/placement_evidence/returned/1/9/target_row",
+                json!(1000000),
+            ),
+        ] {
+            let mut bad = base.clone();
+            *bad.pointer_mut(path).unwrap() = value;
+            assert!(validate_virtual_report(&bad).is_err(), "{path}");
+        }
+        for path in [
+            "/queries",
+            "/queries/999/arms",
+            "/queries/999/placement_evidence/returned/1",
+        ] {
+            let mut bad = base.clone();
+            bad.pointer_mut(path).unwrap().as_array_mut().unwrap().pop();
+            assert!(validate_virtual_report(&bad).is_err(), "{path}");
+        }
+    }
+    #[test]
+    fn virtual_output_cap_is_schema_specific_and_enforced_before_write() {
+        let root = tempfile::tempdir().unwrap();
+        let mut output = crate::Output {
+            file: std::fs::File::create(root.path().join("bounded")).unwrap(),
+            bytes: 0,
+            cap: 4,
+        };
+        use std::io::Write;
+        output.write_all(b"1234").unwrap();
+        assert!(output.write_all(b"5").is_err());
+        assert_eq!(output.file.metadata().unwrap().len(), 4);
+        assert_eq!(crate::report_cap(VIRTUAL_LAYOUT_SCHEMA), 16 * 1024 * 1024);
+        assert_eq!(crate::report_cap(BLOCK_ADMISSION_SCHEMA), crate::REPORT_CAP);
+        assert_eq!(
+            crate::report_cap(VIRTUAL_LAYOUT_SMOKE_SCHEMA),
+            crate::REPORT_CAP
+        );
+        assert_eq!(
+            crate::report_cap(VIRTUAL_LAYOUT_ADMISSION_SCHEMA),
+            crate::REPORT_CAP
+        );
     }
 }

@@ -5645,14 +5645,23 @@ fn compare(paths: &[(PathBuf, String); 4]) -> Result<Value> {
     )
 }
 
+fn report_cap(schema: &str) -> u64 {
+    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA {
+        16 * 1024 * 1024
+    } else {
+        REPORT_CAP
+    }
+}
+
 struct Output {
     file: File,
     bytes: u64,
+    cap: u64,
 }
 
 impl Write for Output {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() as u64 > REPORT_CAP.saturating_sub(self.bytes) {
+        if bytes.len() as u64 > self.cap.saturating_sub(self.bytes) {
             return Err(io::Error::other("report byte cap"));
         }
         let n = self.file.write(bytes)?;
@@ -5696,7 +5705,11 @@ fn execute_report(
             "supervisor_resources_cost_and_cache_qualified":false,"vendor_or_scientific_win_claim":false})
         }
     };
-    let mut out = Output { file, bytes: 0 };
+    let mut out = Output {
+        file,
+        bytes: 0,
+        cap: report_cap(schema),
+    };
     serde_json::to_writer(&mut out, &report)?;
     out.write_all(b"\n")?;
     out.file.sync_all()?;
@@ -5730,7 +5743,20 @@ fn execute_report(
             && report["status"] == "CLOSED_GEOMETRY_ONLY"
             && report["complete"] == true);
     }
-    if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA {
+    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SMOKE_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "STAGING_SMOKE_CLOSED"
+            && report["complete"] == true
+            && report["candidate_queries_executed"] == 1
+            && report["quality_evaluated"] == false
+            && report["truth_file_opened"] == false);
+    }
+    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA {
+        return Ok(sq8_subpage_shortlist::validate_virtual_report(&report).is_ok());
+    }
+    if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA
+        || schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_ADMISSION_SCHEMA
+    {
         return Ok(report["schema"] == schema
             && report["status"] == "READY_ACTUAL_INPUT"
             && report["complete"] == true
@@ -9133,6 +9159,40 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| {
+        a == "--sq8-virtual-layout"
+            || a == "--sq8-virtual-layout-admit"
+            || a == "--sq8-virtual-layout-smoke"
+    }) {
+        let admit = args[1] == "--sq8-virtual-layout-admit";
+        let smoke = args[1] == "--sq8-virtual-layout-smoke";
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "virtual layout config SHA UTF-8".into())
+                .and_then(|sha| {
+                    sq8_subpage_shortlist::execute_virtual_layout(
+                        std::path::Path::new(&args[2]),
+                        sha,
+                        std::path::Path::new(&args[4]),
+                        admit,
+                        smoke,
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-virtual-layout[-admit] CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2)
+            }
+        }
+        return;
+    }
+
     if args
         .get(1)
         .is_some_and(|arg| arg == "--sq8-block-admission" || arg == "--sq8-block-admission-admit")

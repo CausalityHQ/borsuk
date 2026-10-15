@@ -13,6 +13,7 @@ use std::{
 type Result<T> = super::super::Result<T>;
 use super::super::require;
 pub(super) struct MappedAdmission {
+    pub(super) priority_sha256: String,
     pub(super) source_rows: Vec<SourceRow>,
     pub(super) sq8_rows: Vec<Sq8Row>,
     pub(super) plan: SelectedSq8Plan,
@@ -81,6 +82,13 @@ pub(super) fn admit_source_blocks(
         sb.total_cmp(&sa)
             .then((a / unit_rows).cmp(&(b / unit_rows)))
     });
+    let mut priority = Sha256::new();
+    priority.update(b"BORSUK_SOURCE_PRIORITY_V1");
+    for &(source, score) in &ranked {
+        priority.update(u64::try_from(source / unit_rows)?.to_le_bytes());
+        priority.update(score.to_bits().to_le_bytes());
+    }
+    let priority_sha256 = format!("{:x}", priority.finalize());
     let mut accepted = Vec::<usize>::with_capacity(ranked.len());
     for &(source, _) in &ranked {
         let destination = layout
@@ -142,6 +150,7 @@ pub(super) fn admit_source_blocks(
         "mapped final cap parity",
     )?;
     Ok(MappedAdmission {
+        priority_sha256,
         source_rows,
         sq8_rows,
         plan,
@@ -589,5 +598,371 @@ mod router_payload_order_tests {
         let mut extra = leaves;
         extra.push(0);
         assert!(layout_from_router_leaves(&router, &mut Cursor::new(extra), 1 << 20).is_err());
+    }
+}
+
+pub(super) const EXTRA_PAYLOAD: usize = 128 * 1024 * 1024;
+const QUERY_PAYLOAD: usize = 64 * 1024 * 1024;
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Config {
+    schema: String,
+    pub(super) shortlist: super::ShortlistConfig,
+    pub(super) selector_control: crate::CompletedInput,
+}
+pub(super) fn read_config(path: &std::path::Path, sha: &str) -> Result<(Config, u64)> {
+    let (config, n): (Config, _) = crate::read_config(path, sha)?;
+    require(
+        config.schema == "borsuk-sq8-virtual-layout-config-v1",
+        "virtual config schema",
+    )?;
+    require(
+        config.selector_control.bytes > 0 && config.selector_control.bytes <= 1024 * 1024,
+        "virtual closed-control report bound",
+    )?;
+    Ok((config, n))
+}
+fn text<'a>(v: &'a serde_json::Value, key: &str) -> Result<&'a str> {
+    v[key]
+        .as_str()
+        .ok_or_else(|| format!("virtual descriptor string {key}").into())
+}
+fn row_digest(rows: impl Iterator<Item = usize>, tag: &[u8]) -> Result<String> {
+    let mut h = Sha256::new();
+    h.update(tag);
+    for row in rows {
+        h.update(u64::try_from(row)?.to_le_bytes());
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+pub(super) struct Context {
+    pub(super) identity: UnitLayout,
+    pub(super) relocated: crate::virtual_sq8::VirtualSq8,
+    sq8: crate::HeaderSnapshot,
+    snapshots: Vec<crate::HeaderSnapshot>,
+    control: crate::CompletedInput,
+    control_snapshot: Option<crate::HeaderSnapshot>,
+    pub(super) descriptor: serde_json::Value,
+}
+impl Context {
+    /// This phase has no request, truth or baseline-file open. Metadata-only
+    /// config fields supply the pinned original generation/source/layout binding.
+    pub(super) fn prepare(
+        c: &super::ShortlistConfig,
+        control: crate::CompletedInput,
+    ) -> Result<Self> {
+        use borsuk::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
+        let i: crate::Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
+        crate::validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+        require(
+            c.schema == "borsuk-sq8-subpage-shortlist-config-v1"
+                && i.rows == 1_000_000
+                && i.dimensions == 1024
+                && i.count == 1000
+                && i.k == 10,
+            "virtual benchmark geometry/config",
+        )?;
+        require(
+            c.max_payload_bytes > EXTRA_PAYLOAD && control.bytes <= 1024 * 1024,
+            "virtual caller/control payload",
+        )?;
+        let directory = c.store_root.join(&i.generation_prefix);
+        require(
+            c.generation_manifest.path == directory.join("manifest.json")
+                && c.plane_manifest.path == directory.join("plane/manifest.json")
+                && c.generation_manifest.sha256 == i.generation_root_sha256
+                && c.sq8.sha256 == i.native_sq8_sha256,
+            "virtual original generation paths/pins",
+        )?;
+        require(
+            c.plane_manifest.bytes > 0
+                && c.plane_manifest.bytes <= 65536
+                && c.generation_manifest.bytes <= 65536
+                && c.sq8.bytes == u64::try_from(mul(i.rows, add(i.dimensions, 12)?)?)?,
+            "virtual bounded original metadata/SQ8",
+        )?;
+        let (g, gs) = crate::header_json(&c.generation_manifest)?;
+        let (plane_bytes, ps) = crate::loss_binary(&c.plane_manifest, c.plane_manifest.bytes)?;
+        let plane: borsuk::two_bit_source::SourcePlaneReceipt =
+            serde_json::from_slice(&plane_bytes)?;
+        let d = &g["discovery"];
+        require(
+            g["schema"] == "borsuk-two-bit-generation-v8"
+                && d["mode"] == "semantic"
+                && g["plane_manifest_sha256"] == c.plane_manifest.sha256
+                && g["sq8_object_sha256"] == c.sq8.sha256
+                && plane.rows == i.rows
+                && plane.dimensions == i.dimensions
+                && d["source_sha256"] == plane.source_sha256
+                && d["source_order_sha256"] == plane.source_order_sha256
+                && d["mean_sha256"] == plane.mean_sha256
+                && d["records_sha256"] == plane.records_sha256
+                && d["sq8_sha256"] == plane.sq8_sha256
+                && plane.source_order_sha256 == i.native_order_sha256
+                && plane.source_sha256 == i.native_source_sha256
+                && plane.sq8_sha256 == i.native_sq8_sha256,
+            "virtual authenticated construction binding",
+        )?;
+        let profile: SemanticProfile = serde_json::from_value(d["profile"].clone())?;
+        let root_bytes = usize::try_from(d["root_bytes"].as_u64().ok_or("virtual router bytes")?)?;
+        require(root_bytes <= profile.root_cap(), "virtual router cap")?;
+        let member_bytes = mul(i.rows.div_ceil(32), 4)?;
+        let leaves_bytes = mul(i.rows.div_ceil(32), add(4, mul(i.dimensions, 2)?)?)?;
+        require(
+            d["membership_bytes"] == member_bytes && d["leaves_bytes"] == leaves_bytes,
+            "virtual router descriptor lengths",
+        )?;
+        let pin = |name: &str, bytes: usize, hash: &str| -> Result<crate::CompletedInput> {
+            require(crate::valid_sha(hash), "virtual router artifact SHA")?;
+            Ok(crate::CompletedInput {
+                path: directory.join(name),
+                bytes: u64::try_from(bytes)?,
+                sha256: hash.to_owned(),
+            })
+        };
+        let root_pin = pin("router/root.bin", root_bytes, text(d, "root_sha256")?)?;
+        let member_pin = pin(
+            "router/membership.bin",
+            member_bytes,
+            text(d, "membership_sha256")?,
+        )?;
+        let leaves_pin = pin("router/leaves.bin", leaves_bytes, text(d, "leaves_sha256")?)?;
+        let (root, root_snapshot) = crate::loss_binary(&root_pin, root_pin.bytes)?;
+        let (membership, member_snapshot) = crate::loss_binary(&member_pin, member_pin.bytes)?;
+        let input = SourceIdentity {
+            profile,
+            schema: text(d, "input_schema")?,
+            root_sha256: text(d, "input_root_sha256")?,
+            centroids_sha256: text(d, "centroids_sha256")?,
+            rows: i.rows,
+            dimensions: i.dimensions,
+        };
+        let router = SemanticUnitRouter::open(
+            &root,
+            &membership,
+            &root_pin.sha256,
+            &input,
+            profile.root_cap(),
+        )?;
+        require(
+            router.manifest().leaf_payload.bytes == leaves_bytes
+                && router.manifest().leaf_payload.sha256 == leaves_pin.sha256,
+            "virtual leaf object binding",
+        )?;
+        crate::header_pin(&leaves_pin, leaves_pin.bytes)?;
+        let file = crate::header_file(&leaves_pin.path)?;
+        let id = crate::file_identity(&file)?;
+        require(id.len == leaves_pin.bytes, "virtual leaf file length")?;
+        let mut leaf_snapshot = crate::HeaderSnapshot {
+            file,
+            path: leaves_pin.path,
+            identity: id,
+        };
+        leaf_snapshot.recheck()?;
+        let layout = layout_from_router_leaves(&router, &mut leaf_snapshot.file, 8 * 1024 * 1024)?;
+        leaf_snapshot.recheck()?;
+        let mut locator = Sha256::new();
+        locator.update(b"BORSUK_UNIT_LOCATOR_LE_U64_V1");
+        for unit in 0..i.rows.div_ceil(32) {
+            let source = layout
+                .source_row(Sq8Row(unit * 32))
+                .ok_or("virtual locator inverse")?
+                .0
+                / 32;
+            locator.update(u64::try_from(source)?.to_le_bytes());
+        }
+        let locator_sha = format!("{:x}", locator.finalize());
+        let (sidecar, mut sq8) =
+            super::authenticated_sq8_digests(&c.sq8, i.rows, i.dimensions, 8 * 1024 * 1024)?;
+        let generation = g["generation"].as_u64().ok_or("virtual generation")?;
+        let authority_body = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2","generation":generation,
+            "rows":i.rows,"dimensions":i.dimensions,"page_rows":32,"object_sha256":c.sq8.sha256,
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))}))?;
+        let old = PageAuthority::load(
+            &authority_body,
+            &format!("{:x}", Sha256::digest(&authority_body)),
+            &sidecar,
+        )
+        .map_err(|e| format!("virtual original authority {e:?}"))?;
+        let relocated =
+            crate::virtual_sq8::VirtualSq8::prepare(&mut sq8.file, &old, layout, 8 * 1024 * 1024)?;
+        let order = (0..i.rows.div_ceil(32))
+            .map(|u| u as u32)
+            .collect::<Vec<_>>();
+        let identity = UnitLayout::from_destination_order(i.rows, 32, &order, 1 << 20)?;
+        let descriptor = serde_json::json!({"schema":"borsuk-virtual-sq8-placement-v1",
+            "original_generation_sha256":i.generation_root_sha256,"original_sq8_sha256":c.sq8.sha256,
+            "router_sha256":root_pin.sha256,"membership_sha256":member_pin.sha256,
+            "leaves_sha256":router.manifest().leaf_payload.sha256,"locator_sha256":locator_sha,
+            "target_sq8_sha256":relocated.object_sha256(),"rows":i.rows,"dimensions":i.dimensions,
+            "unit_rows":32,"unit_count":i.rows.div_ceil(32),"query_free":true,
+            "physical_object_written":false,"centroid_plane_opened":false});
+        let context = Self {
+            identity,
+            relocated,
+            sq8,
+            snapshots: vec![gs, ps, root_snapshot, member_snapshot, leaf_snapshot],
+            control,
+            control_snapshot: None,
+            descriptor,
+        };
+        context.recheck()?;
+        Ok(context)
+    }
+    /// Authenticate the control as opaque bytes before a paid scored run. Its
+    /// JSON/quality fields are parsed only after all candidate decisions finish.
+    pub(super) fn admit_control_bytes(&mut self) -> Result<()> {
+        let (_, snapshot) = crate::loss_binary(&self.control, self.control.bytes)?;
+        self.control_snapshot = Some(snapshot);
+        self.recheck()
+    }
+    pub(super) fn recheck(&self) -> Result<()> {
+        self.sq8.recheck()?;
+        for s in &self.snapshots {
+            s.recheck()?;
+        }
+        if let Some(s) = &self.control_snapshot {
+            s.recheck()?;
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn rank(
+        &mut self,
+        old_snapshot: &mut crate::HeaderSnapshot,
+        old: &PageAuthority,
+        scored: &[(usize, f64)],
+        nominees: &[usize],
+        query: &[f32],
+        low: &[f32],
+        step: &[f32],
+    ) -> Result<(Vec<super::ShortlistArm>, serde_json::Value)> {
+        let limits = SelectedSq8Limits {
+            max_gets: 30,
+            max_bytes: 32 * 1024 * 1024,
+            max_planner_bytes: 4 * 1024 * 1024 + 4096,
+        };
+        let identity = admit_source_blocks(old, &self.identity, scored, nominees, limits, 1 << 20)?;
+        let relocated = admit_source_blocks(
+            self.relocated.authority(),
+            self.relocated.layout(),
+            scored,
+            nominees,
+            limits,
+            1 << 20,
+        )?;
+        require(
+            identity.priority_sha256 == relocated.priority_sha256,
+            "virtual SOURCE priority parity",
+        )?;
+        let original = super::rank_local_cover(
+            old_snapshot,
+            old,
+            &identity.plan.ranges,
+            old.rows(),
+            old.dimensions(),
+            query,
+            low,
+            step,
+            limits.max_bytes,
+        )?;
+        let moved = self.rank_relocated(&relocated.plan, query, low, step)?;
+        let returned = [&original, &moved].map(|points| points.iter().map(|p| serde_json::json!({"target_row":p.ordinal,"id":p.id,"score_bits":p.score.to_bits()})).collect::<Vec<_>>());
+        let evidence = serde_json::json!({"returned":returned,"nominee_source_sha256":row_digest(nominees.iter().copied(),b"SOURCE_NOMINEES_V1")?,
+            "source_priority_sha256":identity.priority_sha256,
+            "accepted_source_sha256":[row_digest(identity.source_rows.iter().map(|r|r.0),b"SOURCE_SELECTED_V1")?,
+                row_digest(relocated.source_rows.iter().map(|r|r.0),b"SOURCE_SELECTED_V1")?]});
+        let arm = |a: MappedAdmission, returned| super::ShortlistArm {
+            maximum: 1024,
+            selected: a.sq8_rows.into_iter().map(|r| r.0).collect(),
+            ranges: a.plan.ranges,
+            bytes: a.plan.planned_bytes,
+            returned: Some(returned),
+        };
+        Ok((
+            vec![arm(identity, original), arm(relocated, moved)],
+            evidence,
+        ))
+    }
+    fn rank_relocated(
+        &mut self,
+        plan: &SelectedSq8Plan,
+        query: &[f32],
+        low: &[f32],
+        step: &[f32],
+    ) -> Result<Vec<borsuk::exact_sq8_nominee::ScoredNominee>> {
+        let a = self.relocated.authority();
+        let rows = a.rows();
+        let dimensions = a.dimensions();
+        let width = add(dimensions, 12)?;
+        let scoring = add(
+            mul(rows.min(plan.planned_bytes / width), 256)?,
+            add(mul(dimensions, 4)?, 65536)?,
+        )?;
+        let identity = self.identity.owned_payload_bytes()?;
+        require(
+            add(
+                add(self.relocated.retained_payload_bytes(), identity)?,
+                add(plan.planned_bytes, scoring)?,
+            )? <= QUERY_PAYLOAD,
+            "virtual aggregate bodies/scorer payload",
+        )?;
+        self.recheck()?;
+        let mut bodies = Vec::with_capacity(plan.ranges.len());
+        let mut held = 0_usize;
+        for range in &plan.ranges {
+            let cap = QUERY_PAYLOAD
+                .checked_sub(add(add(held, identity)?, scoring)?)
+                .ok_or("virtual remaining body payload")?;
+            let body = self
+                .relocated
+                .read_range(&mut self.sq8.file, range.clone(), cap)?;
+            held = add(held, body.capacity())?;
+            bodies.push(body);
+        }
+        self.recheck()?;
+        let ranges = plan
+            .ranges
+            .iter()
+            .zip(&bodies)
+            .map(|(r, b)| borsuk::returned_sq8::ReturnedRange {
+                start: r.start,
+                bytes: b,
+            })
+            .collect::<Vec<_>>();
+        Ok(borsuk::returned_sq8::rank_returned_ranges(
+            borsuk::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
+            &ranges,
+            query,
+            low,
+            step,
+            crate::K,
+            32 * 1024 * 1024,
+        )
+        .map_err(|e| format!("virtual returned ranking {e:?}"))?)
+    }
+    pub(super) fn verify_control(&mut self, queries: &[serde_json::Value]) -> Result<()> {
+        // Invoked only after every candidate plan and score is fixed.
+        let (bytes, snapshot) = crate::loss_binary(&self.control, self.control.bytes)?;
+        let old: serde_json::Value = serde_json::from_slice(&bytes)?;
+        super::validate_block_admission_report(&old)?;
+        let old_queries = old["queries"]
+            .as_array()
+            .ok_or("virtual control query array")?;
+        require(
+            queries.len() == 1000 && old_queries.len() == 1000,
+            "virtual closed control population",
+        )?;
+        for (now, before) in queries.iter().zip(old_queries) {
+            require(
+                now["ordinal"] == before["ordinal"]
+                    && now["baseline_hits10"] == before["baseline_hits10"]
+                    && now["arms"][0] == before["arms"][0],
+                "virtual identity vs closed selector parity",
+            )?;
+        }
+        self.control_snapshot = Some(snapshot);
+        self.recheck()
     }
 }
