@@ -1,5 +1,5 @@
 //! Test-first source for the explicit-coordinate virtual placement component.
-//! Implementation deliberately absent until the remote failing-test checkpoint.
+//! Minimal coordinate implementation after the verified remote RED checkpoint.
 #![forbid(unsafe_code)]
 
 #[cfg(test)]
@@ -95,51 +95,176 @@ mod tests {
         assert!(layout.source_segments(0..896, 14, 0).is_err());
     }
 }
-// Missing-feature scaffold for the remote RED checkpoint; not a candidate implementation.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SourceRow(usize);
+pub(crate) struct SourceRow(pub(crate) usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Sq8Row(usize);
-struct UnitLayout {
+pub(crate) struct Sq8Row(pub(crate) usize);
+
+/// Coordinate translation only. The enclosing descriptor authenticates the order.
+/// The payload model excludes caller-owned input and allocator/RSS overhead.
+pub(crate) struct UnitLayout {
     rows: usize,
+    unit_rows: usize,
+    source_to_sq8: Vec<u32>,
+    sq8_to_source: Vec<u32>,
 }
 impl UnitLayout {
-    fn required_bytes(rows: usize, unit_rows: usize) -> Result<usize, &'static str> {
+    pub(crate) fn required_bytes(rows: usize, unit_rows: usize) -> Result<usize, &'static str> {
         if rows == 0 || unit_rows == 0 {
-            return Err("geometry");
+            return Err("unit layout geometry");
         }
         let units = rows.div_ceil(unit_rows);
         if units > u32::MAX as usize {
-            return Err("unit count");
+            return Err("unit layout count width");
         }
         units
-            .checked_mul(8)
+            .checked_mul(2 * std::mem::size_of::<u32>())
             .and_then(|n| n.checked_add(4096))
-            .ok_or("payload overflow")
+            .ok_or("unit layout payload overflow")
     }
-    fn from_destination_order(
+
+    /// `order[destination_unit]` is the original SOURCE unit at that position.
+    pub(crate) fn from_destination_order(
         rows: usize,
         unit_rows: usize,
-        _order: &[u32],
+        order: &[u32],
         cap: usize,
     ) -> Result<Self, &'static str> {
-        if Self::required_bytes(rows, unit_rows)? > cap {
-            return Err("payload");
+        let modeled = Self::required_bytes(rows, unit_rows)?;
+        let units = rows.div_ceil(unit_rows);
+        if modeled > cap {
+            return Err("unit layout payload");
         }
-        Ok(Self { rows })
+        if order.len() != units
+            || order.iter().any(|&unit| unit as usize >= units)
+            || (rows % unit_rows != 0 && order.last().copied() != Some((units - 1) as u32))
+        {
+            return Err("unit layout permutation geometry");
+        }
+        let mut source_to_sq8 = Vec::new();
+        source_to_sq8
+            .try_reserve_exact(units)
+            .map_err(|_| "unit layout allocation")?;
+        source_to_sq8.resize(units, u32::MAX);
+        for (destination, &source) in order.iter().enumerate() {
+            let slot = &mut source_to_sq8[source as usize];
+            if *slot != u32::MAX {
+                return Err("unit layout duplicate unit");
+            }
+            *slot = destination as u32;
+        }
+        let mut sq8_to_source = Vec::new();
+        sq8_to_source
+            .try_reserve_exact(units)
+            .map_err(|_| "unit layout allocation")?;
+        sq8_to_source.extend_from_slice(order);
+        let retained = source_to_sq8
+            .capacity()
+            .checked_add(sq8_to_source.capacity())
+            .and_then(|n| n.checked_mul(std::mem::size_of::<u32>()))
+            .and_then(|n| n.checked_add(4096))
+            .ok_or("unit layout capacity overflow")?;
+        if retained > cap {
+            return Err("unit layout capacity");
+        }
+        Ok(Self {
+            rows,
+            unit_rows,
+            source_to_sq8,
+            sq8_to_source,
+        })
     }
-    fn sq8_row(&self, row: SourceRow) -> Option<Sq8Row> {
-        (row.0 < self.rows).then_some(Sq8Row(row.0))
+
+    fn translate(&self, row: usize, units: &[u32]) -> Option<usize> {
+        if row >= self.rows {
+            return None;
+        }
+        let unit = *units.get(row / self.unit_rows)? as usize;
+        let mapped = unit
+            .checked_mul(self.unit_rows)?
+            .checked_add(row % self.unit_rows)?;
+        (mapped < self.rows).then_some(mapped)
     }
-    fn source_row(&self, row: Sq8Row) -> Option<SourceRow> {
-        (row.0 < self.rows).then_some(SourceRow(row.0))
+    pub(crate) fn sq8_row(&self, row: SourceRow) -> Option<Sq8Row> {
+        self.translate(row.0, &self.source_to_sq8).map(Sq8Row)
     }
-    fn source_segments(
+    pub(crate) fn source_row(&self, row: Sq8Row) -> Option<SourceRow> {
+        self.translate(row.0, &self.sq8_to_source).map(SourceRow)
+    }
+
+    /// Original byte segments in destination sequence, one per intact unit.
+    /// Callers must authenticate each segment before scoring the assembled range.
+    pub(crate) fn source_segments(
         &self,
         range: std::ops::Range<usize>,
-        _record_bytes: usize,
-        _cap: usize,
+        record_bytes: usize,
+        cap: usize,
     ) -> Result<Vec<std::ops::Range<usize>>, &'static str> {
-        Ok(std::iter::once(range).collect())
+        let total = self
+            .rows
+            .checked_mul(record_bytes)
+            .ok_or("unit layout byte overflow")?;
+        let unit_bytes = self
+            .unit_rows
+            .checked_mul(record_bytes)
+            .ok_or("unit layout stride overflow")?;
+        if record_bytes == 0
+            || range.start >= range.end
+            || range.end > total
+            || range.start % unit_bytes != 0
+            || (range.end % unit_bytes != 0 && range.end != total)
+        {
+            return Err("unit layout range geometry");
+        }
+        let first = range.start / unit_bytes;
+        let last = (range.end - 1) / unit_bytes;
+        let count = last
+            .checked_sub(first)
+            .and_then(|n| n.checked_add(1))
+            .ok_or("unit layout segment count")?;
+        let modeled = count
+            .checked_mul(std::mem::size_of::<std::ops::Range<usize>>())
+            .and_then(|n| n.checked_add(4096))
+            .ok_or("unit layout segment payload overflow")?;
+        if modeled > cap {
+            return Err("unit layout segment payload");
+        }
+        let mut segments = Vec::new();
+        segments
+            .try_reserve_exact(count)
+            .map_err(|_| "unit layout segment allocation")?;
+        for destination in first..=last {
+            let source = *self
+                .sq8_to_source
+                .get(destination)
+                .ok_or("unit layout destination unit")? as usize;
+            let source_row = source
+                .checked_mul(self.unit_rows)
+                .ok_or("unit layout row overflow")?;
+            let source_rows = self.unit_rows.min(self.rows - source_row);
+            let start = source_row
+                .checked_mul(record_bytes)
+                .ok_or("unit layout offset overflow")?;
+            let bytes = source_rows
+                .checked_mul(record_bytes)
+                .ok_or("unit layout size overflow")?;
+            let destination_start = destination
+                .checked_mul(unit_bytes)
+                .ok_or("unit layout destination offset")?;
+            if bytes != unit_bytes.min(range.end - destination_start) {
+                return Err("unit layout unequal unit lengths");
+            }
+            segments.push(start..start.checked_add(bytes).ok_or("unit layout end overflow")?);
+        }
+        let retained = segments
+            .capacity()
+            .checked_mul(std::mem::size_of::<std::ops::Range<usize>>())
+            .and_then(|n| n.checked_add(4096))
+            .ok_or("unit layout segment capacity overflow")?;
+        if retained > cap {
+            return Err("unit layout segment capacity");
+        }
+        Ok(segments)
     }
 }
