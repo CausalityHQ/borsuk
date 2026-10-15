@@ -2899,6 +2899,48 @@ mod source_walk_tests {
     use super::*;
     use futures_util::{StreamExt, stream};
 
+    #[test]
+    fn source_shortlist_v9_uses_score_then_physical_ordinal() {
+        let rows = 4097_usize;
+        let dimensions = 5;
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.; 5], 20260923).unwrap();
+        let record = codec.encode(&[1., 0., 0., 0., 0.]).unwrap();
+        let prepared = codec
+            .prepare_query(
+                &[1., 0., 0., 0., 0.],
+                crate::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(
+                    dimensions,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let walks = vec![(0, (0..rows.div_ceil(32)).collect())];
+        let mut visits = vec![0_u8; rows];
+        let plan = plan_two_bit_source_walks(
+            rows,
+            dimensions,
+            rows.div_ceil(256),
+            Some(SemanticProfile::Scale1m),
+            &walks,
+            &prepared,
+            |row| {
+                visits[row] += 1;
+                Some(record.as_slice())
+            },
+            30,
+            32 * 1024 * 1024,
+            None,
+        )
+        .unwrap();
+        assert!(visits.iter().all(|&count| count == 1));
+        assert_eq!(
+            plan.ranges,
+            vec![0..256 * (dimensions + 12)],
+            "tied SOURCE scores must select exactly the lowest 256 ordinals before SQ8 block cover"
+        );
+        assert_eq!(plan.planned_bytes, 256 * (dimensions + 12));
+    }
+
     fn assert_metadata_waves(startup: &RemoteOpenStats, names: &[&str]) {
         assert_eq!(
             startup

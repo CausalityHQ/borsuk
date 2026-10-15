@@ -779,6 +779,85 @@ impl TwoBitGenerationBuilder<'_> {
 mod tests {
     use super::*;
     #[test]
+    fn source_shortlist_v9_authenticates_32_row_sq8_blocks() {
+        let temp = tempfile::tempdir().unwrap();
+        let rows = 4097_usize;
+        let dimensions = 5;
+        let raw = (0..rows)
+            .flat_map(|_| {
+                [1_f32, 0., 0., 0., 0.]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+            })
+            .collect::<Vec<_>>();
+        let sq8 = (0..rows)
+            .flat_map(|row| {
+                let mut bytes = (50_000_i64 - row as i64).to_le_bytes().to_vec();
+                bytes.extend(1_f32.to_le_bytes());
+                bytes.extend([255, 0, 0, 0, 0]);
+                bytes
+            })
+            .collect::<Vec<_>>();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        fs::write(&raw_path, &raw).unwrap();
+        fs::write(&sq8_path, &sq8).unwrap();
+        let raw_sha = hash(&raw);
+        let sq8_sha = hash(&sq8);
+        let key = format!("test/objects/{sq8_sha}");
+        let order = (0..rows as u64).collect::<Vec<_>>();
+        let output = temp.path().join("generation");
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &raw_sha,
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &[0.; 5],
+            step: &[1. / 255.; 5],
+            sq8_object_key: &key,
+            sq8_etag: "etag",
+        }
+        .build_with_order(&order, &output, 64_000_000)
+        .unwrap();
+        let root = fs::read(output.join("manifest.json")).unwrap();
+        assert_eq!(hash(&root), root_sha);
+        let root: serde_json::Value = serde_json::from_slice(&root).unwrap();
+        let manifest = fs::read(output.join("page_manifest.json")).unwrap();
+        assert_eq!(
+            hash(&manifest),
+            root["page_manifest_sha256"].as_str().unwrap()
+        );
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(
+            manifest["page_rows"], 32,
+            "new SQ8 proofs must authenticate 32-row blocks"
+        );
+        assert_eq!(root["schema"], "borsuk-two-bit-generation-v9");
+        assert_eq!(manifest["object_sha256"], sq8_sha);
+        let digests = fs::read(output.join("page_digests.bin")).unwrap();
+        assert_eq!(digests.len(), rows.div_ceil(32) * 32);
+        assert_eq!(
+            hash(&digests),
+            manifest["page_digest_sha256"].as_str().unwrap()
+        );
+        for (block, digest) in sq8
+            .chunks(32 * (dimensions + 12))
+            .zip(digests.chunks_exact(32))
+        {
+            assert_eq!(Sha256::digest(block).as_slice(), digest);
+        }
+        assert_eq!(
+            sq8.chunks(32 * (dimensions + 12)).last().unwrap().len(),
+            dimensions + 12
+        );
+    }
+    #[test]
     fn spatial_import_and_repackage_charge_authenticated_mode_and_retained_buffers() {
         let temp = tempfile::tempdir().unwrap();
         let rows = 129_usize * 32;
