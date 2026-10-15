@@ -168,7 +168,25 @@ impl VirtualSq8 {
         )
         .map_err(|_| "virtual target authority")?;
         exact_length(input, old.object_bytes())?;
-        let retained = sum(&[maps, actual_table, table_bytes, FIXED])?;
+        let target_proofs = authority
+            .proof_payload_bytes()
+            .ok_or("virtual target proof capacity overflow")?;
+        // Library allocation has completed: reconcile its actual capacity while
+        // all preparation buffers and the temporary sidecar are still live.
+        if sum(&[
+            maps,
+            actual_table,
+            sidecar.capacity(),
+            target_proofs,
+            page.capacity(),
+            unit.capacity(),
+            FIXED,
+        ])? > cap
+        {
+            return Err("virtual loaded authority capacity");
+        }
+        let retained = sum(&[maps, actual_table, target_proofs, FIXED])?;
+
         Ok(Self {
             layout,
             original_units,
@@ -377,7 +395,7 @@ mod tests {
                     &query,
                     &low,
                     &step,
-                    10,
+                    385,
                     bytes.len(),
                 )
                 .unwrap();
@@ -390,7 +408,7 @@ mod tests {
                     &query,
                     &low,
                     &step,
-                    10,
+                    385,
                     bytes.len(),
                 )
                 .unwrap();
@@ -411,6 +429,239 @@ mod tests {
                     let target_unit = [1, 2, 0, 3][source_unit];
                     assert_eq!(after.ordinal, target_unit * 128 + before.ordinal % 128);
                 }
+            }
+        }
+    }
+    // Additional source-review falsifiers; not in frozen07/current Green run.
+    // Existing prepare/read behavior is exercised; no mocked authentication/scoring.
+    #[test]
+    fn virtual_sq8_exact_prepare_and_query_payload_boundaries_precede_io() {
+        struct Observed {
+            body: Cursor<Vec<u8>>,
+            reads: usize,
+            seeks: usize,
+        }
+        impl std::io::Read for Observed {
+            fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                self.body.read(b)
+            }
+        }
+        impl std::io::Seek for Observed {
+            fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+                self.seeks += 1;
+                self.body.seek(p)
+            }
+        }
+        let (bytes, authority) = fixture(2);
+        let mut old = Observed {
+            body: Cursor::new(bytes),
+            reads: 0,
+            seeks: 0,
+        };
+        // Independent literal modeled bytes for four units: maps8Q+4096,
+        // three32Q proof tables, old256-row page, one128-row unit, 16KiB scratch.
+        let prepare_cap = 8 * 4 + 4096 + 3 * 32 * 4 + 256 * 14 + 128 * 14 + 16384;
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        assert!(VirtualSq8::prepare(&mut old, &authority, layout, prepare_cap - 1).is_err());
+        assert_eq!((old.reads, old.seeks), (0, 0));
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        let prepared = VirtualSq8::prepare(&mut old, &authority, layout, prepare_cap).unwrap();
+        let expected_retained = 8 * 4 + 4096 + 2 * 32 * 4 + 16384;
+        assert_eq!(prepared.retained_payload_bytes(), expected_retained);
+        let range_cap =
+            expected_retained + 385 * 14 + 4 * std::mem::size_of::<std::ops::Range<usize>>() + 4096;
+        old.reads = 0;
+        old.seeks = 0;
+        assert!(
+            prepared
+                .read_range(&mut old, 0..385 * 14, range_cap - 1)
+                .is_err()
+        );
+        assert_eq!((old.reads, old.seeks), (0, 0));
+        assert_eq!(
+            prepared
+                .read_range(&mut old, 0..385 * 14, range_cap)
+                .unwrap()
+                .len(),
+            385 * 14
+        );
+    }
+
+    #[test]
+    fn virtual_sq8_rejects_mutation_between_authenticated_passes() {
+        struct Replace {
+            body: Cursor<Vec<u8>>,
+            first_pass_read: usize,
+            mutated: bool,
+        }
+        impl std::io::Read for Replace {
+            fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.body.read(b)?;
+                self.first_pass_read += n;
+                Ok(n)
+            }
+        }
+        impl std::io::Seek for Replace {
+            fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+                if self.first_pass_read >= 385 * 14 && !self.mutated {
+                    self.body.get_mut()[256 * 14 + 9] ^= 1;
+                    self.mutated = true;
+                }
+                self.body.seek(p)
+            }
+        }
+        let (bytes, authority) = fixture(2);
+        let mut old = Replace {
+            body: Cursor::new(bytes),
+            first_pass_read: 0,
+            mutated: false,
+        };
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        assert!(VirtualSq8::prepare(&mut old, &authority, layout, 1 << 20).is_err());
+        assert!(old.mutated);
+    }
+
+    #[test]
+    fn virtual_sq8_refuses_wrong_geometry_and_trailing_original_bytes() {
+        let (bytes, authority) = fixture(2);
+        let layout = UnitLayout::from_destination_order(384, 128, &[2, 0, 1], 1 << 20).unwrap();
+        assert!(
+            VirtualSq8::prepare(&mut Cursor::new(bytes.clone()), &authority, layout, 1 << 20)
+                .is_err()
+        );
+        let order = (0..385_usize.div_ceil(3))
+            .map(|u| u as u32)
+            .collect::<Vec<_>>();
+        let layout = UnitLayout::from_destination_order(385, 3, &order, 1 << 20).unwrap();
+        assert!(
+            VirtualSq8::prepare(&mut Cursor::new(bytes.clone()), &authority, layout, 1 << 20)
+                .is_err()
+        );
+        let mut extra = bytes;
+        extra.push(0);
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        assert!(VirtualSq8::prepare(&mut Cursor::new(extra), &authority, layout, 1 << 20).is_err());
+    }
+
+    #[test]
+    fn virtual_sq8_refuses_wrong_whole_hash_even_with_valid_page_proofs_and_refuses_truncation() {
+        let (bytes, _) = fixture(2);
+        let mut sidecar = Vec::new();
+        for page in bytes.chunks(256 * 14) {
+            sidecar.extend_from_slice(&Sha256::digest(page));
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2","generation":1,
+            "rows":385,"dimensions":2,"page_rows":256,
+            "object_sha256":"0".repeat(64),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))
+        }))
+        .unwrap();
+        let wrong = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        // Show page proofs are valid; rejection must come from whole-object binding.
+        wrong.verify_payload(0, 1, &bytes).unwrap();
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        assert_eq!(
+            VirtualSq8::prepare(&mut Cursor::new(bytes.clone()), &wrong, layout, 1 << 20).err(),
+            Some("virtual original whole identity")
+        );
+        let (_, authority) = fixture(2);
+        let layout = UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+        assert_eq!(
+            VirtualSq8::prepare(
+                &mut Cursor::new(bytes[..bytes.len() - 1].to_vec()),
+                &authority,
+                layout,
+                1 << 20
+            )
+            .err(),
+            Some("virtual original length")
+        );
+    }
+
+    #[test]
+    fn virtual_sq8_disjoint_nonzero_start_ranges_preserve_native_scores() {
+        use borsuk::exact_sq8_nominee::Sq8Geometry;
+        use borsuk::returned_sq8::{ReturnedRange, rank_returned_ranges};
+        for dimensions in [2, 17] {
+            let (bytes, authority) = fixture(dimensions);
+            let width = dimensions + 12;
+            let layout =
+                UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+            let mut old = Cursor::new(bytes.clone());
+            let prepared = VirtualSq8::prepare(&mut old, &authority, layout, 1 << 20).unwrap();
+            let first = prepared
+                .read_range(&mut old, 128 * width..256 * width, 1 << 20)
+                .unwrap();
+            let tail = prepared
+                .read_range(&mut old, 384 * width..385 * width, 1 << 20)
+                .unwrap();
+            let geometry = Sq8Geometry {
+                rows: 385,
+                dimensions,
+            };
+            let query = vec![0.125; dimensions];
+            let low = vec![0.0; dimensions];
+            let step = vec![1.0; dimensions];
+            let reference = rank_returned_ranges(
+                geometry,
+                &[
+                    ReturnedRange {
+                        start: 0,
+                        bytes: &bytes[..128 * width],
+                    },
+                    ReturnedRange {
+                        start: 384 * width,
+                        bytes: &bytes[384 * width..],
+                    },
+                ],
+                &query,
+                &low,
+                &step,
+                129,
+                129 * width,
+            )
+            .unwrap();
+            let candidate = rank_returned_ranges(
+                geometry,
+                &[
+                    ReturnedRange {
+                        start: 128 * width,
+                        bytes: &first,
+                    },
+                    ReturnedRange {
+                        start: 384 * width,
+                        bytes: &tail,
+                    },
+                ],
+                &query,
+                &low,
+                &step,
+                129,
+                129 * width,
+            )
+            .unwrap();
+            assert_eq!(
+                reference
+                    .iter()
+                    .map(|v| (v.id, v.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                candidate
+                    .iter()
+                    .map(|v| (v.id, v.score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            for (a, b) in reference.iter().zip(&candidate) {
+                assert_eq!(
+                    b.ordinal,
+                    [1, 2, 0, 3][a.ordinal / 128] * 128 + a.ordinal % 128
+                );
             }
         }
     }

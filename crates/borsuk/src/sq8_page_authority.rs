@@ -233,6 +233,13 @@ impl PageAuthority {
     pub fn page_rows(&self) -> usize {
         self.page_rows
     }
+    /// Owned digest-vector payload, using actual capacity rather than row count.
+    /// Manifest strings, this struct and allocator overhead are separate charges.
+    pub fn proof_payload_bytes(&self) -> Option<usize> {
+        self.digests
+            .capacity()
+            .checked_mul(std::mem::size_of::<[u8; 32]>())
+    }
     pub fn object_sha256(&self) -> &str {
         &self.object_sha256
     }
