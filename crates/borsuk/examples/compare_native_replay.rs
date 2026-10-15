@@ -35,6 +35,11 @@ mod paired_partition_coverage;
 #[path = "compare_native_replay/paired_returned_panel.rs"]
 mod paired_returned_panel;
 
+#[path = "compare_native_replay/unit_layout.rs"]
+mod unit_layout;
+#[path = "compare_native_replay/virtual_sq8.rs"]
+mod virtual_sq8;
+
 #[path = "compare_native_replay/sq8_subpage_shortlist.rs"]
 mod sq8_subpage_shortlist;
 
