@@ -3,6 +3,281 @@ use super::{Result, fields, require};
 use serde_json::{Value, json};
 use std::io::Cursor;
 
+pub(super) const REPORT_SCHEMA: &str = "borsuk-current-v9-panel-reader-v1";
+pub(super) const PARITY_SCHEMA: &str = "borsuk-v9-historical-count-parity-v1";
+pub(super) const ORACLE_SCHEMA: &str = "borsuk-v9-source-cover-oracle-v1";
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OracleConfig {
+    schema: String,
+    panel: PanelConfig,
+    generation_manifest: super::CompletedInput,
+    plane_manifest: super::CompletedInput,
+    records: super::CompletedInput,
+    mean: super::CompletedInput,
+    source_digests: super::CompletedInput,
+    requests: super::CompletedInput,
+}
+
+pub(super) fn reduce_oracle(path: &std::path::Path, sha: &str) -> Result<Value> {
+    use borsuk::{rotated_two_bit::RotatedTwoBitCodec, sq8_page_authority::PageAuthority};
+    let (c, config_bytes): (OracleConfig, _) = super::read_config(path, sha)?;
+    require(
+        c.schema == "borsuk-v9-source-cover-oracle-config-v1"
+            && c.panel.schema == "borsuk-current-v9-panel-reader-config-v1"
+            && c.panel.completed.schema == super::SCALE_CONFIG_SCHEMA
+            && c.panel.max_payload_bytes >= 384 * 1024 * 1024,
+        "SOURCE oracle config/payload admission",
+    )?;
+    let inputs = &c.panel.completed.expected_bound_inputs;
+    require(
+        c.generation_manifest.sha256 == inputs["generation_root_sha256"]
+            && c.generation_manifest.bytes <= 65536
+            && c.plane_manifest.bytes <= 65536
+            && c.records.bytes == 264000000
+            && c.mean.bytes == 4096
+            && c.source_digests.bytes == 1000000
+            && c.requests.bytes == 4096000
+            && c.requests.sha256 == inputs["requests_sha256"],
+        "SOURCE oracle descriptor binding",
+    )?;
+    for (pin, cap) in [
+        (&c.generation_manifest, 65536),
+        (&c.plane_manifest, 65536),
+        (&c.records, 264000000),
+        (&c.mean, 4096),
+        (&c.source_digests, 1000000),
+        (&c.requests, 4096000),
+    ] {
+        super::header_pin(pin, cap)?;
+    }
+    let panel = read_candidate(
+        &c.panel.completed.input,
+        &c.panel.completed.expected_identity,
+        inputs,
+        &[0, 1, 127, 255, 511, 767, 998, 999],
+        c.panel.max_payload_bytes,
+    )?;
+    let (root, root_snapshot) = super::header_json(&c.generation_manifest)?;
+    let (plane_bytes, plane_snapshot) =
+        super::loss_binary(&c.plane_manifest, c.plane_manifest.bytes)?;
+    let plane: borsuk::two_bit_source::SourcePlaneReceipt = serde_json::from_slice(&plane_bytes)?;
+    require(
+        root["plane_manifest_sha256"] == c.plane_manifest.sha256
+            && root["sq8_object_sha256"] == inputs["native_sq8_sha256"]
+            && plane.rows == 1000000
+            && plane.dimensions == 1024
+            && plane.record_bytes == 264
+            && plane.records_sha256 == c.records.sha256
+            && plane.mean_sha256 == c.mean.sha256
+            && plane.page_digest_sha256 == c.source_digests.sha256
+            && plane.source_sha256 == inputs["native_source_sha256"]
+            && plane.source_order_sha256 == inputs["native_order_sha256"]
+            && plane.sq8_sha256 == inputs["native_sq8_sha256"]
+            && !plane.query_or_truth_used,
+        "SOURCE oracle authenticated plane/root",
+    )?;
+    let (digests, digest_snapshot) = super::loss_binary(&c.source_digests, 1000000)?;
+    let authority = PageAuthority::load_two_bit(
+        &plane_bytes,
+        &c.plane_manifest.sha256,
+        root["generation"]
+            .as_u64()
+            .ok_or("SOURCE oracle generation")?,
+        &digests,
+    )
+    .map_err(|e| format!("SOURCE oracle authority {e:?}"))?;
+    let (records, records_snapshot) = super::loss_binary(&c.records, 264000000)?;
+    let (mean_bytes, mean_snapshot) = super::loss_binary(&c.mean, 4096)?;
+    authority
+        .verify_payload(0, 31249, &records)
+        .map_err(|e| format!("SOURCE oracle payload {e:?}"))?;
+    let mean = mean_bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    require(
+        mean.iter().all(|v| v.is_finite()),
+        "SOURCE oracle finite mean",
+    )?;
+    let codec = RotatedTwoBitCodec::new(&mean, plane.seed)?;
+    let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(1024)?;
+    let (requests, request_snapshot) = super::loss_binary(&c.requests, 4096000)?;
+    let mut verified = 0usize;
+    let run = super::read_run_observed(
+        &c.panel.completed.input.path,
+        &c.panel.completed.input.sha256,
+        Some(&c.panel.completed),
+        |line, q, _| {
+            let super::UniqueJson(raw) = serde_json::from_slice(line)?;
+            let start = q
+                .ordinal
+                .checked_mul(4096)
+                .ok_or("SOURCE oracle request offset")?;
+            let bytes = requests
+                .get(start..start + 4096)
+                .ok_or("SOURCE oracle request bounds")?;
+            let query = bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            require(
+                query.iter().all(|v| v.is_finite()),
+                "SOURCE oracle finite request",
+            )?;
+            let prepared = codec.prepare_query(&query, scratch)?;
+            validate_source_cover(&raw, 1000000, 1024, 40 * 1024 * 1024, |row| {
+                let start = row.checked_mul(264).ok_or("SOURCE oracle row offset")?;
+                let record = records
+                    .get(start..start + 264)
+                    .ok_or("SOURCE oracle record bounds")?;
+                Ok(prepared.score(record)?)
+            })?;
+            verified += 1;
+            Ok(())
+        },
+    )?;
+    require(
+        verified == 8 && run.samples.len() == 8,
+        "SOURCE oracle complete selected panel",
+    )?;
+    for snapshot in [
+        &root_snapshot,
+        &plane_snapshot,
+        &records_snapshot,
+        &mean_snapshot,
+        &digest_snapshot,
+        &request_snapshot,
+    ] {
+        snapshot.recheck()?;
+    }
+    Ok(
+        json!({"schema":ORACLE_SCHEMA,"status":"EXACT_RECORDED_SOURCE_COVER","complete":true,
+        "reduction_config_sha256":sha,"reduction_config_bytes":config_bytes,
+        "panel_input_sha256":c.panel.completed.input.sha256,"panel_input_bytes":c.panel.completed.input.bytes,
+        "selected_count":verified,"recall_numerator":panel["recall_numerator"],"recall_denominator":80,
+        "recorded_source_frontier_only":true,"independent_router_frontier_qualified":false,
+        "historical_rank_parity_qualified":false,"producer_provenance_qualified":false,
+        "cold_performance_claim":false,"vendor_win_claim":false}),
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParityConfig {
+    schema: String,
+    panel: PanelConfig,
+    historical_count_report: super::CompletedInput,
+}
+
+pub(super) fn reduce_parity(config: &std::path::Path, sha: &str) -> Result<Value> {
+    let (c, config_bytes): (ParityConfig, _) = super::read_config(config, sha)?;
+    require(
+        c.schema == "borsuk-v9-historical-count-parity-config-v1"
+            && c.panel.schema == "borsuk-current-v9-panel-reader-config-v1"
+            && c.panel.completed.schema == super::SCALE_CONFIG_SCHEMA,
+        "v9 historical parity config schema",
+    )?;
+    // Covers the capped historical JSON tree plus the panel reader workspace.
+    require(
+        c.panel.max_payload_bytes >= 160 * 1024 * 1024
+            && c.historical_count_report.bytes > 0
+            && c.historical_count_report.bytes <= 16 * 1024 * 1024
+            && c.historical_count_report.sha256
+                == "31dfa30cbf176254e7bec7cc8eb5288071f85cfbb9bb98455b61b3c87f5ec786",
+        "v9 historical report pin/payload",
+    )?;
+    let panel = read_candidate(
+        &c.panel.completed.input,
+        &c.panel.completed.expected_identity,
+        &c.panel.completed.expected_bound_inputs,
+        &[0, 1, 127, 255, 511, 767, 998, 999],
+        c.panel.max_payload_bytes,
+    )?;
+    let (bytes, snapshot) =
+        super::loss_binary(&c.historical_count_report, c.historical_count_report.bytes)?;
+    let super::UniqueJson(historical) = serde_json::from_slice(&bytes)?;
+    super::sq8_subpage_shortlist::validate_count_curve_report(&historical)?;
+    compare_historical(&panel, &historical)?;
+    snapshot.recheck()?;
+    Ok(
+        json!({"schema":PARITY_SCHEMA,"status":"EXACT_SELECTED_RANK_PARITY","complete":true,
+        "reduction_config_sha256":sha,"reduction_config_bytes":config_bytes,
+        "panel_input_sha256":c.panel.completed.input.sha256,"panel_input_bytes":c.panel.completed.input.bytes,
+        "selected_count":8,"recall_denominator":80,"recall_numerator":panel["recall_numerator"],
+        "historical_count_report_sha256":c.historical_count_report.sha256,
+        "exact_range_oracle_qualified":false,"producer_provenance_qualified":false,
+        "cold_performance_claim":false,"vendor_win_claim":false}),
+    )
+}
+
+fn compare_historical(panel: &Value, historical: &Value) -> Result<()> {
+    require(
+        historical["shortlist_sizes"] == json!([256, 512, 768, 1024]),
+        "historical 256 arm",
+    )?;
+    let queries = panel["queries"].as_array().ok_or("panel queries")?;
+    require(queries.len() == 8, "historical panel length")?;
+    for (query, ordinal) in queries.iter().zip([0, 1, 127, 255, 511, 767, 998, 999]) {
+        require(query["ordinal"] == ordinal, "historical panel ordinal")?;
+        let old = &historical["queries"][ordinal];
+        require(
+            old["ordinal"] == ordinal
+                && query["hits10"] == old["arms"][0]["quality"]["hits10"]
+                && query["charges"]["sq8"]["submitted_gets"] == old["arms"][0]["gets"]
+                && query["charges"]["sq8"]["verified_bytes"] == old["arms"][0]["physical_bytes"]
+                && query["plan"]["selected_pages"].as_array().map(Vec::len)
+                    == old["arms"][0]["selected_blocks"]
+                        .as_u64()
+                        .map(|n| n as usize),
+            "historical selected quality/geometry charges",
+        )?;
+        let now = query["returned"].as_array().ok_or("panel returned ranks")?;
+        let before = old["returned_evidence"][0]
+            .as_array()
+            .ok_or("historical returned ranks")?;
+        require(
+            now.len() == 10 && before.len() == 10,
+            "historical rank length",
+        )?;
+        for (now, before) in now.iter().zip(before) {
+            require(
+                now["id"] == before["id"] && now["score_bits"] == before["score_bits"],
+                "historical ordered ID/f32 score-bit parity",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelConfig {
+    schema: String,
+    completed: super::CompletedConfig,
+    max_payload_bytes: usize,
+}
+
+pub(super) fn reduce(config: &std::path::Path, sha: &str) -> Result<Value> {
+    let (c, config_bytes): (PanelConfig, _) = super::read_config(config, sha)?;
+    require(
+        c.schema == "borsuk-current-v9-panel-reader-config-v1"
+            && c.completed.schema == super::SCALE_CONFIG_SCHEMA,
+        "v9 panel CLI config schema",
+    )?;
+    let mut report = read_candidate(
+        &c.completed.input,
+        &c.completed.expected_identity,
+        &c.completed.expected_bound_inputs,
+        &[0, 1, 127, 255, 511, 767, 998, 999],
+        c.max_payload_bytes,
+    )?;
+    report["reduction_config_sha256"] = json!(sha);
+    report["reduction_config_bytes"] = json!(config_bytes);
+    Ok(report)
+}
+
 fn capped_header(value: &Value) -> Result<Vec<u8>> {
     // A fixed slice, not a growing Vec writer: rejection precedes any output
     // allocation beyond CONFIG_CAP, including a caller-supplied huge string.
@@ -20,6 +295,86 @@ fn capped_header(value: &Value) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod admission_tests {
     use super::*;
+
+    #[test]
+    fn v9_source_oracle_full_sort_ties_partial_tail_and_pre_score_refusal() {
+        let query = json!({"trace":{"nomination_evaluated_units":[8,7,6,5,4,3,2,1,0]},
+            "plan":{"page_rows":32,"selected_pages":[0,1,2,3,4,5,6,7],
+                "ranges":[[0,3584]],"planned_bytes":3584,"target_pages":8,
+                "target_shortfall":0,"primary_pages_retained":0,"covered_pages":8,"bridge_pages":0},
+            "charges":{"sq8":{"submitted_gets":1,"verified_bytes":3584,"failed_gets":0}}});
+        let mut calls = 0;
+        validate_source_cover(&query, 257, 2, 1 << 20, |_| {
+            calls += 1;
+            Ok(1.)
+        })
+        .unwrap();
+        assert_eq!(
+            calls, 257,
+            "all SOURCE rows are scored, including the unselected one-row tail"
+        );
+        let mut bad = query.clone();
+        bad["plan"]["target_pages"] = json!(9);
+        bad["plan"]["target_shortfall"] = json!(1);
+        assert!(validate_source_cover(&bad, 257, 2, 1 << 20, |_| Ok(1.)).is_err());
+        bad = query.clone();
+        bad["plan"]["selected_pages"] = json!([0, 1, 2, 3, 4, 5, 6, 8]);
+        assert!(validate_source_cover(&bad, 257, 2, 1 << 20, |_| Ok(1.)).is_err());
+        assert!(
+            validate_source_cover(&query, 257, 2, 1, |_| panic!("admission precedes scoring"))
+                .is_err()
+        );
+        bad = query.clone();
+        bad["trace"]["nomination_evaluated_units"] = json!([0, 0]);
+        assert!(
+            validate_source_cover(&bad, 257, 2, 1 << 20, |_| panic!(
+                "duplicate units precede scoring"
+            ))
+            .is_err()
+        );
+        assert!(validate_source_cover(&query, 257, 2, 1 << 20, |_| Ok(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn v9_historical_parity_checks_every_selected_rank_and_charge() {
+        let mut historical =
+            json!({"shortlist_sizes":[256,512,768,1024],"queries":vec![Value::Null;1000]});
+        let mut queries = Vec::new();
+        for ordinal in [0, 1, 127, 255, 511, 767, 998, 999] {
+            let returned = (0..10)
+                .map(|rank| json!({"id":ordinal*10+rank,"score_bits":1065353216-rank}))
+                .collect::<Vec<_>>();
+            queries.push(json!({"ordinal":ordinal,"hits10":9,"returned":returned,
+                "plan":{"selected_pages":[0,2]},"charges":{"sq8":{"submitted_gets":2,"verified_bytes":66304}}}));
+            historical["queries"][ordinal] = json!({"ordinal":ordinal,
+                "arms":[{"quality":{"hits10":9},"gets":2,"physical_bytes":66304,"selected_blocks":2}],
+                "returned_evidence":[returned]});
+        }
+        let panel = json!({"queries":queries});
+        compare_historical(&panel, &historical).unwrap();
+        for (pointer, value) in [
+            ("/queries/7/returned/9/id", json!(0)),
+            ("/queries/7/returned/9/score_bits", json!(0)),
+            ("/queries/7/hits10", json!(8)),
+            ("/queries/7/charges/sq8/submitted_gets", json!(3)),
+            ("/queries/7/charges/sq8/verified_bytes", json!(66303)),
+            ("/queries/7/plan/selected_pages", json!([0])),
+            ("/queries/7/ordinal", json!(998)),
+        ] {
+            let mut bad = panel.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(compare_historical(&bad, &historical).is_err(), "{pointer}");
+        }
+        let mut reordered = panel.clone();
+        reordered["queries"][0]["returned"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(compare_historical(&reordered, &historical).is_err());
+        let mut wrong_arm = historical;
+        wrong_arm["shortlist_sizes"] = json!([128, 512, 768, 1024]);
+        assert!(compare_historical(&panel, &wrong_arm).is_err());
+    }
 
     #[test]
     fn v9_header_serialization_is_bounded_before_validation() {
@@ -368,17 +723,25 @@ pub(super) fn read_candidate(
         expected_identity: identity.clone(),
         expected_bound_inputs: inputs.clone(),
     };
-    let run = super::read_run_with(&pin.path, &pin.sha256, Some(&config))?;
+    let mut plans = Vec::with_capacity(selected.len());
+    let run = super::read_run_observed(&pin.path, &pin.sha256, Some(&config), |line, _, _| {
+        let super::UniqueJson(row) = serde_json::from_slice(line)?;
+        plans.push(row["plan"].clone());
+        Ok(())
+    })?;
+    require(plans.len() == selected.len(), "current observed plan count")?;
     require(
         run.terminal.underfilled_queries == 0,
         "current panel full-k",
     )?;
     Ok(
-        json!({"schema":"borsuk-current-v9-panel-reader-v1","selected_count":run.samples.len(),
+        json!({"schema":REPORT_SCHEMA,"status":"VALIDATED_PANEL","complete":true,
+        "panel_input_sha256":pin.sha256,"panel_input_bytes":pin.bytes,
+        "producer_provenance_qualified":false,"selected_count":run.samples.len(),
         "recall_denominator":run.terminal.recall_denominator,"recall_numerator":run.terminal.recall_numerator,
         "population_count":run.inputs.count,"exact_range_oracle_qualified":false,
         "historical_rank_parity_qualified":false,"cold_performance_claim":false,"vendor_win_claim":false,
-        "queries":selected.iter().zip(&run.samples).map(|(ordinal,s)| json!({"ordinal":ordinal,
+        "queries":selected.iter().zip(&run.samples).zip(&plans).map(|((ordinal,s),plan)| json!({"ordinal":ordinal,"plan":plan,
             "returned":s.returned.iter().map(|h|json!({"id":h.id,"score_bits":h.score_bits})).collect::<Vec<_>>(),
             "hits10":s.hits10,"charges":s.charges})).collect::<Vec<_>>() }),
     )
@@ -482,6 +845,83 @@ pub(super) fn validate_geometry(
             && charge["failed_gets"] == 0,
         "current exact SQ8 charges",
     )
+}
+
+// Offline oracle: retain every scored SOURCE row and full-sort it. This does
+// not call the serving heap, shortlist primitive, or production cover planner.
+pub(super) fn validate_source_cover(
+    query: &Value,
+    rows: usize,
+    dimensions: usize,
+    workspace_bytes: usize,
+    mut score: impl FnMut(usize) -> Result<f64>,
+) -> Result<()> {
+    require(
+        rows > 0 && rows <= 1_000_000 && dimensions > 0 && dimensions <= 1024,
+        "SOURCE oracle geometry",
+    )?;
+    let units = query["trace"]["nomination_evaluated_units"]
+        .as_array()
+        .ok_or("SOURCE oracle units")?;
+    require(
+        !units.is_empty() && units.len() <= rows.div_ceil(32),
+        "SOURCE oracle unit count",
+    )?;
+    require(
+        units
+            .len()
+            .checked_mul(64)
+            .and_then(|n| n.checked_add(4096))
+            .is_some_and(|n| n <= workspace_bytes),
+        "SOURCE oracle unit workspace admission",
+    )?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut count = 0usize;
+    for unit in units {
+        let unit = usize::try_from(unit.as_u64().ok_or("SOURCE oracle unit integer")?)?;
+        require(
+            unit < rows.div_ceil(32) && seen.insert(unit),
+            "SOURCE oracle unique bounded units",
+        )?;
+        count = count
+            .checked_add(((unit + 1) * 32).min(rows) - unit * 32)
+            .ok_or("SOURCE oracle count")?;
+    }
+    let modeled = count
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(units.len() * 64))
+        .and_then(|n| n.checked_add(32768))
+        .ok_or("SOURCE oracle workspace overflow")?;
+    require(
+        modeled <= workspace_bytes,
+        "SOURCE oracle workspace admission",
+    )?;
+    let mut scored = Vec::new();
+    scored.try_reserve_exact(count)?;
+    for unit in seen {
+        for row in unit * 32..((unit + 1) * 32).min(rows) {
+            let value = score(row)?;
+            require(value.is_finite(), "SOURCE oracle finite score")?;
+            scored.push((row, value));
+        }
+    }
+    scored.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let selected = scored
+        .iter()
+        .take(256)
+        .map(|p| p.0 / 32)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    require(
+        query["plan"]["selected_pages"] == json!(selected),
+        "SOURCE full-sort block parity",
+    )?;
+    require(
+        query["plan"]["target_pages"] == selected.len() && query["plan"]["target_shortfall"] == 0,
+        "SOURCE oracle exact target accounting",
+    )?;
+    validate_geometry(query, rows, dimensions, 30, 33554432)
 }
 
 #[cfg(test)]

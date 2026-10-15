@@ -5817,6 +5817,35 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
+    if schema == v9_panel::ORACLE_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "EXACT_RECORDED_SOURCE_COVER"
+            && report["complete"] == true
+            && report["selected_count"] == 8
+            && report["recorded_source_frontier_only"] == true
+            && report["independent_router_frontier_qualified"] == false
+            && report["producer_provenance_qualified"] == false
+            && report["cold_performance_claim"] == false
+            && report["vendor_win_claim"] == false);
+    }
+    if schema == v9_panel::PARITY_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "EXACT_SELECTED_RANK_PARITY"
+            && report["complete"] == true
+            && report["selected_count"] == 8
+            && report["exact_range_oracle_qualified"] == false
+            && report["producer_provenance_qualified"] == false
+            && report["cold_performance_claim"] == false
+            && report["vendor_win_claim"] == false);
+    }
+    if schema == v9_panel::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "VALIDATED_PANEL"
+            && report["complete"] == true
+            && report["producer_provenance_qualified"] == false
+            && report["cold_performance_claim"] == false
+            && report["vendor_win_claim"] == false);
+    }
     if schema == v9_fixture::REPORT_SCHEMA {
         return Ok(report["schema"] == schema
             && report["status"] == "IDENTITY_REBOUND_PROOFS_ONLY"
@@ -9801,6 +9830,48 @@ fn main() {
                 reduce_scale(
                     Path::new(&args[2]),
                     args[3].to_str().ok_or("config SHA256 encoding")?,
+                )
+            });
+        }
+        if args.get(1).is_some_and(|arg| arg == "--completed-v9-panel") {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --completed-v9-panel CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), v9_panel::REPORT_SCHEMA, || {
+                v9_panel::reduce(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA encoding")?,
+                )
+            });
+        }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--v9-historical-count-parity")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --v9-historical-count-parity CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), v9_panel::PARITY_SCHEMA, || {
+                v9_panel::reduce_parity(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA encoding")?,
+                )
+            });
+        }
+        if args
+            .get(1)
+            .is_some_and(|arg| arg == "--v9-source-cover-oracle")
+        {
+            require(
+                args.len() == 5,
+                "usage: compare_native_replay --v9-source-cover-oracle CONFIG CONFIG_SHA NEW_REPORT",
+            )?;
+            return execute_report(Path::new(&args[4]), v9_panel::ORACLE_SCHEMA, || {
+                v9_panel::reduce_oracle(
+                    Path::new(&args[2]),
+                    args[3].to_str().ok_or("config SHA encoding")?,
                 )
             });
         }
@@ -16266,12 +16337,76 @@ mod tests {
         assert_eq!(valid["selected_count"], 8);
         assert_eq!(valid["recall_denominator"], 80);
         assert_eq!(valid["exact_range_oracle_qualified"], false);
+        let panel_bytes = encode(&rows);
+        let config = json!({"schema":"borsuk-current-v9-panel-reader-config-v1",
+            "completed":{"schema":SCALE_CONFIG_SCHEMA,
+                "input":{"path":dir.path().join("panel.jsonl"),"bytes":panel_bytes.len(),"sha256":sha(&panel_bytes)},
+                "expected_identity":rows[0],"expected_bound_inputs":rows[1]},
+            "max_payload_bytes":8*1024*1024});
+        let config_path = dir.path().join("panel-config.json");
+        let config_bytes = serde_json::to_vec(&config).unwrap();
+        std::fs::write(&config_path, &config_bytes).unwrap();
+        let output = dir.path().join("panel-report.json");
+        assert!(
+            execute_report(&output, v9_panel::REPORT_SCHEMA, || v9_panel::reduce(
+                &config_path,
+                &sha(&config_bytes)
+            ))
+            .unwrap()
+        );
+        let saved = std::fs::read(&output).unwrap();
+        let report: Value = serde_json::from_slice(&saved).unwrap();
+        assert_eq!(report["status"], "VALIDATED_PANEL");
+        assert_eq!(report["producer_provenance_qualified"], false);
+        assert_eq!(report["reduction_config_sha256"], sha(&config_bytes));
+        assert_eq!(report["reduction_config_bytes"], config_bytes.len());
+        assert_eq!(report["panel_input_sha256"], sha(&panel_bytes));
+        assert_eq!(report["panel_input_bytes"], panel_bytes.len());
+        assert!(
+            execute_report(&output, v9_panel::REPORT_SCHEMA, || panic!(
+                "existing output must refuse before reduction"
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), saved);
+        assert!(v9_panel::reduce(&config_path, &"0".repeat(64)).is_err());
+        let mut unknown = config.clone();
+        unknown["unexpected"] = json!(true);
+        let unknown_bytes = serde_json::to_vec(&unknown).unwrap();
+        std::fs::write(&config_path, &unknown_bytes).unwrap();
+        assert!(v9_panel::reduce(&config_path, &sha(&unknown_bytes)).is_err());
+        let invalid_output = dir.path().join("invalid-panel-report.json");
+        assert!(
+            !execute_report(&invalid_output, v9_panel::REPORT_SCHEMA, || {
+                v9_panel::reduce(&config_path, &sha(&unknown_bytes))
+            })
+            .unwrap()
+        );
+        let invalid: Value =
+            serde_json::from_slice(&std::fs::read(invalid_output).unwrap()).unwrap();
+        assert_eq!(invalid["status"], "INVALID");
         let mut changed_header = rows.clone();
         changed_header[0]["config_sha256"] = json!("7".repeat(64));
         authenticate(&mut changed_header);
         let changed_bytes = encode(&changed_header);
         let changed_path = dir.path().join("independent-header.jsonl");
         std::fs::write(&changed_path, &changed_bytes).unwrap();
+        let alternate = v9_panel::read_candidate(
+            &CompletedInput {
+                path: changed_path.clone(),
+                bytes: changed_bytes.len() as u64,
+                sha256: sha(&changed_bytes),
+            },
+            &changed_header[0],
+            &changed_header[1],
+            &[0, 1, 127, 255, 511, 767, 998, 999],
+            8 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_ne!(
+            alternate["panel_input_sha256"], valid["panel_input_sha256"],
+            "valid panels with different runtime identities retain different evidence identities"
+        );
         assert!(
             v9_panel::read_candidate(
                 &CompletedInput {
@@ -16397,6 +16532,73 @@ mod tests {
     }
 
     #[test]
+    fn v9_oracle_rejects_bad_plane_before_opening_source_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let digests = vec![0u8; 1000000];
+        let digest_path = dir.path().join("digests");
+        std::fs::write(&digest_path, &digests).unwrap();
+        let records_path = dir.path().join("MUST_NOT_OPEN_RECORDS");
+        for (key, value) in [
+            ("schema", json!("wrong")),
+            ("seed", json!(0)),
+            ("page_rows", json!(64)),
+            ("generation", json!(0)),
+        ] {
+            let mut rows = v9_panel_fixture();
+            let mut plane = json!({"schema":"borsuk-two-bit-plane-v3","rows":1000000,"dimensions":1024,
+                "seed":20260923,"record_bytes":264,"source_sha256":rows[1]["native_source_sha256"],
+                "sq8_sha256":rows[1]["native_sq8_sha256"],"source_order_sha256":rows[1]["native_order_sha256"],
+                "mean_sha256":"0".repeat(64),"records_sha256":"0".repeat(64),"page_rows":32,
+                "page_digest_sha256":sha(&digests),"query_or_truth_used":false});
+            if key != "generation" {
+                plane[key] = value.clone();
+            }
+            let plane_bytes = serde_json::to_vec(&plane).unwrap();
+            let plane_path = dir.path().join("plane.json");
+            std::fs::write(&plane_path, &plane_bytes).unwrap();
+            let root = json!({"generation":if key=="generation" {value.clone()} else {json!(1)},
+                "plane_manifest_sha256":sha(&plane_bytes),"sq8_object_sha256":rows[1]["native_sq8_sha256"]});
+            let root_bytes = serde_json::to_vec(&root).unwrap();
+            let root_sha = sha(&root_bytes);
+            let root_path = dir.path().join("root.json");
+            std::fs::write(&root_path, &root_bytes).unwrap();
+            for row in &mut rows {
+                if row.get("generation_root_sha256").is_some() {
+                    row["generation_root_sha256"] = json!(root_sha);
+                }
+                if row["phase"] == "terminal" {
+                    row["summary"]["generation_root_sha256"] = json!(root_sha);
+                }
+            }
+            authenticate(&mut rows);
+            let body = encode(&rows);
+            let panel_path = dir.path().join("panel.jsonl");
+            std::fs::write(&panel_path, &body).unwrap();
+            let config = json!({"schema":"borsuk-v9-source-cover-oracle-config-v1",
+                "panel":{"schema":"borsuk-current-v9-panel-reader-config-v1",
+                    "completed":{"schema":SCALE_CONFIG_SCHEMA,"input":{"path":panel_path,"bytes":body.len(),"sha256":sha(&body)},
+                        "expected_identity":rows[0],"expected_bound_inputs":rows[1]},"max_payload_bytes":384*1024*1024},
+                "generation_manifest":{"path":root_path,"bytes":root_bytes.len(),"sha256":root_sha},
+                "plane_manifest":{"path":plane_path,"bytes":plane_bytes.len(),"sha256":sha(&plane_bytes)},
+                "records":{"path":records_path,"bytes":264000000,"sha256":"0".repeat(64)},
+                "mean":{"path":dir.path().join("MUST_NOT_OPEN_MEAN"),"bytes":4096,"sha256":"0".repeat(64)},
+                "source_digests":{"path":digest_path,"bytes":digests.len(),"sha256":sha(&digests)},
+                "requests":{"path":dir.path().join("MUST_NOT_OPEN_REQUESTS"),"bytes":4096000,"sha256":rows[1]["requests_sha256"]}});
+            let bytes = serde_json::to_vec(&config).unwrap();
+            let path = dir.path().join("oracle.json");
+            std::fs::write(&path, &bytes).unwrap();
+            let error = v9_panel::reduce_oracle(&path, &sha(&bytes))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.starts_with("SOURCE oracle authority"),
+                "{key}: {error}"
+            );
+            assert!(!records_path.exists());
+        }
+    }
+
+    #[test]
     fn v9_panel_reader_refuses_production_policy_before_opening_results() {
         let rows = v9_panel_fixture();
         let dir = tempfile::tempdir().unwrap();
@@ -16405,6 +16607,67 @@ mod tests {
             bytes: 4096,
             sha256: "9".repeat(64),
         };
+        let descriptor = |name: &str, bytes: u64, sha256: Value| {
+            json!({
+            "path":dir.path().join(name),"bytes":bytes,"sha256":sha256})
+        };
+        let oracle = json!({"schema":"borsuk-v9-source-cover-oracle-config-v1",
+            "panel":{"schema":"borsuk-current-v9-panel-reader-config-v1",
+                "completed":{"schema":SCALE_CONFIG_SCHEMA,"input":pin,
+                    "expected_identity":rows[0],"expected_bound_inputs":rows[1]},
+                "max_payload_bytes":384*1024*1024},
+            "generation_manifest":descriptor("unopened-root",27000,rows[1]["generation_root_sha256"].clone()),
+            "plane_manifest":descriptor("unopened-plane",1000,json!("1".repeat(64))),
+            "records":descriptor("unopened-records",264000000,json!("2".repeat(64))),
+            "mean":descriptor("unopened-mean",4096,json!("3".repeat(64))),
+            "source_digests":descriptor("unopened-digests",1000000,json!("4".repeat(64))),
+            "requests":descriptor("unopened-requests",4096000,rows[1]["requests_sha256"].clone())});
+        for (pointer, value, expected) in [
+            (
+                "/schema",
+                json!("wrong"),
+                "SOURCE oracle config/payload admission",
+            ),
+            (
+                "/panel/max_payload_bytes",
+                json!(1),
+                "SOURCE oracle config/payload admission",
+            ),
+            (
+                "/records/bytes",
+                json!(263999999),
+                "SOURCE oracle descriptor binding",
+            ),
+            (
+                "/plane_manifest/bytes",
+                json!(65537),
+                "SOURCE oracle descriptor binding",
+            ),
+            (
+                "/generation_manifest/sha256",
+                json!("0".repeat(64)),
+                "SOURCE oracle descriptor binding",
+            ),
+            (
+                "/requests/sha256",
+                json!("0".repeat(64)),
+                "SOURCE oracle descriptor binding",
+            ),
+        ] {
+            let mut bad = oracle.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            let path = dir.path().join("oracle-admission.json");
+            std::fs::write(&path, &bytes).unwrap();
+            assert_eq!(
+                v9_panel::reduce_oracle(&path, &sha(&bytes))
+                    .unwrap_err()
+                    .to_string(),
+                expected,
+                "{pointer}"
+            );
+        }
+        assert!(!pin.path.exists());
         let mut oversized_identity = rows[0].clone();
         oversized_identity["oversized"] = json!("x".repeat(CONFIG_CAP as usize));
         let error = v9_panel::read_candidate(
