@@ -1,0 +1,33 @@
+{
+  "source_commit": "ea3bf2b8c6f81dccf20dbd97023f3fb90bdba342",
+  "instance_id": "i-0e077bbe6462797cc",
+  "volume_id": "vol-06dfb80d92f4d4045",
+  "native_command_id": "63b6d9ea-ecba-48dc-8e2d-a76c9b6a5d3a",
+  "verifier_exit": 0,
+  "compute_closed": true,
+  "classification": "V9_CLI_ORACLE_NATIVE_QUALIFIED",
+  "stage_count": 15,
+  "source_files": 477,
+  "native_files": 444,
+  "focused_exact_tests_passed": 9,
+  "example_roster_count": 261,
+  "full_example_runtime_repeated": false,
+  "reused_full_example": {
+    "source_commit": "ccbb561bec72e97bc18df363ea307616811af264",
+    "passed": 258,
+    "failed": 0,
+    "ignored": 0,
+    "receipt_sha256": "52cc6700a6437a28ea5c864e1297468f393800f55ebf01f9538f9c590616a7c2"
+  },
+  "source_unchanged": true,
+  "retained_release": {
+    "source_commit": "ea3bf2b8c6f81dccf20dbd97023f3fb90bdba342",
+    "archive_sha256": "f7649591755907dee33078d2817d945d069b30f8527ca142beaeed5356c5cf66",
+    "archive_bytes": 12748800,
+    "performance_claim": false
+  },
+  "retained_remote_archive_body_reauthenticated_locally": false,
+  "actual_input_panel_run": false,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false
+}
