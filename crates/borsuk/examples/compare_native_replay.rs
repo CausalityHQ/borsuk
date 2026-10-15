@@ -28,6 +28,9 @@
 //! NEW_REPORT. Rebinds proof metadata; no canonical publication or serving claim.
 #![recursion_limit = "256"]
 
+#[path = "compare_native_replay/sq8_panel_attribution.rs"]
+mod sq8_panel_attribution;
+
 #[path = "compare_native_replay/v9_fixture.rs"]
 mod v9_fixture;
 
@@ -1474,6 +1477,12 @@ fn open_input(path: &Path) -> Result<File> {
     )?))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadPolicy {
+    Existing,
+    Sq8PanelAttribution,
+}
+
 struct Rows {
     reader: BufReader<File>,
     line: Vec<u8>,
@@ -1483,6 +1492,7 @@ struct Rows {
     v2: bool,
     scale: bool,
     current: bool,
+    policy: ReadPolicy,
     line_cap: usize,
 }
 
@@ -1503,6 +1513,7 @@ impl Rows {
             v2: false,
             scale: false,
             current: false,
+            policy: ReadPolicy::Existing,
             line_cap: LINE_CAP,
         })
     }
@@ -1532,7 +1543,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
-        if self.current {
+        if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
+            sq8_panel_attribution::validate_v8_row(&self.line, phase)?;
+        } else if self.current {
             v9_panel::validate_row(&self.line, phase)?;
         } else if self.scale {
             validate_scale_row(&self.line, phase)?;
@@ -1604,9 +1617,31 @@ fn read_run_observed_with_identity(
     sha: &str,
     expected: Option<&CompletedConfig>,
     admitted_inode: Option<(u64, u64)>,
+    query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
+) -> Result<Run> {
+    read_run_observed_policy(
+        path,
+        sha,
+        expected,
+        admitted_inode,
+        ReadPolicy::Existing,
+        query,
+    )
+}
+
+fn read_run_observed_policy(
+    path: &Path,
+    sha: &str,
+    expected: Option<&CompletedConfig>,
+    admitted_inode: Option<(u64, u64)>,
+    policy: ReadPolicy,
     mut query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
 ) -> Result<Run> {
     require(valid_sha(sha), "result lowercase SHA256")?;
+    let diagnostic = policy == ReadPolicy::Sq8PanelAttribution;
+    if diagnostic {
+        sq8_panel_attribution::validate_completed(expected.ok_or("diagnostic expected headers")?)?;
+    }
     let mut rows = Rows::open(path)?;
     if let Some(inode) = admitted_inode {
         require(
@@ -1614,6 +1649,7 @@ fn read_run_observed_with_identity(
             "parity run changed before first content read",
         )?;
     }
+    rows.policy = policy;
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
@@ -1622,7 +1658,7 @@ fn read_run_observed_with_identity(
             c.expected_identity["schema"] == "borsuk-cohere-native-baseline-result-v9"
         });
     rows.current = current;
-    if current
+    if (current || diagnostic)
         && expected
             .is_some_and(|c| c.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel")
     {
@@ -1669,7 +1705,7 @@ fn read_run_observed_with_identity(
         scale && expected.is_some_and(|c| c.expected_bound_inputs["backend"]["kind"] == "local");
     let ordinals = if scale {
         let raw = &expected.ok_or("scale config")?.expected_bound_inputs;
-        if current {
+        if current || diagnostic {
             v9_panel::ordinals(raw, inputs.count)?
         } else {
             scale_ordinals(raw, inputs.count)?
@@ -1687,7 +1723,11 @@ fn read_run_observed_with_identity(
             "expected v2 input/root/backend pins",
         )?;
         if scale {
-            validate_scale_inputs_for_version(&inputs, &c.expected_bound_inputs, current)?;
+            validate_scale_inputs_for_version(
+                &inputs,
+                &c.expected_bound_inputs,
+                current || diagnostic,
+            )?;
             if current {
                 v9_panel::budgets(&c.expected_identity, &c.expected_bound_inputs)?;
             }
@@ -1707,7 +1747,13 @@ fn read_run_observed_with_identity(
         if panel {
             // The native untraced panel emits admission before any source or generation open.
             let admission: Value = rows.row("diagnostic_admission")?;
-            if current {
+            if diagnostic {
+                sq8_panel_attribution::validate_admission(
+                    &admission,
+                    &c.expected_bound_inputs,
+                    current,
+                )?;
+            } else if current {
                 v9_panel::validate_admission(&admission, &c.expected_bound_inputs)?;
             }
             require(
@@ -1716,7 +1762,7 @@ fn read_run_observed_with_identity(
                     && admission["population_count"] == inputs.count
                     && admission["execution"] == c.expected_bound_inputs["execution"]
                     && admission["trace"]
-                        == if current {
+                        == if current || diagnostic {
                             c.expected_bound_inputs["execution"]["trace"].clone()
                         } else {
                             json!(false)
@@ -5733,7 +5779,9 @@ fn compare(paths: &[(PathBuf, String); 4]) -> Result<Value> {
 }
 
 fn report_cap(schema: &str) -> u64 {
-    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
+    if schema == sq8_panel_attribution::REPORT_SCHEMA {
+        512 * 1024
+    } else if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
         || schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA
     {
         16 * 1024 * 1024
@@ -5817,6 +5865,16 @@ fn execute_report(
         "output/parent identity changed",
     )?;
     dir.sync_all()?;
+    if schema == sq8_panel_attribution::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["complete"] == true
+            && matches!(
+                report["status"].as_str(),
+                Some("MEASURED" | "INCONCLUSIVE_FIXED_PANEL")
+            )
+            && report["diagnostic_only"] == true
+            && report["population_percentiles_valid"] == false);
+    }
     if schema == v9_panel::ORACLE_SCHEMA {
         return Ok(report["schema"] == schema
             && report["status"] == "EXACT_RECORDED_SOURCE_COVER"
@@ -9302,6 +9360,34 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--sq8-panel-attribution") {
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "panel config SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(
+                        Path::new(&args[4]),
+                        sq8_panel_attribution::REPORT_SCHEMA,
+                        || sq8_panel_attribution::reduce(Path::new(&args[2]), sha),
+                    )
+                })
+        } else {
+            Err(
+                "usage: compare_native_replay --sq8-panel-attribution CONFIG CONFIG_SHA NEW_REPORT"
+                    .into(),
+            )
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--prepare-v9-fixture") {
         let result = if args.len() == 6 {
             args[3]
@@ -12716,7 +12802,7 @@ mod tests {
         rows
     }
 
-    fn encode(rows: &[Value]) -> Vec<u8> {
+    pub(super) fn encode(rows: &[Value]) -> Vec<u8> {
         let mut bytes = Vec::new();
         for row in rows {
             if row["phase"] == "query" && row.get("trace").is_some() {
@@ -12741,7 +12827,7 @@ mod tests {
         bytes
     }
 
-    fn authenticate(rows: &mut [Value]) {
+    pub(super) fn authenticate(rows: &mut [Value]) {
         let seal = rows
             .iter()
             .position(|v| v["phase"] == "all_queries_sealed")
@@ -13648,7 +13734,7 @@ mod tests {
         rows
     }
 
-    fn paired_scale_fixture(parallelism: u64) -> Vec<Value> {
+    pub(super) fn paired_scale_fixture(parallelism: u64) -> Vec<Value> {
         let mut rows = paired_v2_fixture(parallelism);
         rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v7");
         rows[0]["serving"] = json!({"mode":"baseline"});
