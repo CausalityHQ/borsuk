@@ -67,14 +67,13 @@ set -e
 printf '%s\n' "$original" > "$testroot/duplicate.exit"
 [[ $original != 0 && ! -e $testroot/evidence/chain-terminal.json ]]
 (cd "$testroot/evidence" && sha256sum --strict -c ../evidence.before.sha256) > "$testroot/duplicate-evidence-check.log"
-# shellcheck disable=SC2016 # Match literal source, not the canary's variables.
-sed -n '/^\[\[ $original == 254 \]\] || exit 1$/,/^grep -Fq/p' "$campaign/smoke-v9-object.sh" > "$testroot/absence-predicate.sh"
-[[ $(wc -l < "$testroot/absence-predicate.sh") == 2 ]]
+awk '/^absent() {/{on=1} on{print} on && /^}/{exit}' "$campaign/smoke-v9-object.sh" > "$testroot/absence-predicate.sh"
+[[ $(wc -l < "$testroot/absence-predicate.sh") == 3 ]]
 mkdir "$testroot/predicate"
 printf 'An error occurred (404) when calling the HeadObject operation: Not Found\n' > "$testroot/predicate/absent.stderr"
 for value in 0 124 254; do
  set +e
- /bin/bash -c 'set -euo pipefail; original=$1; ev=$2; source "$3"' bash "$value" "$testroot/predicate" "$testroot/absence-predicate.sh"
+ /bin/bash -c 'set -euo pipefail; source "$3"; absent "$1" "$2/absent.stderr"' bash "$value" "$testroot/predicate" "$testroot/absence-predicate.sh"
  observed=$?
  set -e
  printf '%s %s\n' "$value" "$observed" >> "$testroot/predicate.out"
@@ -82,7 +81,7 @@ for value in 0 124 254; do
 done
 printf 'AccessDenied\n' > "$testroot/predicate/absent.stderr"
 set +e
-/bin/bash -c 'set -euo pipefail; original=254; ev=$1; source "$2"' bash "$testroot/predicate" "$testroot/absence-predicate.sh"
+/bin/bash -c 'set -euo pipefail; source "$2"; absent 254 "$1/absent.stderr"' bash "$testroot/predicate" "$testroot/absence-predicate.sh"
 observed=$?
 set -e
 [[ $observed != 0 ]]
