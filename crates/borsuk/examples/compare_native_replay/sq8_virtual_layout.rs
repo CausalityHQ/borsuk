@@ -1,34 +1,157 @@
-//! INTENTIONAL missing-coordinate-integration RED scaffold, not a candidate.
+//! SOURCE-preserving SQ8 placement and accounting for the offline falsifier.
 #![allow(dead_code)]
 use crate::unit_layout::{SourceRow, Sq8Row, UnitLayout};
 use borsuk::sq8_page_authority::{
     PageAuthority, SelectedSq8Limits, SelectedSq8Plan, plan_selected_sq8_rows,
 };
-use std::collections::BTreeMap;
-struct MappedAdmission {
-    source_rows: Vec<SourceRow>,
-    sq8_rows: Vec<Sq8Row>,
-    plan: SelectedSq8Plan,
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{Read, Seek, SeekFrom},
+};
+
+type Result<T> = super::super::Result<T>;
+use super::super::require;
+pub(super) struct MappedAdmission {
+    pub(super) source_rows: Vec<SourceRow>,
+    pub(super) sq8_rows: Vec<Sq8Row>,
+    pub(super) plan: SelectedSq8Plan,
 }
-fn admit_source_blocks(
+fn add(a: usize, b: usize) -> Result<usize> {
+    a.checked_add(b)
+        .ok_or_else(|| "mapped payload overflow".into())
+}
+fn mul(a: usize, b: usize) -> Result<usize> {
+    a.checked_mul(b)
+        .ok_or_else(|| "mapped payload overflow".into())
+}
+
+/// SOURCE scores and tie keys stay in original coordinates; only the trial
+/// canonical cover uses destination rows. Borrowed inputs/layout are caller funded.
+pub(super) fn admit_source_blocks(
     authority: &PageAuthority,
-    _layout: &UnitLayout,
+    layout: &UnitLayout,
     scored: &[(usize, f64)],
     nominees: &[usize],
     limits: SelectedSq8Limits,
     cap: usize,
-) -> super::super::Result<MappedAdmission> {
-    let selected = super::budget_admit_shortlist_blocks(authority, scored, nominees, limits, cap)?;
-    let plan = plan_selected_sq8_rows(authority, &selected, limits)
-        .map_err(|e| format!("identity scaffold cover {e:?}"))?;
+) -> Result<MappedAdmission> {
+    let (rows, unit_rows) = layout.geometry();
+    require(
+        rows == authority.rows() && unit_rows == authority.page_rows(),
+        "mapped authority/layout geometry",
+    )?;
+    require(
+        !nominees.is_empty()
+            && nominees.len() <= 1024
+            && nominees.last().is_some_and(|&r| r < rows)
+            && nominees.windows(2).all(|p| p[0] < p[1]),
+        "mapped SOURCE nominees",
+    )?;
+    let planner = add(mul(nominees.len(), 512)?, 4096)?;
+    require(
+        add(mul(nominees.len(), 640)?, 4096)? <= cap && planner <= limits.max_planner_bytes,
+        "mapped simultaneous planner payload",
+    )?;
+    let mut ranked = Vec::with_capacity(nominees.len());
+    for &(source, score) in scored {
+        require(source < rows && score.is_finite(), "mapped SOURCE score")?;
+        if nominees.binary_search(&source).is_ok() {
+            require(ranked.len() < nominees.len(), "mapped bounded score count")?;
+            ranked.push((source, score));
+        }
+    }
+    require(
+        ranked.len() == nominees.len(),
+        "mapped complete SOURCE scores",
+    )?;
+    ranked.sort_unstable_by_key(|&(r, _)| r);
+    require(
+        ranked.windows(2).all(|p| p[0].0 < p[1].0),
+        "mapped unique SOURCE scores",
+    )?;
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        (a / unit_rows)
+            .cmp(&(b / unit_rows))
+            .then(sb.total_cmp(&sa))
+            .then(a.cmp(&b))
+    });
+    ranked.dedup_by(|a, b| a.0 / unit_rows == b.0 / unit_rows);
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        sb.total_cmp(&sa)
+            .then((a / unit_rows).cmp(&(b / unit_rows)))
+    });
+    let mut accepted = Vec::<usize>::with_capacity(ranked.len());
+    for &(source, _) in &ranked {
+        let destination = layout
+            .sq8_row(SourceRow(source))
+            .ok_or("mapped forward row")?
+            .0;
+        let representative = mul(destination / unit_rows, unit_rows)?;
+        let index = accepted
+            .binary_search(&representative)
+            .err()
+            .ok_or("mapped duplicate destination unit")?;
+        accepted.insert(index, representative);
+        match plan_selected_sq8_rows(authority, &accepted, limits) {
+            Ok(_) => {}
+            Err(borsuk::budgeted_page_rank::BudgetedPageError::InsufficientBudget) => {
+                accepted.remove(index);
+            }
+            Err(e) => return Err(format!("mapped canonical planner {e:?}").into()),
+        }
+    }
+    require(!accepted.is_empty(), "mapped no affordable unit")?;
+    let mut source_rows = Vec::with_capacity(nominees.len());
+    let mut sq8_rows = Vec::with_capacity(nominees.len());
+    for &source in nominees {
+        let destination = layout
+            .sq8_row(SourceRow(source))
+            .ok_or("mapped nominee row")?;
+        if accepted
+            .binary_search(&mul(destination.0 / unit_rows, unit_rows)?)
+            .is_ok()
+        {
+            source_rows.push(SourceRow(source));
+            sq8_rows.push(destination);
+        }
+    }
+    sq8_rows.sort_unstable_by_key(|r| r.0);
+    let target_rows = sq8_rows.iter().map(|r| r.0).collect::<Vec<_>>();
+    let owned = add(
+        add(
+            mul(ranked.capacity(), std::mem::size_of::<(usize, f64)>())?,
+            mul(accepted.capacity(), 8)?,
+        )?,
+        add(
+            add(
+                mul(source_rows.capacity(), std::mem::size_of::<SourceRow>())?,
+                mul(sq8_rows.capacity(), std::mem::size_of::<Sq8Row>())?,
+            )?,
+            mul(target_rows.capacity(), 8)?,
+        )?,
+    )?;
+    require(
+        add(owned, planner)? <= cap,
+        "mapped actual capacity payload",
+    )?;
+    let plan = plan_selected_sq8_rows(authority, &target_rows, limits)
+        .map_err(|e| format!("mapped final cover {e:?}"))?;
+    require(
+        plan.ranges.len() <= limits.max_gets && plan.planned_bytes <= limits.max_bytes,
+        "mapped final cap parity",
+    )?;
     Ok(MappedAdmission {
-        source_rows: selected.iter().copied().map(SourceRow).collect(),
-        sq8_rows: selected.iter().copied().map(Sq8Row).collect(),
+        source_rows,
+        sq8_rows,
         plan,
     })
 }
+
+/// Membership discovery is always SOURCE-unit based; coverage/returned ordinals
+/// belong to the destination SQ8 object. Do not materialize a second ID map.
 #[allow(clippy::too_many_arguments)]
-fn assess_arm_mapped(
+pub(super) fn assess_arm_mapped(
     arm: &super::ShortlistArm,
     truth: &[u64],
     baseline: &[crate::Hit],
@@ -36,16 +159,183 @@ fn assess_arm_mapped(
     scored_units: &[usize],
     layout: &UnitLayout,
     dimensions: usize,
-) -> super::super::Result<Option<super::ArmQuality>> {
-    super::assess_arm(
-        arm,
-        truth,
-        baseline,
-        source_positions,
-        scored_units,
-        layout.geometry().0,
-        dimensions,
-    )
+) -> Result<Option<super::ArmQuality>> {
+    let Some(returned) = &arm.returned else {
+        return Ok(None);
+    };
+    let (rows, unit_rows) = layout.geometry();
+    require(
+        unit_rows == 32 && dimensions > 0 && truth.len() == crate::K && returned.len() == crate::K,
+        "mapped quality geometry/full-k",
+    )?;
+    require(
+        scored_units.windows(2).all(|p| p[0] < p[1])
+            && scored_units.last().is_none_or(|&u| u < rows.div_ceil(32)),
+        "mapped SOURCE discovery roster",
+    )?;
+    require(
+        arm.selected.windows(2).all(|p| p[0] < p[1])
+            && arm.selected.last().is_none_or(|&r| r < rows),
+        "mapped selected target roster",
+    )?;
+    let width = add(dimensions, 12)?;
+    let covered = |physical: usize| {
+        arm.ranges
+            .iter()
+            .any(|r| r.start / width <= physical && physical < r.end / width)
+    };
+    let mapped = |id: u64| -> Result<(usize, usize)> {
+        let source = *source_positions
+            .get(&id)
+            .ok_or("mapped ID/SOURCE position")?;
+        let target = layout
+            .sq8_row(SourceRow(source))
+            .ok_or("mapped ID/target position")?
+            .0;
+        Ok((source, target))
+    };
+    let mut seen = BTreeSet::new();
+    for point in returned {
+        require(
+            point.id >= 0
+                && (point.id as usize) < rows
+                && point.score.is_finite()
+                && seen.insert(point.id),
+            "mapped returned ID/score/uniqueness",
+        )?;
+        let (_, target) = mapped(point.id as u64)?;
+        require(
+            point.ordinal == target && covered(target),
+            "mapped returned target ordinal/cover",
+        )?;
+    }
+    let blocks = arm
+        .selected
+        .iter()
+        .map(|r| r / unit_rows)
+        .collect::<BTreeSet<_>>();
+    let mut quality = super::ArmQuality::default();
+    let mut original_hits = 0;
+    for &id in truth {
+        let (source, target) = mapped(id)?;
+        let original = baseline.iter().any(|h| h.id == id);
+        let found = returned.iter().any(|h| h.id as u64 == id);
+        let selected_row = arm.selected.binary_search(&target).is_ok();
+        let selected_block = blocks.contains(&(target / unit_rows));
+        original_hits += usize::from(original);
+        quality.hits10 += usize::from(found);
+        quality.gained += usize::from(found && !original);
+        quality.lost += usize::from(original && !found);
+        quality.shortlist_truth_rows += usize::from(selected_row);
+        quality.selected_block_truth_rows += usize::from(selected_block);
+        if found {
+            quality.bridge_rescued_hits += usize::from(!selected_block);
+            quality.block_expansion_rescued_hits += usize::from(selected_block && !selected_row);
+        } else if !covered(target) {
+            quality.miss_buckets
+                [usize::from(scored_units.binary_search(&(source / 32)).is_ok())] += 1;
+        } else {
+            quality.miss_buckets[if selected_row { 2 } else { 3 }] += 1;
+        }
+    }
+    require(
+        quality.hits10 + quality.miss_buckets.iter().sum::<usize>() == crate::K
+            && original_hits + quality.gained == quality.hits10 + quality.lost,
+        "mapped quality conservation",
+    )?;
+    Ok(Some(quality))
+}
+
+/// Read/authenticate one bounded native leaf at a time. No request/truth inputs
+/// exist in this interface, and no centroid plane is decoded or trained here.
+pub(super) fn layout_from_router_leaves<R: Read + Seek>(
+    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
+    input: &mut R,
+    cap: usize,
+) -> Result<UnitLayout> {
+    let m = router.manifest();
+    require(
+        m.unit_rows == 32 && m.rows > 0 && m.unit_count == m.rows.div_ceil(32),
+        "router layout geometry",
+    )?;
+    let maximum = m
+        .leaves
+        .iter()
+        .map(|l| l.bytes)
+        .max()
+        .ok_or("router layout no leaves")?;
+    let leaf_units = m
+        .leaves
+        .iter()
+        .map(|l| l.unit_count)
+        .max()
+        .ok_or("router layout no units")?;
+    let maps = UnitLayout::required_bytes(m.rows, 32)?;
+    let scratch = add(mul(leaf_units, 128)?, 65536)?;
+    let modeled = add(add(mul(m.unit_count, 4)?, maps)?, add(maximum, scratch)?)?;
+    require(modeled <= cap, "router layout simultaneous payload")?;
+    require(
+        input.seek(SeekFrom::End(0))? == u64::try_from(m.leaf_payload.bytes)?,
+        "router layout payload length",
+    )?;
+    let mut order = Vec::<u32>::new();
+    order.try_reserve_exact(m.unit_count)?;
+    let mut body = Vec::new();
+    body.try_reserve_exact(maximum)?;
+    body.resize(maximum, 0_u8);
+    require(
+        add(
+            add(mul(order.capacity(), 4)?, maps)?,
+            add(body.capacity(), scratch)?,
+        )? <= cap,
+        "router layout actual capacity",
+    )?;
+    let partial = (m.rows % 32 != 0).then_some(m.unit_count - 1);
+    let mut tail_seen = false;
+    let mut offset = 0_usize;
+    let mut whole = Sha256::new();
+    for (id, leaf) in m.leaves.iter().enumerate() {
+        require(
+            leaf.leaf_id == id && leaf.offset == offset && leaf.bytes <= maximum,
+            "router layout contiguous leaves",
+        )?;
+        let stop = add(offset, leaf.bytes)?;
+        require(stop <= m.leaf_payload.bytes, "router layout leaf bound")?;
+        input.seek(SeekFrom::Start(u64::try_from(offset)?))?;
+        input.read_exact(&mut body[..leaf.bytes])?;
+        let units = router.validate_leaf(id, &body[..leaf.bytes])?;
+        require(
+            add(order.len(), units.len())? <= m.unit_count,
+            "router layout bounded roster",
+        )?;
+        whole.update(&body[..leaf.bytes]);
+        for unit in units {
+            if Some(unit) == partial {
+                require(!tail_seen, "router layout duplicate partial tail")?;
+                tail_seen = true;
+            } else {
+                order.push(u32::try_from(unit)?);
+            }
+        }
+        offset = stop;
+    }
+    require(
+        offset == m.leaf_payload.bytes
+            && format!("{:x}", whole.finalize()) == m.leaf_payload.sha256,
+        "router layout whole payload hash",
+    )?;
+    if let Some(tail) = partial {
+        require(tail_seen, "router layout missing partial tail")?;
+        order.push(u32::try_from(tail)?);
+    }
+    require(
+        order.len() == m.unit_count
+            && input.seek(SeekFrom::End(0))? == u64::try_from(m.leaf_payload.bytes)?,
+        "router layout complete stable payload",
+    )?;
+    Ok(UnitLayout::from_destination_order(
+        m.rows, 32, &order, maps,
+    )?)
 }
 // Prospective next driver fixture. Not in frozen07/current qualification.
 // Missing-feature oracle: retaining physical-coordinate tie keys after mapping
@@ -212,22 +502,6 @@ mod mapped_quality_tests {
         };
         assert!(assess_arm_mapped(&arm, &truth, &baseline, &positions, &[0], &layout, 2).is_err());
     }
-}
-
-// Intentional missing-authentication/payload-order scaffold, not production.
-fn layout_from_router_leaves<R: std::io::Read + std::io::Seek>(
-    router: &borsuk::semantic_unit_router::SemanticUnitRouter,
-    _input: &mut R,
-    cap: usize,
-) -> super::super::Result<UnitLayout> {
-    let m = router.manifest();
-    let identity = (0..m.unit_count).map(|u| u as u32).collect::<Vec<_>>();
-    Ok(UnitLayout::from_destination_order(
-        m.rows,
-        m.unit_rows,
-        &identity,
-        cap,
-    )?)
 }
 // Prospective query-free preparation fixture. Not in current a655 run.
 #[cfg(test)]
