@@ -3,7 +3,7 @@
 set -euo pipefail
 [[ $# == 2 && $1 =~ ^[0-9]{1,3}$ && $2 =~ ^[a-z][a-z0-9-]*$ ]] || exit 125
 original=$1; phase=$2; root=/mnt/borsuk-v9-panel
-prefix=research/semantic-router/20261015/source-shortlist-v9-cold-a0001/terminal
+prefix=research/semantic-router/20261015/source-shortlist-v9-cold-a0002/terminal
 export AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 AWS_PAGER=''
 [[ ! -e $root/evidence/cleanup-unverified ]] || exit 125
 support=$(jq -er '.support_sha256|select(test("^[a-f0-9]{64}$"))' "$root/evidence/setup.json")

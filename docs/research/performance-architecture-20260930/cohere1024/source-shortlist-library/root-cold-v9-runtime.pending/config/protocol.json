@@ -304,5 +304,13 @@
     "owned_failure_smoke_cleanup": true,
     "remote_source_bound_fault_canary_required": true,
     "runtime_verified": false
+  },
+  "previous_attempt": {
+    "id": "a0001",
+    "classification": "EXECUTION_INVALID_CONTROL_CANARY_EXTRACTION",
+    "ann_executed": false,
+    "instance": "i-025c485e0f0d533ea",
+    "compute_closed": true,
+    "archive_sha256": "37c9bcd09c5656cd5f3c2e8867c9221dd34f020c35d674a509fcb657f8b5fcdb"
   }
 }

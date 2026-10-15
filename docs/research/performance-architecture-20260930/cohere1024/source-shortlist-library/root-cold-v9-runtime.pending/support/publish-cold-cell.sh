@@ -27,7 +27,7 @@ put() {
  local file=$1 leaf=$2 cap=$3 left
  left=$((deadline-$(date +%s)-2)); ((left>0)) || return 125
  ((left<=cap)) || left=$cap
- /usr/bin/timeout -k 2 "$left" aws --cli-connect-timeout 5 --cli-read-timeout 40 s3api put-object --bucket borsuk-bench-453182569524-euc1 --key "research/semantic-router/20261015/source-shortlist-v9-cold-a0001/cells/$name/$leaf" --body "$file" --if-none-match '*' > "$ev/$leaf.put.json"
+ /usr/bin/timeout -k 2 "$left" aws --cli-connect-timeout 5 --cli-read-timeout 40 s3api put-object --bucket borsuk-bench-453182569524-euc1 --key "research/semantic-router/20261015/source-shortlist-v9-cold-a0002/cells/$name/$leaf" --body "$file" --if-none-match '*' > "$ev/$leaf.put.json"
 }
 put "$result" result.jsonl 45
 put "$report" report.json 25

@@ -7,7 +7,7 @@ ev=$root/evidence/smoke-object
 mkdir -m 700 "$ev"
 token=$(cat /proc/sys/kernel/random/uuid)
 [[ $token =~ ^[a-f0-9-]{36}$ ]] || exit 125
-key=research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/v9-source-shortlist-cold-a0001/smoke-$token.json
+key=research/semantic-router/20261010/full1000-local-admission-a0004/retained-source/semantic/v9-source-shortlist-cold-a0002/smoke-$token.json
 printf '%s\n' "$key" > "$ev/key.txt"
 printf '%s\n' "$token" > "$ev/owner-token.txt"
 manifest=$root/config/candidate-generation.json

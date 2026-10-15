@@ -67,7 +67,7 @@ set -e
 printf '%s\n' "$original" > "$testroot/duplicate.exit"
 [[ $original != 0 && ! -e $testroot/evidence/chain-terminal.json ]]
 (cd "$testroot/evidence" && sha256sum --strict -c ../evidence.before.sha256) > "$testroot/duplicate-evidence-check.log"
-awk '/^absent() {/{on=1} on{print} on && /^}/{exit}' "$campaign/smoke-v9-object.sh" > "$testroot/absence-predicate.sh"
+awk '/^absent[(][)] [{]$/{on=1} on{print} on && /^[}]$/{exit}' "$campaign/smoke-v9-object.sh" > "$testroot/absence-predicate.sh"
 [[ $(wc -l < "$testroot/absence-predicate.sh") == 3 ]]
 mkdir "$testroot/predicate"
 printf 'An error occurred (404) when calling the HeadObject operation: Not Found\n' > "$testroot/predicate/absent.stderr"
