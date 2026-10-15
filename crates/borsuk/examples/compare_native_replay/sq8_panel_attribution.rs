@@ -328,7 +328,10 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value, current: bool) -> 
         require(
             cfg!(target_pointer_width = "64")
                 && (size_of::<Option<u64>>(), align_of::<Option<u64>>()) == (16, 8)
-                && (size_of::<std::path::PathBuf>(), align_of::<std::path::PathBuf>()) == (24, 8)
+                && (
+                    size_of::<std::path::PathBuf>(),
+                    align_of::<std::path::PathBuf>(),
+                ) == (24, 8)
                 && (size_of::<Vec<u8>>(), align_of::<Vec<u8>>()) == (24, 8),
             "panel pinned producer host sampler ABI",
         )?;
@@ -1586,10 +1589,16 @@ mod tests {
                 authenticate(&mut rows);
                 let c = completed(dir.path(), "semantic-mutation", &rows);
                 let mut config = good.clone();
-                config["runs"][slot]["completed"]["input"] = serde_json::to_value(&c.input).unwrap();
+                config["runs"][slot]["completed"]["input"] =
+                    serde_json::to_value(&c.input).unwrap();
                 let (p, s) = save_config(dir.path(), &config);
-                let error = reduce(&p, &s).err().expect("resealed contradiction accepted");
-                assert!(error.to_string().contains(expected_error), "{slot}: {error}");
+                let error = reduce(&p, &s)
+                    .err()
+                    .expect("resealed contradiction accepted");
+                assert!(
+                    error.to_string().contains(expected_error),
+                    "{slot}: {error}"
+                );
             }
         }
     }
