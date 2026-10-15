@@ -1,0 +1,108 @@
+{
+  "expected_bound_inputs": {
+    "backend": {
+      "bucket": "borsuk-bench-453182569524-euc1",
+      "kind": "s3",
+      "physical_prefix": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+      "region": "eu-central-1",
+      "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+      "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+    },
+    "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+    "corpus_intervals": [
+      {
+        "end": 100000,
+        "start": 0
+      },
+      {
+        "end": 1001000,
+        "start": 101000
+      }
+    ],
+    "corpus_source_first": 0,
+    "count": 1000,
+    "credential_source": "imds_instance_role_only",
+    "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+    "dimensions": 1024,
+    "execution": {
+      "mode": "full"
+    },
+    "fetch_parallelism": 64,
+    "generation_prefix": "semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638",
+    "generation_root_sha256": "80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638",
+    "k": 10,
+    "max_memory_bytes": 536870912,
+    "metric": "cosine",
+    "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+    "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+    "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+    "phase": "bound_inputs",
+    "producer_authority": {
+      "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+      "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+      "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+      "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+      "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+    },
+    "profile": "scale1m",
+    "query_source_first": 100000,
+    "requests_bytes": 4096000,
+    "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "reserved_query_interval": {
+      "end": 101000,
+      "start": 100000
+    },
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "rows": 1000000,
+    "selected_count": 1000,
+    "serving": {
+      "mode": "baseline"
+    },
+    "source_cache": "off",
+    "tie_rule": "corpus_ordinal_ascending",
+    "truth_bytes": 80000,
+    "truth_opened": false,
+    "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "source_get_budget": 128
+  },
+  "expected_identity": {
+    "billed_bytes": null,
+    "billed_requests": null,
+    "binary_sha256": "59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083",
+    "codec_source_sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec",
+    "config_sha256": "0102a533a2eac86ebfb011b868fabe61b6542598353e68db80f2968d5411fde6",
+    "execution": {
+      "mode": "full"
+    },
+    "external_gate_required": true,
+    "fetch_parallelism": 64,
+    "generation_source_sha256": "0eec4171d42d42e601ffc473027870f226342e1aae70e28efc9ced4c79f35f9d",
+    "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+    "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+    "phase": "identity",
+    "physical_s3_measured": false,
+    "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+    "router_source_sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8",
+    "runner_source_sha256": "27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3",
+    "s3_credential_source": "imds_instance_role_only",
+    "schema": "borsuk-cohere-native-baseline-result-v8",
+    "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+    "serving": {
+      "mode": "baseline"
+    },
+    "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+    "sq8_range_source_sha256": "bf31d4e0b6e53c9e7da88ab8a5d6d27a748d2492d7a915e7df7eb131c41c45e2",
+    "truth_opened": false,
+    "unread_bytes": null,
+    "wire_bytes": null,
+    "source_get_budget": 128
+  },
+  "input": {
+    "path": "/mnt/borsuk-v9-panel/results/PENDING_CLOSED_NAME.jsonl",
+    "bytes": 0,
+    "sha256": "PENDING_CLOSED_FILE_SHA"
+  },
+  "schema": "borsuk-completed-native-reduction-config-v4"
+}

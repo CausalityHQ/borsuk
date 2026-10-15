@@ -1,0 +1,4 @@
+[
+  {"role":"cohort_archive","bytes":596125,"sha256":"84e8538cd79bc4f14afdaed449c5d2de8f3ea571a1e1ae1c1b4b8f9023ed8062","s3_key":"research/semantic-router/20261010/full1000-local-admission-a0004/evidence.tar.gz","target":"archives/cohort-evidence.tar.gz"},
+  {"role":"historical_archive","bytes":253124,"sha256":"76d61da772cf11c16193d711315fe6aea6d21e7fcc6ebfb7acb1f2c28b7b7b44","s3_key":"research/semantic-router/20261015/sq8-source-count-full-a0001/terminal/evidence.tar.gz","target":"archives/historical-count.tar.gz"}
+]

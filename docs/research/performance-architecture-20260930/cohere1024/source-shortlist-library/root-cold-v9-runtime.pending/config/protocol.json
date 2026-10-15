@@ -1,0 +1,297 @@
+{
+  "schema": "borsuk-v9-two-elf-cold-protocol-v1",
+  "status": "PREREGISTERED_SOURCE_UNVERIFIED",
+  "packet_base_commit": "3ac246c8b497f4c560d75b1465aeab54ceb78494",
+  "runtime_root": "/mnt/borsuk-v9-panel",
+  "launch_authorized_by_this_file": false,
+  "root_fallback": {
+    "reason": "Original contextless specialist launch has saved brief but agent_output repeatedly notfound and no submission marker; isolated root-owned source exception, no duplicate worker or paid run",
+    "original_task": "borsuk/v9-cold-abba-packet",
+    "original_brief_sha256": "6fbc0f9ff33feda96da3900a9650a8f801f4026b63d2cc123c5ebf18a9745848",
+    "startup_audit_ask": "1792089713219904388-1401517",
+    "root_source_scope": "root-runtime outside original specialist file ownership",
+    "original_preserved": true
+  },
+  "resource_and_cost_envelope": {
+    "schema": "borsuk-v9-paired-cold-root-envelope-v1",
+    "admitted": false,
+    "source_base": "3ac246c8b497f4c560d75b1465aeab54ceb78494",
+    "profile": "causality",
+    "region": "eu-central-1",
+    "market": "spot",
+    "instance_type": "m6a.large",
+    "instance_memory_gib": 8,
+    "root_gib": 32,
+    "root_encrypted": true,
+    "delete_on_termination": true,
+    "stage_cpu": "0/100%",
+    "stage_memory_bytes": 2147483648,
+    "stage_swap_bytes": 0,
+    "stage_pids": 128,
+    "machine_seconds": 3600,
+    "external_seconds": 3720,
+    "formal_cell_seconds": 600,
+    "closeout_reserve_seconds": 360,
+    "spot_price_ceiling_usd_hour": 0.10,
+    "compute_ceiling_usd": 0.15,
+    "request_and_ancillary_ceiling_usd": 0.45,
+    "total_ceiling_usd": 0.60,
+    "envelope_rationale": "Four1000-query cells at SOURCE128 plus SQ8<=32 bound logical GETs<=640000; current Frankfurt S3 Tier2 price0.00000043USD/request implies0.2752USD before metadata/PUT allowance. Retained public AWS regional offer is the authority; physical SDK counts/retries and actual lifecycle cost remain separate measurements. Common2GiB CPU0/noSwap is inside8GiB host with room for manager/system services, based on accepted actual-input execution; not a full-cohort performance guarantee.",
+    "order": [
+      "admissionA527",
+      "admissionB527",
+      "canaryA0",
+      "canaryB0",
+      "A1",
+      "B1",
+      "B2",
+      "A2"
+    ],
+    "formal_queries_per_cell": 1000,
+    "dataset": "Cohere Wikipedia embed-multilingual-v3",
+    "dimensions": 1024,
+    "metric": "cosine",
+    "k": 10,
+    "interruption": "execution INVALID; preserve terminal cells and partial interrupted evidence; no pooling partial cells or automatic replacement",
+    "cache_scope": "application cache off/fresh process per cell; S3 server-cache eviction uncontrolled",
+    "quality_target_hits": 9780,
+    "prospective_quality_floor_hits": 9760,
+    "quality_denominator": 10000,
+    "quality_policy": "Matched-quality acceptance requires>=9780 in each candidate cell and exact9780 fresh controls; valid lower-quality or efficiency-missing outcomes remain recorded Pareto evidence. Execution validity and scientific outcomes are separate.",
+    "cold_protocol_specialist": "2b51feca83da47b7",
+    "actual_input_acceptance_commit": "3ac246c8b497f4c560d75b1465aeab54ceb78494",
+    "launch_authorized_by_this_file": false,
+    "request_price_authority": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-central-1/index.json",
+    "request_price_sku": "TUSXZSTYY6YJH244",
+    "request_price_effective": "2026-10-01T00:00:00Z",
+    "get_price_usd_per_request": 4.3E-7,
+    "max_formal_logical_gets": 640000,
+    "max_formal_get_cost_usd": 0.2752
+  },
+  "arms": {
+    "original": {
+      "native_source": "8910ef50c1cce155eb396d71a2e05dd3b9e906a0",
+      "binary_sha256": "59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083",
+      "configuration": {
+        "schema": "borsuk-cohere-native-baseline-config-v8",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "metric": "cosine",
+        "tie_rule": "corpus_ordinal_ascending",
+        "corpus_intervals": [
+          {
+            "start": 0,
+            "end": 100000
+          },
+          {
+            "start": 101000,
+            "end": 1001000
+          }
+        ],
+        "reserved_query_interval": {
+          "start": 100000,
+          "end": 101000
+        },
+        "cohort_receipt": {
+          "path": "/mnt/borsuk-v9-panel/inputs/prepared-parent_cohort_complete.json",
+          "bytes": 6238,
+          "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+        },
+        "derivation_receipt": {
+          "path": "/mnt/borsuk-v9-panel/inputs/prepared-parent_derived_derivation.json",
+          "bytes": 23128,
+          "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+        },
+        "producer_authority": {
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+        },
+        "corpus_source_first": 0,
+        "query_source_first": 100000,
+        "rows": 1000000,
+        "dimensions": 1024,
+        "count": 1000,
+        "k": 10,
+        "profile": "scale1m",
+        "backend": {
+          "kind": "s3",
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "region": "eu-central-1",
+          "physical_prefix": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\""
+        },
+        "generation_prefix": "semantic/rebound-spatial-returned-a0001/generations/80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638",
+        "generation_root_sha256": "80fb1e8fdea78d72363d28f1406924084227203dd6708d596be3519155b88638",
+        "scratch_parent": "/mnt/borsuk-v9-panel/scratch",
+        "requests": {
+          "path": "/mnt/borsuk-v9-panel/inputs/queries.f32",
+          "bytes": 4096000,
+          "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+        },
+        "truth": {
+          "path": "/mnt/borsuk-v9-panel/inputs/truth.u64",
+          "bytes": 80000,
+          "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+        },
+        "native_source": {
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413"
+        },
+        "max_memory_bytes": 536870912,
+        "fetch_parallelism": 64,
+        "serving": {
+          "mode": "baseline"
+        },
+        "execution": {
+          "mode": "full"
+        },
+        "source_get_budget": 128
+      }
+    },
+    "candidate": {
+      "native_source": "ccbb561bec72e97bc18df363ea307616811af264",
+      "binary_sha256": "912f23d34dd175f365aab2797896da2c45306bf9dd4faf7d44723c8bdce50995",
+      "configuration": {
+        "schema": "borsuk-cohere-native-baseline-config-v9",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "metric": "cosine",
+        "tie_rule": "corpus_ordinal_ascending",
+        "corpus_intervals": [
+          {
+            "start": 0,
+            "end": 100000
+          },
+          {
+            "start": 101000,
+            "end": 1001000
+          }
+        ],
+        "reserved_query_interval": {
+          "start": 100000,
+          "end": 101000
+        },
+        "cohort_receipt": {
+          "path": "/mnt/borsuk-v9-panel/inputs/prepared-parent_cohort_complete.json",
+          "bytes": 6238,
+          "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+        },
+        "derivation_receipt": {
+          "path": "/mnt/borsuk-v9-panel/inputs/prepared-parent_derived_derivation.json",
+          "bytes": 23128,
+          "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+        },
+        "producer_authority": {
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+        },
+        "corpus_source_first": 0,
+        "query_source_first": 100000,
+        "rows": 1000000,
+        "dimensions": 1024,
+        "count": 1000,
+        "k": 10,
+        "profile": "scale1m",
+        "backend": {
+          "kind": "s3",
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "region": "eu-central-1",
+          "physical_prefix": "research/semantic-router/20261010/full1000-local-admission-a0004/retained-source",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\""
+        },
+        "generation_prefix": "semantic/v9-source-shortlist-actual-a0001/generations/460d095ac98f2dba70ff765907ba89d3bd7bbdb03e1cb4781da637ef5d19baf6",
+        "generation_root_sha256": "460d095ac98f2dba70ff765907ba89d3bd7bbdb03e1cb4781da637ef5d19baf6",
+        "scratch_parent": "/mnt/borsuk-v9-panel/scratch",
+        "requests": {
+          "path": "/mnt/borsuk-v9-panel/inputs/queries.f32",
+          "bytes": 4096000,
+          "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+        },
+        "truth": {
+          "path": "/mnt/borsuk-v9-panel/inputs/truth.u64",
+          "bytes": 80000,
+          "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+        },
+        "native_source": {
+          "source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+          "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+          "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413"
+        },
+        "max_memory_bytes": 536870912,
+        "fetch_parallelism": 64,
+        "serving": {
+          "mode": "baseline"
+        },
+        "execution": {
+          "mode": "full"
+        },
+        "source_get_budget": 128,
+        "sq8_get_budget": 30,
+        "sq8_byte_budget": 33554432
+      }
+    }
+  },
+  "helper": {
+    "native_source": "ea3bf2b8c6f81dccf20dbd97023f3fb90bdba342",
+    "binary_sha256": "0845bddd426a6e7b9a56317f73ff92fdfa15b14b2f1d109cf62d7a77bbb54fbd",
+    "command": "--completed-scale"
+  },
+  "stages": [
+    "control-canary",
+    "opaque-binary-receipt-input-transport",
+    "admission-original527",
+    "admission-candidate527",
+    "canary-original0",
+    "canary-candidate0",
+    "CLI-object-smoke",
+    "measurement-freeze",
+    "formal-original-a1",
+    "formal-candidate-b1",
+    "formal-candidate-b2",
+    "formal-original-a2",
+    "native-summary-comparison",
+    "terminal-archive"
+  ],
+  "formal_execution": {
+    "mode": "full",
+    "queries_per_cell": 1000,
+    "fresh_owned_process_per_cell": true,
+    "application_cache": "off",
+    "concurrent_queries": 1,
+    "fetch_parallelism": 64,
+    "source_get_budget": 128,
+    "server_cache_eviction_qualified": false,
+    "timing": "native query wall including routing, SOURCE, planning and SQ8; excludes startup and client RPC ingress",
+    "sequential_qps": "1000*1e9/sum(native query wall ns)",
+    "first_query_latency_available": false
+  },
+  "allowed_treatment_differences": [
+    "qualified serving executable/source",
+    "generation schema and root",
+    "SQ8 proof rows256 versus32",
+    "SOURCE shortlist implementation",
+    "SQ8 GET/byte envelopes"
+  ],
+  "control_anchor_hits": 9780,
+  "candidate_matched_quality_hits": 9780,
+  "candidate_floor_hits": 9760,
+  "recall_denominator": 10000,
+  "performance_screen": "Both candidate/control p95 improve; neither paired p90 nor sequentialQPS regresses more than5%; adoption additionally exceeds max absolute within-arm repeat p95 change",
+  "quality_and_efficiency_decisions_separate": true,
+  "preserve_valid_pareto_results": true,
+  "execution_invalid_is_not_algorithm_rejection": true,
+  "per_formal_cell_publication": "create-only opaque result, native aggregate report and supervision; terminal LAST before next cell",
+  "interruption": "Preserve completed cell terminals and failed attempt; no pooling partial cells, no automatic replacement or partial ABBA win",
+  "counter_provenance": "Native logical component charges separate from cumulative SDK including S3/IMDS/PUT; wire and billed bytes/requests unqualified",
+  "scope": "Two full architecture configurations, not shortlist-size-only causal attribution; no matched vendor win claim",
+  "cold_measurement_admitted": false
+}
