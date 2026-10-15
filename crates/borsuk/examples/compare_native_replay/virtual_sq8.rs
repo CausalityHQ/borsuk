@@ -1,38 +1,254 @@
-//! INTENTIONAL MISSING-FEATURE RED SCAFFOLD. Not a candidate authenticated reader.
+//! Authenticated virtual SQ8 placement for the offline locality falsifier.
+//! Original generation and SOURCE coordinates remain unchanged.
 #![allow(dead_code)]
-use super::unit_layout::UnitLayout;
+use super::unit_layout::{Sq8Row, UnitLayout};
 use borsuk::sq8_page_authority::PageAuthority;
+use sha2::{Digest, Sha256};
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
 
-struct VirtualSq8 {
-    original_hash: String,
+type Result<T> = std::result::Result<T, &'static str>;
+const FIXED: usize = 16 * 1024;
+
+pub(crate) struct VirtualSq8 {
+    layout: UnitLayout,
+    original_units: Vec<[u8; 32]>,
+    authority: PageAuthority,
+    unit_bytes: usize,
+    row_bytes: usize,
+    retained: usize,
+}
+fn sum(values: &[usize]) -> Result<usize> {
+    values.iter().try_fold(0_usize, |n, &v| {
+        n.checked_add(v).ok_or("virtual payload overflow")
+    })
+}
+fn product(a: usize, b: usize) -> Result<usize> {
+    a.checked_mul(b).ok_or("virtual geometry overflow")
+}
+fn buffer(bytes: usize) -> Result<Vec<u8>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(bytes)
+        .map_err(|_| "virtual allocation")?;
+    v.resize(bytes, 0);
+    Ok(v)
+}
+fn read_at<R: Read + Seek>(input: &mut R, start: usize, bytes: &mut [u8]) -> Result<()> {
+    input
+        .seek(SeekFrom::Start(
+            u64::try_from(start).map_err(|_| "virtual offset width")?,
+        ))
+        .map_err(|_| "virtual seek")?;
+    input.read_exact(bytes).map_err(|_| "virtual read")
+}
+fn exact_length<R: Read + Seek>(input: &mut R, expected: usize) -> Result<()> {
+    if input.seek(SeekFrom::End(0)).map_err(|_| "virtual length")?
+        != u64::try_from(expected).map_err(|_| "virtual length width")?
+    {
+        return Err("virtual original length");
+    }
+    Ok(())
 }
 impl VirtualSq8 {
-    fn prepare<R: Read + Seek>(
-        _: &mut R,
-        authority: &PageAuthority,
-        _: UnitLayout,
-        _: usize,
-    ) -> Result<Self, &'static str> {
+    pub(crate) fn prepare<R: Read + Seek>(
+        input: &mut R,
+        old: &PageAuthority,
+        layout: UnitLayout,
+        cap: usize,
+    ) -> Result<Self> {
+        let (rows, unit_rows) = layout.geometry();
+        if rows != old.rows() || old.page_rows() % unit_rows != 0 {
+            return Err("virtual authority/layout geometry");
+        }
+        let row_bytes = old
+            .dimensions()
+            .checked_add(12)
+            .ok_or("virtual row width")?;
+        let unit_bytes = product(unit_rows, row_bytes)?;
+        let page_bytes = product(old.page_rows(), row_bytes)?;
+        if old.object_bytes() != product(rows, row_bytes)? {
+            return Err("virtual SQ8 authority width");
+        }
+        let units = rows.div_ceil(unit_rows);
+        let table_bytes = product(units, 32)?;
+        let maps = layout.owned_payload_bytes()?;
+        // During PageAuthority::load: old unit proofs + target sidecar + copied
+        // target proofs coexist. Caller retains/funds the old authority/input.
+        let required = sum(&[
+            maps,
+            product(table_bytes, 3)?,
+            page_bytes,
+            unit_bytes,
+            FIXED,
+        ])?;
+        if required > cap {
+            return Err("virtual prepare payload");
+        }
+        exact_length(input, old.object_bytes())?;
+        let mut page = buffer(page_bytes)?;
+        let mut original_units = Vec::<[u8; 32]>::new();
+        original_units
+            .try_reserve_exact(units)
+            .map_err(|_| "virtual proof allocation")?;
+        let actual_table = product(original_units.capacity(), 32)?;
+        if sum(&[
+            maps,
+            actual_table,
+            product(table_bytes, 2)?,
+            page.capacity(),
+            unit_bytes,
+            FIXED,
+        ])? > cap
+        {
+            return Err("virtual prepare capacity");
+        }
+        let mut whole = Sha256::new();
+        for p in 0..rows.div_ceil(old.page_rows()) {
+            let range = old.byte_range(p, p).map_err(|_| "virtual original page")?;
+            let body = &mut page[..range.len()];
+            read_at(input, range.start, body)?;
+            old.verify_payload(p, p, body)
+                .map_err(|_| "virtual original proof")?;
+            whole.update(&*body);
+            for unit in body.chunks(unit_bytes) {
+                original_units.push(Sha256::digest(unit).into());
+            }
+        }
+        if original_units.len() != units || format!("{:x}", whole.finalize()) != old.object_sha256()
+        {
+            return Err("virtual original whole identity");
+        }
+        let mut sidecar = Vec::new();
+        sidecar
+            .try_reserve_exact(table_bytes)
+            .map_err(|_| "virtual target proof allocation")?;
+        let mut unit = buffer(unit_bytes)?;
+        if sum(&[
+            maps,
+            actual_table,
+            sidecar.capacity(),
+            table_bytes,
+            page.capacity(),
+            unit.capacity(),
+            FIXED,
+        ])? > cap
+        {
+            return Err("virtual target capacity");
+        }
+        let mut target_hash = Sha256::new();
+        for destination in 0..units {
+            let row = layout
+                .source_row(Sq8Row(product(destination, unit_rows)?))
+                .ok_or("virtual inverse row")?
+                .0;
+            let start = product(row, row_bytes)?;
+            let n = product(unit_rows.min(rows - row), row_bytes)?;
+            read_at(input, start, &mut unit[..n])?;
+            let digest: [u8; 32] = Sha256::digest(&unit[..n]).into();
+            if digest != original_units[row / unit_rows] {
+                return Err("virtual source changed during prepare");
+            }
+            target_hash.update(&unit[..n]);
+            sidecar.extend_from_slice(&digest);
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":old.generation(),
+            "rows":rows,"dimensions":old.dimensions(),"page_rows":unit_rows,
+            "object_sha256":format!("{:x}",target_hash.finalize()),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))
+        }))
+        .map_err(|_| "virtual target manifest")?;
+        if manifest.len() > 4096 {
+            return Err("virtual target manifest size");
+        }
+        let authority = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .map_err(|_| "virtual target authority")?;
+        exact_length(input, old.object_bytes())?;
+        let retained = sum(&[maps, actual_table, table_bytes, FIXED])?;
         Ok(Self {
-            original_hash: authority.object_sha256().to_owned(),
+            layout,
+            original_units,
+            authority,
+            unit_bytes,
+            row_bytes,
+            retained,
         })
     }
-    fn object_sha256(&self) -> &str {
-        &self.original_hash
+    pub(crate) fn object_sha256(&self) -> &str {
+        self.authority.object_sha256()
     }
-    fn read_range<R: Read + Seek>(
+    pub(crate) fn authority(&self) -> &PageAuthority {
+        &self.authority
+    }
+    pub(crate) fn layout(&self) -> &UnitLayout {
+        &self.layout
+    }
+    pub(crate) fn retained_payload_bytes(&self) -> usize {
+        self.retained
+    }
+    pub(crate) fn read_range<R: Read + Seek>(
         &self,
         input: &mut R,
-        range: std::ops::Range<usize>,
-        _: usize,
-    ) -> Result<Vec<u8>, &'static str> {
-        input
-            .seek(SeekFrom::Start(range.start as u64))
-            .map_err(|_| "scaffold seek")?;
-        let mut bytes = vec![0; range.end - range.start];
-        input.read_exact(&mut bytes).map_err(|_| "scaffold read")?;
-        Ok(bytes)
+        range: Range<usize>,
+        cap: usize,
+    ) -> Result<Vec<u8>> {
+        if range.start >= range.end
+            || range.end > self.authority.object_bytes()
+            || range.start % self.unit_bytes != 0
+            || (range.end % self.unit_bytes != 0 && range.end != self.authority.object_bytes())
+        {
+            return Err("virtual range geometry");
+        }
+        let count = (range.end - 1) / self.unit_bytes - range.start / self.unit_bytes + 1;
+        let segment_bytes = sum(&[product(count, std::mem::size_of::<Range<usize>>())?, 4096])?;
+        if sum(&[self.retained, range.len(), segment_bytes])? > cap {
+            return Err("virtual range payload");
+        }
+        exact_length(input, self.authority.object_bytes())?;
+        let segments = self
+            .layout
+            .source_segments(range.clone(), self.row_bytes, segment_bytes)?;
+        let mut output = buffer(range.len())?;
+        if sum(&[
+            self.retained,
+            output.capacity(),
+            product(segments.capacity(), std::mem::size_of::<Range<usize>>())?,
+            4096,
+        ])? > cap
+        {
+            return Err("virtual range capacity");
+        }
+        let mut offset = 0;
+        for segment in &segments {
+            let stop = offset
+                .checked_add(segment.len())
+                .ok_or("virtual assembly overflow")?;
+            let body = output
+                .get_mut(offset..stop)
+                .ok_or("virtual assembly length")?;
+            read_at(input, segment.start, body)?;
+            let digest: [u8; 32] = Sha256::digest(&*body).into();
+            if self.original_units.get(segment.start / self.unit_bytes) != Some(&digest) {
+                return Err("virtual source changed after prepare");
+            }
+            offset = stop;
+        }
+        if offset != output.len() {
+            return Err("virtual assembly incomplete");
+        }
+        self.authority
+            .verify_payload(
+                range.start / self.unit_bytes,
+                (range.end - 1) / self.unit_bytes,
+                &output,
+            )
+            .map_err(|_| "virtual target proof")?;
+        exact_length(input, self.authority.object_bytes())?;
+        Ok(output)
     }
 }
 // Fixtures for the next authenticated virtual reader; not yet wired or executed.
@@ -129,5 +345,73 @@ mod tests {
         let prepared = VirtualSq8::prepare(&mut old, &authority, layout, 1 << 20).unwrap();
         old.get_mut()[256 * 14 + 9] ^= 1;
         assert!(prepared.read_range(&mut old, 0..128 * 14, 1 << 20).is_err());
+    }
+    // Append inside the virtual reader test module after its identity/byte RED gate.
+    // Not part of frozen aed0ed82 or the live experiment; not compiled/executed.
+    #[test]
+    fn virtual_sq8_relocation_preserves_native_rank_ids_score_bits_and_mapped_ordinals() {
+        use borsuk::exact_sq8_nominee::Sq8Geometry;
+        use borsuk::returned_sq8::{ReturnedRange, rank_returned_ranges};
+        for dimensions in [2, 17] {
+            let (bytes, authority) = fixture(dimensions);
+            let layout =
+                UnitLayout::from_destination_order(385, 128, &[2, 0, 1, 3], 1 << 20).unwrap();
+            let mut old = Cursor::new(bytes.clone());
+            let prepared = VirtualSq8::prepare(&mut old, &authority, layout, 1 << 20).unwrap();
+            let moved = prepared
+                .read_range(&mut old, 0..bytes.len(), 1 << 20)
+                .unwrap();
+            for query in [vec![0.0; dimensions], vec![0.125; dimensions]] {
+                let geometry = Sq8Geometry {
+                    rows: 385,
+                    dimensions,
+                };
+                let low = vec![0.0; dimensions];
+                let step = vec![1.0; dimensions];
+                let baseline = rank_returned_ranges(
+                    geometry,
+                    &[ReturnedRange {
+                        start: 0,
+                        bytes: &bytes,
+                    }],
+                    &query,
+                    &low,
+                    &step,
+                    10,
+                    bytes.len(),
+                )
+                .unwrap();
+                let candidate = rank_returned_ranges(
+                    geometry,
+                    &[ReturnedRange {
+                        start: 0,
+                        bytes: &moved,
+                    }],
+                    &query,
+                    &low,
+                    &step,
+                    10,
+                    bytes.len(),
+                )
+                .unwrap();
+                assert_eq!(
+                    baseline
+                        .iter()
+                        .map(|v| (v.id, v.score.to_bits()))
+                        .collect::<Vec<_>>(),
+                    candidate
+                        .iter()
+                        .map(|v| (v.id, v.score.to_bits()))
+                        .collect::<Vec<_>>()
+                );
+                for (before, after) in baseline.iter().zip(&candidate) {
+                    // Independent literal three-cycle forward oracle, not a call
+                    // back into the coordinate implementation under test.
+                    let source_unit = before.ordinal / 128;
+                    let target_unit = [1, 2, 0, 3][source_unit];
+                    assert_eq!(after.ordinal, target_unit * 128 + before.ordinal % 128);
+                }
+            }
+        }
     }
 }

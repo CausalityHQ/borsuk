@@ -110,6 +110,17 @@ pub(crate) struct UnitLayout {
     sq8_to_source: Vec<u32>,
 }
 impl UnitLayout {
+    pub(crate) fn geometry(&self) -> (usize, usize) {
+        (self.rows, self.unit_rows)
+    }
+    pub(crate) fn owned_payload_bytes(&self) -> Result<usize, &'static str> {
+        self.source_to_sq8
+            .capacity()
+            .checked_add(self.sq8_to_source.capacity())
+            .and_then(|n| n.checked_mul(std::mem::size_of::<u32>()))
+            .and_then(|n| n.checked_add(4096))
+            .ok_or("unit layout retained overflow")
+    }
     pub(crate) fn required_bytes(rows: usize, unit_rows: usize) -> Result<usize, &'static str> {
         if rows == 0 || unit_rows == 0 {
             return Err("unit layout geometry");
