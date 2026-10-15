@@ -2420,12 +2420,12 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     let diverse_graph_resident =
         UnitCentroidGraph::preflight_resident_bytes(&diverse_graph, &centers).unwrap();
     let sidecar = sq8
-        .chunks(256 * 14)
+        .chunks(32 * 14)
         .flat_map(|b| Sha256::digest(b).to_vec())
         .collect::<Vec<_>>();
     let page_manifest = serde_json::to_vec(
         &serde_json::json!({"schema":"borsuk-v115-sq8-page-authority-v2",
-        "generation":1,"rows":512,"dimensions":2,"page_rows":256,"object_sha256":sq8_sha,
+        "generation":1,"rows":512,"dimensions":2,"page_rows":32,"object_sha256":sq8_sha,
         "page_digest_sha256":hash(&sidecar)}),
     )
     .unwrap();
@@ -2451,7 +2451,7 @@ async fn pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_bu
     fs::write(root.join("canonical.bin"), &canonical).unwrap();
     let canonical_descriptor = serde_json::json!({"rows":512,"dimensions":2,
         "bytes":canonical.len(),"sha256":hash(&canonical),"object_key":format!("tenant/g1/objects/{}",hash(&canonical))});
-    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v8",
+    let manifest=serde_json::to_vec(&serde_json::json!({"schema":"borsuk-two-bit-generation-v9",
         "generation":1,"base_epoch":0,"plane_manifest_sha256":hash(&fs::read(root.join("plane/manifest.json")).unwrap()),
         "page_manifest_sha256":hash(&page_manifest),"discovery":{"mode":"graph","centroids_sha256":hash(&centroid),
         "graph_sha256":hash(&graph),"graph_resident_bytes":graph_resident,

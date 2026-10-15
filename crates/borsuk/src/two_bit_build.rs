@@ -4,6 +4,7 @@ use crate::{
     canonical_source::write_canonical_source,
     object_native_generation::valid_object_key,
     resident_vector_graph::HashingReader,
+    sq8_page_authority::SQ8_PAGE_ROWS,
     two_bit_generation::{
         Discovery, DiscoveryMode, Manifest, SCHEMA, TwoBitGeneration, TwoBitGenerationError,
         TwoBitGenerationLimits,
@@ -343,7 +344,7 @@ pub fn repackage_semantic_router(
         ),
         (
             "page_digests.bin",
-            (rows.div_ceil(256) * 32) as u64,
+            (rows.div_ceil(SQ8_PAGE_ROWS) * 32) as u64,
             page["page_digest_sha256"]
                 .as_str()
                 .ok_or(bad("repackage page digest"))?,
@@ -413,10 +414,10 @@ fn admit_build_payload_with_partition(
         return Err(bad("build inputs"));
     }
     let units = rows.div_ceil(32);
-    let pages = rows.div_ceil(256);
+    let pages = rows.div_ceil(SQ8_PAGE_ROWS);
     let page_bytes = dimensions
         .checked_add(12)
-        .and_then(|n| n.checked_mul(256))
+        .and_then(|n| n.checked_mul(SQ8_PAGE_ROWS))
         .ok_or(bad("page geometry"))?;
     // Covers f16 blob/f32 decode/build copies, adjacency (levels capped17
     // in the existing builder), visit/order arrays, heap and serialization.
@@ -627,10 +628,10 @@ impl TwoBitGenerationBuilder<'_> {
             max_build_payload_bytes,
             partition,
         )?;
-        let pages = rows.div_ceil(256);
+        let pages = rows.div_ceil(SQ8_PAGE_ROWS);
         let page_bytes = dimensions
             .checked_add(12)
-            .and_then(|n| n.checked_mul(256))
+            .and_then(|n| n.checked_mul(SQ8_PAGE_ROWS))
             .ok_or(bad("page geometry"))?;
         fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
         match order {
@@ -742,7 +743,7 @@ impl TwoBitGenerationBuilder<'_> {
         let mut sidecar = Vec::with_capacity(pages * 32);
         let mut digest = Sha256::new();
         for page in 0..pages {
-            let bytes = (rows - page * 256).min(256) * (dimensions + 12);
+            let bytes = (rows - page * SQ8_PAGE_ROWS).min(SQ8_PAGE_ROWS) * (dimensions + 12);
             input
                 .read_exact(&mut buffer[..bytes])
                 .map_err(TwoBitGenerationError::Io)?;
@@ -758,7 +759,7 @@ impl TwoBitGenerationBuilder<'_> {
         write_new(&output.join("page_digests.bin"), &sidecar)?;
         let page_manifest = serde_json::to_vec(
             &serde_json::json!({"schema":"borsuk-v115-sq8-page-authority-v2",
-            "generation":self.generation,"rows":rows,"dimensions":dimensions,"page_rows":256,
+            "generation":self.generation,"rows":rows,"dimensions":dimensions,"page_rows":SQ8_PAGE_ROWS,
             "object_sha256":self.source.sq8_sha256,"page_digest_sha256":hash(&sidecar)}),
         )
         .map_err(|_| bad("page manifest encoding"))?;
@@ -778,8 +779,9 @@ impl TwoBitGenerationBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn source_shortlist_v9_authenticates_32_row_sq8_blocks() {
+    #[tokio::test]
+    async fn source_shortlist_v9_authenticates_32_row_sq8_blocks() {
+        use object_store::{ObjectStore, path::Path as ObjectPath};
         let temp = tempfile::tempdir().unwrap();
         let rows = 4097_usize;
         let dimensions = 5;
@@ -805,6 +807,10 @@ mod tests {
         let raw_sha = hash(&raw);
         let sq8_sha = hash(&sq8);
         let key = format!("test/objects/{sq8_sha}");
+        let store = object_store::memory::InMemory::new();
+        let location = ObjectPath::from(key.clone());
+        store.put(&location, sq8.clone().into()).await.unwrap();
+        let etag = store.head(&location).await.unwrap().e_tag.unwrap();
         let order = (0..rows as u64).collect::<Vec<_>>();
         let output = temp.path().join("generation");
         let root_sha = TwoBitGenerationBuilder {
@@ -821,7 +827,7 @@ mod tests {
             low: &[0.; 5],
             step: &[1. / 255.; 5],
             sq8_object_key: &key,
-            sq8_etag: "etag",
+            sq8_etag: &etag,
         }
         .build_with_order(&order, &output, 64_000_000)
         .unwrap();
@@ -856,6 +862,116 @@ mod tests {
             sq8.chunks(32 * (dimensions + 12)).last().unwrap().len(),
             dimensions + 12
         );
+        let manifest_bytes = fs::read(output.join("page_manifest.json")).unwrap();
+        let authority = crate::sq8_page_authority::PageAuthority::load(
+            &manifest_bytes,
+            &hash(&manifest_bytes),
+            &digests,
+        )
+        .unwrap();
+        for page in 0..rows.div_ceil(32) {
+            let range = authority.byte_range(page, page).unwrap();
+            authority
+                .verify_payload(page, page, &sq8[range.clone()])
+                .unwrap();
+            let mut corrupt = sq8[range].to_vec();
+            let last = corrupt.len() - 1;
+            corrupt[last] ^= 1;
+            assert!(authority.verify_payload(page, page, &corrupt).is_err());
+        }
+        // The final one-row proof cannot authenticate a full-width response or
+        // an adjacent block, even when those bytes belong to the same object.
+        assert!(authority.verify_payload(128, 128, &sq8[..32 * 17]).is_err());
+        assert!(
+            authority
+                .verify_payload(0, 0, &sq8[32 * 17..64 * 17])
+                .is_err()
+        );
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 128 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: sq8.len(),
+            max_query_gets: 30,
+            max_parallel_gets: 4,
+            max_source_bytes: 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 4,
+            max_query_scratch_bytes: 400_000,
+            already_pinned_bytes: 4096,
+        };
+        let generation = TwoBitGeneration::open(&output, &root_sha, limits).unwrap();
+        let query = [1., 0., 0., 0., 0.];
+        let (result, trace) = generation
+            .diagnostic_search_with_store(&store, &query, 10)
+            .await
+            .unwrap();
+        // Independent full-sort oracle over the actual SOURCE visit roster.
+        // SOURCE ties select physical ordinals; SQ8 ties rank application IDs.
+        let mut visited = trace
+            .nomination_evaluated_units
+            .iter()
+            .flat_map(|&unit| unit * 32..((unit + 1) * 32).min(rows))
+            .collect::<Vec<_>>();
+        let visit_count = visited.len();
+        visited.sort_unstable();
+        visited.dedup();
+        assert_eq!(visited.len(), visit_count, "SOURCE rows scored once");
+        assert!(visited.len() >= 256);
+        visited.truncate(256);
+        let mut blocks = visited.iter().map(|row| row / 32).collect::<Vec<_>>();
+        blocks.dedup();
+        let mut ranges = Vec::<std::ops::Range<usize>>::new();
+        for &block in &blocks {
+            let start = block * 32 * 17;
+            let end = ((block + 1) * 32).min(rows) * 17;
+            if let Some(last) = ranges.last_mut().filter(|last| last.end == start) {
+                last.end = end;
+            } else {
+                ranges.push(start..end);
+            }
+        }
+        assert_eq!(result.plan.page_rows, 32);
+        assert_eq!(result.plan.selected_pages, blocks);
+        assert_eq!(result.plan.ranges, ranges);
+        assert_eq!(
+            result.ranked.stats.verified_bytes,
+            ranges.iter().map(|r| r.len()).sum::<usize>()
+        );
+        // Sequential f32 formula, independent of the production scoring helper.
+        let expected_score = 1_f32 - 2. * (255_f32 * (1_f32 / 255.) - 0.5);
+        let mut expected = ranges
+            .iter()
+            .flat_map(|r| r.start / 17..r.end / 17)
+            .map(|row| (row, 50_000_i64 - row as i64, expected_score.to_bits()))
+            .collect::<Vec<_>>();
+        expected.sort_unstable_by_key(|entry| entry.1);
+        let actual = result
+            .ranked
+            .candidates
+            .iter()
+            .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected[..10]);
+        let mut excluded = expected[..3]
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>();
+        excluded.sort_unstable();
+        let filtered = generation
+            .search_with_store(&store, &query, 10, Some(&excluded))
+            .await
+            .unwrap();
+        assert_eq!(
+            filtered.plan, result.plan,
+            "exclusions do not alter SOURCE selection"
+        );
+        let actual = filtered
+            .ranked
+            .candidates
+            .iter()
+            .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected[3..13]);
     }
     #[test]
     fn spatial_import_and_repackage_charge_authenticated_mode_and_retained_buffers() {
@@ -982,7 +1098,8 @@ mod tests {
             fs::read(exact.join("router/root.bin")).unwrap(),
             artifacts.manifest
         );
-        let modeled = 2 * 128 + rows.div_ceil(256) * 32 + 256 * (2 + 12) + 262144;
+        let modeled =
+            2 * 128 + rows.div_ceil(SQ8_PAGE_ROWS) * 32 + SQ8_PAGE_ROWS * (2 + 12) + 262144;
         let retained = import.retained_bytes().unwrap();
         let rejected = temp.path().join("import-between");
         let error = builder
@@ -1135,7 +1252,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v8",
+            manifest["schema"], "borsuk-two-bit-generation-v9",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();

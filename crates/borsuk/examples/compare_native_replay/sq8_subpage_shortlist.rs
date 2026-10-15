@@ -5,6 +5,29 @@ mod count_curve;
 #[path = "sq8_virtual_layout.rs"]
 mod sq8_virtual_layout;
 
+#[cfg(test)]
+pub(super) fn planning_authority(
+    rows: usize,
+    dimensions: usize,
+) -> borsuk::sq8_page_authority::PageAuthority {
+    use sha2::{Digest, Sha256};
+    assert!(rows > 0 && rows <= 1_000_000 && dimensions > 0 && dimensions <= 1024);
+    let sidecar = vec![0_u8; rows.div_ceil(32) * 32];
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+        "rows":rows, "dimensions":dimensions, "page_rows":32,
+        "object_sha256":"0".repeat(64),
+        "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))
+    }))
+    .unwrap();
+    borsuk::sq8_page_authority::PageAuthority::load(
+        &manifest,
+        &format!("{:x}", Sha256::digest(&manifest)),
+        &sidecar,
+    )
+    .unwrap()
+}
+
 // Offline diagnostic workspace only. Borrowed capture storage and allocator
 // overhead are caller-funded; admission precedes copying/sorting payload.
 fn shortlist(
@@ -82,8 +105,7 @@ mod tests {
         let mut trace = TwoBitPlanTrace::default();
         let mut scored = Vec::new();
         let plan = plan_two_bit_source_walks(
-            rows,
-            2,
+            &super::planning_authority(rows, 2),
             2,
             Some(SemanticProfile::Scale1m),
             &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
@@ -93,8 +115,11 @@ mod tests {
                 scored.push((row, prepared.score(record).unwrap()));
                 Some(record.as_slice())
             },
-            1,
-            1 << 20,
+            borsuk::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 1,
+                max_bytes: 1 << 20,
+                max_planner_bytes: 256 * 1024,
+            },
             Some(&mut trace),
         )
         .unwrap();
@@ -118,8 +143,7 @@ mod tests {
         assert!(!plan.ranges.is_empty());
         let flat = records.concat();
         let (captured_plan, captured_trace, captured_scores) = super::capture_scored_rows(
-            rows,
-            2,
+            &super::planning_authority(rows, 2),
             2,
             &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
             &prepared,
@@ -140,8 +164,7 @@ mod tests {
         assert_eq!(captured_scores, scored);
         assert!(
             super::capture_scored_rows(
-                rows,
-                2,
+                &super::planning_authority(rows, 2),
                 2,
                 &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
                 &prepared,
@@ -150,14 +173,13 @@ mod tests {
                 256,
                 1 << 20,
                 1,
-                1 << 20
+                1 << 20,
             )
             .is_err()
         );
         assert!(
             super::capture_scored_rows(
-                rows,
-                2,
+                &super::planning_authority(rows, 2),
                 2,
                 &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
                 &prepared,
@@ -166,7 +188,7 @@ mod tests {
                 257,
                 257 * 32 + 4095,
                 1,
-                1 << 20
+                1 << 20,
             )
             .is_err()
         );
@@ -525,8 +547,7 @@ mod digest_tests {
 // by its record callback. Physical SOURCE cover gaps are not eligible rows.
 #[allow(clippy::too_many_arguments)]
 fn capture_scored_rows(
-    rows: usize,
-    dimensions: usize,
+    authority: &borsuk::sq8_page_authority::PageAuthority,
     nomination_page_limit: usize,
     walks: &[(usize, Vec<usize>)],
     prepared: &borsuk::rotated_two_bit::PreparedTwoBit,
@@ -541,6 +562,7 @@ fn capture_scored_rows(
     borsuk::two_bit_generation::TwoBitPlanTrace,
     Vec<(usize, f64)>,
 )> {
+    let rows = authority.rows();
     super::require(
         rows > 0 && record_bytes > 0 && capture_row_cap > 0,
         "capture geometry",
@@ -558,8 +580,7 @@ fn capture_scored_rows(
     captured.try_reserve_exact(capture_row_cap)?;
     let mut trace = borsuk::two_bit_generation::TwoBitPlanTrace::default();
     let plan = borsuk::two_bit_generation::plan_two_bit_source_walks(
-        rows,
-        dimensions,
+        authority,
         nomination_page_limit,
         Some(borsuk::semantic_unit_router::SemanticProfile::Scale1m),
         walks,
@@ -577,8 +598,11 @@ fn capture_scored_rows(
             captured.push((row, score));
             Some(record)
         },
-        max_gets,
-        max_bytes,
+        borsuk::sq8_page_authority::SelectedSq8Limits {
+            max_gets,
+            max_bytes,
+            max_planner_bytes: 256 * 1024,
+        },
         Some(&mut trace),
     )?;
     super::require(!captured.is_empty(), "capture empty roster")?;
@@ -614,13 +638,13 @@ fn plan_value(
     plan: &borsuk::budgeted_page_rank::BudgetedPagePlan,
     dimensions: usize,
 ) -> serde_json::Value {
-    let page_bytes = (dimensions + 12) * 256;
+    let page_bytes = (dimensions + 12) * plan.page_rows;
     let covered: usize = plan
         .ranges
         .iter()
         .map(|r| r.len().div_ceil(page_bytes))
         .sum();
-    serde_json::json!({"selected_pages":plan.selected_pages,
+    serde_json::json!({"page_rows":plan.page_rows,"selected_pages":plan.selected_pages,
         "ranges":plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
         "planned_bytes":plan.planned_bytes,"target_pages":plan.target_pages,
         "target_shortfall":plan.target_shortfall,"primary_pages_retained":plan.primary_pages_retained,
@@ -1157,8 +1181,7 @@ fn reduce_shortlist_engine(
             })
             .ok_or("capture count overflow")?;
         let (capture_plan, capture_trace, scored) = capture_scored_rows(
-            i.rows,
-            i.dimensions,
+            &authority,
             trace.ranked_candidate_pages.len(),
             &[(seed, walked)],
             &prepared,

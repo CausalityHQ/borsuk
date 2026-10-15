@@ -133,6 +133,21 @@ impl TwoBitIndex {
         self.base.as_ref()?.remote_open_stats()
     }
 
+    /// Share existing download admission across populated indexes/generations.
+    /// Retained query buffers remain separately charged. Empty immutable heads
+    /// issue no base reads and do not retain the controller.
+    pub fn with_shared_byte_window(
+        mut self,
+        window: std::sync::Arc<crate::sq8_s3_range::InFlightBytes>,
+    ) -> Result<Self, TwoBitGenerationError> {
+        if let Some(base) = self.base.take() {
+            let base = base.with_shared_byte_window(window)?;
+            self.modeled_bytes = base.modeled_memory_bytes();
+            self.base = Some(base);
+        }
+        Ok(self)
+    }
+
     /// Up to k logical IDs, including a truly empty result. The same query slot
     /// spans nomination, I/O and pending scoring. No base GET on an empty root.
     /// Snapshot namespace/root/dimensions must match this index; charge all pins.
@@ -220,6 +235,7 @@ impl TwoBitIndex {
         };
         Ok(TwoBitMutationSearchResult {
             plan: BudgetedPagePlan {
+                page_rows: crate::sq8_page_authority::SQ8_PAGE_ROWS,
                 selected_pages: Vec::new(),
                 ranges: Vec::new(),
                 planned_bytes: 0,

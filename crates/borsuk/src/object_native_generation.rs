@@ -487,7 +487,11 @@ async fn stage_metadata(
                     "plane/page_digests.bin" => {
                         Some(rows.div_ceil(32).checked_mul(32).ok_or(overflow)?)
                     }
-                    "page_digests.bin" => Some(rows.div_ceil(256).checked_mul(32).ok_or(overflow)?),
+                    "page_digests.bin" => Some(
+                        rows.div_ceil(crate::sq8_page_authority::SQ8_PAGE_ROWS)
+                            .checked_mul(32)
+                            .ok_or(overflow)?,
+                    ),
                     "router/root.bin" => match &root.discovery {
                         crate::two_bit_generation::Discovery::Semantic { root_bytes, .. } => {
                             Some(*root_bytes)

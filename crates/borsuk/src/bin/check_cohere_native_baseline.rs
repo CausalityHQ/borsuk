@@ -44,7 +44,7 @@ const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v8";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v8";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v9";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -60,7 +60,6 @@ const FAILURE_VALUE_BYTES: usize = 256 * 1024;
 const BASELINE_QUERY_GETS: usize = 32;
 const BASELINE_SOURCE_GETS: usize = 128;
 // One 256-row SQ8 page at the fixed D1024 width, for reporting covered/bridge pages.
-const SQ8_PAGE_BYTES: usize = 256 * (D + 12);
 
 /// Which serving path answers each query. Required in every config: there is no default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -2282,6 +2281,7 @@ async fn query_and_seal_with(
         // closure (direct) or the admitted pages (baseline); bridges live only in `ranges`.
         #[derive(Serialize)]
         struct PlanRecord<'a> {
+            page_rows: usize,
             selected_pages: &'a [usize],
             ranges: Vec<[usize; 2]>,
             planned_bytes: usize,
@@ -2295,9 +2295,10 @@ async fn query_and_seal_with(
             .plan
             .ranges
             .iter()
-            .map(|r| r.len().div_ceil(SQ8_PAGE_BYTES))
+            .map(|r| r.len().div_ceil(result.plan.page_rows * (D + 12)))
             .sum::<usize>();
         let plan = PlanRecord {
+            page_rows: result.plan.page_rows,
             selected_pages: &result.plan.selected_pages,
             ranges: result
                 .plan

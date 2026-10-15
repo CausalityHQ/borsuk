@@ -1114,7 +1114,7 @@ pub async fn republish_retained_two_bit_generation(
         || pages.generation != manifest.generation
         || pages.rows != plane.rows
         || pages.dimensions != plane.dimensions
-        || pages.page_rows != 256
+        || pages.page_rows != crate::sq8_page_authority::SQ8_PAGE_ROWS
         || pages.object_sha256 != manifest.sq8_object_sha256
         || !valid_sha256(&pages.page_digest_sha256)
     {
@@ -1150,7 +1150,10 @@ pub async fn republish_retained_two_bit_generation(
     let descriptors = [
         (
             "page_digests.bin",
-            plane.rows.div_ceil(256).checked_mul(32),
+            plane
+                .rows
+                .div_ceil(crate::sq8_page_authority::SQ8_PAGE_ROWS)
+                .checked_mul(32),
             pages.page_digest_sha256.as_str(),
         ),
         (

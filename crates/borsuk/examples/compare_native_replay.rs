@@ -10211,15 +10211,17 @@ mod tests {
             semantic_seed_additions: vec![],
         };
         plan_two_bit_source_walks(
-            rows,
-            2,
+            &crate::sq8_subpage_shortlist::planning_authority(rows, 2),
             2,
             Some(SemanticProfile::Scale1m),
             &[(0, vec![0, 1, 2, 3, 4, 5, 6, 7, 16])],
             &prepared,
             |row| records.get(row).map(Vec::as_slice),
-            32,
-            1 << 20,
+            borsuk::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 32,
+                max_bytes: 1 << 20,
+                max_planner_bytes: 256 * 1024,
+            },
             Some(&mut trace),
         )
         .unwrap();

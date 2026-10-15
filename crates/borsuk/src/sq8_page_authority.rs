@@ -5,6 +5,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+// SQ8 authentication granularity is independent of SOURCE discovery pages.
+pub(crate) const SQ8_PAGE_ROWS: usize = 32;
+pub(crate) const SOURCE_SHORTLIST_ROWS: usize = 256;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageError {
     InvalidManifest,
@@ -510,6 +514,93 @@ pub fn plan_selected_sq8_rows(
     })
 }
 
+/// Admit nominated SQ8 blocks in descending SOURCE-score order.
+///
+/// Nominees are strictly increasing physical ordinals, with finite scores, and
+/// contain at most 256 rows. Only blocks that exceed the physical byte budget
+/// are skipped; scratch admission is checked for the entire roster first.
+/// `max_payload_bytes` funds this helper's simultaneous owned allocations; the
+/// borrowed authority and nominees remain caller-funded.
+pub fn plan_source_shortlist_blocks(
+    authority: &PageAuthority,
+    nominees: &[(usize, f64)],
+    limits: SelectedSq8Limits,
+    max_payload_bytes: usize,
+) -> Result<SelectedSq8Plan, BudgetedPageError> {
+    if !authority.is_sq8()
+        || authority.page_rows() != SQ8_PAGE_ROWS
+        || limits.max_gets == 0
+        || limits.max_bytes == 0
+        || limits.max_planner_bytes == 0
+    {
+        return Err(BudgetedPageError::InvalidGeometry);
+    }
+    if nominees.is_empty()
+        || nominees.len() > SOURCE_SHORTLIST_ROWS
+        || nominees
+            .last()
+            .is_some_and(|&(row, _)| row >= authority.rows())
+        || nominees.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err(BudgetedPageError::InvalidCandidate);
+    }
+    if nominees.iter().any(|&(_, score)| !score.is_finite()) {
+        return Err(BudgetedPageError::InvalidScore);
+    }
+    let modeled = nominees
+        .len()
+        .checked_mul(640)
+        .and_then(|n| n.checked_add(4096))
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
+    if modeled > max_payload_bytes
+        || selected_sq8_planner_payload(nominees.len())? > limits.max_planner_bytes
+    {
+        return Err(BudgetedPageError::InsufficientBudget);
+    }
+    let mut ranked = nominees.to_vec();
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        (a / SQ8_PAGE_ROWS)
+            .cmp(&(b / SQ8_PAGE_ROWS))
+            .then(sb.total_cmp(&sa))
+            .then(a.cmp(&b))
+    });
+    ranked.dedup_by(|a, b| a.0 / SQ8_PAGE_ROWS == b.0 / SQ8_PAGE_ROWS);
+    ranked.sort_unstable_by(|&(a, sa), &(b, sb)| {
+        sb.total_cmp(&sa)
+            .then((a / SQ8_PAGE_ROWS).cmp(&(b / SQ8_PAGE_ROWS)))
+    });
+    let mut accepted = Vec::<usize>::with_capacity(ranked.len());
+    for &(row, _) in &ranked {
+        let representative = row / SQ8_PAGE_ROWS * SQ8_PAGE_ROWS;
+        let position = accepted
+            .binary_search(&representative)
+            .unwrap_or_else(|p| p);
+        accepted.insert(position, representative);
+        match plan_selected_sq8_rows(authority, &accepted, limits) {
+            Ok(_) => (),
+            Err(BudgetedPageError::InsufficientBudget) => {
+                accepted.remove(position);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if accepted.is_empty() {
+        return Err(BudgetedPageError::InsufficientBudget);
+    }
+    let selected = nominees
+        .iter()
+        .filter_map(|&(row, _)| {
+            accepted
+                .binary_search(&(row / SQ8_PAGE_ROWS * SQ8_PAGE_ROWS))
+                .is_ok()
+                .then_some(row)
+        })
+        .collect::<Vec<_>>();
+    let mut plan = plan_selected_sq8_rows(authority, &selected, limits)?;
+    plan.modeled_planner_bytes = modeled;
+    Ok(plan)
+}
+
 #[cfg(test)]
 mod selected_sq8_rows_contract {
     use super::{
@@ -517,6 +608,155 @@ mod selected_sq8_rows_contract {
     };
     use crate::sq8_page_authority::PageAuthority;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn source_shortlist_cover_matches_independent_greedy_oracle() {
+        // Independent interval implementation: no production cover/planner helper.
+        fn cover(blocks: &[usize], gets: usize) -> Vec<std::ops::Range<usize>> {
+            let mut runs = Vec::<std::ops::Range<usize>>::new();
+            for &block in blocks {
+                let start = block * 32 * 17;
+                let end = ((block + 1) * 32).min(4097) * 17;
+                if let Some(last) = runs.last_mut().filter(|last| last.end == start) {
+                    last.end = end;
+                } else {
+                    runs.push(start..end);
+                }
+            }
+            while runs.len() > gets {
+                let gap = (0..runs.len() - 1)
+                    .min_by_key(|&i| (runs[i + 1].start - runs[i].end, runs[i].end))
+                    .unwrap();
+                let end = runs.remove(gap + 1).end;
+                runs[gap].end = end;
+            }
+            runs
+        }
+        let authority = authority(4097, 5, 32);
+        let mut nominees = (0..255)
+            .map(|i| {
+                let row = i * 16;
+                let score = match i % 7 {
+                    0 => -0.0,
+                    1 => 0.0,
+                    _ => -((i * 37 % 101) as f64),
+                };
+                (row, score)
+            })
+            .collect::<Vec<_>>();
+        nominees.push((4096, 1.));
+        // A full sort of all nominees chooses the best row for each block.
+        let mut priority = nominees.clone();
+        priority.sort_by(|&(a, sa), &(b, sb)| {
+            sb.total_cmp(&sa)
+                .then((a / 32).cmp(&(b / 32)))
+                .then(a.cmp(&b))
+        });
+        let mut seen = std::collections::BTreeSet::new();
+        priority.retain(|&(row, _)| seen.insert(row / 32));
+        for gets in [1, 3, 30] {
+            for bytes in [17, 32 * 17, 4096, 16384, 4097 * 17] {
+                let mut accepted = Vec::new();
+                for &(row, _) in &priority {
+                    let mut trial = accepted.clone();
+                    trial.push(row / 32);
+                    trial.sort_unstable();
+                    let charge = cover(&trial, gets).iter().map(|r| r.len()).sum::<usize>();
+                    if charge <= bytes {
+                        accepted = trial;
+                    }
+                }
+                let expected = cover(&accepted, gets);
+                let actual = super::plan_source_shortlist_blocks(
+                    &authority,
+                    &nominees,
+                    SelectedSq8Limits {
+                        max_gets: gets,
+                        max_bytes: bytes,
+                        max_planner_bytes: 256 * 1024,
+                    },
+                    256 * 1024,
+                )
+                .unwrap();
+                assert_eq!(actual.selected_pages, accepted, "gets={gets} bytes={bytes}");
+                assert_eq!(actual.ranges, expected, "gets={gets} bytes={bytes}");
+                assert_eq!(
+                    actual.planned_bytes,
+                    expected.iter().map(|r| r.len()).sum::<usize>()
+                );
+                assert!(actual.planned_bytes <= bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn source_shortlist_block_budget_keeps_later_affordable_tail() {
+        let authority = authority(97, 5, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 17,
+            max_planner_bytes: 256 * 1024,
+        };
+        let nominees = [(0, 9.), (96, 8.)];
+        let plan =
+            super::plan_source_shortlist_blocks(&authority, &nominees, limits, 256 * 1024).unwrap();
+        assert_eq!(plan.selected_pages, vec![3]);
+        assert_eq!(plan.ranges, vec![96 * 17..97 * 17]);
+        assert_eq!(plan.planned_bytes, 17);
+        assert_eq!(
+            super::plan_source_shortlist_blocks(
+                &authority,
+                &nominees,
+                SelectedSq8Limits {
+                    max_planner_bytes: 2 * 512 + 4095,
+                    ..limits
+                },
+                256 * 1024
+            ),
+            Err(BudgetedPageError::InsufficientBudget)
+        );
+        assert_eq!(
+            super::plan_source_shortlist_blocks(&authority, &nominees, limits, 2 * 640 + 4095),
+            Err(BudgetedPageError::InsufficientBudget)
+        );
+    }
+
+    #[test]
+    fn source_shortlist_block_cover_charges_bridges_and_refuses_invalid_nominees() {
+        let authority = authority(97, 5, 32);
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: 97 * 17,
+            max_planner_bytes: 256 * 1024,
+        };
+        let plan = super::plan_source_shortlist_blocks(
+            &authority,
+            &[(0, 9.), (96, 8.)],
+            limits,
+            256 * 1024,
+        )
+        .unwrap();
+        assert_eq!(plan.selected_pages, vec![0, 3]);
+        assert_eq!(plan.ranges, vec![0..97 * 17]);
+        assert_eq!(plan.planned_bytes, 97 * 17);
+        assert_eq!(
+            super::plan_source_shortlist_blocks(&authority, &[(0, f64::NAN)], limits, 256 * 1024),
+            Err(BudgetedPageError::InvalidScore)
+        );
+        assert_eq!(
+            super::plan_source_shortlist_blocks(
+                &authority,
+                &[(0, 1.), (0, 2.)],
+                limits,
+                256 * 1024
+            ),
+            Err(BudgetedPageError::InvalidCandidate)
+        );
+        assert_eq!(
+            super::plan_source_shortlist_blocks(&authority, &[(97, 1.)], limits, 256 * 1024),
+            Err(BudgetedPageError::InvalidCandidate)
+        );
+    }
     fn authority(rows: usize, dimensions: usize, page_rows: usize) -> PageAuthority {
         let width = dimensions + 12;
         let mut object = vec![1_u8; rows * width];

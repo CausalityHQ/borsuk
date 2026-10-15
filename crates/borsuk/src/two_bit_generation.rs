@@ -3,15 +3,16 @@ use crate::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIde
 #[cfg(test)]
 use crate::sq8_s3_range::rank_verified_sq8_pages_inner;
 use crate::{
-    budgeted_page_rank::{
-        BudgetedPageError, BudgetedPagePlan, choose_budgeted_pages_sparse, cover_pages,
-    },
+    budgeted_page_rank::{BudgetedPageError, BudgetedPagePlan, cover_pages},
     canonical_source::CanonicalSource,
     object_native_generation::{
         MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_two_bit_metadata,
     },
     rotated_two_bit::PreparedTwoBit,
-    sq8_page_authority::{PageAuthority, PageError},
+    sq8_page_authority::{
+        PageAuthority, PageError, SOURCE_SHORTLIST_ROWS, SQ8_PAGE_ROWS, SelectedSq8Limits,
+        plan_source_shortlist_blocks,
+    },
     sq8_s3_range::{
         InFlightBytes, OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats,
         VerifiedRange, fetch_verified_ranges_traced_with_byte_window,
@@ -241,7 +242,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v8";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v9";
 pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
@@ -651,7 +652,7 @@ pub struct TwoBitPlanTrace {
     pub ranked_candidate_pages: Vec<usize>,
     /// Globally distinct32-row units source-scored, including bounded completion.
     pub nomination_evaluated_units: Vec<usize>,
-    /// First ranked page, required by physical admission.
+    /// First ranked SOURCE page; it is not forced into SQ8 admission.
     pub primary_page: usize,
     /// Nearest then diversity discovery; identical graph identities run once.
     pub discoveries: Vec<TwoBitDiscoveryTrace>,
@@ -693,10 +694,59 @@ impl TwoBitPlanTrace {
 // the 64B/set-entry allowance is modeled payload, not an allocator guarantee.
 // Actual native RSS remains an independent host gate.
 const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
-    match profile {
+    let source = match profile {
         Some(SemanticProfile::Scale1m) => 3 * 1024 * 1024,
         _ => 1024 * 1024,
+    };
+    source + SOURCE_SHORTLIST_RESERVE
+}
+const SOURCE_SHORTLIST_RESERVE: u64 = 256 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+struct SourceRowScore {
+    row: usize,
+    score: f64,
+}
+impl PartialEq for SourceRowScore {
+    fn eq(&self, other: &Self) -> bool {
+        self.row == other.row && self.score.to_bits() == other.score.to_bits()
     }
+}
+impl Eq for SourceRowScore {}
+impl PartialOrd for SourceRowScore {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for SourceRowScore {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // The largest heap entry is the worst retained row.
+        other
+            .score
+            .total_cmp(&self.score)
+            .then(self.row.cmp(&other.row))
+    }
+}
+fn retain_source_shortlist(
+    heap: &mut std::collections::BinaryHeap<SourceRowScore>,
+    row: usize,
+    score: f64,
+) -> Result<()> {
+    if !score.is_finite() {
+        return Err(TwoBitGenerationError::Invalid("nonfinite source score"));
+    }
+    let candidate = SourceRowScore { row, score };
+    if heap.len() < SOURCE_SHORTLIST_ROWS {
+        heap.push(candidate);
+    } else {
+        let mut worst = heap
+            .peek_mut()
+            .ok_or(TwoBitGenerationError::Invalid("source shortlist heap"))?;
+        if candidate < *worst {
+            *worst = candidate;
+        }
+    }
+    Ok(())
 }
 /// Offline source nomination and SQ8 page admission using the production planner.
 /// The caller binds the prepared query and authenticated records to one source;
@@ -704,25 +754,35 @@ const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
 /// The explicit profile admits semantic walk/completion bounds; `None` retains
 /// graph limits. Semantic discovery supplies its entire admitted page closure.
 /// Standalone callers must also reserve 3MiB planner working payload for Scale1m
-/// (1MiB for other profiles), plus prepared-query and optional retained-trace
+/// (1MiB for other profiles), plus 256KiB for shortlist admission, prepared-query and optional retained-trace
 /// memory. Generation methods enforce their modeled admission separately.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
-    rows: usize,
-    dimensions: usize,
+    authority: &PageAuthority,
     nomination_page_limit: usize,
     semantic_profile: Option<SemanticProfile>,
     walks: &[(usize, Vec<usize>)],
     prepared: &PreparedTwoBit,
     mut record: impl FnMut(usize) -> Option<&'a [u8]>,
-    max_query_gets: usize,
-    max_query_bytes: usize,
+    limits: SelectedSq8Limits,
     trace: Option<&mut TwoBitPlanTrace>,
 ) -> Result<BudgetedPagePlan> {
-    // Reuse physical admission to reject overflowing geometry before walk/row
-    // arithmetic. Actual query budgets are applied after nomination as before.
-    choose_budgeted_pages_sparse(&[], &[0], rows, dimensions, 1, 1, usize::MAX)
-        .map_err(TwoBitGenerationError::Budget)?;
+    let rows = authority.rows();
+    let dimensions = authority.dimensions();
+    if !authority.is_sq8()
+        || authority.page_rows() != SQ8_PAGE_ROWS
+        || limits.max_gets == 0
+        || limits.max_bytes == 0
+    {
+        return Err(TwoBitGenerationError::Budget(
+            BudgetedPageError::InvalidGeometry,
+        ));
+    }
+    if limits.max_planner_bytes < rows.min(SOURCE_SHORTLIST_ROWS) * 512 + 4096 {
+        return Err(TwoBitGenerationError::Budget(
+            BudgetedPageError::InsufficientBudget,
+        ));
+    }
     if semantic_profile.is_some_and(|profile| !profile.valid_geometry(rows, dimensions)) {
         return Err(TwoBitGenerationError::Invalid("source semantic profile"));
     }
@@ -732,20 +792,18 @@ pub fn plan_two_bit_source_walks<'a>(
     } else {
         0
     });
+    let mut shortlist = std::collections::BinaryHeap::with_capacity(SOURCE_SHORTLIST_ROWS);
     let score = |unit: usize| {
         if trace.is_some() {
             nomination_evaluated_units.push(unit);
         }
         let mut maximum = f64::NEG_INFINITY;
         for row in unit * 32..((unit + 1) * 32).min(rows) {
-            maximum = maximum.max(
-                prepared
-                    .score(
-                        record(row)
-                            .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
-                    )
-                    .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?,
-            );
+            let value = prepared
+                .score(record(row).ok_or(TwoBitGenerationError::Invalid("missing source record"))?)
+                .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+            retain_source_shortlist(&mut shortlist, row, value)?;
+            maximum = maximum.max(value);
         }
         Ok(maximum)
     };
@@ -756,22 +814,36 @@ pub fn plan_two_bit_source_walks<'a>(
         trace.nomination_evaluated_units = nomination_evaluated_units;
         trace.ranked_candidate_pages = ranked.iter().map(|&(page, _)| page).collect();
     }
-    let primary = [ranked[0].0 * 256];
-    let order = ranked
-        .iter()
-        .enumerate()
-        .map(|(rank, &(page, _))| (page, rank as f32))
+    let mut nominees = shortlist
+        .into_iter()
+        .map(|entry| (entry.row, entry.score))
         .collect::<Vec<_>>();
-    choose_budgeted_pages_sparse(
-        &order,
-        &primary,
-        rows,
-        dimensions,
-        rows.div_ceil(256),
-        max_query_gets,
-        max_query_bytes,
+    nominees.sort_unstable_by_key(|&(row, _)| row);
+    let selected = plan_source_shortlist_blocks(
+        authority,
+        &nominees,
+        limits,
+        SOURCE_SHORTLIST_RESERVE as usize,
     )
-    .map_err(TwoBitGenerationError::Budget)
+    .map_err(TwoBitGenerationError::Budget)?;
+    let target_pages = 1 + nominees
+        .windows(2)
+        .filter(|pair| pair[0].0 / SQ8_PAGE_ROWS != pair[1].0 / SQ8_PAGE_ROWS)
+        .count();
+    let target_shortfall = target_pages
+        .checked_sub(selected.selected_pages.len())
+        .ok_or(TwoBitGenerationError::Invalid(
+            "source shortlist page accounting",
+        ))?;
+    Ok(BudgetedPagePlan {
+        page_rows: SQ8_PAGE_ROWS,
+        selected_pages: selected.selected_pages,
+        ranges: selected.ranges,
+        planned_bytes: selected.planned_bytes,
+        primary_pages_retained: 0,
+        target_pages,
+        target_shortfall,
+    })
 }
 
 /// Exact production query normalization for offline discovery and SQ8 scoring.
@@ -1373,8 +1445,6 @@ impl TwoBitGeneration {
         if manifest.discovery.mode() == DiscoveryMode::Semantic {
             limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
             limits.max_source_gets = limits.max_source_gets.min(128);
-            limits.max_query_bytes = limits.max_query_bytes.min(16_773_120);
-            limits.max_query_gets = limits.max_query_gets.min(32);
         }
         let files = manifest.discovery.files(paged);
         let mut disk = manifest_size;
@@ -1668,7 +1738,7 @@ impl TwoBitGeneration {
             || pages.object_sha256() != manifest.sq8_object_sha256
             || pages.rows() != receipt.rows
             || pages.dimensions() != receipt.dimensions
-            || pages.page_rows() != 256
+            || pages.page_rows() != SQ8_PAGE_ROWS
             || manifest.low.len() != receipt.dimensions
         {
             return Err(bad("generation binding"));
@@ -2003,8 +2073,7 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<BudgetedPagePlan> {
         plan_two_bit_source_walks(
-            self.pages.rows(),
-            self.pages.dimensions(),
+            &self.pages,
             if self.manifest.discovery.mode() == DiscoveryMode::Semantic {
                 walks
                     .iter()
@@ -2018,8 +2087,11 @@ impl TwoBitGeneration {
             walks,
             prepared,
             record,
-            self.limits.max_query_gets,
-            self.limits.max_query_bytes,
+            SelectedSq8Limits {
+                max_gets: self.limits.max_query_gets,
+                max_bytes: self.limits.max_query_bytes,
+                max_planner_bytes: SOURCE_SHORTLIST_RESERVE as usize,
+            },
             trace,
         )
     }
@@ -2462,7 +2534,7 @@ impl TwoBitGeneration {
             )
         };
 
-        let page_bytes = 256 * (self.pages.dimensions() + 12);
+        let page_bytes = self.pages.page_rows() * (self.pages.dimensions() + 12);
         let ranges = plan
             .ranges
             .iter()
@@ -2657,6 +2729,7 @@ impl TwoBitGeneration {
             other => other,
         })?;
         Ok(BudgetedPagePlan {
+            page_rows: 256,
             target_pages: closure.len(),
             target_shortfall: 0,
             primary_pages_retained: 0,
@@ -2667,7 +2740,7 @@ impl TwoBitGeneration {
     }
 
     // The shared authenticated scorer under the caller's explicit direct caps. The
-    // historical (clamped) `max_query_*` limits are deliberately not consulted.
+    // ordinary `max_query_*` limits are deliberately not consulted.
     #[allow(clippy::too_many_arguments)]
     async fn direct_closure_rank(
         &self,
@@ -2679,7 +2752,7 @@ impl TwoBitGeneration {
         limits: DirectClosureLimits,
         range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<RankedSq8> {
-        let page_bytes = 256 * (self.pages.dimensions() + 12);
+        let page_bytes = self.pages.page_rows() * (self.pages.dimensions() + 12);
         let ranges = plan
             .ranges
             .iter()
@@ -2899,6 +2972,86 @@ mod source_walk_tests {
     use super::*;
     use futures_util::{StreamExt, stream};
 
+    // Planning-only fixture: payload authentication is covered by real builders/readers.
+    fn source_test_authority(
+        rows: usize,
+        dimensions: usize,
+    ) -> std::result::Result<PageAuthority, PageError> {
+        use sha2::{Digest, Sha256};
+        if rows == 0
+            || dimensions == 0
+            || dimensions
+                .checked_add(12)
+                .and_then(|n| n.checked_mul(rows))
+                .is_none()
+        {
+            return Err(PageError::InvalidManifest);
+        }
+        let length = rows
+            .div_ceil(SQ8_PAGE_ROWS)
+            .checked_mul(32)
+            .filter(|&n| n <= 4 * 1024 * 1024)
+            .ok_or(PageError::InvalidSidecar)?;
+        let sidecar = vec![0_u8; length];
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":rows, "dimensions":dimensions, "page_rows":SQ8_PAGE_ROWS,
+            "object_sha256":"0".repeat(64),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar))
+        }))
+        .unwrap();
+        PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+    }
+
+    #[test]
+    fn source_shortlist_heap_matches_full_sort_with_signed_zero_and_negative_scores() {
+        for panel in 0..2 {
+            let scores = (0..4097)
+                .map(|row| {
+                    let score = if panel == 0 || row < 8 {
+                        if row % 2 == 0 { -0.0 } else { 0.0 }
+                    } else {
+                        -((row % 7 + 1) as f64)
+                    };
+                    (row, score)
+                })
+                .collect::<Vec<_>>();
+            let mut expected = scores.clone();
+            expected.sort_unstable_by(|&(a, sa), &(b, sb)| sb.total_cmp(&sa).then(a.cmp(&b)));
+            expected.truncate(256);
+            expected.sort_unstable_by_key(|&(row, _)| row);
+            let mut heap = std::collections::BinaryHeap::with_capacity(256);
+            for &(row, score) in scores.iter().rev() {
+                retain_source_shortlist(&mut heap, row, score).unwrap();
+                assert!(heap.len() <= 256);
+            }
+            let mut actual = heap
+                .into_iter()
+                .map(|entry| (entry.row, entry.score))
+                .collect::<Vec<_>>();
+            actual.sort_unstable_by_key(|&(row, _)| row);
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|&(row, score)| (row, score.to_bits()))
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|&(row, score)| (row, score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        let mut heap = std::collections::BinaryHeap::with_capacity(256);
+        for score in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(retain_source_shortlist(&mut heap, 0, score).is_err());
+            assert!(heap.is_empty());
+        }
+    }
+
     #[test]
     fn source_shortlist_v9_uses_score_then_physical_ordinal() {
         let rows = 4097_usize;
@@ -2917,8 +3070,7 @@ mod source_walk_tests {
         let walks = vec![(0, (0..rows.div_ceil(32)).collect())];
         let mut visits = vec![0_u8; rows];
         let plan = plan_two_bit_source_walks(
-            rows,
-            dimensions,
+            &source_test_authority(rows, dimensions).unwrap(),
             rows.div_ceil(256),
             Some(SemanticProfile::Scale1m),
             &walks,
@@ -2927,8 +3079,11 @@ mod source_walk_tests {
                 visits[row] += 1;
                 Some(record.as_slice())
             },
-            30,
-            32 * 1024 * 1024,
+            crate::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 30,
+                max_bytes: 32 * 1024 * 1024,
+                max_planner_bytes: 256 * 1024,
+            },
             None,
         )
         .unwrap();
@@ -5107,7 +5262,11 @@ mod source_walk_tests {
                 1
             );
             assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+            let window = InFlightBytes::with_waiter_limit(16 * 1024 * 1024, 16, 16384).unwrap();
+            let coordinated = coordinated.with_shared_byte_window(window.clone()).unwrap();
+            assert_eq!(std::sync::Arc::strong_count(&window), 2);
             drop(coordinated);
+            assert_eq!(std::sync::Arc::strong_count(&window), 1);
         }
         *store.root_read_budget.lock().unwrap() = None;
         // Preserve the standalone trusted-SHA path's transport assertions.
@@ -5995,6 +6154,9 @@ mod source_walk_tests {
                 .unwrap();
         assert!(index.head().is_empty());
         assert!(store.reads.lock().unwrap().is_empty());
+        let window = InFlightBytes::with_waiter_limit(1, 16, 16384).unwrap();
+        let index = index.with_shared_byte_window(window.clone()).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&window), 1);
         drop(index);
         let maintenance = tempfile::tempdir().unwrap();
         for _ in 0..2 {
@@ -6189,15 +6351,17 @@ mod source_walk_tests {
                     .discover_walks(normalized.as_ref(), Some(&mut trace))
                     .unwrap();
                 let diagnostic = plan_two_bit_source_walks(
-                    rows,
-                    2,
+                    &source_test_authority(rows, 2).unwrap(),
                     rows.div_ceil(256).min(159),
                     None,
                     &walks,
                     &prepared,
                     |row| local.plane.record(row),
-                    gets,
-                    bytes,
+                    crate::sq8_page_authority::SelectedSq8Limits {
+                        max_gets: gets,
+                        max_bytes: bytes,
+                        max_planner_bytes: 256 * 1024,
+                    },
                     Some(&mut trace),
                 )
                 .unwrap();
@@ -6217,15 +6381,17 @@ mod source_walk_tests {
                 assert_eq!(
                     diagnostic,
                     plan_two_bit_source_walks(
-                        rows,
-                        2,
+                        &source_test_authority(rows, 2).unwrap(),
                         rows.div_ceil(256).min(159),
                         None,
                         &walks,
                         &prepared,
                         |row| local.plane.record(row),
-                        gets,
-                        bytes,
+                        crate::sq8_page_authority::SelectedSq8Limits {
+                            max_gets: gets,
+                            max_bytes: bytes,
+                            max_planner_bytes: 256 * 1024
+                        },
                         None,
                     )
                     .unwrap()
@@ -6826,19 +6992,22 @@ mod source_walk_tests {
         assert!(rank_walked_source(513, &walks, |_| Ok(1.0)).is_err());
         let mut trace = TwoBitPlanTrace::default();
         let plan = plan_two_bit_source_walks(
-            513,
-            2,
+            &source_test_authority(513, 2).unwrap(),
             1,
             Some(SemanticProfile::Native100k),
             &walks,
             &prepared,
             |_| Some(&record),
-            32,
-            513 * 14,
+            crate::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 32,
+                max_bytes: 513 * 14,
+                max_planner_bytes: 256 * 1024,
+            },
             Some(&mut trace),
         )
         .unwrap();
-        assert_eq!(plan.selected_pages, vec![2]);
+        assert_eq!(plan.page_rows, 32);
+        assert_eq!(plan.selected_pages, vec![16]);
         assert_eq!(plan.ranges, vec![7168..7182]);
         assert_eq!(trace.primary_page, 2);
         assert_eq!(trace.ranked_candidate_pages, vec![2]);
@@ -6846,15 +7015,17 @@ mod source_walk_tests {
         for limit in [0, 3, 4, 160] {
             assert!(
                 plan_two_bit_source_walks(
-                    513,
-                    2,
+                    &source_test_authority(513, 2).unwrap(),
                     limit,
                     Some(SemanticProfile::Native100k),
                     &walks,
                     &prepared,
                     |_| Some(&record),
-                    32,
-                    513 * 14,
+                    crate::sq8_page_authority::SelectedSq8Limits {
+                        max_gets: 32,
+                        max_bytes: 513 * 14,
+                        max_planner_bytes: 256 * 1024
+                    },
                     None,
                 )
                 .is_err()
@@ -6963,8 +7134,7 @@ mod source_walk_tests {
         let mut reads = vec![0_u8; rows];
         let mut trace = TwoBitPlanTrace::default();
         plan_two_bit_source_walks(
-            rows,
-            2,
+            &source_test_authority(rows, 2).unwrap(),
             pages,
             Some(SemanticProfile::Scale1m),
             &walks,
@@ -6973,8 +7143,11 @@ mod source_walk_tests {
                 reads[row] += 1;
                 Some(records[record_id(row)].as_slice())
             },
-            32,
-            rows * 14,
+            crate::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 32,
+                max_bytes: rows * 14,
+                max_planner_bytes: 256 * 1024,
+            },
             Some(&mut trace),
         )
         .unwrap();
@@ -7000,8 +7173,7 @@ mod source_walk_tests {
         for missing in [false, true] {
             assert!(
                 plan_two_bit_source_walks(
-                    rows,
-                    2,
+                    &source_test_authority(rows, 2).unwrap(),
                     pages,
                     Some(SemanticProfile::Scale1m),
                     &walks,
@@ -7011,8 +7183,11 @@ mod source_walk_tests {
                     } else {
                         Some(records[record_id(row)].as_slice())
                     },
-                    32,
-                    rows * 14,
+                    crate::sq8_page_authority::SelectedSq8Limits {
+                        max_gets: 32,
+                        max_bytes: rows * 14,
+                        max_planner_bytes: 256 * 1024
+                    },
                     None,
                 )
                 .is_err()
@@ -7073,15 +7248,17 @@ mod source_walk_tests {
             ..Default::default()
         };
         let plan = plan_two_bit_source_walks(
-            1_000_000,
-            768,
+            &source_test_authority(1_000_000, 768).unwrap(),
             512,
             Some(SemanticProfile::Fresh1m),
             &walks,
             &prepared,
             |_| Some(&record),
-            32,
-            16_773_120,
+            crate::sq8_page_authority::SelectedSq8Limits {
+                max_gets: 32,
+                max_bytes: 16_773_120,
+                max_planner_bytes: 256 * 1024,
+            },
             Some(&mut trace),
         )
         .unwrap();
@@ -7097,7 +7274,7 @@ mod source_walk_tests {
         assert_eq!(trace.ranked_candidate_pages, (0..512).collect::<Vec<_>>());
         assert_eq!(
             plan.ranges.iter().map(|range| range.len()).sum::<usize>(),
-            84 * 256 * 780
+            256 * 780
         );
         let retained = std::mem::size_of::<TwoBitPlanTrace>()
             + (trace.nomination_evaluated_units.capacity()
@@ -7126,15 +7303,17 @@ mod source_walk_tests {
         ] {
             assert!(
                 plan_two_bit_source_walks(
-                    1_000_000,
-                    768,
+                    &source_test_authority(1_000_000, 768).unwrap(),
                     limit,
                     Some(SemanticProfile::Fresh1m),
                     &[(0, invalid)],
                     &prepared,
                     |_| panic!("rejected closure read SOURCE"),
-                    32,
-                    16_773_120,
+                    crate::sq8_page_authority::SelectedSq8Limits {
+                        max_gets: 32,
+                        max_bytes: 16_773_120,
+                        max_planner_bytes: 256 * 1024
+                    },
                     None,
                 )
                 .is_err()
@@ -7142,30 +7321,34 @@ mod source_walk_tests {
         }
         assert!(
             plan_two_bit_source_walks(
-                1_000_000,
-                768,
+                &source_test_authority(1_000_000, 768).unwrap(),
                 512,
                 None,
                 &walks,
                 &prepared,
                 |_| panic!("graph cap relaxed"),
-                32,
-                16_773_120,
+                crate::sq8_page_authority::SelectedSq8Limits {
+                    max_gets: 32,
+                    max_bytes: 16_773_120,
+                    max_planner_bytes: 256 * 1024
+                },
                 None,
             )
             .is_err()
         );
         assert!(
             plan_two_bit_source_walks(
-                100_000,
-                768,
+                &source_test_authority(100_000, 768).unwrap(),
                 512,
                 Some(SemanticProfile::Fresh1m),
                 &walks,
                 &prepared,
                 |_| panic!("wrong profile read SOURCE"),
-                32,
-                16_773_120,
+                crate::sq8_page_authority::SelectedSq8Limits {
+                    max_gets: 32,
+                    max_bytes: 16_773_120,
+                    max_planner_bytes: 256 * 1024
+                },
                 None,
             )
             .is_err()
@@ -7226,16 +7409,18 @@ mod source_walk_tests {
         let walks = [(0, (0..9).collect())];
         assert!(matches!(
             plan_two_bit_source_walks(
-                257,
-                2,
+                &source_test_authority(257, 2).unwrap(),
                 2,
                 None,
                 &walks,
                 &prepared,
                 |_| None,
-                32,
-                257 * 14,
-                None
+                crate::sq8_page_authority::SelectedSq8Limits {
+                    max_gets: 32,
+                    max_bytes: 257 * 14,
+                    max_planner_bytes: 256 * 1024
+                },
+                None,
             ),
             Err(TwoBitGenerationError::Invalid("missing source record"))
         ));
@@ -7244,15 +7429,17 @@ mod source_walk_tests {
         nonfinite[scale..scale + 4].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(matches!(
             plan_two_bit_source_walks(
-                257,
-                2,
+                &source_test_authority(257, 2).unwrap(),
                 2,
                 None,
                 &walks,
                 &prepared,
                 |_| Some(&nonfinite),
-                32,
-                257 * 14,
+                crate::sq8_page_authority::SelectedSq8Limits {
+                    max_gets: 32,
+                    max_bytes: 257 * 14,
+                    max_planner_bytes: 256 * 1024
+                },
                 None,
             ),
             Err(TwoBitGenerationError::Plane(SourceBuildError::Codec(
@@ -7269,36 +7456,25 @@ mod source_walk_tests {
         ] {
             assert!(
                 plan_two_bit_source_walks(
-                    257,
-                    2,
+                    &source_test_authority(257, 2).unwrap(),
                     2,
                     None,
                     &invalid,
                     &prepared,
                     |_| panic!("invalid walk scored"),
-                    32,
-                    257 * 14,
+                    crate::sq8_page_authority::SelectedSq8Limits {
+                        max_gets: 32,
+                        max_bytes: 257 * 14,
+                        max_planner_bytes: 256 * 1024
+                    },
                     None,
                 )
                 .is_err()
             );
         }
         for (rows, dimensions) in [(0, 2), (257, 0), (usize::MAX, 2), (257, usize::MAX)] {
-            assert!(
-                plan_two_bit_source_walks(
-                    rows,
-                    dimensions,
-                    rows.div_ceil(256).min(159),
-                    None,
-                    &walks,
-                    &prepared,
-                    |_| panic!("invalid geometry scored"),
-                    32,
-                    257 * 14,
-                    None,
-                )
-                .is_err()
-            );
+            // Invalid geometry cannot cross the authenticated-authority API.
+            assert!(source_test_authority(rows, dimensions).is_err());
         }
     }
     #[test]

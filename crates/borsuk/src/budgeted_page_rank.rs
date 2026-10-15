@@ -17,6 +17,8 @@ pub enum BudgetedPageError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BudgetedPagePlan {
+    /// Physical rows per selected-page index; independent of proof geometry.
+    pub page_rows: usize,
     pub selected_pages: Vec<usize>,
     pub ranges: Vec<Range<usize>>,
     pub planned_bytes: usize,
@@ -223,6 +225,7 @@ fn choose_ranked_pages(
     debug_assert_eq!(final_bytes, exact_charge);
     let selected_pages = selected;
     Ok(BudgetedPagePlan {
+        page_rows: PAGE_ROWS,
         target_shortfall: target_pages.saturating_sub(selected_pages.len()),
         target_pages,
         selected_pages,
