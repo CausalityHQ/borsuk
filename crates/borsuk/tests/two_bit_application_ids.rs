@@ -1632,11 +1632,12 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     .await
     .unwrap();
     assert_eq!(pending.rows().len(), 2);
+    let mut gc =
+        borsuk::two_bit_gc::TwoBitGcSession::new(store.clone(), &empty_prefix, &maintenance)
+            .unwrap();
     // Valid modeled caps can still be too small for the actual pending body.
     let failure = borsuk::two_bit_gc::collect_two_bit_garbage(
-        store.clone(),
-        &empty_prefix,
-        &maintenance,
+        &mut gc,
         borsuk::two_bit_gc::TwoBitGcLimits {
             mutations: TwoBitMutationLimits {
                 max_snapshot_bytes: 100,
@@ -1689,9 +1690,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             break;
         }
         let report = borsuk::two_bit_gc::collect_two_bit_garbage(
-            store.clone(),
-            &empty_prefix,
-            &maintenance,
+            &mut gc,
             borsuk::two_bit_gc::TwoBitGcLimits {
                 max_objects_deleted: 1,
                 ..caps
@@ -1732,14 +1731,9 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .await
             .is_ok()
     );
-    let swept = borsuk::two_bit_gc::collect_two_bit_garbage(
-        store.clone(),
-        &empty_prefix,
-        &maintenance,
-        caps,
-    )
-    .await
-    .unwrap();
+    let swept = borsuk::two_bit_gc::collect_two_bit_garbage(&mut gc, caps)
+        .await
+        .unwrap();
     assert!(swept.objects_deleted > 0);
     let base = borsuk::two_bit_compaction::compact_two_bit_index(
         store.clone(),
@@ -1791,14 +1785,9 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     .await
     .unwrap();
     assert!(
-        borsuk::two_bit_gc::collect_two_bit_garbage(
-            store.clone(),
-            &empty_prefix,
-            &maintenance,
-            caps
-        )
-        .await
-        .is_err()
+        borsuk::two_bit_gc::collect_two_bit_garbage(&mut gc, caps)
+            .await
+            .is_err()
     );
     drop(coordinated);
     let failing =
@@ -1806,9 +1795,12 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             op == common::StoreOperation::Delete
         });
     let failure = borsuk::two_bit_gc::collect_two_bit_garbage(
-        std::sync::Arc::new(failing),
-        &empty_prefix,
-        &maintenance,
+        &mut borsuk::two_bit_gc::TwoBitGcSession::new(
+            std::sync::Arc::new(failing),
+            &empty_prefix,
+            &maintenance,
+        )
+        .unwrap(),
         caps,
     )
     .await
@@ -1820,14 +1812,11 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
             .await
             .is_err()
     );
-    let report = borsuk::two_bit_gc::collect_two_bit_garbage(
-        store.clone(),
-        &empty_prefix,
-        &maintenance,
-        caps,
-    )
-    .await
-    .unwrap();
+    gc = borsuk::two_bit_gc::TwoBitGcSession::new(store.clone(), &empty_prefix, &maintenance)
+        .unwrap();
+    let report = borsuk::two_bit_gc::collect_two_bit_garbage(&mut gc, caps)
+        .await
+        .unwrap();
     assert!(report.scan_complete);
     assert!(report.objects_deleted > 0);
     assert!(store.head(&orphan).await.is_err());
@@ -2166,9 +2155,8 @@ async fn native_s3_conditional_fence_and_gc_smoke() {
         .await
         .unwrap();
     let report = borsuk::two_bit_gc::collect_two_bit_garbage(
-        store.clone(),
-        &prefix,
-        &maintenance,
+        &mut borsuk::two_bit_gc::TwoBitGcSession::new(store.clone(), &prefix, &maintenance)
+            .unwrap(),
         borsuk::two_bit_gc::TwoBitGcLimits {
             max_memory_bytes: 2_000_000,
             mutations,
@@ -2251,9 +2239,12 @@ async fn gc_rejects_inconsistent_mutation_caps_before_remote_io() {
             .with_operation_log();
     let directory = tempfile::tempdir().unwrap();
     let error = collect_two_bit_garbage(
-        std::sync::Arc::new(store),
-        &ObjectPath::from("admission"),
-        directory.path(),
+        &mut borsuk::two_bit_gc::TwoBitGcSession::new(
+            std::sync::Arc::new(store),
+            &ObjectPath::from("admission"),
+            directory.path(),
+        )
+        .unwrap(),
         TwoBitGcLimits {
             max_memory_bytes: 2_000_000,
             mutations: borsuk::two_bit_mutations::TwoBitMutationLimits {
