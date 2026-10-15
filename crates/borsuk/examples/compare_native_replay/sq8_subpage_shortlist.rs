@@ -1,5 +1,8 @@
 //! Native shortlist diagnostic fixtures. No performance or adoption claim.
 
+#[path = "sq8_virtual_layout.rs"]
+mod sq8_virtual_layout;
+
 // Offline diagnostic workspace only. Borrowed capture storage and allocator
 // overhead are caller-funded; admission precedes copying/sorting payload.
 fn shortlist(
