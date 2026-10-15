@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-v9-cold-root-decision-v1",
+  "attempt": "a0003",
+  "status": "VALID_QUALITY_BYTES_PARETO_TAIL_REGRESSION",
+  "native_valid": true,
+  "default_adoption": false,
+  "retain_candidate": true,
+  "quality_target_met": true,
+  "tail_latency_screen_passed": false,
+  "independent_evidence_audit": "3ca0bf7b49854c50",
+  "independent_audit_pending": false,
+  "stage_inference": "SQ8 p90/p95 worsened consistently despite lower median; SOURCE B1 p95 also varied. Stage quantiles are not additive or per-query causal attribution.",
+  "next_action": "Bounded diagnostic discriminator before any production rewrite or repeat full campaign",
+  "vendor_win_claim": false,
+  "summary_schema": "borsuk-v9-two-elf-abba-summary-v1",
+  "independent_audit_disposition": "Qualified acceptance; performance screen fails; no default adoption or vendor claim"
+}

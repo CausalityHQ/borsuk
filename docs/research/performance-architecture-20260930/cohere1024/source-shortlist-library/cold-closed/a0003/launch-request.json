@@ -1,0 +1,59 @@
+{
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 32,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "ClientToken": "borsuk-v9-cold-a0003-3ac246c8",
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.10",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "InstanceType": "m6a.large",
+  "MaxCount": 1,
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "MinCount": 1,
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "SubnetId": "subnet-034528fbd6977848f",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-v9-cold-a0003"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "3ac246c8b497f4c560d75b1465aeab54ceb78494"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "paired-cold-v8-control-v9-shortlist"
+        }
+      ]
+    }
+  ]
+}

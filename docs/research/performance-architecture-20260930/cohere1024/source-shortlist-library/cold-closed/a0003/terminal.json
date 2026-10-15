@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-paired-cold-terminal-publication-v1",
+  "packet_base_commit": "3ac246c8b497f4c560d75b1465aeab54ceb78494",
+  "support_archive_sha256": "83a965d853259f843c0e964864491dae3f2bae0d7ba023a243149dd31a321525",
+  "archive_sha256": "29f2c977247d76e1b475bb13520fc069da310556a45ff53a3a3aa0f4c5809f5b",
+  "archive_bytes": 30370316,
+  "original_exit": 0,
+  "last_phase": "complete",
+  "execution_closed": true,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false,
+  "compute_closure_pending": true
+}

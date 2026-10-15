@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-correctness-stage-v1",
+  "phase": "completed-canary-candidate",
+  "config_sha256": "82d235db14d80f33362e59e59d69eeff54b6122c5e01213a2b1b52c5d3558f8c",
+  "binary_sha256": "0845bddd426a6e7b9a56317f73ff92fdfa15b14b2f1d109cf62d7a77bbb54fbd",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "timeout_wrapper_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "performance_claim": false
+}

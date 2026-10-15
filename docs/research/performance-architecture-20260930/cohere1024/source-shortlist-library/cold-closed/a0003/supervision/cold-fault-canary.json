@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-cold-fault-canary-v1",
+  "status": "FAULT_CANARY_PASS",
+  "runtime_script_mutation_refused": true,
+  "whole_cell_budget_boundary_verified": true,
+  "underfill_remains_measured": true,
+  "exact_five_percent_boundaries_verified": true,
+  "smoke_failure_cleanup_preserves_original": true,
+  "aws_mocked": true,
+  "native_actors_executed": false,
+  "scientific_bodies_opened": false,
+  "performance_claim": false
+}

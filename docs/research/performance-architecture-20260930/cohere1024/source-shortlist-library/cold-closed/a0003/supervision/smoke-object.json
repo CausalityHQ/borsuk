@@ -1,0 +1,9 @@
+{
+  "schema": "borsuk-v9-disposable-object-smoke-v2",
+  "status": "CREATED_READBACK_DELETED",
+  "operations": "real_AWS_CLI_only",
+  "ownership_token_verified": true,
+  "cleanup_verified": true,
+  "native_publication_claim": false,
+  "performance_claim": false
+}

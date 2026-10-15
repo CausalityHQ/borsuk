@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-v9-correctness-stage-v1",
+  "phase": "admission-candidate",
+  "config_sha256": "cafb0fb13e4a87878660d4c1996264aaae1d084fa84bea89d37a95e1d45afd48",
+  "binary_sha256": "912f23d34dd175f365aab2797896da2c45306bf9dd4faf7d44723c8bdce50995",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "timeout_wrapper_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "execution_closed": true,
+  "performance_claim": false
+}

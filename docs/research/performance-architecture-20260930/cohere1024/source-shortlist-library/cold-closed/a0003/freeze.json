@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-v9-cold-launch-freeze-v1",
+  "admitted": true,
+  "review_pending": false,
+  "control_canary_required": true,
+  "fault_canary_required": true,
+  "real_input_admission_required": true,
+  "total_ceiling_usd": 0.60,
+  "market": "spot",
+  "instance_type": "m6a.large",
+  "support_source_commit": "eceeead69c6b51718d9d178e54709d5e48e35733",
+  "support_archive_sha256": "83a965d853259f843c0e964864491dae3f2bae0d7ba023a243149dd31a321525",
+  "support_archive_key": "research/semantic-router/20261015/source-shortlist-v9-cold-a0003/inputs/support.tar",
+  "support_archive_bytes": 174080,
+  "previous_attempts": [
+    "a0001 source extractor mismatch",
+    "a0002 whole-line versus prefix guard mismatch"
+  ],
+  "unchanged_ann_arms": true
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "borsuk-v9-cold-root-verification-v1",
+  "status": "CLOSED_NATIVE_VALID",
+  "archive_sha256": "29f2c977247d76e1b475bb13520fc069da310556a45ff53a3a3aa0f4c5809f5b",
+  "support_source": "eceeead69c6b51718d9d178e54709d5e48e35733",
+  "payload_files_authenticated": 705,
+  "native_stages_closed_zero": 16,
+  "stage_event_rows": 32,
+  "control_canary": true,
+  "fault_canary": true,
+  "real_cli_smoke_cleanup": true,
+  "resource_envelope_verified": true,
+  "compute_closed": true,
+  "vendor_win_claim": false,
+  "independent_audit_pending": false,
+  "independent_audit": {
+    "id": "3ca0bf7b49854c50",
+    "status": "QUALIFIED_ACCEPTANCE_TRADEOFF_NO_DEFAULT",
+    "exit_code": 0
+  }
+}
