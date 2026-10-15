@@ -1,0 +1,246 @@
+{
+   "resource_note" : "time max_rss is process RSS; cgroup memory.peak includes charged page cache; neither is query serving RSS",
+   "resources" : {
+      "cpu.max.before" : "800000 100000\n",
+      "cpu.stat.after" : "usage_usec 3294649126\nuser_usec 3091743071\nsystem_usec 202906055\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 33153\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",
+      "cpuset.cpus.effective.before" : "0-7\n",
+      "memory.events.after" : "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0\n",
+      "memory.max.before" : "30064771072\n",
+      "memory.peak.after" : "15951900672\n",
+      "memory.swap.max.before" : "0\n",
+      "memory.swap.peak.after" : "0\n",
+      "pids.max.before" : "512\n",
+      "pids.peak.after" : "71\n"
+   },
+   "schema" : "borsuk-reader-qualification-stage-summary-v1",
+   "scientific_performance_claim" : false,
+   "scope" : "completed compiler/test metadata; not ANN performance measurements",
+   "source_commit" : "4fe2c1349922b7f5862e9b2568ae2fb70fab2417",
+   "stages" : [
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay --no-run \n",
+         "exit" : 0,
+         "max_rss_kib" : 4034552,
+         "name" : "compile",
+         "system_cpu_seconds" : 31.22,
+         "user_cpu_seconds" : 252.05,
+         "wall_hms" : "5:09.34"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_overlap_tie_and_exact_reconciliation -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95204,
+         "name" : "debug-exact-1",
+         "system_cpu_seconds" : 0.1,
+         "user_cpu_seconds" : 0.16,
+         "wall_hms" : "0:00.29"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_authentication_overlap_is_a_union -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95668,
+         "name" : "debug-exact-2",
+         "system_cpu_seconds" : 0.1,
+         "user_cpu_seconds" : 0.16,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_moved_wait_and_integer_boundaries -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95480,
+         "name" : "debug-exact-3",
+         "system_cpu_seconds" : 0.09,
+         "user_cpu_seconds" : 0.17,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_host_null_and_structure_refusals -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95564,
+         "name" : "debug-exact-4",
+         "system_cpu_seconds" : 0.1,
+         "user_cpu_seconds" : 0.16,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_sealed_six_runs_and_late_authentication -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95556,
+         "name" : "debug-exact-5",
+         "system_cpu_seconds" : 0.11,
+         "user_cpu_seconds" : 2.22,
+         "wall_hms" : "0:02.36"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_old_v8_policy_unchanged -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95524,
+         "name" : "debug-exact-6",
+         "system_cpu_seconds" : 0.11,
+         "user_cpu_seconds" : 0.47,
+         "wall_hms" : "0:00.57"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_config_caps_ordinals_and_occupied_output -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95660,
+         "name" : "debug-exact-7",
+         "system_cpu_seconds" : 0.13,
+         "user_cpu_seconds" : 0.98,
+         "wall_hms" : "0:01.12"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_resealed_semantic_and_admission_mutations -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95368,
+         "name" : "debug-exact-8",
+         "system_cpu_seconds" : 0.15,
+         "user_cpu_seconds" : 11.61,
+         "wall_hms" : "0:11.89"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_requires_both_pairs_to_reproduce_and_falsify -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95728,
+         "name" : "debug-exact-9",
+         "system_cpu_seconds" : 0.13,
+         "user_cpu_seconds" : 2.65,
+         "wall_hms" : "0:02.78"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_overlap_tie_and_exact_reconciliation -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 4425964,
+         "name" : "release-exact-1",
+         "system_cpu_seconds" : 38.01,
+         "user_cpu_seconds" : 990.23,
+         "wall_hms" : "17:43.64"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_authentication_overlap_is_a_union -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95692,
+         "name" : "release-exact-2",
+         "system_cpu_seconds" : 0.1,
+         "user_cpu_seconds" : 0.16,
+         "wall_hms" : "0:00.27"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_moved_wait_and_integer_boundaries -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95508,
+         "name" : "release-exact-3",
+         "system_cpu_seconds" : 0.11,
+         "user_cpu_seconds" : 0.15,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_host_null_and_structure_refusals -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95456,
+         "name" : "release-exact-4",
+         "system_cpu_seconds" : 0.07,
+         "user_cpu_seconds" : 0.18,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_sealed_six_runs_and_late_authentication -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95376,
+         "name" : "release-exact-5",
+         "system_cpu_seconds" : 0.12,
+         "user_cpu_seconds" : 0.59,
+         "wall_hms" : "0:00.73"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_old_v8_policy_unchanged -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95652,
+         "name" : "release-exact-6",
+         "system_cpu_seconds" : 0.11,
+         "user_cpu_seconds" : 0.24,
+         "wall_hms" : "0:00.36"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_config_caps_ordinals_and_occupied_output -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95348,
+         "name" : "release-exact-7",
+         "system_cpu_seconds" : 0.13,
+         "user_cpu_seconds" : 0.34,
+         "wall_hms" : "0:00.47"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_resealed_semantic_and_admission_mutations -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95484,
+         "name" : "release-exact-8",
+         "system_cpu_seconds" : 0.15,
+         "user_cpu_seconds" : 1.89,
+         "wall_hms" : "0:02.04"
+      },
+      {
+         "command_text" : "cargo test --locked --release -p borsuk --example compare_native_replay sq8_panel_attribution::tests::sq8_panel_requires_both_pairs_to_reproduce_and_falsify -- --test-threads=1 --exact \n",
+         "exit" : 0,
+         "max_rss_kib" : 95580,
+         "name" : "release-exact-9",
+         "system_cpu_seconds" : 0.12,
+         "user_cpu_seconds" : 0.62,
+         "wall_hms" : "0:00.75"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay -- --list \n",
+         "exit" : 0,
+         "max_rss_kib" : 95632,
+         "name" : "inventory",
+         "system_cpu_seconds" : 0.1,
+         "user_cpu_seconds" : 0.16,
+         "wall_hms" : "0:00.26"
+      },
+      {
+         "command_text" : "cargo test --locked -p borsuk --example compare_native_replay -- --test-threads=1 \n",
+         "exit" : 0,
+         "max_rss_kib" : 405844,
+         "name" : "example-regressions",
+         "system_cpu_seconds" : 7.2,
+         "user_cpu_seconds" : 1059.01,
+         "wall_hms" : "17:50.08"
+      },
+      {
+         "command_text" : "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious \n",
+         "exit" : 0,
+         "max_rss_kib" : 3913224,
+         "name" : "workspace-clippy",
+         "system_cpu_seconds" : 41.06,
+         "user_cpu_seconds" : 247.01,
+         "wall_hms" : "5:13.66"
+      },
+      {
+         "command_text" : "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh \n",
+         "exit" : 0,
+         "max_rss_kib" : 5588100,
+         "name" : "workspace-test-build",
+         "system_cpu_seconds" : 82.11,
+         "user_cpu_seconds" : 471.11,
+         "wall_hms" : "8:08.67"
+      },
+      {
+         "command_text" : "cargo build --locked --release -p borsuk --example compare_native_replay \n",
+         "exit" : 0,
+         "max_rss_kib" : 1072776,
+         "name" : "release",
+         "system_cpu_seconds" : 1.22,
+         "user_cpu_seconds" : 48.82,
+         "wall_hms" : "0:49.76"
+      },
+      {
+         "command_text" : "tar -cf /mnt/borsuk-paired-qualification/release.tar -- target/release/examples/compare_native_replay \n",
+         "exit" : 0,
+         "max_rss_kib" : 2772,
+         "name" : "retain-archive",
+         "system_cpu_seconds" : 0.01,
+         "user_cpu_seconds" : 0,
+         "wall_hms" : "0:00.01"
+      }
+   ]
+}

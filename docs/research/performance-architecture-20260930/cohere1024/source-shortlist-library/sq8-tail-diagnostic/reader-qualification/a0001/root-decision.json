@@ -1,0 +1,22 @@
+{
+  "schema": "borsuk-sq8-panel-reader-disposition-v1",
+  "source_commit": "4fe2c1349922b7f5862e9b2568ae2fb70fab2417",
+  "disposition": "QUALIFIED_COMPILER_AND_SYNTHETIC_CORRECTNESS",
+  "native_science_executed": false,
+  "actual_actor_b_reservation_confirmed_from_historical_output": true,
+  "actor_b_pinned_bytes": 534097,
+  "release_archive_sha256": "95a6e0035ae8183e6bfcb127c363c65120115e3bd765cd217f3b997032c0a2b0",
+  "release_archive_bytes": 13066240,
+  "release_elf_receipt": "f456ea8a94f983a2266d3df661a7b4dfe120e607b79b13f968687d2af510880a  target/release/examples/compare_native_replay\n",
+  "evidence_archive_sha256": "a72104483baa6b2af101ab19790df99afcabf05753b9f212b816419cbe995c12",
+  "evidence_s3_key": "research/semantic-router/20261015/sq8-panel-reader-gates-a0001/terminal/qualification-evidence.tar.gz",
+  "release_s3_key": "research/semantic-router/20261015/sq8-panel-reader-gates-a0001/terminal/release.tar",
+  "root_verifier_initial_error": "required nonempty tar stdout; valid retention log is empty. Original trace preserved; corrected to require regular log plus original exit/command/time/artifact checks",
+  "remaining": [
+    "diagnostic runtime integration and source-bound canaries",
+    "actual-input admission and separate canary",
+    "fixed32 diagnostic; no replacement queries"
+  ],
+  "product_goal_complete": false,
+  "performance_or_vendor_win_claim": false
+}

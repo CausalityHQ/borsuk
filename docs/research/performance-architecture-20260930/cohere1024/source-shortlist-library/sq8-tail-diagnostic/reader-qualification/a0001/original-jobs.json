@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-reader-original-job-receipts-v1",
+  "setup": {
+    "CommandId": "af3298bd-4c1f-4246-8442-e328a4224bf1",
+    "InstanceId": "i-0d098044b92ed6ec8",
+    "Status": "Success",
+    "ResponseCode": 0
+  },
+  "native": {
+    "CommandId": "74c2433f-7d3c-42e0-85d7-1f03f2166969",
+    "InstanceId": "i-0d098044b92ed6ec8",
+    "Status": "Success",
+    "ResponseCode": 0
+  },
+  "instance_id": "i-0d098044b92ed6ec8",
+  "volume_id": "vol-060638d80fefece36",
+  "watcher_session": 5493,
+  "watcher_exit": 0
+}

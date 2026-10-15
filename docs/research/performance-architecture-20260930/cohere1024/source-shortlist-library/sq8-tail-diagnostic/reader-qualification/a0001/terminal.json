@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-sq8-panel-reader-qualification-v1",
+  "source_commit": "4fe2c1349922b7f5862e9b2568ae2fb70fab2417",
+  "manager_exit": 0,
+  "native_exit": 0,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "native_qualified": true,
+  "scientific_performance_claim": false,
+  "compute_closure_pending": true
+}

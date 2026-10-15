@@ -1,0 +1,109 @@
+{
+  "status": "UNVERIFIED",
+  "summary": "Source-only bounded repair committed; parent must perform native verification before integration.",
+  "commit": "31aa4e4622f6de395590db93b9f7a58f5c19c7b4",
+  "base": "e4aa5be6986f8e02f0a1675db5df2253644188e9",
+  "branch": "devbox/sq8-panel-validation-repair-e4aa5be",
+  "owned_file": "crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs",
+  "scope": "Only sq8_panel_attribution.rs changed; shared v9_panel and all producers/readers untouched.",
+  "diff": {
+    "path": "/data/orchestration/borsuk-sq8-panel-validation-repair/change.patch",
+    "sha256": "cfbb89c1a6024d9726e49e0d28555c1fdd3cbb7a0be65213da2cbd19af3508a1",
+    "insertions": 207,
+    "deletions": 7
+  },
+  "source_sha256": "4af845a4d326e42b20c7b0c69c7b8c6cb908eb640d25972f2bd507ee0d73733b",
+  "preserved_initial_ref": {
+    "branch": "devbox/sq8-panel-validation-repair",
+    "commit": "37c4adcfe8eb2cd3d464f7beb81c42bb9bfbfff5"
+  },
+  "sparse_checkout": [
+    "/AGENTS.md",
+    "/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs"
+  ],
+  "changes": [
+    "Checked EOF-first_chunk <= copy_ns + chunks*max_body_gap_ns; multiplication/addition overflow refuses. One chunk requires first==last. Positive gap endpoint for one/two chunks must be an actual first/last/EOF event; zero gap/null remains valid when copy covers the interval.",
+    "After existing shared admission reconciles trace peak/futures/retained/total, require exact pinned producer diagnostic reservation: untraced 131072, traced source-derived 534097 under the explicit 64-bit size/alignment guard.",
+    "Require checked process_cpu_end-start equals query_process_cpu_ns. Correct positive fixture to start100,end101,raw1 and traced reservation534097."
+  ],
+  "scope_reach": [
+    "validate_admission called only by compare_native_replay.rs read_run_observed_policy for Sq8PanelAttribution.",
+    "host has one production caller, decompose; its signature and caller updated together.",
+    "decompose callers in reducer and local tests use the same validation; fixture query gains raw query_process_cpu_ns.",
+    "No exports/config/producers/shared readers changed. LABELS, ORDINALS, ACTORS, SOURCE_PINS, completed/config validation, plan validation, difference thresholds and reduce remain byte-identical."
+  ],
+  "pinned_source_evidence": [
+    {
+      "revision": "e4aa5be6986f8e02f0a1675db5df2253644188e9",
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs",
+      "sha256": "2cde772083b426cbd076524ab6ad73d2575f02553e2abbe73537bad5f47cf72e",
+      "saved": "/data/orchestration/borsuk-sq8-panel-validation-repair/e4aa5be6-sq8_panel_attribution.rs"
+    },
+    {
+      "revision": "e4aa5be6986f8e02f0a1675db5df2253644188e9",
+      "path": "crates/borsuk/examples/compare_native_replay/v9_panel.rs",
+      "sha256": "aba7cfb40019636e671c40575bd16bf9a54b34d36a58c497da7620e9c3b17c66",
+      "saved": "/data/orchestration/borsuk-sq8-panel-validation-repair/e4aa5be6-v9_panel.rs"
+    },
+    {
+      "revision": "8910ef50c1cce155eb396d71a2e05dd3b9e906a0",
+      "path": "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "sha256": "27e893f926f1ce6c56738505795f5afff1384ed595300a3f5a2c08105407ecd3",
+      "saved": "/data/orchestration/borsuk-sq8-panel-validation-repair/8910ef50-check_cohere_native_baseline.rs"
+    },
+    {
+      "revision": "ccbb561bec72e97bc18df363ea307616811af264",
+      "path": "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "sha256": "3d1e3f63d88d943615c7155460aeb3c9cc05c19e27d48d9c39d4fb60d6065304",
+      "saved": "/data/orchestration/borsuk-sq8-panel-validation-repair/ccbb561b-check_cohere_native_baseline.rs"
+    },
+    {
+      "revision": "ccbb561bec72e97bc18df363ea307616811af264",
+      "path": "crates/borsuk/src/sq8_s3_range.rs",
+      "sha256": "bf31d4e0b6e53c9e7da88ab8a5d6d27a748d2492d7a915e7df7eb131c41c45e2",
+      "saved": "/data/orchestration/borsuk-sq8-panel-validation-repair/ccbb561b-sq8_s3_range.rs"
+    }
+  ],
+  "source_ranges": [
+    "ccbb561b sq8_s3_range.rs:1313-1342 (mark/wait/arrival/EOF/copy),1514-1533 (note_chunk/note_wait/note_copy)",
+    "8910ef50 check_cohere_native_baseline.rs:1198-1233 (reservation);1510-1513,1547-1552 (host structs)",
+    "ccbb561b check_cohere_native_baseline.rs:1205-1240 (reservation);1517-1520,1554-1559 (host structs);2206-2217 (CPU delta/anchors)"
+  ],
+  "abi": {
+    "classification": "SOURCE-DERIVED ASSUMPTION; NOT MEASURED",
+    "snapshot": "Option<u64> + [Option<u64>;48] = 49*16 = 784 bytes, alignment8",
+    "sampler": "PathBuf24 + Vec<u8>24 + before784 + after784 = 1616 bytes, alignment8; all field sizes multiples of8",
+    "traced_pinned": "2*65536 + 1616 + 131072 + 1 + 8192 + 262144 = 534097",
+    "guard": "target_pointer_width64; Option<u64> size16/align8; PathBuf size24/align8; Vec<u8> size24/align8",
+    "remaining": "Guard examines validator target constituent layout. Rust repr(Rust) is not a stable ABI; parent must confirm actual pinned-producer HostSampler size1616 with native evidence on its authorized target."
+  },
+  "test_names": [
+    "sq8_panel_overlap_tie_and_exact_reconciliation",
+    "sq8_panel_authentication_overlap_is_a_union",
+    "sq8_panel_moved_wait_and_integer_boundaries",
+    "sq8_panel_host_null_and_structure_refusals",
+    "sq8_panel_sealed_six_runs_and_late_authentication",
+    "sq8_panel_old_v8_policy_unchanged",
+    "sq8_panel_config_caps_ordinals_and_occupied_output",
+    "sq8_panel_resealed_semantic_and_admission_mutations",
+    "sq8_panel_requires_both_pairs_to_reproduce_and_falsify"
+  ],
+  "test_extensions": {
+    "sq8_panel_moved_wait_and_integer_boundaries": "13 range timing cases (equality, shortfall, zero gap, 1/2/3-chunk endpoints/cardinality), 3 u64 bound arithmetic cases (exact MAX/add overflow/multiply overflow), 5 CPU delta cases.",
+    "sq8_panel_resealed_semantic_and_admission_mutations": "42 additional resealed semantic counterexamples: 18 relationally consistent wrong reservations across all six slots; 24 zero/tiny gap, singleton boundary/endpoint, two-chunk endpoint and CPU mismatches across all four traced slots. Assert targeted error text after reauthentication and rehashed descriptors/config."
+  },
+  "verification": {
+    "static_receipt": "/data/orchestration/borsuk-sq8-panel-validation-repair/static-receipt.json",
+    "commit_receipt": "/data/orchestration/borsuk-sq8-panel-validation-repair/commit-receipt.json",
+    "scope": "RuntimeMaxUSec=2min\nCPUQuotaPerSecUSec=1s\nAllowedCPUs=0\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\n",
+    "observed": "git diff --check exit0; exact-parent/single-file/clean-status/source hash/diff hash/static preservation inventory passed.",
+    "not_run": "No Cargo, rustc, rustfmt, native code, tests, mocks, dataset reads, network, AWS, review/consultation, or children. No red/green runtime claim.",
+    "parent_gates": "Parent owns causality EC2/jobs1: compile and run affected example tests, native producer ABI/reservation confirmation, required Clippy and scripts/check_rust_test_build.sh assurance on exact integrated revision."
+  },
+  "risks": [
+    "Rust syntax/type checking, formatting and runtime behavior remain UNVERIFIED until parent native gates.",
+    "Exact traced reservation assumes the documented 64-bit producer layout; guard fails closed on a mismatched validator constituent ABI.",
+    "The range inequality is a necessary collector constraint, not a complete reconstruction of all omitted per-chunk marks."
+  ],
+  "delivery": "One coherent commit with configured Roman Bartusiak identity, no trailers, no push/merge; original e4 base and stale ref preserved."
+}

@@ -1,0 +1,29 @@
+{
+  "group": "910b3dc12d4e4fa8",
+  "source": "e4aa5be6986f8e02f0a1675db5df2253644188e9",
+  "engineering": {
+    "id": "65d88e7107d145b0",
+    "status": "completed",
+    "exit_code": 0,
+    "result": "What this change does: adds a six-run, fixed-panel SQ8 attribution report using the authenticated reader. I reviewed `e4aa5be6986f8e02f0a1675db5df2253644188e9` against its parent requirements. **Three validation defects need repair before qualification.** Counterexamples below are source-derived, not executed.\n\n1. **Impossible body-gap evidence is accepted.**  \n   [sq8_panel_attribution.rs:570–589](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs:570) checks upper bounds but does not establish that the reported gap can be the maximum.\n\n   **Counterexample:** in the existing range-0 fixture, set `max_body_gap_ns=0` and its endpoint to `null`. First chunk remains 160, EOF 310, copy time 10, and chunk count 2. The checks accept this, although the native collector necessarily spends 140 ns in the two waits after the first chunk; at least one must be ≥70 ns. The report instead selects range 1’s 19 ns gap and changes the authentication-overlap evidence. Native accounting is defined at [sq8_s3_range.rs:1313–1341](/home/rb/git/borsuk/crates/borsuk/src/sq8_s3_range.rs:1313).\n\n   **Smallest repair:** check the necessary bound `EOF − first_chunk ≤ copy_ns + chunks × max_gap` using checked arithmetic. Also enforce single-chunk first/last equality and possible gap endpoints when there are only one or two chunks. Add resealed rejection cases.\n\n2. **Diagnostic admission accepts an impossible one-byte reservation.**  \n   [sq8_panel_attribution.rs:320–329](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs:320) delegates accounting to [v9_panel.rs:480–511](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/v9_panel.rs:480), which checks consistency between supplied numbers without validating the mandatory diagnostic overhead.\n\n   **Counterexample:** in A0, set both `diagnostic_bytes_per_active_query` and `diagnostic_pinned_bytes` to `1`, retaining the other valid admission fields and original caller reservation. These checks accept it. The producer necessarily reserves **131072 bytes** for the two panel buffers, even with tracing off; see [check_cohere_native_baseline.rs:1205–1220](/home/rb/git/borsuk/crates/borsuk/src/bin/check_cohere_native_baseline.rs:1205).\n\n   **Smallest repair:** validate the diagnostic overhead against each pinned producer’s formula, including exactly 131072 bytes for untraced panels. Add a resealed under-reservation test. Otherwise authenticated output can certify false resource accounting.\n\n3. **CPU diagnostic evidence is disconnected from the query’s authenticated CPU total.**  \n   [sq8_panel_attribution.rs:484–488](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs:484) only checks that CPU anchors increase.\n\n   **Counterexample already in the success fixture:** diagnostic anchors are `100→200`, while `query_process_cpu_ns=1` ([fixture:835–837](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs:835), [fixture:938–945](/home/rb/git/borsuk/crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs:938)). The producer derives both fields from the identical CPU delta, so this combination is impossible; see [producer:2206–2217](/home/rb/git/borsuk/crates/borsuk/src/bin/check_cohere_native_baseline.rs:2206).\n\n   **Smallest repair:** require `process_cpu_end_ns − process_cpu_start_ns == query_process_cpu_ns`, correct the fixture, and add a resealed mismatch test. Otherwise the report presents contradictory whole-query CPU evidence.\n\nThe shared stage origin, paired integer thresholds, authentication-overlap union, and unresolved/inconclusive interpretation appear consistent with the contract. The findings concern semantic validation; seals and hashes alone cannot reject consistently resealed contradictions.\n\n**Verdict: fix 1–3 before qualification.**\n\nNot checked: builds, the nine tests, native execution, Clippy or workspace test compilation; no files changed.  \nRisk: this remains source-only **UNVERIFIED** work."
+  },
+  "research": {
+    "id": "e52d81917d5e4b27",
+    "status": "partial",
+    "exit_code": 1,
+    "result": "You've hit your session limit · resets 11:40pm (UTC)",
+    "attempt_history": [
+      {
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "budget_usd": 4,
+        "timeout_seconds": 1199,
+        "started_at": 1792097615,
+        "effort": "xhigh",
+        "effort_source": "jev"
+      }
+    ],
+    "substantive_review": false
+  },
+  "disposition": "REPAIR_REQUIRED_SOURCE_ONLY; native qualification not started"
+}

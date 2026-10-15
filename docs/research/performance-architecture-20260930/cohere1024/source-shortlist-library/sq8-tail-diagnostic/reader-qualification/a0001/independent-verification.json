@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-sq8-panel-reader-root-verification-v1",
+  "source_commit": "4fe2c1349922b7f5862e9b2568ae2fb70fab2417",
+  "instance_id": "i-0d098044b92ed6ec8",
+  "native_command_id": "74c2433f-7d3c-42e0-85d7-1f03f2166969",
+  "verifier_exit": 0,
+  "stages": 25,
+  "exact_tests": 18,
+  "example_inventory": 270,
+  "example_passed": 270,
+  "example_ignored": 0,
+  "source_files_unchanged": 478,
+  "native_source_files": 445,
+  "pids_peak": 71,
+  "compute_closed": true,
+  "scope": "compiler and synthetic correctness only",
+  "scientific_performance_claim": false
+}

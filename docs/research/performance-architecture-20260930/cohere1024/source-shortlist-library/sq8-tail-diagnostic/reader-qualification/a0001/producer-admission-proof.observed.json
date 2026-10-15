@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-producer-reservation-source-proof-v1",
+  "input_archive_sha256": "f18d72d4d8308c03f846f7f82ee0c0f829d070892a964bc9acf6b5ae5d8881a4",
+  "input_member": "results/panel.jsonl",
+  "historical_binary_sha256": "912f23d34dd175f365aab2797896da2c45306bf9dd4faf7d44723c8bdce50995",
+  "trace": true,
+  "selected_count": 8,
+  "diagnostic_pinned_bytes": 534097,
+  "diagnostic_bytes_per_active_query": 624817,
+  "trace_peak_bytes": 90720,
+  "source_model_pinned_bytes": 534097,
+  "matches_model": true,
+  "metadata_analysis_only": true,
+  "new_ann_queries": 0,
+  "performance_claim": false
+}
