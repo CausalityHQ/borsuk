@@ -6,9 +6,19 @@ root=/mnt/borsuk-v9-panel
 mkdir -m 700 "$root/chain.claim"
 date -u +%FT%TZ > "$root/chain.claim/started.txt"
 phase=starting
+code_pin=$BORSUK_RUNTIME_MANIFEST_SHA
+[[ $code_pin =~ ^[a-f0-9]{64}$ ]] || exit 125
+readonly code_pin
+code_checks=0
+verify_code() {
+ code_checks=$((code_checks+1))
+ printf '%s  %s\n' "$code_pin" "$root/runtime-code.sha256" | sha256sum --strict -c - >/dev/null
+ (cd "$root" && sha256sum --strict -c runtime-code.sha256) > "$root/evidence/runtime-code-$code_checks.log"
+}
 finish() {
  original=$?; trap - EXIT
  set +e
+ if ! verify_code; then printf '%s\n' RUNTIME_CODE_PIN_FAILURE_CLOSEOUT_REFUSED; exit 126; fi
  /usr/bin/timeout -k 5 150 /bin/bash "$root/close-v9-runtime.sh" "$original" "$phase"
  publication=$?
  printf 'ORIGINAL_CHAIN_EXIT=%s PUBLICATION_EXIT=%s LAST_PHASE=%s\n' "$original" "$publication" "$phase"
@@ -19,7 +29,8 @@ trap finish EXIT
 export AWS_MAX_ATTEMPTS=1 AWS_DEFAULT_REGION=eu-central-1 AWS_PAGER=''
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_SHARED_CREDENTIALS_FILE AWS_CONFIG_FILE
 owned() {
- local name=$1 cap=$2 manager cg stop token invocation current forced=false drained=false; shift 2
+ local name=$1 cap=$2 manager cg stop token invocation current memory=2147483648 forced=false drained=false; shift 2
+ if [[ $name == cold-faults ]]; then memory=268435456; fi
  stop=$(cat "$root/machine-stop.epoch")
  [[ $stop =~ ^[0-9]+$ && $stop -gt $(( $(date +%s)+cap+360 )) ]] || return 125
  cg=/sys/fs/cgroup/system.slice/borsuk-v9-prep-$name.service
@@ -29,7 +40,7 @@ owned() {
  [[ $token =~ ^[a-f0-9-]{36}$ ]] || return 125
  printf '%s\n' "$token" > "$root/evidence/prep-$name.claim/token.txt"
  set +e
- /usr/bin/timeout -k 20 "$((cap+40))" systemd-run --unit="borsuk-v9-prep-$name" --expand-environment=no --wait --pipe -p WorkingDirectory="$root" -p Environment="BORSUK_V9_STAGE_TOKEN=$token" -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=2147483648 -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStartSec=10 -p TimeoutStopSec=10 -p LimitCORE=0 -p RuntimeMaxSec="$cap" "$@" > "$root/evidence/prep-$name.log" 2>&1
+ /usr/bin/timeout -k 20 "$((cap+40))" systemd-run --unit="borsuk-v9-prep-$name" --expand-environment=no --wait --pipe -p WorkingDirectory="$root" -p Environment="BORSUK_V9_STAGE_TOKEN=$token" -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax="$memory" -p MemorySwapMax=0 -p TasksMax=128 -p KillMode=control-group -p TimeoutStartSec=10 -p TimeoutStopSec=10 -p LimitCORE=0 -p RuntimeMaxSec="$cap" "$@" > "$root/evidence/prep-$name.log" 2>&1
  manager=$?
  set -e
  printf '%s\n' "$manager" > "$root/evidence/prep-$name.manager-exit.txt"
@@ -64,15 +75,18 @@ owned() {
 }
 transport() {
  local name=$1 sha
+ verify_code
  sha=$(sha256sum "$root/config/$name-transport.json"); sha=${sha%% *}
  owned "transport-$name" 620 /bin/bash "$root/transport-v9-inputs.sh" "$root/config/$name-transport.json" "$sha"
 }
 run() {
  local name=$1 config=$2 sha before rest after
+ verify_code
  sha=$(sha256sum "$config" | cut -d ' ' -f 1)
  read -r before rest < /proc/uptime
  printf '%s\tSTART\t%s\t%s\n' "$name" "$before" "$sha" >> "$root/evidence/stages.tsv"
  /bin/bash "$root/run-v9-stage.sh" "$name" "$config" "$sha"
+ verify_code
  read -r after rest < /proc/uptime
  printf '%s\tEND\t%s\t%s\n' "$name" "$after" "$sha" >> "$root/evidence/stages.tsv"
 }
@@ -89,10 +103,16 @@ validate_closed() {
  jq -e '.schema=="borsuk-completed-native-reduction-v4" and .status=="MEASURED" and .complete==true' "$root/results/completed-$name.json" >/dev/null
 }
 phase=control-canary
+verify_code
 owned control-canary 180 /bin/bash "$root/control-v9-canary.sh"
 jq -e '.status=="CONTROL_CANARY_PASS" and .ann_executed==false and .scientific_bodies_opened==false' "$root/evidence/control-canary.json" >/dev/null
+phase=cold-faults
+verify_code
+owned cold-faults 120 /bin/bash "$root/control-cold-faults.sh"
+jq -e '.status=="FAULT_CANARY_PASS" and .native_actors_executed==false and .scientific_bodies_opened==false' "$root/evidence/cold-fault-canary.json" >/dev/null
 phase=binaries
 transport binary
+verify_code
 owned extract-binaries 60 /bin/bash "$root/extract-v9-inputs.sh" binaries
 [[ ! -e $root/bin/original && ! -e $root/bin/candidate ]]
 mv "$root/bin/check_cohere_native_baseline" "$root/bin/candidate"
@@ -102,6 +122,7 @@ printf '%s  %s\n' 59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c780
 chmod 0500 "$root/bin/original"
 phase=receipts
 transport auxiliary
+verify_code
 owned extract-receipts 60 /bin/bash "$root/extract-v9-inputs.sh" receipts
 phase=requests-truth
 transport query
@@ -117,7 +138,8 @@ for kind in admission canary; do
  done
 done
 phase=smoke-object
-owned smoke-object 80 /bin/bash "$root/smoke-v9-object.sh"
+verify_code
+owned smoke-object 150 /bin/bash "$root/smoke-v9-object.sh"
 jq -e '.status=="CREATED_READBACK_DELETED" and .native_publication_claim==false' "$root/evidence/smoke-object/smoke.json" >/dev/null
 date -u +%FT%TZ > "$root/evidence/measurement-freeze.timestamp"
 sync -f "$root/evidence/measurement-freeze.timestamp"
@@ -126,15 +148,21 @@ sync -f "$root/evidence/measurement-freeze-inputs.sha256"
 for cell in original-a1 candidate-b1 candidate-b2 original-a2; do
  arm=$(printf '%s' "$cell" | cut -d - -f 1)
  phase=formal-$cell
+ # Reserve worst-case native(690), reader(270), publication(190), closeout(360), slack20.
+ stop=$(cat "$root/machine-stop.epoch")
+ ((stop-$(date +%s)>1530)) || exit 125
  (cd "$root" && sha256sum --strict -c frozen-runtime-inputs.sha256) > "$root/evidence/$phase.freeze-check.log"
  run "$phase" "$root/config/formal-$arm.config.json"
  validate_closed "$phase" "formal-$arm"
  jq -e '.population_percentiles_valid==true and .diagnostic_only==false and .native_terminal.selected_count==1000' "$root/results/completed-$phase.json" >/dev/null
+verify_code
  owned "publish-$phase" 150 /bin/bash "$root/publish-cold-cell.sh" "$phase"
 done
 phase=summary
+verify_code
 [[ $(wc -l < "$root/evidence/stages.tsv") == 32 ]] || exit 125
 jq -n --slurpfile a1 "$root/results/completed-formal-original-a1.json" --slurpfile b1 "$root/results/completed-formal-candidate-b1.json" --slurpfile b2 "$root/results/completed-formal-candidate-b2.json" --slurpfile a2 "$root/results/completed-formal-original-a2.json" --slurpfile ea "$root/config/formal-original.completed.EXPECTED.json" --slurpfile eb "$root/config/formal-candidate.completed.EXPECTED.json" -f "$root/reduce-v9-abba.jq" > "$root/results/abba-summary.json"
+verify_code
 sync -f "$root/results/abba-summary.json"
 sync -f "$root/results"
 phase=complete

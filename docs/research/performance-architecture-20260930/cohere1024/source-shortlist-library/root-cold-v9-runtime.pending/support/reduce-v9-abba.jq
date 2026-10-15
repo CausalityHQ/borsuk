@@ -5,7 +5,10 @@ def valid($expected):
  and .identity==$expected.expected_identity and .inputs==$expected.expected_bound_inputs
  and .native_terminal.complete==true and .native_terminal.selected_count==1000
  and .native_terminal.population_count==1000 and .native_terminal.recall_denominator==10000
- and .native_terminal.underfilled_queries==0 and .statistics.count==1000
+ and .statistics.count==1000
+ and all([.statistics.p90_ns,.statistics.p95_ns,.statistics.query_wall_ns][]; type=="number" and floor==. and .>0 and .<=1000000000000)
+ and .statistics.p90_ns<=.statistics.query_wall_ns
+ and .statistics.p95_ns<=.statistics.query_wall_ns
  and .statistics.p90_ns>0 and .statistics.p95_ns>0 and .statistics.sequential_qps>0
  and .native_terminal.transport_last_boundary.after.transport_failures==0
  and .native_terminal.transport_last_boundary.after.stream_failures==0
@@ -17,6 +20,7 @@ def cell($label):
   runtime_config_sha256:.identity.config_sha256,binary_sha256:.identity.binary_sha256,
   generation_root_sha256:.native_terminal.generation_root_sha256,
   hits:.native_terminal.recall_numerator,denominator:.native_terminal.recall_denominator,
+  underfilled_queries:.native_terminal.underfilled_queries,
   statistics:.statistics,observed_process_peak_bytes:.native_terminal.observed_process_peak_bytes,
   logical_charges:.native_terminal.charges,
   cumulative_sdk_transport:.native_terminal.transport_last_boundary.after,
@@ -24,6 +28,8 @@ def cell($label):
 def pair($a;$b):
  {control:$a.label,candidate:$b.label,
   p90_gain_fraction:(1-$b.statistics.p90_ns/$a.statistics.p90_ns),
+  p90_regression_within_five_percent:($b.statistics.p90_ns*100 <= $a.statistics.p90_ns*105),
+  qps_regression_within_five_percent:($b.statistics.query_wall_ns*95 <= $a.statistics.query_wall_ns*100),
   p95_gain_fraction:(1-$b.statistics.p95_ns/$a.statistics.p95_ns),
   sequential_qps_change_fraction:($b.statistics.sequential_qps/$a.statistics.sequential_qps-1),
   source_get_delta:($b.logical_charges.source.submitted_gets-$a.logical_charges.source.submitted_gets),
@@ -42,11 +48,15 @@ require(([$a1,$b1,$b2,$a2,$ea,$eb]|all(.[];length==1));"single report/template d
 | {schema:"borsuk-v9-two-elf-abba-summary-v1",status:"MEASURED",complete:true,
    ordered_labels:["A1","B1","B2","A2"],cells:$c,pairs:$pairs,
    control_anchor_reproduced:($c[0].hits==9780 and $c[3].hits==9780),
-   candidate_matched_quality:($c[1].hits>=9780 and $c[2].hits>=9780),
+   candidate_matched_recall:($c[1].hits>=9780 and $c[2].hits>=9780),
+   candidate_full_k:($c[1].underfilled_queries==0 and $c[2].underfilled_queries==0),
+   candidate_matched_quality:($c[1].hits>=9780 and $c[2].hits>=9780 and $c[1].underfilled_queries==0 and $c[2].underfilled_queries==0),
    candidate_prospective_floor:($c[1].hits>=9760 and $c[2].hits>=9760),
    descriptive_p95_repeat_reference:$repeat,
-   modest_performance_screen:($pairs|all(.[];.p95_gain_fraction>0 and .p90_gain_fraction>= -0.05 and .sequential_qps_change_fraction>= -0.05)),
-   p95_gains_exceed_descriptive_repeat:($pairs|all(.[];.p95_gain_fraction>$repeat)),
+   modest_performance_screen:($pairs|all(.[];.p95_gain_fraction>0 and .p90_regression_within_five_percent and .qps_regression_within_five_percent)),
+   p95_repeat_numeric_boundary:($pairs|any(.[];((.p95_gain_fraction-$repeat)|fabs)<1e-12)),
+   p95_gains_exceed_descriptive_repeat:(if ($pairs|any(.[];((.p95_gain_fraction-$repeat)|fabs)<1e-12)) then null else ($pairs|all(.[];.p95_gain_fraction>$repeat)) end),
+   numerical_boundary_requires_root_precision_check:true,
    quality_and_efficiency_are_separate:true,preserve_valid_pareto_results:true,
    chronology_qualification:"external root chain events, supervision and source receipt required",
    physical_wire_or_billed_quantities_qualified:false,server_cache_eviction_qualified:false,

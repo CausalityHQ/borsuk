@@ -247,6 +247,7 @@
   },
   "stages": [
     "control-canary",
+    "cold-fault-canary",
     "opaque-binary-receipt-input-transport",
     "admission-original527",
     "admission-candidate527",
@@ -293,5 +294,15 @@
   "interruption": "Preserve completed cell terminals and failed attempt; no pooling partial cells, no automatic replacement or partial ABBA win",
   "counter_provenance": "Native logical component charges separate from cumulative SDK including S3/IMDS/PUT; wire and billed bytes/requests unqualified",
   "scope": "Two full architecture configurations, not shortlist-size-only causal attribution; no matched vendor win claim",
-  "cold_measurement_admitted": false
+  "cold_measurement_admitted": false,
+  "audit_repair": {
+    "review": "7853e92d2e65479f",
+    "runtime_code_manifest": true,
+    "whole_cell_reserve_seconds": 1530,
+    "underfill_is_quality_outcome": true,
+    "integer_five_percent_comparison": true,
+    "owned_failure_smoke_cleanup": true,
+    "remote_source_bound_fault_canary_required": true,
+    "runtime_verified": false
+  }
 }

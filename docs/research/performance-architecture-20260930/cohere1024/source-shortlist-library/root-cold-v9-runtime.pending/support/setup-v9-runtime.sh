@@ -43,6 +43,8 @@ cp support/*.json "$root/config/"
 chmod 0500 "$root/"*.sh
 chmod 0400 "$root/config/"*.json
 cp support/*.jq "$root/"
+cp support/runtime-code.sha256 "$root/runtime-code.sha256"
+chmod 0400 "$root/runtime-code.sha256"
 jq -n --arg sha "$support_sha" --argjson stop "$stop" '{schema:"borsuk-v9-runtime-setup-v1",status:"SETUP_ONLY",support_sha256:$sha,machine_stop_epoch:$stop,compiler_installed:false,native_execution:false}' > evidence/setup.json
 sync -f evidence/setup.json
 sync -f evidence
