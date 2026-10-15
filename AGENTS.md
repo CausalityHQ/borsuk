@@ -107,3 +107,23 @@ Before each new paid cold or performance experiment:
 3. Freeze source/configuration and run the measured experiment only after both gates pass. Record commands, source identities, runtime and terminal receipts. Code, protocol or resource errors are execution INVALID, never a performance KILL. Preserve frozen historical dispositions.
 
 Environment or configuration failures do not reject the proposed solution. Fix the demonstrated setup defect, validate the repaired environment, and rerun the unchanged algorithm and scientific limits in a new recorded attempt. Preserve the failed attempt; distinguish an observed algorithm resource-limit failure from an environment that failed to establish or enforce the declared limits.
+## Operator policy: contextless specialists and simulated perspectives
+
+Use Devbox `specialist_start` by default for each separable bounded plan,
+implementation, test or evidence audit. Specialists start with no inherited
+conversation, transcript, reasoning history or preferred conclusion. Supply
+only a self-contained task, relevant code and exact base, factual requirements,
+constraints and acceptance checks. The root reconciles proposals with prior
+experiments, verifies results and integrates changes. Keep experiment and
+spending authority with the root; do not duplicate children or consultations.
+
+For exploration, ask which relevant expert or stakeholder groups would examine
+the problem, and what arguments, predictions and objections each would offer.
+Do not treat generic personal-opinion answers as authority. Simulated viewpoints
+are not real consultations, independent evidence or consensus: check claims
+against primary sources, code and measurements. Use a small relevant set of
+perspectives; do not add ceremonial panels to trivial tasks.
+
+Retain valid quality gains as Pareto improvements even when memory or runtime
+targets miss, then optimize efficiency while preserving quality. Operational
+hard ceilings, measurement validity and spending authorization still apply.
