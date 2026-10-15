@@ -972,6 +972,42 @@ mod tests {
             .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected[3..13]);
+        fn budget_refusal(error: &TwoBitGenerationError) -> bool {
+            match error {
+                TwoBitGenerationError::Query { error, .. }
+                | TwoBitGenerationError::SourcePlanning { error, .. }
+                | TwoBitGenerationError::RouterCharged { error, .. } => budget_refusal(error),
+                TwoBitGenerationError::Budget(
+                    crate::budgeted_page_rank::BudgetedPageError::InsufficientBudget,
+                ) => true,
+                _ => false,
+            }
+        }
+        // A clustered256 shortlist cannot satisfy k257. This is a physical
+        // budget refusal before SQ8 I/O, not a scoring/corruption failure.
+        let error = generation
+            .search_with_store(&store, &query, 257, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(budget_refusal(&error));
+        assert_eq!(error.read_stats(), Default::default());
+        let tiny = TwoBitGeneration::open(
+            &output,
+            &root_sha,
+            TwoBitGenerationLimits {
+                max_query_bytes: 17,
+                ..limits
+            },
+        )
+        .unwrap();
+        let error = tiny
+            .search_with_store(&store, &query, 10, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(budget_refusal(&error));
+        assert_eq!(error.read_stats(), Default::default());
     }
     #[test]
     fn spatial_import_and_repackage_charge_authenticated_mode_and_retained_buffers() {

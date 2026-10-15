@@ -281,7 +281,12 @@ fn disk_bound(rows: usize, dimensions: usize) -> Result<u64> {
     per_row
         .checked_mul(rows)
         .and_then(|n| n.checked_add(graph))
-        .and_then(|n| n.checked_add(rows.div_ceil(256).checked_mul(32)?))
+        .and_then(|n| {
+            n.checked_add(
+                rows.div_ceil(crate::sq8_page_authority::SQ8_PAGE_ROWS)
+                    .checked_mul(32)?,
+            )
+        })
         .and_then(|n| n.checked_add(262144))
         .map(|n| n as u64)
         .ok_or(bad("compaction disk geometry"))
@@ -1022,7 +1027,9 @@ mod tests {
     #[test]
     fn scale_profile_compaction_million_row_payload_and_disk_arithmetic() {
         let profile = SemanticProfile::Scale1m;
-        let build = 515_513_384;
+        // Proof digests grow by874976B, while the one-block buffer shrinks
+        // by232064B (256->32 rows at1036B/row): net+642912B.
+        let build = 516_156_296;
         assert_eq!(
             crate::two_bit_build::admit_build_payload(
                 1_000_000,
@@ -1046,9 +1053,9 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(build + 8_000_000 + 262144, 523_775_528);
-        assert_eq!(profile.allocation_cap() - 523_775_528, 13_095_384);
-        assert_eq!(disk_bound(1_000_000, 1024).unwrap(), 11_052_387_168);
+        assert_eq!(build + 8_000_000 + 262144, 524_418_440);
+        assert_eq!(profile.allocation_cap() - 524_418_440, 12_452_472);
+        assert_eq!(disk_bound(1_000_000, 1024).unwrap(), 11_053_262_144);
     }
 
     #[test]

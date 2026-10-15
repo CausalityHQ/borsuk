@@ -43,7 +43,7 @@ const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v8";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v9";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v9";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
@@ -57,9 +57,9 @@ const HOST_READ_CAP: usize = 128 * 1024;
 const HOST_JSON_BYTES: usize = 8 * 1024;
 // A failed diagnostic query also materializes one JSON tree of its diagnostic object.
 const FAILURE_VALUE_BYTES: usize = 256 * 1024;
+#[cfg(test)]
 const BASELINE_QUERY_GETS: usize = 32;
 const BASELINE_SOURCE_GETS: usize = 128;
-// One 256-row SQ8 page at the fixed D1024 width, for reporting covered/bridge pages.
 
 /// Which serving path answers each query. Required in every config: there is no default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -298,6 +298,9 @@ struct Config {
     truth: Artifact,
     native_source: NativeSource,
     max_memory_bytes: u64,
+    // Explicit operating-point limits, independent of transport concurrency.
+    sq8_get_budget: usize,
+    sq8_byte_budget: usize,
     #[serde(default = "default_fetch_parallelism")]
     fetch_parallelism: usize,
     #[serde(default = "default_source_get_budget")]
@@ -722,6 +725,11 @@ fn bounded_path(path: &Path) -> Result<()> {
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     validate_population(c)?;
     let shape = population(c, shape);
+    require(
+        (1..=256).contains(&c.sq8_get_budget)
+            && (1..=MEMORY_CAP as usize).contains(&c.sq8_byte_budget),
+        "explicit SQ8 GET/byte budgets",
+    )?;
     require(
         matches!(c.source_get_budget, 96 | 128),
         "source_get_budget must be integer 96 or 128",
@@ -1179,13 +1187,13 @@ const ACTIVE_QUERIES: usize = 1;
 fn trace_ranges(c: &Config) -> usize {
     c.serving
         .direct()
-        .map_or(BASELINE_QUERY_GETS, |direct| direct.max_sq8_gets)
+        .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
 // Most range futures any phase of a query can plan; baseline SOURCE batches are the largest.
 fn plan_ranges(c: &Config) -> usize {
     c.serving
         .direct()
-        .map_or(BASELINE_SOURCE_GETS.max(BASELINE_QUERY_GETS), |direct| {
+        .map_or(BASELINE_SOURCE_GETS.max(c.sq8_get_budget), |direct| {
             direct.max_sq8_gets
         })
 }
@@ -1267,8 +1275,8 @@ fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
         max_memory_bytes: MEMORY_CAP,
         max_active_queries: ACTIVE_QUERIES,
-        max_query_bytes: 16_773_120,
-        max_query_gets: BASELINE_QUERY_GETS,
+        max_query_bytes: c.sq8_byte_budget,
+        max_query_gets: c.sq8_get_budget,
         max_parallel_gets: c.fetch_parallelism,
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: c.source_get_budget,
@@ -2602,6 +2610,8 @@ fn execute_paths_status(
         let mut identity = json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
             "source_get_budget":configured.as_ref().ok().map(|c| c.source_get_budget),
+            "sq8_get_budget":configured.as_ref().ok().map(|c| c.sq8_get_budget),
+            "sq8_byte_budget":configured.as_ref().ok().map(|c| c.sq8_byte_budget),
             "serving":configured.as_ref().ok().map(|c| c.serving),
             "binary_sha256":executable_sha()?,"runner_source_sha256":hash(include_bytes!("check_cohere_native_baseline.rs")),
             "generation_source_sha256":hash(include_bytes!("../two_bit_generation.rs")),
@@ -2630,6 +2640,7 @@ fn execute_paths_status(
         } = validate_receipts(&c)?;
         let mut bound = json!({"phase":"bound_inputs","dataset":c.dataset,"revision":c.revision,
             "fetch_parallelism":c.fetch_parallelism,"source_get_budget":c.source_get_budget,"source_cache":"off","serving":c.serving,
+            "sq8_get_budget":c.sq8_get_budget,"sq8_byte_budget":c.sq8_byte_budget,
             "metric":c.metric,"tie_rule":c.tie_rule,"rows":c.rows,"dimensions":D,"count":c.count,"k":K,
             "corpus_source_first":c.corpus_source_first,"query_source_first":c.query_source_first,
             "profile":c.profile,"backend":c.backend,"generation_prefix":c.generation_prefix,
@@ -2795,6 +2806,7 @@ mod tests {
             "truth":{"path":dir.join("truth.u64"),"bytes":shape.count*K*8,"sha256":"c".repeat(64)},
             "native_source":{"source_sha256":"d".repeat(64),"sq8_sha256":"e".repeat(64),
                 "source_order_sha256":"f".repeat(64)},"max_memory_bytes":MEMORY_CAP,
+            "sq8_get_budget":32,"sq8_byte_budget":16_773_120,
             "serving":{"mode":"baseline"},"execution":{"mode":"full"}});
         fixture_receipts(dir, &mut value);
         value
@@ -2984,6 +2996,31 @@ mod tests {
         let mut bad: Config = serde_json::from_value(value).unwrap();
         bad.requests.sha256 = "0".repeat(64);
         assert!(validate_receipts(&bad).is_err());
+    }
+
+    #[test]
+    fn sq8_budgets_are_required_and_bind_the_operating_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        value["sq8_get_budget"] = json!(30);
+        value["sq8_byte_budget"] = json!(33_554_432);
+        let configured: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&configured, shape).unwrap();
+        let admitted = limits(&configured).unwrap();
+        assert_eq!(admitted.max_query_gets, 30);
+        assert_eq!(admitted.max_query_bytes, 33_554_432);
+        assert_eq!(trace_ranges(&configured), 30);
+        for field in ["sq8_get_budget", "sq8_byte_budget"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<Config>(missing).is_err());
+            let mut zero = value.clone();
+            zero[field] = json!(0);
+            assert!(validate_config(&serde_json::from_value(zero).unwrap(), shape).is_err());
+        }
+        value["schema"] = json!("borsuk-cohere-native-baseline-config-v8");
+        assert!(validate_config(&serde_json::from_value(value).unwrap(), shape).is_err());
     }
 
     #[test]
@@ -5040,8 +5077,11 @@ mod tests {
         );
         // Exact modeled memory: whole existing model plus one full direct query budget.
         let memory = &record["memory"];
-        let planner =
-            1_048_576 + TwoBitPlanTrace::scratch_bytes(257) as u64 + 4 * D as u64 + 512 * 2;
+        let planner = 1_048_576
+            + 262_144
+            + TwoBitPlanTrace::scratch_bytes(257) as u64
+            + 4 * D as u64
+            + 512 * 2;
         let ranking = 256 * 257 + 4 * D as u64;
         let direct = 3 * object_bytes as u64 + planner + ranking;
         assert_eq!(memory["direct_planner_bytes"], planner);

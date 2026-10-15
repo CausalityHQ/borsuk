@@ -1,6 +1,6 @@
 //! Generation-bound SHA-256 verification of exact S3 record-page ranges.
 
-use crate::budgeted_page_rank::{BudgetedPageError, cover_pages};
+use crate::budgeted_page_rank::{BudgetedPageError, cover_charge, cover_pages};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -570,18 +570,30 @@ pub fn plan_source_shortlist_blocks(
             .then((a / SQ8_PAGE_ROWS).cmp(&(b / SQ8_PAGE_ROWS)))
     });
     let mut accepted = Vec::<usize>::with_capacity(ranked.len());
+    let mut gaps = Vec::with_capacity(ranked.len());
+    let block_bytes = authority
+        .record_bytes
+        .checked_mul(SQ8_PAGE_ROWS)
+        .ok_or(BudgetedPageError::ArithmeticOverflow)?;
     for &(row, _) in &ranked {
-        let representative = row / SQ8_PAGE_ROWS * SQ8_PAGE_ROWS;
+        let representative = row / SQ8_PAGE_ROWS;
         let position = accepted
             .binary_search(&representative)
             .unwrap_or_else(|p| p);
         accepted.insert(position, representative);
-        match plan_selected_sq8_rows(authority, &accepted, limits) {
-            Ok(_) => (),
-            Err(BudgetedPageError::InsufficientBudget) => {
-                accepted.remove(position);
-            }
-            Err(error) => return Err(error),
+        // Reuse one gap buffer for charge-only trials. Materialize authenticated
+        // ranges once after admission; no per-trial tree/range allocations.
+        let charge = cover_charge(
+            &accepted,
+            authority.rows(),
+            authority.record_bytes,
+            block_bytes,
+            SQ8_PAGE_ROWS,
+            limits.max_gets,
+            &mut gaps,
+        )?;
+        if charge > limits.max_bytes {
+            accepted.remove(position);
         }
     }
     if accepted.is_empty() {
@@ -591,7 +603,7 @@ pub fn plan_source_shortlist_blocks(
         .iter()
         .filter_map(|&(row, _)| {
             accepted
-                .binary_search(&(row / SQ8_PAGE_ROWS * SQ8_PAGE_ROWS))
+                .binary_search(&(row / SQ8_PAGE_ROWS))
                 .is_ok()
                 .then_some(row)
         })

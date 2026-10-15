@@ -2518,6 +2518,14 @@ impl TwoBitGeneration {
         started: std::time::Instant,
         range_trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<TwoBitSearchResult> {
+        let row_bytes = self.pages.dimensions() + 12;
+        // Plain search promises k rows. Refuse an impossible physical budget
+        // before SOURCE I/O; explicit exclusion/overlay APIs may return up to k.
+        if excluded_ids.is_none() && self.limits.max_query_bytes / row_bytes < top_k {
+            return Err(TwoBitGenerationError::Budget(
+                BudgetedPageError::InsufficientBudget,
+            ));
+        }
         let (plan, normalized, source_stats, router_stats) = if self.source.is_some() {
             self.plan_paged_measured(store, query, trace, stages, started)
                 .await?
@@ -2534,7 +2542,19 @@ impl TwoBitGeneration {
             )
         };
 
-        let page_bytes = self.pages.page_rows() * (self.pages.dimensions() + 12);
+        // Selection may cover fewer rows than a larger byte cap permits. This
+        // is budget exhaustion, not corrupt SQ8. Preserve incurred SOURCE and
+        // router charges and refuse before submitting any SQ8 request.
+        if excluded_ids.is_none() && plan.planned_bytes / row_bytes < top_k {
+            return Err(TwoBitGenerationError::SourcePlanning {
+                stats: source_stats,
+                error: Box::new(TwoBitGenerationError::Budget(
+                    BudgetedPageError::InsufficientBudget,
+                )),
+            }
+            .with_router(router_stats));
+        }
+        let page_bytes = self.pages.page_rows() * row_bytes;
         let ranges = plan
             .ranges
             .iter()
@@ -3689,6 +3709,10 @@ mod source_walk_tests {
             // physical pages. The transpose gives the trainer 32 distinct
             // initial seeds (units 0,64,...), while bit 2 alternates selected
             // positive and unselected negative directions within each block.
+            // One query-aligned unit vector per32-row SQ8 block makes the
+            // best256 rows span many blocks, rather than eight tied blocks.
+            // The other31 rows retain their class direction and unit norm;
+            // class centroids remain distinct with the same shared perturbation.
             let mut raw = Vec::with_capacity(rows * dimensions * 4);
             let mut sq8 = Vec::with_capacity(rows * (dimensions + 12));
             for row in 0..rows {
@@ -3697,9 +3721,11 @@ mod source_walk_tests {
                 sq8.extend_from_slice(&((rows - row) as i64).to_le_bytes());
                 sq8.extend_from_slice(&1_f32.to_le_bytes());
                 for d in 0..dimensions {
-                    let value = if d != class { 0_f32 } else if class & 4 == 0 { 1. } else { -1. };
+                    let value = if row % 32 == 0 {
+                        if d & 4 == 0 { 0.25_f32 } else { 0. }
+                    } else if d != class { 0_f32 } else if class & 4 == 0 { 1. } else { -1. };
                     raw.extend_from_slice(&value.to_le_bytes());
-                    sq8.push((value + 1.) as u8);
+                    sq8.push(((value + 1.) * 4.) as u8);
                 }
             }
             let raw_path = temp.path().join("raw");
@@ -3716,7 +3742,7 @@ mod source_walk_tests {
                     raw: &raw_path, raw_sha256: &hash(&raw),
                     sq8: &sq8_path, sq8_sha256: &sq8_sha, rows, dimensions,
                 },
-                base_epoch: 0, generation: 1, low: &[-1.; 32], step: &[1.; 32],
+                base_epoch: 0, generation: 1, low: &[-1.; 32], step: &[0.25; 32],
                 sq8_object_key: key.as_ref(), sq8_etag: ETAG,
             }
             .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128 * 1024 * 1024)
@@ -3748,7 +3774,7 @@ mod source_walk_tests {
             assert!(source_cover.windows(2).all(|w| w[0].end < w[1].start));
             assert!(plan.ranges.windows(2).all(|w| w[0].end < w[1].start));
             let source_ranges = source_cover.iter().map(|r| (r.start / (32 * width), (r.end - 1) / (32 * width))).collect::<Vec<_>>();
-            let sq8_ranges = plan.ranges.iter().map(|r| (r.start / (256 * (dimensions + 12)), (r.end - 1) / (256 * (dimensions + 12)))).collect::<Vec<_>>();
+            let sq8_ranges = plan.ranges.iter().map(|r| (r.start / (SQ8_PAGE_ROWS * (dimensions + 12)), (r.end - 1) / (SQ8_PAGE_ROWS * (dimensions + 12)))).collect::<Vec<_>>();
             let prefix = ObjectPath::from(format!("cold/generations/{root_sha}"));
             let source_key = metadata_location(&prefix, "plane/records.bin");
             let leaf_key = metadata_location(&prefix, "router/leaves.bin");
@@ -8284,6 +8310,7 @@ mod source_walk_tests {
             // Exact modeled memory, from independent arithmetic.
             let memory = generation.direct_closure_memory(dlimits).unwrap();
             let planner = 1_048_576
+                + 262_144
                 + TwoBitPlanTrace::scratch_bytes(rows) as u64
                 + 4 * dimensions as u64
                 + 512 * rows.div_ceil(256) as u64;

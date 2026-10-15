@@ -100,23 +100,24 @@ pub(crate) fn cover_pages(
 
 // The admission loop needs only the cost for rejected candidates. A full
 // cover (and its range allocations) is materialized after admission.
-fn cover_charge(
+pub(crate) fn cover_charge(
     selected: &[usize],
     rows: usize,
     row_bytes: usize,
     full_page_bytes: usize,
+    page_rows: usize,
     max_gets: usize,
     gaps: &mut Vec<usize>,
 ) -> Result<usize, BudgetedPageError> {
-    if selected.is_empty() || max_gets == 0 {
+    if selected.is_empty() || max_gets == 0 || page_rows == 0 {
         return Err(BudgetedPageError::InvalidGeometry);
     }
     let mut charged = selected
         .len()
         .checked_mul(full_page_bytes)
         .ok_or(BudgetedPageError::ArithmeticOverflow)?;
-    if rows % PAGE_ROWS != 0 && selected.last() == Some(&(rows / PAGE_ROWS)) {
-        charged -= (PAGE_ROWS - rows % PAGE_ROWS) * row_bytes;
+    if rows % page_rows != 0 && selected.last() == Some(&(rows / page_rows)) {
+        charged -= (page_rows - rows % page_rows) * row_bytes;
     }
     gaps.clear();
     for pair in selected.windows(2) {
@@ -196,6 +197,7 @@ fn choose_ranked_pages(
             rows,
             row_bytes,
             full_page_bytes,
+            PAGE_ROWS,
             max_gets,
             &mut gap_scratch,
         )?;
@@ -394,6 +396,7 @@ mod tests {
                     rows,
                     row_bytes,
                     full_page_bytes,
+                    PAGE_ROWS,
                     max_gets,
                     &mut gaps
                 )
@@ -423,8 +426,16 @@ mod tests {
                     .unwrap()
                     .1;
                     assert_eq!(
-                        cover_charge(&pages, rows, 108, 108 * PAGE_ROWS, max_gets, &mut gaps)
-                            .unwrap(),
+                        cover_charge(
+                            &pages,
+                            rows,
+                            108,
+                            108 * PAGE_ROWS,
+                            PAGE_ROWS,
+                            max_gets,
+                            &mut gaps
+                        )
+                        .unwrap(),
                         exact,
                         "rows={rows} pages={pages:?} max_gets={max_gets}"
                     );

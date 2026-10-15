@@ -201,9 +201,7 @@ impl TwoBitIndex {
                     .search_with_mutations(reader, query, top_k, mutations)
                     .await;
             }
-            let result = base
-                .search_excluding(reader, query, top_k.min(base.rows()), &[])
-                .await?;
+            let result = base.search(reader, query, top_k.min(base.rows())).await?;
             return Ok(TwoBitMutationSearchResult {
                 plan: result.plan,
                 candidates: result

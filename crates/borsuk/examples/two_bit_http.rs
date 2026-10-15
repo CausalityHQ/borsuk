@@ -179,16 +179,27 @@ async fn search(
 }
 
 fn physical_namespace(args: &[String]) -> Result<ObjectPath, Box<dyn Error>> {
-    if !matches!(args.len(), 8 | 9) {
-        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOCAL_LISTEN [PHYSICAL_NAMESPACE]".into());
+    if !matches!(args.len(), 10 | 11) {
+        return Err("usage: two_bit_http BUCKET REGION PREFIX TRUSTED_ROOT_SHA GENERATION CONTROL_EPOCH LOCAL_LISTEN SQ8_GETS SQ8_BYTES [PHYSICAL_NAMESPACE]".into());
     }
-    Ok(ObjectPath::parse(args.get(8).map_or("", String::as_str))?)
+    Ok(ObjectPath::parse(args.get(10).map_or("", String::as_str))?)
+}
+
+fn query_budgets(args: &[String]) -> Result<(usize, usize), Box<dyn Error>> {
+    physical_namespace(args)?;
+    let gets = args[8].parse::<usize>()?;
+    let bytes = args[9].parse::<usize>()?;
+    if !(1..=256).contains(&gets) || bytes == 0 {
+        return Err("explicit positive SQ8 budgets (GETs <=256)".into());
+    }
+    Ok((gets, bytes))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
     let physical_namespace = physical_namespace(&args)?;
+    let (max_query_gets, max_query_bytes) = query_budgets(&args)?;
     let listen: SocketAddr = args[7].parse()?;
     if !listen.ip().is_loopback()
         && !matches!(listen.ip(), std::net::IpAddr::V4(ip) if ip.is_private())
@@ -222,8 +233,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: native_development_memory::memory_limit()?,
         max_active_queries: QUERY_SLOTS,
-        max_query_bytes: 16_773_120,
-        max_query_gets: 32,
+        max_query_bytes,
+        max_query_gets,
         max_parallel_gets: 16,
         max_source_bytes: 64 * 1024 * 1024,
         max_source_gets: 128,
@@ -265,6 +276,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "{}",
         json!({"phase":"ready","listen":listener.local_addr()?,
         "logical_generation_prefix":args[3],"physical_namespace":physical_namespace.as_ref(),
+        "sq8_get_budget":max_query_gets,"sq8_byte_budget":max_query_bytes,
         "transport":transport_report(&state.reader),
         "authority":state.authority,"head_read_wall_ns":head_read_wall_ns,
         "remote_open_wall_ns":remote_open_wall_ns,
@@ -289,14 +301,17 @@ mod tests {
             "1",
             "1",
             "127.0.0.1:3000",
+            "30",
+            "33554432",
         ]
         .map(String::from)
         .to_vec();
         assert_eq!(physical_namespace(&args).unwrap(), ObjectPath::default());
+        assert_eq!(query_budgets(&args).unwrap(), (30, 33_554_432));
         args.push("tenant/import".into());
         assert_eq!(physical_namespace(&args).unwrap().as_ref(), "tenant/import");
         assert_eq!(args[3], "generation");
-        args[8].clear();
+        args[10].clear();
         assert_eq!(physical_namespace(&args).unwrap(), ObjectPath::default());
         for invalid in [
             "tenant/../other",
@@ -304,7 +319,7 @@ mod tests {
             "s3://other-bucket/key",
             "tenant/\0",
         ] {
-            args[8] = invalid.into();
+            args[10] = invalid.into();
             assert!(physical_namespace(&args).is_err());
         }
         args.push("extra".into());

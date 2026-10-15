@@ -110,7 +110,7 @@ fn main() -> Result<()> {
         ("plane/records.bin", rows * 200),
         ("plane/page_digests.bin", units * 32),
         ("page_manifest.json", ROOT_CAP),
-        ("page_digests.bin", rows.div_ceil(256) * 32),
+        ("page_digests.bin", rows.div_ceil(32) * 32),
         ("canonical.bin", rows * (dimensions * 4 + 8)),
         ("centroids.bin", 32 + units * dimensions * 2),
         ("graph.bin", 8 * 1024 * 1024),
