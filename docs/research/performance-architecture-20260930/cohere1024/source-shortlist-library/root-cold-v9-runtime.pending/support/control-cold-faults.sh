@@ -84,7 +84,7 @@ cp "$root/config/candidate-generation.json" "$ev/smoke-root/config/candidate-gen
 printf '%s\n' "$(( $(date +%s)+1000 ))" > "$ev/smoke-root/machine-stop.epoch"
 sed "s@^root=/mnt/borsuk-v9-panel\$@root=$ev/smoke-root@" "$root/smoke-v9-object.sh" > "$ev/smoke-source.sh"
 [[ $(grep -Fxc "root=$ev/smoke-root" "$ev/smoke-source.sh") == 1 ]] || exit 1
-if grep -Fq 'root=/mnt/borsuk-v9-panel' "$ev/smoke-source.sh"; then exit 1; fi
+if grep -Fxq 'root=/mnt/borsuk-v9-panel' "$ev/smoke-source.sh"; then exit 1; fi
 cat > "$ev/aws-bin/aws" <<'SPY'
 #!/bin/bash
 set -euo pipefail
