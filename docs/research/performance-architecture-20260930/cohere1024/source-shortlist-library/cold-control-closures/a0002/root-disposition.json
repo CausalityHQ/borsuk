@@ -1,0 +1,23 @@
+{
+ "schema":"borsuk-v9-cold-attempt-disposition-v1",
+ "attempt":"a0002",
+ "classification":"EXECUTION_INVALID_FAULT_HARNESS_PATH_CHECK",
+ "setup_exit":0,
+ "native_controller_exit":1,
+ "last_phase":"cold-faults",
+ "real_systemd_control_canary_passed":true,
+ "code_mutation_and_conditional_manifest_refusal_passed":true,
+ "whole_cell_budget_boundary_passed":true,
+ "underfill_measured_and_exact_five_percent_boundaries_passed":true,
+ "failure":"Substring grep matched the correctly rewritten sandbox root; exact whole-line assignment required",
+ "ann_executed":false,
+ "scientific_measurements":false,
+ "archive_sha256":"4d45f693e3fcde52f5198b2e216bc108a060c1bcb6465329ffb30fd5e60236d8",
+ "archive_bytes":54651,
+ "instance":"i-0594ab2d38f667a06",
+ "volume":"vol-0c356cabff3fe0c64",
+ "compute_closed":true,
+ "algorithm_rejected":false,
+ "next_attempt":"a0003",
+ "same_ann_arms":true
+}

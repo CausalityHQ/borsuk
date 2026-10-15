@@ -1,0 +1,22 @@
+{
+    "CommandId": "0fe8ee9f-5130-402a-be4f-c807ef16059e",
+    "InstanceId": "i-025c485e0f0d533ea",
+    "Comment": "borsuk-v9-cold-native",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-15T19:44:36.509Z",
+    "ExecutionElapsedTime": "PT3.755S",
+    "ExecutionEndDateTime": "2026-10-15T19:44:39.509Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-v9-panel/runtime-code.sha256: OK\nclose-v9-runtime.sh: OK\ncontrol-cold-faults.sh: OK\ncontrol-v9-canary.sh: OK\nextract-v9-inputs.sh: OK\npublish-cold-cell.sh: OK\nrun-v9-chain.sh: OK\nrun-v9-stage.sh: OK\nsetup-v9-runtime.sh: OK\nsmoke-v9-object.sh: OK\ntransport-v9-inputs.sh: OK\nreduce-v9-abba.jq: OK\n{\n  \"schema\": \"borsuk-v9-paired-cold-terminal-publication-v1\",\n  \"packet_base_commit\": \"3ac246c8b497f4c560d75b1465aeab54ceb78494\",\n  \"support_archive_sha256\": \"ba887e7d1cea4961724fe73ded73a6d7eed2683ba9c1ea5c8ed587f2c10440c9\",\n  \"archive_sha256\": \"37c9bcd09c5656cd5f3c2e8867c9221dd34f020c35d674a509fcb657f8b5fcdb\",\n  \"archive_bytes\": 31500,\n  \"original_exit\": 1,\n  \"last_phase\": \"control-canary\",\n  \"execution_closed\": false,\n  \"cold_performance_claim\": false,\n  \"vendor_win_claim\": false,\n  \"compute_closure_pending\": true\n}\nORIGINAL_CHAIN_EXIT=1 PUBLICATION_EXIT=0 LAST_PHASE=control-canary\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Running as unit: borsuk-v9-cold-controller.service\nFinished with result: exit-code\nMain processes terminated with: code=exited/status=1\nService runtime: 3.721s\nCPU time consumed: 1.381s\nMemory peak: 1.9M\nMemory swap peak: 0B\nfailed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

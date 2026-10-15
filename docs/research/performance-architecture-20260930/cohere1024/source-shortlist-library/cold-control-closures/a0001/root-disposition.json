@@ -1,0 +1,22 @@
+{
+  "schema":"borsuk-v9-cold-attempt-disposition-v1",
+  "attempt":"a0001",
+  "classification":"EXECUTION_INVALID_CONTROL_CANARY_EXTRACTION",
+  "setup_exit":0,
+  "native_controller_exit":1,
+  "last_phase":"control-canary",
+  "original_exit17_witness":17,
+  "original_timeout_witness":124,
+  "duplicate_claim_refused":true,
+  "empty_absence_predicate_extraction":true,
+  "ann_executed":false,
+  "scientific_measurements":false,
+  "archive_sha256":"37c9bcd09c5656cd5f3c2e8867c9221dd34f020c35d674a509fcb657f8b5fcdb",
+  "archive_bytes":31500,
+  "instance":"i-025c485e0f0d533ea",
+  "volume":"vol-0ded61c0e0c71548c",
+  "compute_closed":true,
+  "algorithm_rejected":false,
+  "next_attempt":"a0002",
+  "same_ann_arms":true
+}
