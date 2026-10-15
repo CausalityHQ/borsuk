@@ -408,6 +408,7 @@ mod session_tests {
         list_drops: AtomicUsize,
         drop_in_runtime: AtomicBool,
         deletes: AtomicUsize,
+        delete_not_found: AtomicUsize,
     }
     struct ListLifetime(Arc<Observed>);
     impl Drop for ListLifetime {
@@ -429,7 +430,8 @@ mod session_tests {
         observed: Arc<Observed>,
         list_error_at: Arc<AtomicUsize>,
         delete_error: Arc<AtomicUsize>, // 1 before effect, 2 after effect
-        release_error: Arc<AtomicUsize>,
+        release_error: Arc<AtomicUsize>, // 1 before, 2 after, 3 after + failed reread
+        head_read_error: Arc<AtomicBool>,
         gate: Arc<Mutex<Option<Arc<Gate>>>>,
     }
     impl SessionStore {
@@ -442,6 +444,7 @@ mod session_tests {
                 list_error_at: Arc::new(AtomicUsize::new(usize::MAX)),
                 delete_error: Arc::new(AtomicUsize::new(0)),
                 release_error: Arc::new(AtomicUsize::new(0)),
+                head_read_error: Arc::new(AtomicBool::new(false)),
                 gate: Arc::new(Mutex::new(None)),
             }
         }
@@ -489,7 +492,10 @@ mod session_tests {
                 return Err(injected());
             }
             let result = self.at(path).put_opts(path, payload, options).await?;
-            if fault == 2 {
+            if fault == 3 {
+                self.head_read_error.store(true, Ordering::SeqCst);
+            }
+            if fault >= 2 {
                 return Err(injected());
             }
             Ok(result)
@@ -506,6 +512,11 @@ mod session_tests {
             path: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
+            if path.as_ref().ends_with("/head.json")
+                && self.head_read_error.swap(false, Ordering::SeqCst)
+            {
+                return Err(injected());
+            }
             self.at(path).get_opts(path, options).await
         }
         fn delete_stream(
@@ -532,7 +543,13 @@ mod session_tests {
                         if fault == 1 {
                             return Err(injected());
                         }
-                        this.at(&path).delete(&path).await?;
+                        let result = this.at(&path).delete(&path).await;
+                        if matches!(&result, Err(object_store::Error::NotFound { .. })) {
+                            this.observed
+                                .delete_not_found
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                        result?;
                         if fault == 2 {
                             return Err(injected());
                         }
@@ -905,30 +922,132 @@ mod session_tests {
     }
 
     #[tokio::test]
-    async fn fence_release_errors_never_report_success_or_discard_continuation() {
-        for effect in [1, 2] {
+    async fn real_filesystem_absent_pending_candidate_reopens_reads_and_mutations() {
+        for after_effect in [true, false] {
+            let data_dir = tempfile::tempdir().unwrap();
+            let mut store = SessionStore::new(Arc::new(
+                object_store::local::LocalFileSystem::new_with_prefix(data_dir.path()).unwrap(),
+            ));
+            store.head = Some(Arc::new(InMemory::new()));
+            let f = Fixture::with_store(store).await;
+            let orphan = f.orphan(1, b"orphan").await;
+            let mut session = f.session();
+            if after_effect {
+                f.store.delete_error.store(2, Ordering::SeqCst);
+            }
+            let first = run(
+                &mut session,
+                TwoBitGcLimits {
+                    max_deleted_object_bytes: if after_effect { 6 } else { 5 },
+                    ..caps()
+                },
+            )
+            .await;
+            let fenced =
+                tokio::time::timeout(DEADLINE, read_two_bit_head(f.store.as_ref(), &f.prefix))
+                    .await
+                    .expect("bounded latest read")
+                    .is_err();
+            let competing = if after_effect {
+                None
+            } else {
+                // Another cooperating session removes the budget-retained candidate.
+                let mut other = f.session();
+                let result = run(&mut other, caps()).await;
+                drop(other);
+                Some(result)
+            };
+            let lists_before_retry = f.store.observed.lists.load(Ordering::SeqCst);
+            let retried = run(&mut session, caps()).await;
+            let reopened = tokio::time::timeout(DEADLINE, async {
+                let head = read_two_bit_head(f.store.as_ref(), &f.prefix)
+                    .await?
+                    .ok_or(TwoBitStoreError::Invalid("fixture head absent"))?;
+                apply_two_bit_mutations(
+                    f.store.as_ref(),
+                    &head,
+                    2,
+                    None,
+                    &[TwoBitMutation {
+                        id: 7,
+                        vector: Some(vec![1., 0.]),
+                    }],
+                    caps().mutations,
+                )
+                .await
+            })
+            .await;
+            f.finish(session).await;
+            let first_report = if after_effect {
+                let failed = first.unwrap_err();
+                assert!(failed.report.delete_outcome_unknown);
+                failed.report
+            } else {
+                let capped = first.unwrap();
+                assert_eq!(capped.required_deleted_object_bytes, Some(6));
+                let competing = competing.unwrap().unwrap();
+                assert!(competing.scan_complete);
+                assert_eq!(competing.objects_deleted, 1);
+                capped
+            };
+            assert_eq!(fenced, after_effect);
+            assert_eq!(first_report.pending_object_bytes, Some(6));
+            assert_eq!(first_report.delete_attempts, usize::from(after_effect));
+            assert_eq!(first_report.objects_deleted, 0);
+            assert_eq!(first_report.deleted_object_bytes, 0);
+            let retried = retried.unwrap();
+            assert!(retried.scan_complete);
+            assert!(!retried.delete_outcome_unknown && !retried.restart_required);
+            assert_eq!(retried.delete_attempts, 1);
+            assert_eq!(retried.objects_deleted, 0);
+            assert_eq!(retried.deleted_object_bytes, 0);
+            assert_eq!(retried.pending_object_bytes, None);
+            assert_eq!(retried.required_deleted_object_bytes, None);
+            assert_eq!(f.store.observed.delete_not_found.load(Ordering::SeqCst), 1);
+            assert_eq!(lists_before_retry, if after_effect { 1 } else { 2 });
+            assert_eq!(
+                f.store.observed.lists.load(Ordering::SeqCst),
+                lists_before_retry
+            );
+            assert!(
+                matches!(reopened, Ok(Ok(_))),
+                "latest reads and mutation must reopen"
+            );
+            assert!(f.store.head(&orphan).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn fence_release_reconciliation_and_unresolved_errors_preserve_continuation() {
+        for effect in [1, 2, 3] {
             let f = Fixture::new().await;
             let a = f.orphan(2, b"a").await;
             let b = f.orphan(1, b"b").await;
             f.store.script(&[a, b.clone()]).await;
             f.store.release_error.store(effect, Ordering::SeqCst);
             let mut session = f.session();
-            let failed = run(
+            let first = run(
                 &mut session,
                 TwoBitGcLimits {
                     max_objects_deleted: 1,
                     ..caps()
                 },
             )
-            .await
-            .unwrap_err();
+            .await;
+            let unread_reconciliation_fault = f.store.head_read_error.load(Ordering::SeqCst);
             let fenced = read_two_bit_head(f.store.as_ref(), &f.prefix)
                 .await
                 .is_err();
             let retried = run(&mut session, caps()).await.unwrap();
             f.finish(session).await;
-            assert_eq!(failed.report.objects_deleted, 1);
-            assert!(!failed.report.scan_complete);
+            let report = if effect == 2 {
+                first.expect("successful reread reconciles the release")
+            } else {
+                first.expect_err("unresolved release must fail").report
+            };
+            assert!(!unread_reconciliation_fault);
+            assert_eq!(report.objects_deleted, 1);
+            assert!(!report.scan_complete);
             assert_eq!(fenced, effect == 1);
             assert_eq!(retried.objects_deleted, 1);
             assert!(retried.scan_complete);

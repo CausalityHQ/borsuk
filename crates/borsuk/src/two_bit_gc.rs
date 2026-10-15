@@ -47,7 +47,7 @@ pub struct TwoBitGcReport {
     pub objects_scanned: usize,
     /// Unknown keys skipped, never deleted.
     pub unknown_objects: usize,
-    /// Delete calls submitted, including ambiguous failures.
+    /// Delete calls submitted, including absent objects and ambiguous failures.
     pub delete_attempts: usize,
     /// Acknowledged successful logical deletes.
     pub objects_deleted: usize,
@@ -63,11 +63,11 @@ pub struct TwoBitGcReport {
     /// Candidate exceeds the entire byte cap; retry with at least this budget.
     /// A shortfall only in this call's remaining budget leaves this as None.
     pub required_deleted_object_bytes: Option<u64>,
-    /// A DELETE failed and may have taken effect; acknowledged counters exclude it.
+    /// A non-NotFound DELETE failure may have taken effect; counters exclude it.
     /// Also true if the worker failed and its progress could not be recovered.
     pub delete_outcome_unknown: bool,
 }
-/// A failed call reports acknowledged progress. DELETE/LIST failures preserve
+/// A failed call reports acknowledged progress. Ambiguous DELETE/LIST failures preserve
 /// the durable fence; pre-delete validation tries to release it without advancing.
 #[derive(Debug, thiserror::Error)]
 #[error("two-bit garbage collection: {error}")]
@@ -296,7 +296,8 @@ fn worker_failed() -> TwoBitGcFailure {
 /// A concurrent retry while that work runs fails busy, without queueing another pass.
 /// Successful capped calls release the fence while retaining LIST. EOF alone ends
 /// a sweep; the next call starts another. LIST errors discard traversal explicitly.
-/// DELETE errors retain one candidate and the durable fence; release errors fail.
+/// DELETE NotFound clears the candidate without charging acknowledged deletes.
+/// Other DELETE errors retain the candidate and fence; unresolved release errors fail.
 /// There is no crash-durable cursor or historical rollback retention. Late uploads
 /// may require another sweep. Versioned retention is outside logical delete counts.
 pub async fn collect_two_bit_garbage(
@@ -423,9 +424,16 @@ impl Traversal {
                 break;
             }
             report.delete_attempts += 1;
-            if let Err(error) = store.delete(&self.pending.as_ref().unwrap().0).await {
-                report.delete_outcome_unknown = true;
-                return Err(error.into());
+            match store.delete(&self.pending.as_ref().unwrap().0).await {
+                Ok(()) => {}
+                Err(object_store::Error::NotFound { .. }) => {
+                    self.pending = None;
+                    continue;
+                }
+                Err(error) => {
+                    report.delete_outcome_unknown = true;
+                    return Err(error.into());
+                }
             }
             self.pending = None;
             report.objects_deleted += 1;

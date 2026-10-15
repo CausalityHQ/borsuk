@@ -60,12 +60,20 @@ the next call starts a new sweep; late uploads may need that sweep.
 
 Admission, lock and keep-set failures do not advance traversal. A LIST error
 discards the stream and reports `restart_required`; the next admitted call
-restarts from the prefix. DELETE failure retains the candidate and durable fence,
-sets `delete_outcome_unknown`, and excludes that operation from acknowledged
-delete counters. Fence-release errors are failures even if all deletions finished;
-a transport error can also leave the release outcome uncertain. Retry with the
-same session and directory. Neither successful retries nor byte counters prove
-physical reclamation in a versioned bucket.
+restarts from the prefix. DELETE `NotFound` clears the pending candidate and
+continues scanning; it counts as a `delete_attempts` operation but adds neither
+`objects_deleted` nor `deleted_object_bytes`. An earlier ambiguous delete or
+another cooperating session may already have removed that object. Other DELETE
+errors retain the candidate and durable fence, set `delete_outcome_unknown`, and
+exclude that operation from acknowledged delete counters.
+
+A fence-release write error is reconciled as success if rereading the authenticated
+head confirms the intended released state. If rereading fails or does not confirm
+that state, the call fails even if all deletions finished. The actual fence may
+still be held or may already be released; traversal is retained either way.
+Retry with the same session and directory to reacquire fresh authority and
+continue. Neither successful retries nor byte counters prove physical reclamation
+in a versioned bucket.
 
 One owned thread and a persistent current-thread Tokio runtime execute accepted
 work, with a capacity-one request channel and busy rejection while work is active.
