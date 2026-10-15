@@ -1,0 +1,23 @@
+[
+  {
+    "role": "baseline_archive",
+    "bytes": 30074880,
+    "sha256": "abd5fd15ddb53b69e21d76f6ba29a09d33bed610ce944ca36e1d649ce454e8c7",
+    "s3_key": "research/semantic-router/20261015/source-shortlist-v9-panel-reviewed-a0001/retained-release/release.tar",
+    "target": "archives/baseline.tar"
+  },
+  {
+    "role": "helper_archive",
+    "bytes": 13066240,
+    "sha256": "95a6e0035ae8183e6bfcb127c363c65120115e3bd765cd217f3b997032c0a2b0",
+    "s3_key": "research/semantic-router/20261015/sq8-panel-reader-gates-a0001/terminal/release.tar",
+    "target": "archives/helper.tar"
+  },
+  {
+    "role": "original_binary",
+    "bytes": 17494600,
+    "sha256": "59a22eed2e7d3cb8142e35108171cdcd8c27ec83c8968ba307cd9dc092c78083",
+    "s3_key": "research/semantic-router/20261014/source-budget96-header-window-green-a0001/binaries/check_cohere_native_baseline",
+    "target": "archives/original.elf"
+  }
+]
