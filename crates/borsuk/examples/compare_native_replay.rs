@@ -5646,7 +5646,9 @@ fn compare(paths: &[(PathBuf, String); 4]) -> Result<Value> {
 }
 
 fn report_cap(schema: &str) -> u64 {
-    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA {
+    if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
+        || schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA
+    {
         16 * 1024 * 1024
     } else {
         REPORT_CAP
@@ -5743,6 +5745,15 @@ fn execute_report(
             && report["status"] == "CLOSED_GEOMETRY_ONLY"
             && report["complete"] == true);
     }
+    if schema == sq8_subpage_shortlist::COUNT_CURVE_SMOKE_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "STAGING_SMOKE_CLOSED"
+            && report["complete"] == true
+            && report["candidate_queries_executed"] == 1
+            && report["arms_executed"] == 4
+            && report["quality_evaluated"] == false
+            && report["truth_file_opened"] == false);
+    }
     if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SMOKE_SCHEMA {
         return Ok(report["schema"] == schema
             && report["status"] == "STAGING_SMOKE_CLOSED"
@@ -5754,7 +5765,11 @@ fn execute_report(
     if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA {
         return Ok(sq8_subpage_shortlist::validate_virtual_report(&report).is_ok());
     }
+    if schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA {
+        return Ok(sq8_subpage_shortlist::validate_count_curve_report(&report).is_ok());
+    }
     if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA
+        || schema == sq8_subpage_shortlist::COUNT_CURVE_ADMISSION_SCHEMA
         || schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_ADMISSION_SCHEMA
     {
         return Ok(report["schema"] == schema
@@ -9159,6 +9174,39 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| {
+        a == "--sq8-shortlist-count-curve"
+            || a == "--sq8-shortlist-count-curve-admit"
+            || a == "--sq8-shortlist-count-curve-smoke"
+    }) {
+        let admit = args[1] == "--sq8-shortlist-count-curve-admit";
+        let smoke = args[1] == "--sq8-shortlist-count-curve-smoke";
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "count curve config SHA UTF-8".into())
+                .and_then(|sha| {
+                    sq8_subpage_shortlist::execute_count_curve(
+                        std::path::Path::new(&args[2]),
+                        sha,
+                        std::path::Path::new(&args[4]),
+                        admit,
+                        smoke,
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-shortlist-count-curve[-admit|-smoke] CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2)
+            }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| {
         a == "--sq8-virtual-layout"
             || a == "--sq8-virtual-layout-admit"

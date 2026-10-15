@@ -751,20 +751,36 @@ fn reduce_shortlist_mode_inner(
         config_path,
         config_sha,
         admission_only,
-        budgeted,
+        if budgeted {
+            Selection::Block
+        } else {
+            Selection::Unbudgeted
+        },
         false,
         None,
     )
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selection {
+    Unbudgeted,
+    Block,
+    CountCurve,
 }
 fn reduce_shortlist_engine(
     config_path: &std::path::Path,
     config_sha: &str,
     admission_only: bool,
-    budgeted: bool,
+    selection: Selection,
     smoke_only: bool,
     mut virtual_layout: Option<sq8_virtual_layout::Context>,
 ) -> super::Result<serde_json::Value> {
     let virtual_mode = virtual_layout.is_some();
+    let count_mode = selection == Selection::CountCurve;
+    let budgeted = selection != Selection::Unbudgeted;
+    super::require(
+        !virtual_mode || selection == Selection::Block,
+        "exclusive count/virtual selection",
+    )?;
     use super::{
         header_json, header_pin, loss_binary, loss_coverage, read_run_observed, require,
         scan_loss_sq8,
@@ -777,7 +793,12 @@ fn reduce_shortlist_engine(
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
-    let (c, config_bytes) = if virtual_mode {
+    let mut count_pin = None;
+    let (c, config_bytes) = if count_mode {
+        let (config, n) = count_curve::read_config(config_path, config_sha)?;
+        count_pin = Some(config.selector_control);
+        (config.shortlist, n)
+    } else if virtual_mode {
         let (v, n) = sq8_virtual_layout::read_config(config_path, config_sha)?;
         (v.shortlist, n)
     } else {
@@ -802,7 +823,7 @@ fn reduce_shortlist_engine(
         "shortlist frozen population/protocol",
     )?;
     require(
-        c.shortlist_sizes == [1024, 2048, 4096, 8192]
+        (count_mode || c.shortlist_sizes == [1024, 2048, 4096, 8192])
             && c.max_payload_bytes == 2 * 1024 * 1024 * 1024,
         "shortlist preregistered curve/envelope",
     )?;
@@ -871,6 +892,11 @@ fn reduce_shortlist_engine(
         + 1000 * 15360 * 8
         + 128 * 1024 * 1024
         + if budgeted { 1024 * 1024 } else { 0 }
+        + if count_mode {
+            count_curve::EXTRA_PAYLOAD
+        } else {
+            0
+        }
         + if virtual_mode {
             sq8_virtual_layout::EXTRA_PAYLOAD
         } else {
@@ -880,6 +906,7 @@ fn reduce_shortlist_engine(
         caller_bytes < c.max_payload_bytes,
         "shortlist retained caller payload",
     )?;
+    let count_control = count_pin.map(count_curve::Control::admit).transpose()?;
     let mut originals = Vec::<Vec<usize>>::with_capacity(i.count);
     let run = read_run_observed(
         &c.completed.input.path,
@@ -1023,7 +1050,9 @@ fn reduce_shortlist_engine(
                 == run.file_identity,
             "shortlist admission baseline lifetime identity",
         )?;
-        if virtual_mode {
+        if count_mode {
+            count_curve::read_config(config_path, config_sha)?;
+        } else if virtual_mode {
             sq8_virtual_layout::read_config(config_path, config_sha)?;
         } else {
             read_shortlist_config(config_path, config_sha, budgeted)?;
@@ -1031,8 +1060,8 @@ fn reduce_shortlist_engine(
         if let Some(layout) = virtual_layout.as_ref() {
             layout.recheck()?;
         }
-        return Ok(json!({
-            "schema":if virtual_mode{VIRTUAL_LAYOUT_ADMISSION_SCHEMA}else{ADMISSION_SCHEMA},"status":"READY_ACTUAL_INPUT","complete":true,
+        let mut admitted = json!({
+            "schema":if count_mode{COUNT_CURVE_ADMISSION_SCHEMA}else if virtual_mode{VIRTUAL_LAYOUT_ADMISSION_SCHEMA}else{ADMISSION_SCHEMA},"status":"READY_ACTUAL_INPUT","complete":true,
             "config_sha256":config_sha,"config_bytes":config_bytes,
             "rows":i.rows,"dimensions":i.dimensions,"query_count":i.count,"truth_ids_validated":i.count*super::K,
             "generation_root_sha256":i.generation_root_sha256,
@@ -1044,10 +1073,17 @@ fn reduce_shortlist_engine(
             "payload_model_bytes":caller_bytes,"local_file_only":true,
             "scientific_qualified":false,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,
             "qualified":false
-        }));
+        });
+        if let Some(control) = count_control.as_ref() {
+            control.recheck()?;
+            admitted["shortlist_sizes"] = json!(c.shortlist_sizes);
+            admitted["closed_control_bytes_admitted"] = json!(true);
+        }
+        return Ok(admitted);
     }
     let mut candidate_queries = Vec::with_capacity(1000);
     let mut placement_proofs = Vec::with_capacity(if virtual_mode { 1000 } else { 0 });
+    let mut count_evidence = Vec::with_capacity(if count_mode { 1000 } else { 0 });
 
     for slot in 0..(if smoke_only { 1 } else { originals.len() }) {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
@@ -1193,6 +1229,35 @@ fn reduce_shortlist_engine(
             placement_proofs.push(proof);
             continue;
         }
+        if count_mode {
+            let mut arms = count_curve::plan_arms(
+                &authority,
+                &scored,
+                &c.shortlist_sizes,
+                SelectedSq8Limits {
+                    max_gets: CANDIDATE_SQ8_GETS,
+                    max_bytes: 32 * 1024 * 1024,
+                    max_planner_bytes: 4 * 1024 * 1024 + 4096,
+                },
+                64 * scored.len() + 16 * 1024 + 4096,
+            )?;
+            for arm in &mut arms {
+                arm.returned = Some(rank_local_cover(
+                    &mut sq8_snapshot,
+                    &authority,
+                    &arm.ranges,
+                    i.rows,
+                    i.dimensions,
+                    &normalized,
+                    &low,
+                    &step,
+                    32 * 1024 * 1024,
+                )?);
+            }
+            count_evidence.push(count_curve::returned_evidence(&arms)?);
+            candidate_queries.push(arms);
+            continue;
+        }
         let mut arms = Vec::with_capacity(4);
 
         for maximum in c
@@ -1260,6 +1325,35 @@ fn reduce_shortlist_engine(
         candidate_queries.push(arms);
     }
     if smoke_only {
+        if count_mode {
+            require(
+                candidate_queries.len() == 1
+                    && count_evidence.len() == 1
+                    && candidate_queries[0].len() == 4,
+                "count smoke population",
+            )?;
+            count_control
+                .as_ref()
+                .ok_or("count smoke control")?
+                .recheck()?;
+            for snapshot in [&gs, &ps, &rs, &ms, &ds, &qs, &order_snapshot, &sq8_snapshot] {
+                snapshot.recheck()?;
+            }
+            require(
+                super::file_identity(&super::open_input(&c.completed.input.path)?)?
+                    == run.file_identity,
+                "count smoke baseline lifetime identity",
+            )?;
+            count_curve::read_config(config_path, config_sha)?;
+            return Ok(
+                json!({"schema":COUNT_CURVE_SMOKE_SCHEMA,"status":"STAGING_SMOKE_CLOSED","complete":true,
+                "candidate_queries_executed":1,"arms_executed":4,"shortlist_sizes":c.shortlist_sizes,
+                "baseline_prefix_exact_plan_trace_ids_scorebits":true,"source_capture_routing_scoring_unchanged":true,
+                "closed_control_bytes_admitted":true,"quality_evaluated":false,"truth_file_opened":false,
+                "original_physical_layout":true,"config_sha256":config_sha,"local_file_only":true,
+                "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false}),
+            );
+        }
         let layout = virtual_layout.as_ref().ok_or("virtual smoke context")?;
         require(
             candidate_queries.len() == 1 && placement_proofs.len() == 1,
@@ -1377,6 +1471,13 @@ fn reduce_shortlist_engine(
         }
         queries.push(json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports}));
     }
+    if let Some(control) = count_control.as_ref() {
+        control.verify(&queries)?;
+        require(count_evidence.len() == 1000, "count full returned evidence")?;
+        for (q, evidence) in queries.iter_mut().zip(count_evidence) {
+            q["returned_evidence"] = evidence;
+        }
+    }
     if let Some(layout) = virtual_layout.as_mut() {
         layout.verify_control(&queries)?;
         require(
@@ -1409,7 +1510,9 @@ fn reduce_shortlist_engine(
         super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
         "shortlist baseline lifetime identity",
     )?;
-    if virtual_mode {
+    if count_mode {
+        count_curve::read_config(config_path, config_sha)?;
+    } else if virtual_mode {
         sq8_virtual_layout::read_config(config_path, config_sha)?;
     } else {
         read_shortlist_config(config_path, config_sha, budgeted)?;
@@ -1417,16 +1520,21 @@ fn reduce_shortlist_engine(
     if let Some(layout) = virtual_layout.as_ref() {
         layout.recheck()?;
     }
+    if let Some(control) = count_control.as_ref() {
+        control.recheck()?;
+    }
     let arm_count = if virtual_mode {
         2
+    } else if count_mode {
+        4
     } else if budgeted {
         1
     } else {
         4
     };
 
-    let mut result = json!({"schema":if virtual_mode {VIRTUAL_LAYOUT_SCHEMA}else if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
-    if budgeted && !virtual_mode {
+    let mut result = json!({"schema":if count_mode{COUNT_CURVE_SCHEMA}else if virtual_mode {VIRTUAL_LAYOUT_SCHEMA}else if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
+    if budgeted && !virtual_mode && !count_mode {
         result["selection_rule"] = json!("MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION");
         result["input_shortlist_size"] = json!(1024);
         result["single_causal_selection_change"] = json!(true);
@@ -1453,6 +1561,9 @@ fn reduce_shortlist_engine(
         result["single_causal_placement_change"] = json!(true);
         result["quality_advancement_eligible"] = json!(admissible[1] == 1000 && totals[1] >= 9760);
         validate_virtual_report(&result)?;
+    }
+    if count_mode {
+        count_curve::finalize_report(&mut result)?;
     }
     Ok(result)
 }
@@ -1546,6 +1657,56 @@ fn queries_gets(queries: &serde_json::Value, arm: usize) -> super::Result<u64> {
                 .ok_or_else(|| "virtual GET total overflow".into())
         })
 }
+pub(super) const COUNT_CURVE_SCHEMA: &str = count_curve::SCHEMA;
+pub(super) const COUNT_CURVE_ADMISSION_SCHEMA: &str = count_curve::ADMISSION_SCHEMA;
+pub(super) const COUNT_CURVE_SMOKE_SCHEMA: &str = count_curve::SMOKE_SCHEMA;
+pub(super) fn validate_count_curve_report(report: &serde_json::Value) -> super::Result<()> {
+    count_curve::validate_report(report)
+}
+pub(super) fn execute_count_curve(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+    admission_only: bool,
+    smoke_only: bool,
+) -> super::Result<bool> {
+    use std::io::Write;
+    super::require(!(admission_only && smoke_only), "count action")?;
+    let schema = if admission_only {
+        COUNT_CURVE_ADMISSION_SCHEMA
+    } else if smoke_only {
+        COUNT_CURVE_SMOKE_SCHEMA
+    } else {
+        COUNT_CURVE_SCHEMA
+    };
+    let mut summary = None;
+    let good = super::execute_report(output, schema, || {
+        let report = reduce_shortlist_engine(
+            config,
+            sha,
+            admission_only,
+            Selection::CountCurve,
+            smoke_only,
+            None,
+        )?;
+        summary = Some(
+            serde_json::json!({"schema":schema,"status":report["status"],"complete":report["complete"],
+            "config_sha256":report["config_sha256"],"query_count":report["query_count"],"shortlist_sizes":report["shortlist_sizes"],
+            "admissible_queries":report["admissible_queries"],"hits10":report["measured_hit_subtotals"],
+            "planned_target_gets":report["planned_target_gets_totals"],"planned_target_bytes":report["planned_target_bytes_totals"],
+            "native_quality_io_totals":report["native_quality_io_totals"],"quality_floor_met":report["quality_floor_met"],
+            "control_parity":report["closed_selector_control_parity"],"cold_latency_claim":false,"vendor_win_claim":false}),
+        );
+        Ok(report)
+    })?;
+    if good {
+        let mut stdout = std::io::stdout().lock();
+        serde_json::to_writer(&mut stdout, &summary.ok_or("count native summary")?)?;
+        stdout.write_all(b"\n")?;
+    }
+    Ok(good)
+}
+
 pub(super) const VIRTUAL_LAYOUT_SMOKE_SCHEMA: &str = "borsuk-sq8-virtual-layout-smoke-v1";
 pub(super) const VIRTUAL_LAYOUT_SCHEMA: &str = "borsuk-sq8-virtual-layout-v1";
 pub(super) const VIRTUAL_LAYOUT_ADMISSION_SCHEMA: &str = "borsuk-sq8-virtual-layout-admission-v1";
@@ -1570,8 +1731,14 @@ pub(super) fn execute_virtual_layout(
         let (c, _) = sq8_virtual_layout::read_config(config, sha)?;
         let mut context = sq8_virtual_layout::Context::prepare(&c.shortlist, c.selector_control)?;
         context.admit_control_bytes()?;
-        let report =
-            reduce_shortlist_engine(config, sha, admission_only, true, smoke_only, Some(context))?;
+        let report = reduce_shortlist_engine(
+            config,
+            sha,
+            admission_only,
+            Selection::Block,
+            smoke_only,
+            Some(context),
+        )?;
         summary = Some(
             serde_json::json!({"schema":schema,"status":report["status"],"complete":report["complete"],
             "baseline_hits10":report["baseline_hits10"],"query_count":report["query_count"],
