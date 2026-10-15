@@ -240,7 +240,7 @@ impl VirtualSq8 {
         {
             return Err("virtual range capacity");
         }
-        let mut offset = 0;
+        let mut offset = 0_usize;
         for segment in &segments {
             let stop = offset
                 .checked_add(segment.len())
