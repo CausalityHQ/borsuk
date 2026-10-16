@@ -2,6 +2,8 @@
 
 #[path = "sq8_count_curve.rs"]
 mod count_curve;
+#[path = "sq8_get_curve.rs"]
+mod get_curve;
 #[path = "sq8_virtual_layout.rs"]
 mod sq8_virtual_layout;
 
@@ -789,6 +791,7 @@ enum Selection {
     Unbudgeted,
     Block,
     CountCurve,
+    GetCurve,
 }
 fn reduce_shortlist_engine(
     config_path: &std::path::Path,
@@ -800,6 +803,8 @@ fn reduce_shortlist_engine(
 ) -> super::Result<serde_json::Value> {
     let virtual_mode = virtual_layout.is_some();
     let count_mode = selection == Selection::CountCurve;
+    let get_mode = selection == Selection::GetCurve;
+    let curve_mode = count_mode || get_mode;
     let budgeted = selection != Selection::Unbudgeted;
     super::require(
         !virtual_mode || selection == Selection::Block,
@@ -818,7 +823,14 @@ fn reduce_shortlist_engine(
     use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
     let mut count_pin = None;
-    let (c, config_bytes) = if count_mode {
+    let mut get_pin = None;
+    let mut get_budgets = [30, 38, 46, 64];
+    let (c, config_bytes) = if get_mode {
+        let (config, n) = get_curve::read_config(config_path, config_sha)?;
+        get_pin = Some(config.selector_control);
+        get_budgets = config.get_budgets;
+        (config.shortlist, n)
+    } else if count_mode {
         let (config, n) = count_curve::read_config(config_path, config_sha)?;
         count_pin = Some(config.selector_control);
         (config.shortlist, n)
@@ -847,7 +859,7 @@ fn reduce_shortlist_engine(
         "shortlist frozen population/protocol",
     )?;
     require(
-        (count_mode || c.shortlist_sizes == [1024, 2048, 4096, 8192])
+        (curve_mode || c.shortlist_sizes == [1024, 2048, 4096, 8192])
             && c.max_payload_bytes == 2 * 1024 * 1024 * 1024,
         "shortlist preregistered curve/envelope",
     )?;
@@ -916,6 +928,11 @@ fn reduce_shortlist_engine(
         + 1000 * 15360 * 8
         + 128 * 1024 * 1024
         + if budgeted { 1024 * 1024 } else { 0 }
+        + if get_mode {
+            get_curve::EXTRA_PAYLOAD
+        } else {
+            0
+        }
         + if count_mode {
             count_curve::EXTRA_PAYLOAD
         } else {
@@ -931,6 +948,7 @@ fn reduce_shortlist_engine(
         "shortlist retained caller payload",
     )?;
     let count_control = count_pin.map(count_curve::Control::admit).transpose()?;
+    let get_control = get_pin.map(get_curve::Control::admit).transpose()?;
     let mut originals = Vec::<Vec<usize>>::with_capacity(i.count);
     let run = read_run_observed(
         &c.completed.input.path,
@@ -1074,7 +1092,9 @@ fn reduce_shortlist_engine(
                 == run.file_identity,
             "shortlist admission baseline lifetime identity",
         )?;
-        if count_mode {
+        if get_mode {
+            get_curve::read_config(config_path, config_sha)?;
+        } else if count_mode {
             count_curve::read_config(config_path, config_sha)?;
         } else if virtual_mode {
             sq8_virtual_layout::read_config(config_path, config_sha)?;
@@ -1085,7 +1105,7 @@ fn reduce_shortlist_engine(
             layout.recheck()?;
         }
         let mut admitted = json!({
-            "schema":if count_mode{COUNT_CURVE_ADMISSION_SCHEMA}else if virtual_mode{VIRTUAL_LAYOUT_ADMISSION_SCHEMA}else{ADMISSION_SCHEMA},"status":"READY_ACTUAL_INPUT","complete":true,
+            "schema":if get_mode{GET_CURVE_ADMISSION_SCHEMA}else if count_mode{COUNT_CURVE_ADMISSION_SCHEMA}else if virtual_mode{VIRTUAL_LAYOUT_ADMISSION_SCHEMA}else{ADMISSION_SCHEMA},"status":"READY_ACTUAL_INPUT","complete":true,
             "config_sha256":config_sha,"config_bytes":config_bytes,
             "rows":i.rows,"dimensions":i.dimensions,"query_count":i.count,"truth_ids_validated":i.count*super::K,
             "generation_root_sha256":i.generation_root_sha256,
@@ -1103,11 +1123,19 @@ fn reduce_shortlist_engine(
             admitted["shortlist_sizes"] = json!(c.shortlist_sizes);
             admitted["closed_control_bytes_admitted"] = json!(true);
         }
+        if let Some(control) = get_control.as_ref() {
+            control.recheck()?;
+            admitted["get_budgets"] = json!(get_budgets);
+            admitted["shortlist_sizes"] = json!(c.shortlist_sizes);
+            admitted["closed_control_bytes_admitted"] = json!(true);
+            admitted["historical_control"] = serde_json::to_value(&control.pin)?;
+        }
         return Ok(admitted);
     }
     let mut candidate_queries = Vec::with_capacity(1000);
     let mut placement_proofs = Vec::with_capacity(if virtual_mode { 1000 } else { 0 });
-    let mut count_evidence = Vec::with_capacity(if count_mode { 1000 } else { 0 });
+    let mut count_evidence = Vec::with_capacity(if curve_mode { 1000 } else { 0 });
+    let mut get_selection = Vec::with_capacity(if get_mode { 1000 } else { 0 });
 
     for slot in 0..(if smoke_only { 1 } else { originals.len() }) {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
@@ -1252,18 +1280,29 @@ fn reduce_shortlist_engine(
             placement_proofs.push(proof);
             continue;
         }
-        if count_mode {
-            let mut arms = count_curve::plan_arms(
-                &authority,
-                &scored,
-                &c.shortlist_sizes,
-                SelectedSq8Limits {
-                    max_gets: CANDIDATE_SQ8_GETS,
-                    max_bytes: 32 * 1024 * 1024,
-                    max_planner_bytes: 4 * 1024 * 1024 + 4096,
-                },
-                count_curve::workspace_bytes(scored.len())?,
-            )?;
+        if curve_mode {
+            let limits = SelectedSq8Limits {
+                max_gets: CANDIDATE_SQ8_GETS,
+                max_bytes: 32 * 1024 * 1024,
+                max_planner_bytes: 4 * 1024 * 1024 + 4096,
+            };
+            let mut arms = if get_mode {
+                get_curve::plan_arms(
+                    &authority,
+                    &scored,
+                    &get_budgets,
+                    limits,
+                    count_curve::workspace_bytes(scored.len())?,
+                )?
+            } else {
+                count_curve::plan_arms(
+                    &authority,
+                    &scored,
+                    &c.shortlist_sizes,
+                    limits,
+                    count_curve::workspace_bytes(scored.len())?,
+                )?
+            };
             for arm in &mut arms {
                 arm.returned = Some(rank_local_cover(
                     &mut sq8_snapshot,
@@ -1277,7 +1316,14 @@ fn reduce_shortlist_engine(
                     32 * 1024 * 1024,
                 )?);
             }
-            count_evidence.push(count_curve::returned_evidence(&arms)?);
+            let evidence = count_curve::returned_evidence(&arms)?;
+            if let Some(control) = get_control.as_ref() {
+                control.verify_ranking(slot, &evidence, &get_budgets)?;
+            }
+            count_evidence.push(evidence);
+            if get_mode {
+                get_selection.push(get_curve::selection_evidence(&arms));
+            }
             candidate_queries.push(arms);
             continue;
         }
@@ -1348,17 +1394,19 @@ fn reduce_shortlist_engine(
         candidate_queries.push(arms);
     }
     if smoke_only {
-        if count_mode {
+        if curve_mode {
             require(
                 candidate_queries.len() == 1
                     && count_evidence.len() == 1
                     && candidate_queries[0].len() == 4,
                 "count smoke population",
             )?;
-            count_control
-                .as_ref()
-                .ok_or("count smoke control")?
-                .recheck()?;
+            if let Some(control) = count_control.as_ref() {
+                control.recheck()?;
+            }
+            if let Some(control) = get_control.as_ref() {
+                control.recheck()?;
+            }
             for snapshot in [&gs, &ps, &rs, &ms, &ds, &qs, &order_snapshot, &sq8_snapshot] {
                 snapshot.recheck()?;
             }
@@ -1367,15 +1415,22 @@ fn reduce_shortlist_engine(
                     == run.file_identity,
                 "count smoke baseline lifetime identity",
             )?;
-            count_curve::read_config(config_path, config_sha)?;
-            return Ok(
-                json!({"schema":COUNT_CURVE_SMOKE_SCHEMA,"status":"STAGING_SMOKE_CLOSED","complete":true,
+            if get_mode {
+                get_curve::read_config(config_path, config_sha)?;
+            } else {
+                count_curve::read_config(config_path, config_sha)?;
+            }
+            let mut smoke = json!({"schema":if get_mode{GET_CURVE_SMOKE_SCHEMA}else{COUNT_CURVE_SMOKE_SCHEMA},"status":"STAGING_SMOKE_CLOSED","complete":true,
                 "candidate_queries_executed":1,"arms_executed":4,"shortlist_sizes":c.shortlist_sizes,
                 "baseline_prefix_exact_plan_trace_ids_scorebits":true,"source_capture_routing_scoring_unchanged":true,
                 "closed_control_bytes_admitted":true,"quality_evaluated":false,"truth_file_opened":false,
                 "original_physical_layout":true,"config_sha256":config_sha,"local_file_only":true,
-                "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false}),
-            );
+                "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false});
+            if get_mode {
+                smoke["get_budgets"] = json!(get_budgets);
+                smoke["g30_historical_returned_rank_prefix_parity"] = json!(true);
+            }
+            return Ok(smoke);
         }
         let layout = virtual_layout.as_ref().ok_or("virtual smoke context")?;
         require(
@@ -1492,14 +1547,40 @@ fn reduce_shortlist_engine(
             }
             reports.push(candidate_report(arm, i.rows, i.dimensions, quality)?);
         }
-        queries.push(json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports}));
+        let mut query_report = json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports});
+        if get_mode {
+            for (a, &budget) in query_report["arms"]
+                .as_array_mut()
+                .ok_or("GET arms")?
+                .iter_mut()
+                .zip(&get_budgets)
+            {
+                a["get_budget"] = json!(budget);
+            }
+            query_report["quality_evidence"] = json!({"baseline_ids":base.returned.iter().map(|h|h.id).collect::<Vec<_>>(),
+                "truth":ids.iter().map(|id| {
+                    let row=*positions.get(id).ok_or("GET truth position")?;
+                    Ok(json!({"id":id,"target_row":row,"source_scored":originals[slot].binary_search(&(row/32)).is_ok()}))
+                }).collect::<super::Result<Vec<_>>>()?});
+        }
+        queries.push(query_report);
     }
     if let Some(control) = count_control.as_ref() {
         control.verify(&queries)?;
-        require(count_evidence.len() == 1000, "count full returned evidence")?;
+    }
+    if curve_mode {
+        require(count_evidence.len() == 1000, "curve full returned evidence")?;
         for (q, evidence) in queries.iter_mut().zip(count_evidence) {
             q["returned_evidence"] = evidence;
         }
+    }
+    let mut historical_ranks = false;
+    if let Some(control) = get_control.as_ref() {
+        require(get_selection.len() == 1000, "GET full selection evidence")?;
+        for (q, evidence) in queries.iter_mut().zip(get_selection) {
+            q["selection_evidence"] = evidence;
+        }
+        historical_ranks = control.verify(&queries, &get_budgets)?;
     }
     if let Some(layout) = virtual_layout.as_mut() {
         layout.verify_control(&queries)?;
@@ -1533,7 +1614,9 @@ fn reduce_shortlist_engine(
         super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
         "shortlist baseline lifetime identity",
     )?;
-    if count_mode {
+    if get_mode {
+        get_curve::read_config(config_path, config_sha)?;
+    } else if count_mode {
         count_curve::read_config(config_path, config_sha)?;
     } else if virtual_mode {
         sq8_virtual_layout::read_config(config_path, config_sha)?;
@@ -1546,9 +1629,12 @@ fn reduce_shortlist_engine(
     if let Some(control) = count_control.as_ref() {
         control.recheck()?;
     }
+    if let Some(control) = get_control.as_ref() {
+        control.recheck()?;
+    }
     let arm_count = if virtual_mode {
         2
-    } else if count_mode {
+    } else if curve_mode {
         4
     } else if budgeted {
         1
@@ -1556,8 +1642,8 @@ fn reduce_shortlist_engine(
         4
     };
 
-    let mut result = json!({"schema":if count_mode{COUNT_CURVE_SCHEMA}else if virtual_mode {VIRTUAL_LAYOUT_SCHEMA}else if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
-    if budgeted && !virtual_mode && !count_mode {
+    let mut result = json!({"schema":if get_mode{GET_CURVE_SCHEMA}else if count_mode{COUNT_CURVE_SCHEMA}else if virtual_mode {VIRTUAL_LAYOUT_SCHEMA}else if budgeted {BLOCK_ADMISSION_SCHEMA} else {SHORTLIST_SCHEMA},"status":"MEASURED","complete":true,"config_sha256":config_sha,"config_bytes":config_bytes,"query_count":1000,"baseline_hits10":baseline_hits,"baseline_sq8_gets_total":run.samples.iter().map(|s|s.charges.sq8.submitted_gets).sum::<u64>(),"baseline_sq8_bytes_total":run.samples.iter().map(|s|s.charges.sq8.verified_bytes).sum::<u64>(),"baseline_sq8_get_budget":BASELINE_SQ8_GETS,"candidate_sq8_get_budget":CANDIDATE_SQ8_GETS,"block_control_rerank_is_determinism_check":true,"baseline_exact_plan_trace_charges_ids_scorebits":true,"truth_file_opened_after_all_baseline_controls":true,"shortlist_sizes":&c.shortlist_sizes[..arm_count],"admissible_queries":&admissible[..arm_count],"measured_hit_subtotals":&totals[..arm_count],"physical_bytes_totals":&physical_bytes[..arm_count],"recall_floor_hits10":9760,"nonratcheting_reference_hits10":9780,"quality_floor_met":(0..arm_count).map(|a|if admissible[a]==1000{Some(totals[a]>=9760)}else{None}).collect::<Vec<_>>(),"covered_ranking_loss_combines_sq8_quantization_and_ties":true,"quantization_isolated":false,"physical_s3_or_billed_bytes":false,"miss_bucket_order":["outside_source_and_cover","source_to_shortlist_cover_loss","shortlisted_covered_ranking_loss","unshortlisted_covered_ranking_loss"],"payload_model_bytes":caller_bytes,"ephemeral_sq8_block_rows":32,"queries":queries,"local_file_only":true,"cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false,"qualified":false});
+    if budgeted && !virtual_mode && !curve_mode {
         result["selection_rule"] = json!("MAX_SOURCE_SCORE_BLOCK_GREEDY_EXACT_COVER_ADMISSION");
         result["input_shortlist_size"] = json!(1024);
         result["single_causal_selection_change"] = json!(true);
@@ -1587,6 +1673,13 @@ fn reduce_shortlist_engine(
     }
     if count_mode {
         count_curve::finalize_report(&mut result)?;
+    }
+    if let Some(control) = get_control.as_ref() {
+        result["get_budgets"] = json!(get_budgets);
+        result["historical_control"] = serde_json::to_value(&control.pin)?;
+        result["historical_returned_ranks_checked_before_truth"] = json!(true);
+        result["historical_count_curve_older_block_control_rank_parity"] = json!(false);
+        get_curve::finalize_report(&mut result, historical_ranks)?;
     }
     Ok(result)
 }
@@ -1680,6 +1773,45 @@ fn queries_gets(queries: &serde_json::Value, arm: usize) -> super::Result<u64> {
                 .ok_or_else(|| "virtual GET total overflow".into())
         })
 }
+pub(super) const GET_CURVE_SCHEMA: &str = get_curve::SCHEMA;
+pub(super) const GET_CURVE_ADMISSION_SCHEMA: &str = get_curve::ADMISSION_SCHEMA;
+pub(super) const GET_CURVE_SMOKE_SCHEMA: &str = get_curve::SMOKE_SCHEMA;
+pub(super) fn validate_get_curve_report(report: &serde_json::Value) -> super::Result<()> {
+    get_curve::validate_report(report)
+}
+pub(super) fn validate_get_curve_gate(
+    report: &serde_json::Value,
+    schema: &str,
+) -> super::Result<()> {
+    get_curve::validate_gate(report, schema)
+}
+pub(super) fn execute_get_curve(
+    config: &std::path::Path,
+    sha: &str,
+    output: &std::path::Path,
+    admission_only: bool,
+    smoke_only: bool,
+) -> super::Result<bool> {
+    super::require(!(admission_only && smoke_only), "GET curve action")?;
+    let schema = if admission_only {
+        GET_CURVE_ADMISSION_SCHEMA
+    } else if smoke_only {
+        GET_CURVE_SMOKE_SCHEMA
+    } else {
+        GET_CURVE_SCHEMA
+    };
+    super::execute_report(output, schema, || {
+        reduce_shortlist_engine(
+            config,
+            sha,
+            admission_only,
+            Selection::GetCurve,
+            smoke_only,
+            None,
+        )
+    })
+}
+
 pub(super) const COUNT_CURVE_SCHEMA: &str = count_curve::SCHEMA;
 pub(super) const COUNT_CURVE_ADMISSION_SCHEMA: &str = count_curve::ADMISSION_SCHEMA;
 pub(super) const COUNT_CURVE_SMOKE_SCHEMA: &str = count_curve::SMOKE_SCHEMA;

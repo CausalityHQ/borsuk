@@ -149,3 +149,9 @@ and the cheapest valid paired check per iteration. Hard operational safety and
 spend ceilings still apply. Preserve incomplete, OOM and corrupt attempts as
 execution INVALID, and prospectively qualify feasible envelopes; never revise
 historical outcomes or scientific thresholds after seeing results.
+
+Specialists are single-use by default: finish one bounded assignment with a
+verified handoff. If the assignment grows, use supported context compaction
+at a safe checkpoint and verify that task, jobs and evidence survived. If
+compaction is unavailable, finish with a durable handoff; do not leave a
+specialist polling indefinitely.

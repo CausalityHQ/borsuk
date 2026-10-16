@@ -1,0 +1,57 @@
+{
+  "schema": "borsuk-sq8-get-curve-qualification-v2",
+  "source_commit": "4616855c0f9227c0fab2051d1af5cf4346d8a1ca",
+  "inner_sha256": "01214058fc8422dad311bd9c9832c8e320bf3bdcf940173f15467b06b13e1f2c",
+  "input_map_sha256": "4f87c1f88d3bbdb48aa1d6a4a47ffd5240bcf2f46acb5ae6eb1b1244f4b6324c",
+  "required_exact_tests_sha256": "5e733f986ed64aab48d599d804f9853596c0f0a35cd819b244d47cbfeda83f8f",
+  "required_exact_tests": 11,
+  "required_get_curve_tests": 11,
+  "required_test_scope": {
+    "get_curve": [
+      "sq8_subpage_shortlist::get_curve::tests::strict_config_and_budgets_leave_payloads_unopened",
+      "sq8_subpage_shortlist::get_curve::tests::g30_equivalence_and_more_gets_change_admitted_rows",
+      "sq8_subpage_shortlist::get_curve::tests::partial_tail_exact_byte_cap_and_tied_gaps",
+      "sq8_subpage_shortlist::get_curve::tests::bridge_removal_changes_winner_and_can_rescue_or_lose_truth",
+      "sq8_subpage_shortlist::get_curve::tests::quality_rejects_malformed_tail_ranks_and_resealed_reports",
+      "sq8_subpage_shortlist::get_curve::tests::report_preserves_below_floor_and_rejects_resealed_budget_charge_quality_errors",
+      "sq8_subpage_shortlist::get_curve::tests::report_requires_authenticated_g30_ranks_and_shared_experiment_evidence",
+      "sq8_subpage_shortlist::get_curve::tests::g30_historical_binding_requires_rank_proof_and_checks_every_query",
+      "sq8_subpage_shortlist::get_curve::tests::retained_control_authenticates_complete_ranks_before_truth_and_rechecks_snapshot",
+      "sq8_subpage_shortlist::get_curve::tests::admission_smoke_and_measurement_schemas_cannot_be_substituted",
+      "sq8_subpage_shortlist::get_curve::tests::create_only_and_invalid_errors_preserve_existing_output"
+    ]
+  },
+  "profiles": [
+    "debug",
+    "release"
+  ],
+  "terminal_prefix": "research/semantic-router/20261016/sq8-get-curve-gates-a0001/terminal/",
+  "binary_roster": {
+    "schema": "borsuk-qualification-binaries-v1",
+    "binaries": [
+      {
+        "name": "compare_native_replay",
+        "key": "research/semantic-router/20261016/sq8-get-curve-gates-a0001/terminal/binaries/compare_native_replay",
+        "size_bytes": 13507168,
+        "sha256": "83f8ef6d614dfd5795b8f976450715a99ae5fd4e5b5fab2b6ce45ecfaf2286a1",
+        "upload_exit": 0,
+        "upload_receipt": "evidence/sq8-get-curve-manager/compare_native_replay.put.json",
+        "verified": true
+      }
+    ]
+  },
+  "binaries_verified": true,
+  "evidence_archive_sha256": "d3b940ae07bb8805633b2a964dd50ff6f2bd3f5099e1208c41f3627004b3dcdb",
+  "supervisor_exit": 0,
+  "manager_exit": 0,
+  "native_exit": 0,
+  "unit_owned": true,
+  "owned_cgroup_drained": true,
+  "forced_cleanup": false,
+  "unit_status_verified": true,
+  "resource_envelope_verified": true,
+  "native_qualified": true,
+  "full_qualification": false,
+  "scientific_performance_claim": false,
+  "compute_closure_pending": true
+}

@@ -1,0 +1,7 @@
+# SQ8 GET curve qualification
+
+Frozen Rust 4616855c0f9227c0fab2051d1af5cf4346d8a1ca passed the original causality EC2 Spot compiler/synthetic-correctness campaign. Eleven exact tests each selected and passed once in debug and release; the complete example regression harness passed 292/292. Locked release comparator build, workspace Clippy correctness/suspicious and actual shim-unset workspace test compilation exited zero. All 83 recorded inner stage exits are zero. The 481-entry source/support inventory and 448-entry native inventory matched the frozen package and remained unchanged. The retained ELF SHA is recorded in independent-verification.json.
+
+The original instance i-0cab4a3dd6f53127b was terminated, its root volume is absent and external timer inactive. No scientific inputs or performance campaign ran on that compiler host. Original evidence archive remains at s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261016/sq8-get-curve-gates-a0001/terminal/qualification-evidence.tar.gz with SHA d3b940ae07bb8805633b2a964dd50ff6f2bd3f5099e1208c41f3627004b3dcdb.
+
+Next gate: separately admit exact real inputs through the qualified validator; pass a disposable smoke; freeze fixed SOURCE shortlist256 and SQ8 GET ceilings30/38/46/64 for full1000 quality/planned-read analysis with authenticated retained G30 ranks. Preserve every Pareto candidate, including quality/read tradeoffs. This diagnostic does not measure cold latency, QPS, total cost or a vendor win. Product goal remains incomplete.

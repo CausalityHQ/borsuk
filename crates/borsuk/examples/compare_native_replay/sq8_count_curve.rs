@@ -235,9 +235,17 @@ fn add(total: &mut u64, value: u64) -> Result<()> {
     Ok(())
 }
 fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
-    use serde_json::json;
     let counts: [usize; 4] = serde_json::from_value(report["shortlist_sizes"].clone())?;
     validate_counts(&counts)?;
+    aggregate_arms(report, &counts, &[30; 4])
+}
+// GET curves share conservation checks without changing historical count semantics.
+pub(super) fn aggregate_arms(
+    report: &serde_json::Value,
+    counts: &[usize; 4],
+    budgets: &[usize; 4],
+) -> Result<serde_json::Value> {
+    use serde_json::json;
     let queries = report["queries"].as_array().ok_or("count curve queries")?;
     crate::require(
         queries.len() == 1000,
@@ -286,13 +294,13 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
                         .is_some_and(|capacity| selected <= capacity)
                     && runs > 0
                     && runs <= blocks
-                    && g == runs.min(30)
+                    && g == runs.min(budgets[a] as u64)
                     && b % super::GEOMETRY_BLOCK_BYTES == 0
                     && b.checked_sub(bridge) == blocks.checked_mul(super::GEOMETRY_BLOCK_BYTES)
                     && runs
                         .checked_sub(g)
                         .is_some_and(|gaps| bridge / super::GEOMETRY_BLOCK_BYTES >= gaps)
-                    && (runs > 30 || bridge == 0),
+                    && (runs > budgets[a] as u64 || bridge == 0),
                 "count arm physical geometry",
             )?;
             let miss: [u64; 4] = serde_json::from_value(quality["miss_buckets"].clone())?;
@@ -307,7 +315,7 @@ fn aggregate(report: &serde_json::Value) -> Result<serde_json::Value> {
                     && h + miss.iter().sum::<u64>() == 10
                     && base + gain == h + loss
                     && g > 0
-                    && g <= 30
+                    && g <= budgets[a] as u64
                     && b > 0
                     && b <= 32 * 1024 * 1024,
                 "count arm quality/cover conservation",

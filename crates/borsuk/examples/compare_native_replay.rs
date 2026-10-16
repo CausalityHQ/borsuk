@@ -5884,7 +5884,9 @@ fn compare(paths: &[(PathBuf, String); 4]) -> Result<Value> {
 }
 
 fn report_cap(schema: &str) -> u64 {
-    if schema == sq8_split_panel::REPORT_SCHEMA {
+    if schema == sq8_subpage_shortlist::GET_CURVE_SCHEMA {
+        32 * 1024 * 1024
+    } else if schema == sq8_split_panel::REPORT_SCHEMA {
         16 * 1024 * 1024
     } else if schema == sq8_panel_attribution::REPORT_SCHEMA {
         512 * 1024
@@ -6071,6 +6073,14 @@ fn execute_report_with_sync(
     }
     if schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA {
         return Ok(sq8_subpage_shortlist::validate_count_curve_report(&report).is_ok());
+    }
+    if schema == sq8_subpage_shortlist::GET_CURVE_SCHEMA {
+        return Ok(sq8_subpage_shortlist::validate_get_curve_report(&report).is_ok());
+    }
+    if schema == sq8_subpage_shortlist::GET_CURVE_ADMISSION_SCHEMA
+        || schema == sq8_subpage_shortlist::GET_CURVE_SMOKE_SCHEMA
+    {
+        return Ok(sq8_subpage_shortlist::validate_get_curve_gate(&report, schema).is_ok());
     }
     if schema == sq8_subpage_shortlist::ADMISSION_SCHEMA
         || schema == sq8_subpage_shortlist::COUNT_CURVE_ADMISSION_SCHEMA
@@ -9563,6 +9573,39 @@ fn main() {
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(2);
+            }
+        }
+        return;
+    }
+    if args.get(1).is_some_and(|a| {
+        a == "--sq8-shortlist-get-curve"
+            || a == "--sq8-shortlist-get-curve-admit"
+            || a == "--sq8-shortlist-get-curve-smoke"
+    }) {
+        let admit = args[1] == "--sq8-shortlist-get-curve-admit";
+        let smoke = args[1] == "--sq8-shortlist-get-curve-smoke";
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "GET curve config SHA UTF-8".into())
+                .and_then(|sha| {
+                    sq8_subpage_shortlist::execute_get_curve(
+                        std::path::Path::new(&args[2]),
+                        sha,
+                        std::path::Path::new(&args[4]),
+                        admit,
+                        smoke,
+                    )
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-shortlist-get-curve[-admit|-smoke] CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2)
             }
         }
         return;
