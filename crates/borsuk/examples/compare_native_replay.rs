@@ -1864,6 +1864,12 @@ fn read_run_observed_policy(
                 e.startup["caller_pinned_bytes"] == pinned,
                 "split admission/startup caller charge",
             )?;
+            sq8_split_panel::validate_startup(
+                &e.startup,
+                &expected
+                    .ok_or("split startup config")?
+                    .expected_bound_inputs,
+            )?;
         }
     }
     let mut samples = Vec::with_capacity(count);

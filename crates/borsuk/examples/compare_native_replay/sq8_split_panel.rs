@@ -507,7 +507,8 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
             && raw["range_state_both_paths_bytes"] == both
             && raw["range_state_pinned_by_runner_bytes"] == pinned
             && raw["trace_peak_charged_by_library_at_traced_admission"] == traced
-            && number(&raw["caller_pinned_bytes"])? >= (diagnostic + pinned) as u64,
+            && number(&raw["caller_pinned_bytes"])? >= (diagnostic + pinned) as u64
+            && number(&raw["caller_pinned_bytes"])? <= number(&inputs["max_memory_bytes"])?,
         "split trace admission conservation",
     )?;
     require(
@@ -529,6 +530,21 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
                 "unset":"a boundary never reached is null, never a fabricated timestamp"
             }),
         "split diagnostic semantics",
+    )
+}
+
+pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
+    let cap = number(&inputs["max_memory_bytes"])?;
+    let trace = borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(1_000_000) as u64;
+    let query = plus(532_480, trace)?;
+    require(
+        cap == 512 * 1024 * 1024
+            && raw["library_cap_bytes"] == cap
+            && raw["codec_scratch_bytes"] == 532_480
+            && raw["trace_scratch_bytes"] == trace
+            && raw["query_scratch_bytes"] == query
+            && plus(number(&raw["caller_pinned_bytes"])?, query)? <= cap,
+        "split startup memory/config conservation",
     )
 }
 
@@ -964,9 +980,17 @@ fn screen(deltas: [[i128; 2]; 2]) -> &'static str {
     }
 }
 
-fn net_screen(fetch: [[i128; 2]; 2], net: [[i128; 2]; 2]) -> &'static str {
+fn net_screen(
+    fetch: [[i128; 2]; 2],
+    net: [[i128; 2]; 2],
+    critical_split: [[bool; 2]; 2],
+) -> &'static str {
     match (screen(fetch), screen(net)) {
-        ("STRONG_TARGETED_SCREEN", "STRONG_TARGETED_SCREEN") => "STRONG_TARGETED_SCREEN",
+        ("STRONG_TARGETED_SCREEN", "STRONG_TARGETED_SCREEN")
+            if critical_split.iter().flatten().all(|split| *split) =>
+        {
+            "STRONG_TARGETED_SCREEN"
+        }
         ("SMALL_EFFECT_SCREEN", _) => "SMALL_EFFECT_SCREEN",
         _ => "INCONCLUSIVE",
     }
@@ -1111,6 +1135,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
     }
     let mut primary = [[0; 2]; 2];
     let mut primary_net = [[0; 2]; 2];
+    let mut primary_critical_split = [[false; 2]; 2];
     let mut queries = Vec::with_capacity(32);
     for (index, ordinal) in ORDINALS.into_iter().enumerate() {
         let pair1 = paired(
@@ -1126,6 +1151,10 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
             &observations[4][index],
         )?;
         if let Some(primary_slot) = [483, 773].iter().position(|&o| o == ordinal) {
+            primary_critical_split[0][primary_slot] =
+                decompositions[1][index].latest_logical_range_was_split;
+            primary_critical_split[1][primary_slot] =
+                decompositions[2][index].latest_logical_range_was_split;
             primary[0][primary_slot] = pair1["fetch_improvement_ns"]
                 .as_i64()
                 .ok_or("split signed delta")? as i128;
@@ -1164,15 +1193,17 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
     }
     Ok(
         json!({"schema":REPORT_SCHEMA,"status":"VALIDATED_FIXED_PANEL","complete":true,
-        "screen":net_screen(primary, primary_net),"screen_scope":"TARGETED_FETCH_AND_NET_FETCH_TO_RANK_NOT_POPULATION_PERFORMANCE",
+        "screen":net_screen(primary, primary_net, primary_critical_split),"screen_scope":"STRONG_REQUIRES_FETCH_NET_AND_SPLIT_CRITICAL_RANGE_SMALL_EFFECT_IS_FETCH_ONLY_TARGETED",
         "fetch_only_screen":screen(primary),
         "primary_fetch_improvements_ns":primary,"primary_net_fetch_to_rank_improvements_ns":primary_net,
+        "primary_candidate_critical_logical_range_was_split":primary_critical_split,
         "net_performance_screen":screen(primary_net),
         "reduction_config_sha256":sha,"reduction_config_bytes":config_bytes,
         "diagnostic_only":true,"selected_count":32,"population_percentiles_valid":false,
         "population_p95_claim":false,"qps_claim":false,"causal_claim":false,"vendor_or_scientific_win_claim":false,
         "producer_provenance_qualified":false,"historical_disabled_B_parity_qualified":false,
-        "scored_row_roster_parity_qualified":false,"physical_ordinal_parity_qualified":true,
+        "scored_row_roster_parity_qualified":false,"physical_ordinal_parity_qualified":false,
+        "recorded_ordered_returned_physical_ordinal_parity":true,
         "recorded_logical_coverage_parity":true,"recorded_ordered_id_scorebit_parity":true,
         "valid_tradeoffs_retained_independent_of_screen":true,
         "range_fields":RANGE_FIELDS,"host_fields":HOST_FIELDS.as_slice(),
@@ -1201,6 +1232,9 @@ mod tests {
         format!("{:x}", Sha256::digest(bytes))
     }
     fn query(split: bool) -> Value {
+        query_with_geometry(split, false)
+    }
+    fn query_with_geometry(split: bool, unsplit_critical: bool) -> Value {
         let page = 32;
         let bytes = page * 1036;
         let mut deltas = serde_json::Map::new();
@@ -1235,8 +1269,12 @@ mod tests {
         raw["plan"] = json!({"page_rows":32,"selected_pages":(0..130).collect::<Vec<_>>(),
             "ranges":[[0,130*bytes]],"planned_bytes":130*bytes,"target_pages":130,"target_shortfall":0,
             "primary_pages_retained":0,"covered_pages":130,"bridge_pages":0});
+        if unsplit_critical {
+            raw["plan"]["selected_pages"] = json!((0..129).chain([131]).collect::<Vec<_>>());
+            raw["plan"]["ranges"] = json!([[0, 129 * bytes], [131 * bytes, 132 * bytes]]);
+        }
         let physical = physical_ranges(&raw, split).unwrap();
-        raw["plan"]["logical_range_count"] = json!(1);
+        raw["plan"]["logical_range_count"] = json!(raw["plan"]["ranges"].as_array().unwrap().len());
         raw["charges"]["sq8"] =
             json!({"submitted_gets":physical.len(),"verified_bytes":130*bytes,"failed_gets":0});
         let template = raw["diagnostic"]["sq8_range_trace"]["ranges"][0].clone();
@@ -1262,15 +1300,21 @@ mod tests {
             .collect::<Vec<_>>();
         let trace = &mut raw["diagnostic"]["sq8_range_trace"];
         trace["ranges"] = json!(rows);
+        if unsplit_critical {
+            trace["ranges"].as_array_mut().unwrap().last_mut().unwrap()[14] = json!(361);
+        }
         trace["planned_ranges"] = json!(physical.len());
         trace["max_parallel"] = json!(physical.len());
         trace["planned_bytes"] = json!(130 * bytes);
-        trace["rank"]["ranges"] = json!(1);
+        trace["rank"]["ranges"] = json!(if unsplit_critical { 2 } else { 1 });
         trace["rank"]["rows"] = json!(130 * 32);
         raw
     }
 
     fn fixture(slot: usize) -> Vec<Value> {
+        fixture_with_geometry(slot, false)
+    }
+    fn fixture_with_geometry(slot: usize, unsplit_critical: bool) -> Vec<Value> {
         let split = candidate(slot);
         let traced = slot >= 2;
 
@@ -1322,7 +1366,12 @@ mod tests {
                 "unset":"a boundary never reached is null, never a fabricated timestamp"}}));
         rows.extend_from_slice(&full[2..5]);
         rows[5]["caller_pinned_bytes"] = rows[2]["caller_pinned_bytes"].clone();
-        let example = query(split);
+        rows[5]["library_cap_bytes"] = json!(536_870_912_u64);
+        rows[5]["codec_scratch_bytes"] = json!(532_480_u64);
+        let trace = borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(1_000_000);
+        rows[5]["trace_scratch_bytes"] = json!(trace);
+        rows[5]["query_scratch_bytes"] = json!(532_480 + trace);
+        let example = query_with_geometry(split, unsplit_critical);
         let gets = example["charges"]["sq8"]["submitted_gets"]
             .as_u64()
             .unwrap();
@@ -1468,9 +1517,16 @@ mod tests {
         dir: &Path,
         changed: impl Fn(usize, &mut Vec<Value>),
     ) -> (std::path::PathBuf, String) {
+        config_with_geometry(dir, false, changed)
+    }
+    fn config_with_geometry(
+        dir: &Path,
+        unsplit_critical: bool,
+        changed: impl Fn(usize, &mut Vec<Value>),
+    ) -> (std::path::PathBuf, String) {
         let runs = (0..6)
             .map(|slot| {
-                let mut rows = fixture(slot);
+                let mut rows = fixture_with_geometry(slot, unsplit_critical);
                 changed(slot, &mut rows);
                 let d = descriptor(dir, slot, rows);
                 json!({"label":d.label,"completed":d.completed,"runtime_config":d.runtime_config})
@@ -1499,6 +1555,61 @@ mod tests {
 
     #[test]
     fn sq8_split_panel_sealed_six_runs_and_screen() {
+        for unsplit_critical in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (path, sha) = config_with_geometry(dir.path(), unsplit_critical, |slot, rows| {
+                if !matches!(slot, 2 | 5) {
+                    return;
+                }
+                let delay = 20_000_000_u64;
+                let mut extra = 0;
+                for row in rows.iter_mut().filter(|row| row["phase"] == "query") {
+                    if !matches!(row["ordinal"].as_u64(), Some(483 | 773)) {
+                        continue;
+                    }
+                    row["query_wall_ns"] = json!(row["query_wall_ns"].as_u64().unwrap() + delay);
+                    row["stages"]["sq8"]["end_ns"] = json!(550 + delay);
+                    let diag = &mut row["diagnostic"];
+                    diag["query_monotonic_end_ns"] = json!(2000 + delay);
+                    diag["host"]["after_monotonic_ns"] = json!(2100 + delay);
+                    let trace = &mut diag["sq8_range_trace"];
+                    for field in [
+                        "all_ranges_complete_ns",
+                        "rank_start_ns",
+                        "rank_end_ns",
+                        "release_end_ns",
+                    ] {
+                        trace[field] = json!(trace[field].as_u64().unwrap() + delay);
+                    }
+                    for span in trace["ranges"].as_array_mut().unwrap() {
+                        for field in (5..=14).chain([18]) {
+                            span[field] = json!(span[field].as_u64().unwrap() + delay);
+                        }
+                    }
+                    extra += delay;
+                }
+                assert_eq!(extra, 2 * delay);
+                let summary = &mut rows.last_mut().unwrap()["summary"];
+                for field in ["query_wall_ns", "process_wall_ns"] {
+                    summary[field] = json!(summary[field].as_u64().unwrap() + extra);
+                }
+            });
+            let report = reduce(&path, &sha).unwrap();
+            assert_eq!(report["fetch_only_screen"], "STRONG_TARGETED_SCREEN");
+            assert_eq!(report["net_performance_screen"], "STRONG_TARGETED_SCREEN");
+            assert_eq!(
+                report["screen"],
+                if unsplit_critical {
+                    "INCONCLUSIVE"
+                } else {
+                    "STRONG_TARGETED_SCREEN"
+                }
+            );
+            assert_eq!(
+                report["primary_candidate_critical_logical_range_was_split"],
+                json!(vec![vec![!unsplit_critical; 2]; 2])
+            );
+        }
         let dir = tempfile::tempdir().unwrap();
         let (path, sha) = config(dir.path(), |_, _| {});
         let report = reduce(&path, &sha).unwrap();
@@ -1512,7 +1623,11 @@ mod tests {
             json!([10, 250, 40, 20, 100, 20, 10])
         );
         assert_eq!(report["scored_row_roster_parity_qualified"], false);
-        assert_eq!(report["physical_ordinal_parity_qualified"], true);
+        assert_eq!(report["physical_ordinal_parity_qualified"], false);
+        assert_eq!(
+            report["recorded_ordered_returned_physical_ordinal_parity"],
+            true
+        );
         assert_eq!(
             report["runs"][3]["decomposition"][0]["physical_to_logical_ranges"],
             json!([0, 0, 0])
@@ -1578,13 +1693,29 @@ mod tests {
         );
         assert_eq!(screen([[5_999_999, 7_699_999]; 2]), "SMALL_EFFECT_SCREEN");
         assert_eq!(
-            net_screen([[12_100_000, 15_500_000]; 2], [[0, 0]; 2]),
+            net_screen([[12_100_000, 15_500_000]; 2], [[0, 0]; 2], [[true; 2]; 2]),
             "INCONCLUSIVE"
         );
         assert_eq!(
-            net_screen([[12_100_000, 15_500_000]; 2], [[12_100_000, 15_500_000]; 2]),
+            net_screen(
+                [[12_100_000, 15_500_000]; 2],
+                [[12_100_000, 15_500_000]; 2],
+                [[true; 2]; 2]
+            ),
             "STRONG_TARGETED_SCREEN"
         );
+        for missing in 0..4 {
+            let mut critical = [[true; 2]; 2];
+            critical[missing / 2][missing % 2] = false;
+            assert_eq!(
+                net_screen(
+                    [[12_100_000, 15_500_000]; 2],
+                    [[12_100_000, 15_500_000]; 2],
+                    critical
+                ),
+                "INCONCLUSIVE"
+            );
+        }
         for values in [
             [[12_099_999, 15_500_000], [12_100_000, 15_500_000]],
             [[6_000_000, 0], [0, 0]],
@@ -1640,7 +1771,34 @@ mod tests {
                     *rows[6].pointer_mut(pointer).unwrap() = value.clone();
                 }
             });
-            assert!(reduce(&path, &sha).is_err(), "accepted {pointer}");
+            let error = reduce(&path, &sha).unwrap_err().to_string();
+            if pointer == "/returned_physical_ordinals/9" && value == json!(10) {
+                assert_eq!(error, "split cross-arm returned physical ordinal parity");
+            }
+        }
+        for (field, value) in [
+            ("library_cap_bytes", 1_u64),
+            ("caller_pinned_bytes", 536_870_913),
+            ("caller_pinned_bytes", 536_870_911),
+            ("codec_scratch_bytes", 536_870_913),
+            ("trace_scratch_bytes", 536_870_913),
+            ("query_scratch_bytes", 536_870_913),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (path, sha) = config(dir.path(), |slot, rows| {
+                if slot == 3 {
+                    rows[5][field] = json!(value);
+                    if field == "caller_pinned_bytes" {
+                        rows[2][field] = json!(value);
+                    }
+                }
+            });
+            let expected = if field == "caller_pinned_bytes" && value > 536_870_912 {
+                "split trace admission conservation"
+            } else {
+                "split startup memory/config conservation"
+            };
+            assert_eq!(reduce(&path, &sha).unwrap_err().to_string(), expected);
         }
         for field in ["returned_physical_ordinals", "logical_range_count"] {
             let dir = tempfile::tempdir().unwrap();
