@@ -1,0 +1,79 @@
+{
+  "schema": "borsuk-s3vectors-full1m-root-decision-v1",
+  "status": "SINGLE_CLIENT_RESPONSE_AND_REDUCTION_VERIFIED",
+  "instance_id": "i-066ea3c7f390e7095",
+  "source_revision": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+  "source_sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c",
+  "binary_sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da",
+  "config_sha256": "1ef17d99ae007e892d9769f0970af3fc2f111bd90591e7561883db37556d9a03",
+  "original_launch_ssm": "a0fed137-7cdd-4584-8145-daaeefcd7e59",
+  "original_invocation_id": "f6a894e1aba44ac7b35203f9c089d755",
+  "corrected_verifier_ssm": "e2a489cf-802f-4726-b7d0-4c2c5c5f50fb",
+  "independent_bucket_absence_ssm": "61e7d9aa-c146-4625-801e-22e0d4e2ed58",
+  "workload": {
+    "rows": 1000000,
+    "dimensions": 1024,
+    "k": 10,
+    "queries": 1000,
+    "metric": "cosine",
+    "corpus_sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+    "queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  },
+  "metrics": {
+    "hits": 9571,
+    "denominator": 10000,
+    "recall_at_10": 0.9571,
+    "p50_ns": 128846090,
+    "p90_ns": 199659548,
+    "p95_ns": 211891269,
+    "p99_ns": 260565673,
+    "first_query_ns": 357083422,
+    "sum_query_ns": 135092901082,
+    "whole_pass_ns": 140942411577,
+    "serial_reciprocal_qps": 7.402313459779876,
+    "whole_pass_qps": 7.095096421375461
+  },
+  "protocol": {
+    "concurrency": 1,
+    "client_reuse": true,
+    "max_attempts": 1,
+    "observed_inactivity_ms": 3626944,
+    "backend_cache_state": "uncontrolled",
+    "inactivity_proves_eviction": false,
+    "index_mode": "ENHANCED",
+    "first_request_credentials_included": true
+  },
+  "resource": {
+    "configured_client_memory_max_bytes": 536870912,
+    "observed_cgroup_charged_peak_bytes": 537382912,
+    "swap_peak_bytes": 0,
+    "peak_is_rss": false,
+    "terminal_memory_and_pids_events_available": false,
+    "transport_allocation_bound_claim": false
+  },
+  "cleanup": {
+    "native_index_and_bucket_absence_verified": true,
+    "independent_bucket_absence_exit": 254,
+    "ec2_retained_only_for_active_separate_library_work": true,
+    "persistent_ebs_preserved": true
+  },
+  "limits": {
+    "measured_cost_usd": null,
+    "concurrent_capacity_qualified": false,
+    "guaranteed_cold_claim": false,
+    "matched_borsuk_comparison": false,
+    "turbopuffer_comparison": false,
+    "vendor_win_claim": false,
+    "product_ready_claim": false
+  },
+  "verification_correction": {
+    "original_verifier_exit": 1,
+    "cause": "Expected1001 lines; frozen producer emits authenticated completion trailer as line1002",
+    "original_verifier_preserved": true,
+    "malformed_framing_cases_rejected": 15,
+    "native_rerun": false,
+    "collector_rerun": false
+  },
+  "next": "Freeze and qualify capsule library lifecycle, then paired BORSUK control/candidate with authenticated same original corpus/query/truth pipeline; resolve Turbopuffer matched protocol before win claim."
+}

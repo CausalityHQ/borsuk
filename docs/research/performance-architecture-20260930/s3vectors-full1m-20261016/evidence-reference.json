@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-s3vectors-full1m-evidence-reference-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261016/persistent-rust-workspace-a0001/s3vectors-full1m-cell-a0002-closure",
+  "archive_sha256": "13a643603aa51f2ae1c28b2c0ba24476f1da107b2019a392a3fea0d5f46f8b28",
+  "archive_bytes": 1504474,
+  "decision_sha256": "c94d2c3c2d6f9bc813d3d52d25a085589ac9783cbdbe14137734146c641568a4",
+  "files_sha256": "3f5228bf6d2e97e8f90b52aa860a4128a2ad45537a1b8f6f63abd18453b1f710",
+  "terminal_sha256": "359743112c55a7d8a21769da56086bf22a87a86c1e9806782271e7bf7e7f7c9d",
+  "publication_ssm": "260e9a8b-ff95-4f90-86f5-37303d912ba6",
+  "publication_exit": 0,
+  "all_readbacks_match": true,
+  "terminal_last": true,
+  "root_read_verifier_ssm": "9cfa10f1-1eed-43a6-bf5b-12762dcdb452"
+}
