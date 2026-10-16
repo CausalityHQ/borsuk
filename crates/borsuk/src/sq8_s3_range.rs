@@ -4172,6 +4172,23 @@ mod tests {
                         assert_eq!(ranked.stats.submitted_gets, physical);
                         assert_eq!(trace.ranges().len(), physical);
                         assert_eq!(trace.rank.unwrap().ranges as usize, ranges.len());
+                        let mut spans = trace.ranges().iter();
+                        for &(first, last) in ranges {
+                            let logical = authority.byte_range(first, last).unwrap();
+                            let mut end = logical.start;
+                            while end < logical.end {
+                                let span = spans.next().unwrap();
+                                assert_eq!(span.start_byte as usize, end);
+                                assert!(span.end_byte as usize > end);
+                                assert!(span.end_byte as usize <= logical.end);
+                                assert!(
+                                    span.end_byte as usize - end <= split.max_physical_range_bytes
+                                );
+                                end = span.end_byte as usize;
+                            }
+                            assert_eq!(end, logical.end);
+                        }
+                        assert!(spans.next().is_none());
                     }
                 }
             }
@@ -4194,6 +4211,7 @@ mod tests {
             max_physical_gets: 3,
         };
         let mut trace = Sq8RangeTrace::new(3).unwrap();
+        let window = InFlightBytes::new(split.max_physical_range_bytes);
         let before = fixture.reader.transport_stats().attempts;
         let result = rank_verified_sq8_pages_traced_with_split(
             fixture.reader.store(),
@@ -4210,7 +4228,7 @@ mod tests {
             3,
             &[],
             Some(&mut trace),
-            None,
+            Some(&window),
             Some(split),
         )
         .await
@@ -4218,11 +4236,35 @@ mod tests {
         assert_eq!(result.stats.submitted_gets, 3);
         assert_eq!(result.stats.verified_bytes, object.len());
         assert_eq!(fixture.reader.transport_stats().attempts - before, 3);
+        assert_eq!(
+            *window.available.lock().unwrap(),
+            split.max_physical_range_bytes
+        );
+        assert_eq!(trace.ranges().len(), result.stats.submitted_gets);
+        let expected = vec![
+            (0, 256 * 13),
+            (256 * 13, 512 * 13),
+            (512 * 13, object.len()),
+        ];
+        assert_eq!(
+            trace
+                .ranges()
+                .iter()
+                .map(|span| (span.start_byte as usize, span.end_byte as usize))
+                .collect::<Vec<_>>(),
+            expected
+        );
         let requests = fixture.snapshot().requests;
         assert_eq!(requests.len(), 3);
         assert!(requests.iter().all(|(_, head, range, etag)| !head
             && range.is_some()
             && etag.as_deref() == Some(ETAG)));
+        let mut requested = requests
+            .iter()
+            .map(|(_, _, range, _)| range.unwrap())
+            .collect::<Vec<_>>();
+        requested.sort_unstable();
+        assert_eq!(requested, expected);
         fixture.arm(Some((1, [0, 256 * 13, 512 * 13])));
         trace.begin(Instant::now());
         let work = rank_verified_sq8_pages_traced_with_split(
@@ -4293,7 +4335,7 @@ mod tests {
             10,
             1,
             object.len(),
-            3,
+            2, // Three failing pieces exceed the scheduler slots; queued work must still drain.
             &[],
             None,
             None,
