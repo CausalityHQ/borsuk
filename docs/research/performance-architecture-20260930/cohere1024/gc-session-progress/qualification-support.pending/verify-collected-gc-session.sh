@@ -36,7 +36,7 @@ file() {
  local archived
  [[ -f $1 && ! -L $1 ]] || fail "missing/nonregular/symlink: $1"
  [[ $(realpath -e -- "$1") == "$1" ]] || fail "symlink ancestor: $1"
- if [[ -n $archive_root && $1 == "$base/"* && $1 != "$manager/terminal.json" ]]; then
+ if [[ -n $archive_root && $1 == "$base/"* ]]; then
   archived=$archive_root/${1#"$base/"}
   [[ -f $archived && ! -L $archived && $(realpath -e -- "$archived") == "$archived" ]] || fail "not archived regular metadata: $1"
   cmp -s "$1" "$archived" || fail "collected/archive bytes differ: $1"
@@ -99,7 +99,7 @@ for name in qualify-gc-session.sh supervise-gc-session.sh source-files.sha256 na
 done
 [[ $(digest "$inputs/qualify-gc-session.sh") == "$inner_sha" ]] || fail 'inner driver pin'
 [[ $(digest "$inputs/supervise-gc-session.sh") == "$outer_sha" ]] || fail 'supervisor pin'
-json_is "$manager/terminal.json" -s --arg s "$source_commit" --arg h "$inner_sha" --arg smoke "$smoke" '
+json_is "$out/terminal.json" -s --arg s "$source_commit" --arg h "$inner_sha" --arg smoke "$smoke" '
  length==1 and (.[0] | .schema=="borsuk-gc-session-qualification-v1" and
  .source_commit==$s and .inner_sha256==$h and .source_files==478 and .native_source_files==445 and
  .expected_gc_inventory==24 and .supervisor_exit==0 and .manager_exit==0 and .native_exit==0 and
@@ -109,9 +109,9 @@ json_is "$manager/terminal.json" -s --arg s "$source_commit" --arg h "$inner_sha
  .scientific_performance_claim==false and .compute_closure_pending==true and
  (.terminal_prefix | test("^research/semantic-router/[0-9]{8}/gc-session-[a-z0-9-]+/terminal/$")) and
  (.evidence_archive_sha256 | test("^[0-9a-f]{64}$")))'
-# Terminal is published after the archive; root collects it separately at manager/terminal.json.
+# Terminal is published after the archive; root retains it directly in the launch directory.
 archive_sha=$(digest "$out/qualification-evidence.tar.gz")
-json_is "$manager/terminal.json" --arg sha "$archive_sha" '.evidence_archive_sha256==$sha'
+json_is "$out/terminal.json" --arg sha "$archive_sha" '.evidence_archive_sha256==$sha'
 members=$(tar --list --absolute-names --gzip --file "$out/qualification-evidence.tar.gz" --quoting-style=literal)
 printf '%s\n' "$members" | awk '
  {
