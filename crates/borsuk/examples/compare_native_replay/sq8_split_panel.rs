@@ -140,15 +140,14 @@ fn split_value(enabled: bool) -> Value {
     if enabled {
         json!({"max_physical_range_bytes":SPLIT_BYTES,"max_physical_gets":46})
     } else {
-        Value::Null
+        json!({"max_physical_range_bytes":33554432,"max_physical_gets":46})
     }
 }
-pub(super) fn physical_cap(inputs: &Value) -> u64 {
-    if inputs["sq8_range_split"].is_null() {
-        30
-    } else {
-        46
-    }
+pub(super) fn physical_cap(_inputs: &Value) -> u64 {
+    46
+}
+fn small_pieces(inputs: &Value) -> bool {
+    inputs["sq8_range_split"]["max_physical_range_bytes"] == SPLIT_BYTES
 }
 fn split_option(header: &Value) -> Result<()> {
     let split = header
@@ -457,10 +456,7 @@ fn physical_ranges(raw: &Value, split: bool) -> Result<Vec<Value>> {
             } else {
                 end
             };
-            require(
-                physical.len() < if split { 46 } else { 30 },
-                "physical GET cap",
-            )?;
+            require(physical.len() < 46, "physical GET cap")?;
             physical.push(json!([start, next]));
             start = next;
         }
@@ -478,7 +474,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
         .len();
     logical["charges"]["sq8"]["submitted_gets"] = json!(count);
     super::v9_panel::validate_geometry(&logical, 1000000, 1024, 30, 33554432)?;
-    let physical = physical_ranges(raw, !inputs["sq8_range_split"].is_null())?;
+    let physical = physical_ranges(raw, small_pieces(inputs))?;
     require(
         raw["charges"]["sq8"]
             == json!({"submitted_gets":physical.len(),
@@ -580,11 +576,17 @@ struct Decomposition {
     rank: Value,
     rank_unattributed_ns: u64,
     host: Value,
+    fetch_to_rank_ns: u64,
+    physical_to_logical_ranges: Vec<usize>,
+    latest_logical_range_index: usize,
+    latest_logical_range_was_split: bool,
+    largest_logical_range_bytes: u64,
+    largest_physical_range_bytes: u64,
 }
 
 fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     validate_geometry(raw, inputs)?;
-    let physical = physical_ranges(raw, !inputs["sq8_range_split"].is_null())?;
+    let physical = physical_ranges(raw, small_pieces(inputs))?;
     let diag = &raw["diagnostic"];
     diagnostic_shape(diag)?;
     if let (Some(start), Some(end)) = (
@@ -619,6 +621,23 @@ fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
             && trace["planned_bytes"] == raw["plan"]["planned_bytes"],
         "panel trace plan totals",
     )?;
+    let logical = raw["plan"]["ranges"].as_array().ok_or("logical ranges")?;
+    let mut physical_to_logical = Vec::with_capacity(plan.len());
+    for piece in plan {
+        let matches = logical
+            .iter()
+            .enumerate()
+            .filter(|(_, range)| {
+                range[0].as_u64() <= piece[0].as_u64() && range[1].as_u64() >= piece[1].as_u64()
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        require(
+            matches.len() == 1,
+            "physical span unique logical containment",
+        )?;
+        physical_to_logical.push(matches[0]);
+    }
     let fetch = number(&trace["fetch_start_ns"])?;
     let barrier = number(&trace["all_ranges_complete_ns"])?;
     let page_rows = 32;
@@ -777,6 +796,28 @@ fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
         rank: rank.clone(),
         rank_unattributed_ns: rank_unattributed,
         host,
+        fetch_to_rank_ns: duration(fetch, boundaries[4])?,
+        latest_logical_range_index: physical_to_logical[latest.1],
+        latest_logical_range_was_split: physical_to_logical
+            .iter()
+            .filter(|&&index| index == physical_to_logical[latest.1])
+            .count()
+            > 1,
+        physical_to_logical_ranges: physical_to_logical,
+        largest_logical_range_bytes: logical
+            .iter()
+            .map(|r| duration(number(&r[0])?, number(&r[1])?))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .ok_or("logical maximum")?,
+        largest_physical_range_bytes: plan
+            .iter()
+            .map(|r| duration(number(&r[0])?, number(&r[1])?))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .ok_or("physical maximum")?,
     })
 }
 
@@ -806,6 +847,7 @@ fn paired(
         .collect::<Vec<_>>();
     Ok(
         json!({"fetch_improvement_ns":intervals[1],"interval_improvements_ns":intervals,
+        "net_fetch_to_rank_improvement_ns":delta(control.fetch_to_rank_ns,candidate.fetch_to_rank_ns),
         "sq8_improvement_ns":delta(control.sq8_ns,candidate.sq8_ns),
         "post_barrier_improvement_ns":delta(control.post_barrier_ns,candidate.post_barrier_ns),
         "query_wall_improvement_ns":delta(b.query_wall_ns,c.query_wall_ns),
@@ -958,6 +1000,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
         runs.push(run);
     }
     let mut primary = [[0; 2]; 2];
+    let mut primary_net = [[0; 2]; 2];
     let mut queries = Vec::with_capacity(32);
     for (index, ordinal) in ORDINALS.into_iter().enumerate() {
         let pair1 = paired(
@@ -979,6 +1022,14 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
             primary[1][primary_slot] = pair2["fetch_improvement_ns"]
                 .as_i64()
                 .ok_or("split signed delta")? as i128;
+            primary_net[0][primary_slot] = pair1["net_fetch_to_rank_improvement_ns"]
+                .as_i64()
+                .ok_or("split signed net delta")?
+                as i128;
+            primary_net[1][primary_slot] = pair2["net_fetch_to_rank_improvement_ns"]
+                .as_i64()
+                .ok_or("split signed net delta")?
+                as i128;
         }
         let perturbation = [(0, 2), (0, 5), (1, 3), (1, 4)].map(|(off, on)| json!({
             "off":LABELS[off],"on":LABELS[on],
@@ -1003,7 +1054,9 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
     }
     Ok(
         json!({"schema":REPORT_SCHEMA,"status":"VALIDATED_FIXED_PANEL","complete":true,
-        "screen":screen(primary),"primary_fetch_improvements_ns":primary,
+        "screen":screen(primary),"screen_scope":"FETCH_ONLY_TARGETED_SCREEN_NOT_NET_PERFORMANCE",
+        "primary_fetch_improvements_ns":primary,"primary_net_fetch_to_rank_improvements_ns":primary_net,
+        "net_performance_screen":"EXTERNAL_ROOT_GATE_REQUIRED",
         "reduction_config_sha256":sha,"reduction_config_bytes":config_bytes,
         "diagnostic_only":true,"selected_count":32,"population_percentiles_valid":false,
         "population_p95_claim":false,"qps_claim":false,"causal_claim":false,"vendor_or_scientific_win_claim":false,
@@ -1015,7 +1068,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
         "boundary_fields":["stage_start","fetch_start","latest_range_complete","all_ranges_barrier","rank_start","rank_end","release_end","stage_end"],
         "interval_fields":["pre_fetch","fetch_to_latest_complete","latest_complete_to_barrier","barrier_to_rank_including_reassembly","rank","release","stage_tail"],
         "proof_gaps":["No stored scored-row roster or returned physical ordinals; logical byte coverage and rank row totals do not prove scored-row identity. Root native parity falsifier required.",
-            "No reassembly-only timer: barrier_to_rank includes reassembly and bookkeeping. Per-range copy_ns measures incoming body copies only.",
+            "No reassembly-only timer: barrier_to_rank includes reassembly and bookkeeping. Per-range copy_ns measures incoming body copies only. Fetch-only screen is not a net-performance screen; root must freeze net acceptance gates.",
             "Root must verify executable/source provenance, original native exit/resource/cache/cost/order receipts and disabled-path historical B compatibility."],
         "semantics":"Targeted previously accessed selected panel, noncausal. S3 server cache uncontrolled. Timings overlap; only boundary chain reconciles stage time. Headers combine client queue/connect/TLS/server. No population p95/QPS or vendor claim; retain every valid gain and its GET/CPU/RSS costs even if the screen fails.",
         "runs":c.runs.iter().zip(&runs).enumerate().map(|(slot,(d,r))| json!({
@@ -1127,7 +1180,7 @@ mod tests {
         }
         rows[1]["selected_count"] = json!(32);
         use borsuk::sq8_s3_range::Sq8RangeTrace;
-        let ranges = if split { 46 } else { 30 };
+        let ranges = 46;
         let peak = if traced {
             Sq8RangeTrace::modeled_bytes(ranges, 64)
         } else {
@@ -1346,6 +1399,26 @@ mod tests {
             json!([10, 250, 40, 20, 100, 20, 10])
         );
         assert_eq!(report["scored_row_roster_parity_qualified"], false);
+        assert_eq!(
+            report["runs"][3]["decomposition"][0]["physical_to_logical_ranges"],
+            json!([0, 0, 0])
+        );
+        assert_eq!(
+            report["runs"][3]["decomposition"][0]["latest_logical_range_was_split"],
+            true
+        );
+        assert_eq!(
+            report["runs"][2]["decomposition"][0]["latest_logical_range_was_split"],
+            false
+        );
+        assert_eq!(
+            report["runs"][3]["decomposition"][0]["largest_physical_range_bytes"],
+            SPLIT_BYTES
+        );
+        assert_eq!(
+            report["primary_net_fetch_to_rank_improvements_ns"],
+            json!([[0, 0], [0, 0]])
+        );
         let original: Value = serde_json::from_str(
             report["runs"][3]["original_queries"][0]["original_jsonl"]
                 .as_str()
@@ -1365,9 +1438,14 @@ mod tests {
                 .is_some()
         );
         let inputs = json!({"sq8_range_split":split_value(true)});
-        let mut b = decompose(&query(false), &json!({"sq8_range_split":null})).unwrap();
+        let mut b = decompose(
+            &query(false),
+            &json!({"sq8_range_split":split_value(false)}),
+        )
+        .unwrap();
         let c = decompose(&query(true), &inputs).unwrap();
         b.intervals_ns[1] += 12_100_000;
+        b.fetch_to_rank_ns += 12_100_000;
         let observation = Observation {
             ordinal: 483,
             query_wall_ns: 600,
