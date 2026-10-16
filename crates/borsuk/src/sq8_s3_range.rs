@@ -338,6 +338,119 @@ pub struct Sq8ReadStats {
     pub failed_gets: usize,
 }
 
+/// Optional transport caps; logical cover budgets and scoring batches stay unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sq8RangeSplit {
+    pub max_physical_range_bytes: usize,
+    pub max_physical_gets: usize,
+}
+
+impl Sq8RangeSplit {
+    /// Additional per-query reservation: reassembly, transport bodies, split roster,
+    /// retained range descriptors and the complete physical future/outcome drain.
+    pub fn scratch_bytes(self, max_bytes: usize, parallel: usize) -> Option<usize> {
+        if self.max_physical_range_bytes == 0
+            || self.max_physical_range_bytes > isize::MAX as usize
+            || self.max_physical_gets == 0
+            || parallel == 0
+        {
+            return None;
+        }
+        let descriptors = self.max_physical_gets.checked_mul(
+            std::mem::size_of::<(usize, usize)>()
+                .checked_add(2 * std::mem::size_of::<VerifiedRange>())?
+                .checked_add(std::mem::size_of::<ReturnedRange<'_>>())?,
+        )?;
+        let pending = Sq8RangeTrace::pending_futures_bytes(self.max_physical_gets, parallel);
+        if pending == usize::MAX {
+            return None;
+        }
+        max_bytes
+            .checked_add(descriptors)?
+            .checked_add(
+                self.max_physical_range_bytes
+                    .min(max_bytes)
+                    .checked_mul(self.max_physical_gets.min(parallel))?
+                    .min(max_bytes)
+                    .checked_mul(2)?,
+            )?
+            .checked_add(pending)
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+    }
+
+    // Allocation-free pass; repeat only after all count/byte/trace admission succeeds.
+    fn visit(
+        self,
+        authority: &PageAuthority,
+        ranges: &[(usize, usize)],
+        logical_cap: usize,
+        max_bytes: usize,
+        mut emit: impl FnMut((usize, usize)),
+    ) -> Result<usize, RangeFetchError> {
+        let bad = || RangeFetchError::UnexpectedMetadata;
+        if !authority.is_sq8()
+            || ranges.is_empty()
+            || ranges.len() > logical_cap
+            || self.max_physical_gets == 0
+            || self.max_physical_range_bytes == 0
+        {
+            return Err(bad());
+        }
+        let block = authority
+            .dimensions()
+            .checked_add(12)
+            .and_then(|row| row.checked_mul(authority.page_rows()))
+            .ok_or_else(bad)?;
+        let per_piece = self.max_physical_range_bytes / block;
+        let mut total = 0usize;
+        let mut count = 0usize;
+        let mut previous = None;
+        for &(first, last) in ranges {
+            if previous.is_some_and(|end| first <= end) {
+                return Err(bad());
+            }
+            let interval = authority
+                .byte_range(first, last)
+                .map_err(RangeFetchError::Page)?;
+            total = total
+                .checked_add(interval.end - interval.start)
+                .ok_or_else(bad)?;
+            if total > max_bytes || total > isize::MAX as usize {
+                return Err(bad());
+            }
+            let blocks = last
+                .checked_sub(first)
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(bad)?;
+            let pieces = if per_piece == 0 {
+                if blocks != 1 || interval.end - interval.start > self.max_physical_range_bytes {
+                    return Err(bad());
+                }
+                1
+            } else {
+                blocks.div_ceil(per_piece)
+            };
+            count = count
+                .checked_add(pieces)
+                .filter(|&n| n <= self.max_physical_gets)
+                .ok_or_else(bad)?;
+            let mut start = first;
+            for _ in 0..pieces {
+                let end = start
+                    .checked_add(per_piece.max(1).min(last - start + 1) - 1)
+                    .ok_or_else(bad)?;
+                emit((start, end));
+                if end < last {
+                    start = end.checked_add(1).ok_or_else(bad)?;
+                }
+            }
+            previous = Some(last);
+        }
+        Ok(count)
+    }
+}
+
 /// A bounded remote SQ8 query; no source-vector plane is loaded or retained.
 #[derive(Debug)]
 pub struct RankedSq8 {
@@ -835,8 +948,48 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_byte_window(
     max_bytes: usize,
     max_parallel: usize,
     excluded_ids: &[i64],
+    trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
+) -> Result<RankedSq8, RankedSq8Failure> {
+    rank_verified_sq8_pages_traced_with_split(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        query,
+        low,
+        step,
+        top_k,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        excluded_ids,
+        trace,
+        budget,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn rank_verified_sq8_pages_traced_with_split(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    excluded_ids: &[i64],
     mut trace: Option<&mut Sq8RangeTrace>,
     budget: Option<&Arc<InFlightBytes>>,
+    split: Option<Sq8RangeSplit>,
 ) -> Result<RankedSq8, RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
@@ -867,19 +1020,77 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_byte_window(
     {
         return Err(fail(RangeFetchError::Score(Sq8ScoreError::InvalidQuery)));
     }
-    let (verified, stats) = fetch_verified_ranges_traced_with_byte_window(
+    let mut physical = Vec::new();
+    if let Some(split) = split {
+        split
+            .scratch_bytes(max_bytes, max_parallel)
+            .ok_or_else(|| fail(RangeFetchError::UnexpectedMetadata))?;
+        // Check the byte window in the allocation-free count pass as well.
+        let mut window_refused = false;
+        let count = split
+            .visit(authority, ranges, max_gets, max_bytes, |(first, last)| {
+                let interval = authority.byte_range(first, last).expect("admitted split");
+                if budget.is_some_and(|budget| interval.end - interval.start > budget.capacity) {
+                    window_refused = true;
+                }
+            })
+            .map_err(fail)?;
+        if window_refused
+            || trace
+                .as_deref()
+                .is_some_and(|trace| count > trace.capacity())
+        {
+            return Err(fail(RangeFetchError::UnexpectedMetadata));
+        }
+        physical = Vec::with_capacity(count);
+        split
+            .visit(authority, ranges, max_gets, max_bytes, |range| {
+                physical.push(range)
+            })
+            .map_err(fail)?;
+    }
+    let fetch_ranges = if split.is_some() {
+        physical.as_slice()
+    } else {
+        ranges
+    };
+    let (mut verified, stats) = fetch_verified_ranges_traced_with_byte_window(
         store,
         location,
         authority,
-        ranges,
+        fetch_ranges,
         etag,
-        max_gets,
+        split.map_or(max_gets, |split| split.max_physical_gets),
         max_bytes,
         max_parallel,
         trace.as_deref_mut(),
         budget,
     )
     .await?;
+    if split.is_some() {
+        // Preserve the exact original scoring groups, including kernel tail behavior.
+        let mut pieces = verified.into_iter();
+        verified = Vec::with_capacity(ranges.len());
+        for &(first, last) in ranges {
+            let interval = authority
+                .byte_range(first, last)
+                .map_err(|error| RankedSq8Failure {
+                    error: RangeFetchError::Page(error),
+                    stats,
+                })?;
+            let mut bytes = BytesMut::with_capacity(interval.end - interval.start);
+            while bytes.len() < interval.end - interval.start {
+                let piece = pieces.next().expect("authenticated split coverage");
+                assert_eq!(piece.start, interval.start + bytes.len());
+                bytes.extend_from_slice(&piece.bytes);
+            }
+            verified.push(VerifiedRange {
+                start: interval.start,
+                bytes: bytes.freeze(),
+            });
+        }
+        assert!(pieces.next().is_none());
+    }
     if let Some(trace) = trace.as_deref_mut() {
         trace.rank_start_ns = Some(trace.now_ns());
     }
@@ -3727,6 +3938,490 @@ mod tests {
             fetch_verified_pages_inner(&store, &location, &authority, 1, 1, &etag, 17 * 13).await,
             Err(RangeFetchError::Store(_))
         ));
+    }
+
+    fn split_object(rows: usize, dimensions: usize) -> (Vec<u8>, PageAuthority) {
+        let mut object = Vec::new();
+        for row in 0..rows {
+            object.extend_from_slice(&(row as i64).to_le_bytes());
+            object.extend_from_slice(&(0.25 + row as f32 / rows as f32).to_le_bytes());
+            object.extend((0..dimensions).map(|dim| ((row * 17 + dim * 13) % 251) as u8));
+        }
+        let sidecar = object
+            .chunks(256 * (dimensions + 12))
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":7,
+            "rows":rows,"dimensions":dimensions,"page_rows":256,
+            "object_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        let authority = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        (object, authority)
+    }
+
+    #[test]
+    fn split_plan_exact_coverage_tail_caps_and_overflow() {
+        for dimensions in [1, 7, 33, 1024] {
+            let (object, authority) = split_object(4 * 256 + 19, dimensions);
+            let block = 256 * (dimensions + 12);
+            for cap in [block, 2 * block, 3 * block + 7, object.len()] {
+                let split = Sq8RangeSplit {
+                    max_physical_range_bytes: cap,
+                    max_physical_gets: 5,
+                };
+                let mut pieces = Vec::new();
+                let count = split
+                    .visit(&authority, &[(0, 4)], 1, object.len(), |r| pieces.push(r))
+                    .unwrap();
+                assert_eq!(count, pieces.len());
+                let mut end = 0;
+                let mut covered = Vec::new();
+                for (first, last) in pieces {
+                    let interval = authority.byte_range(first, last).unwrap();
+                    assert_eq!(interval.start, end);
+                    assert!(interval.len() <= cap);
+                    end = interval.end;
+                    covered.extend_from_slice(&object[interval]);
+                }
+                assert_eq!(end, object.len());
+                assert_eq!(covered, object);
+            }
+            let split = Sq8RangeSplit {
+                max_physical_range_bytes: block,
+                max_physical_gets: 3,
+            };
+            assert!(
+                split
+                    .visit(&authority, &[(0, 4)], 1, object.len(), |_| {})
+                    .is_err()
+            );
+            assert!(
+                split
+                    .visit(&authority, &[(0, 1), (1, 1)], 2, object.len(), |_| {})
+                    .is_err()
+            );
+            assert!(
+                split
+                    .visit(&authority, &[(0, usize::MAX)], 1, usize::MAX, |_| {})
+                    .is_err()
+            );
+            assert!(
+                split
+                    .visit(&authority, &[(0, 1)], 1, block, |_| {})
+                    .is_err()
+            );
+            let tail = Sq8RangeSplit {
+                max_physical_range_bytes: 19 * (dimensions + 12),
+                ..split
+            };
+            assert_eq!(
+                tail.visit(&authority, &[(4, 4)], 1, object.len(), |_| {})
+                    .unwrap(),
+                1
+            );
+            assert!(
+                tail.visit(&authority, &[(0, 0)], 1, object.len(), |_| {})
+                    .is_err()
+            );
+            let mut pieces = Vec::new();
+            split
+                .visit(
+                    &authority,
+                    &[(0, 0), (2, 2), (4, 4)],
+                    3,
+                    object.len(),
+                    |r| pieces.push(r),
+                )
+                .unwrap();
+            assert_eq!(pieces, vec![(0, 0), (2, 2), (4, 4)]);
+            assert!(
+                split
+                    .visit(&authority, &pieces, 2, object.len(), |_| {})
+                    .is_err()
+            );
+        }
+        let object = unique_sq8_object(1);
+        let sidecar = Sha256::digest(&object).to_vec();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-v115-sq8-page-authority-v2", "generation":1,
+            "rows":1,"dimensions":1,"page_rows":usize::MAX,
+            "object_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+        }))
+        .unwrap();
+        let overflow = PageAuthority::load(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            &sidecar,
+        )
+        .unwrap();
+        assert!(
+            Sq8RangeSplit {
+                max_physical_range_bytes: 13,
+                max_physical_gets: 1
+            }
+            .visit(&overflow, &[(0, 0)], 1, 13, |_| {})
+            .is_err()
+        );
+        for split in [
+            Sq8RangeSplit {
+                max_physical_range_bytes: 0,
+                max_physical_gets: 1,
+            },
+            Sq8RangeSplit {
+                max_physical_range_bytes: usize::MAX,
+                max_physical_gets: 1,
+            },
+            Sq8RangeSplit {
+                max_physical_range_bytes: 1,
+                max_physical_gets: usize::MAX,
+            },
+            Sq8RangeSplit {
+                max_physical_range_bytes: 1,
+                max_physical_gets: 0,
+            },
+        ] {
+            assert!(split.scratch_bytes(usize::MAX, 1).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn split_unsplit_score_bits_ordinals_exclusions_and_charges() {
+        for dimensions in [1, 7, 16, 33, 1024] {
+            // Both full blocks and a kernel tail; logical gaps and a bridged range.
+            let (object, authority) = split_object(4 * 256 + 19, dimensions);
+            let store = InMemory::new();
+            let location = Path::from("sq8");
+            let etag = store
+                .put(&location, PutPayload::from(object.clone()))
+                .await
+                .unwrap()
+                .e_tag
+                .unwrap();
+            let query = vec![0.1; dimensions];
+            let low = vec![-0.3; dimensions];
+            let step = vec![0.02; dimensions];
+            for excluded in [&[][..], &[3, 7, 257, 1035][..]] {
+                for ranges in [&[(0, 4)][..], &[(0, 1), (3, 4)][..]] {
+                    let plain = rank_verified_sq8_pages_traced_with_byte_window(
+                        &store,
+                        &location,
+                        &authority,
+                        ranges,
+                        &etag,
+                        &query,
+                        &low,
+                        &step,
+                        10,
+                        2,
+                        object.len(),
+                        3,
+                        excluded,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                    for blocks in [1, 2, 3] {
+                        let split = Sq8RangeSplit {
+                            max_physical_range_bytes: blocks * 256 * (dimensions + 12),
+                            max_physical_gets: 5,
+                        };
+                        let mut trace = Sq8RangeTrace::new(5).unwrap();
+                        let ranked = rank_verified_sq8_pages_traced_with_split(
+                            &store,
+                            &location,
+                            &authority,
+                            ranges,
+                            &etag,
+                            &query,
+                            &low,
+                            &step,
+                            10,
+                            2,
+                            object.len(),
+                            3,
+                            excluded,
+                            Some(&mut trace),
+                            None,
+                            Some(split),
+                        )
+                        .await
+                        .unwrap();
+                        let bits = |ranked: &RankedSq8| {
+                            ranked
+                                .candidates
+                                .iter()
+                                .map(|hit| (hit.id, hit.ordinal, hit.score.to_bits()))
+                                .collect::<Vec<_>>()
+                        };
+                        assert_eq!(bits(&plain), bits(&ranked));
+                        assert_eq!(plain.stats.verified_bytes, ranked.stats.verified_bytes);
+                        assert_eq!(ranked.stats.failed_gets, 0);
+                        let physical = split
+                            .visit(&authority, ranges, 2, object.len(), |_| {})
+                            .unwrap();
+                        assert_eq!(ranked.stats.submitted_gets, physical);
+                        assert_eq!(trace.ranges().len(), physical);
+                        assert_eq!(trace.rank.unwrap().ranges as usize, ranges.len());
+                        let mut spans = trace.ranges().iter();
+                        for &(first, last) in ranges {
+                            let logical = authority.byte_range(first, last).unwrap();
+                            let mut end = logical.start;
+                            while end < logical.end {
+                                let span = spans.next().unwrap();
+                                assert_eq!(span.start_byte as usize, end);
+                                assert!(span.end_byte as usize > end);
+                                assert!(span.end_byte as usize <= logical.end);
+                                assert!(
+                                    span.end_byte as usize - end <= split.max_physical_range_bytes
+                                );
+                                end = span.end_byte as usize;
+                            }
+                            assert_eq!(end, logical.end);
+                        }
+                        assert!(spans.next().is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn split_http_count_etag_auth_ordered_error_and_drain() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.into(), object.clone())]),
+            Instant::now() + Duration::from_secs(30),
+        );
+        let split = Sq8RangeSplit {
+            max_physical_range_bytes: 256 * 13,
+            max_physical_gets: 3,
+        };
+        let mut trace = Sq8RangeTrace::new(3).unwrap();
+        let window = InFlightBytes::new(split.max_physical_range_bytes);
+        let before = fixture.reader.transport_stats().attempts;
+        let result = rank_verified_sq8_pages_traced_with_split(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 2)],
+            ETAG,
+            &[1.],
+            &[0.],
+            &[1.],
+            10,
+            1,
+            object.len(),
+            3,
+            &[],
+            Some(&mut trace),
+            Some(&window),
+            Some(split),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.stats.submitted_gets, 3);
+        assert_eq!(result.stats.verified_bytes, object.len());
+        assert_eq!(fixture.reader.transport_stats().attempts - before, 3);
+        assert_eq!(
+            *window.available.lock().unwrap(),
+            split.max_physical_range_bytes
+        );
+        assert_eq!(trace.ranges().len(), result.stats.submitted_gets);
+        let expected = vec![
+            (0, 256 * 13),
+            (256 * 13, 512 * 13),
+            (512 * 13, object.len()),
+        ];
+        assert_eq!(
+            trace
+                .ranges()
+                .iter()
+                .map(|span| (span.start_byte as usize, span.end_byte as usize))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let requests = fixture.snapshot().requests;
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|(_, head, range, etag)| !head
+            && range.is_some()
+            && etag.as_deref() == Some(ETAG)));
+        let mut requested = requests
+            .iter()
+            .map(|(_, _, range, _)| range.unwrap())
+            .collect::<Vec<_>>();
+        requested.sort_unstable();
+        assert_eq!(requested, expected);
+        fixture.arm(Some((1, [0, 256 * 13, 512 * 13])));
+        trace.begin(Instant::now());
+        let work = rank_verified_sq8_pages_traced_with_split(
+            fixture.reader.store(),
+            &location,
+            &authority,
+            &[(0, 2)],
+            ETAG,
+            &[1.],
+            &[0.],
+            &[1.],
+            10,
+            1,
+            object.len(),
+            3,
+            &[],
+            Some(&mut trace),
+            None,
+            Some(split),
+        );
+        let (failure, ()) = tokio::join!(work, async {
+            fixture
+                .wait(|state| state.active[1] == 2 && state.finished[1].contains(&(256 * 13)))
+                .await;
+            fixture.release_error();
+            fixture.wait(|state| state.finished[1].contains(&0)).await;
+            assert_eq!(fixture.snapshot().active[1], 1);
+            fixture.release_sibling();
+        });
+        let failure = failure.unwrap_err();
+        assert!(matches!(failure.error, RangeFetchError::Store(_)));
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                failed_gets: 2,
+                verified_bytes: 88 * 13
+            }
+        );
+        assert_eq!(trace.ranges()[1].outcome, "page_auth");
+        assert_eq!(fixture.snapshot().finished[1], vec![256 * 13, 0, 512 * 13]);
+        assert!(trace.rank_start_ns.is_none());
+        assert!(trace.all_ranges_complete_ns.is_some());
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn split_http_wrong_etag_fails_closed_and_drains_every_get() {
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let response = http_response(
+            "206 Partial Content",
+            Some("bytes 0-3327/7800"),
+            "\"changed\"",
+            3328,
+            &object[..3328],
+        );
+        let (reader, stop, requests, server) = http_fixture(response);
+        let result = rank_verified_sq8_pages_traced_with_split(
+            reader.store(),
+            &Path::from("sq8"),
+            &authority,
+            &[(0, 2)],
+            "\"frozen\"",
+            &[1.],
+            &[0.],
+            &[1.],
+            10,
+            1,
+            object.len(),
+            2, // Three failing pieces exceed the scheduler slots; queued work must still drain.
+            &[],
+            None,
+            None,
+            Some(Sq8RangeSplit {
+                max_physical_range_bytes: 3328,
+                max_physical_gets: 3,
+            }),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let failure = result.unwrap_err();
+        assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                failed_gets: 3,
+                verified_bytes: 0
+            }
+        );
+        assert_eq!(reader.transport_stats().attempts, 3);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests.iter().all(|request| {
+            request
+                .to_ascii_lowercase()
+                .contains("if-match: \"frozen\"\r\n")
+        }));
+    }
+
+    #[tokio::test]
+    async fn split_refuses_caps_trace_and_window_before_http() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let key = "gen/objects/sq8";
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.into(), object.clone())]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        let location = Path::from(key);
+        for case in 0..7 {
+            let split = Sq8RangeSplit {
+                max_physical_range_bytes: if case == 0 { 0 } else { 256 * 13 },
+                max_physical_gets: if case == 1 {
+                    2
+                } else if case == 6 {
+                    usize::MAX
+                } else {
+                    3
+                },
+            };
+            let mut trace = Sq8RangeTrace::new(if case == 2 { 2 } else { 3 }).unwrap();
+            let window = InFlightBytes::new(if case == 3 { 1 } else { object.len() });
+            let ranges = if case == 5 {
+                &[(0, 0), (2, 2)][..]
+            } else {
+                &[(0, 2)][..]
+            };
+            let result = rank_verified_sq8_pages_traced_with_split(
+                fixture.reader.store(),
+                &location,
+                &authority,
+                ranges,
+                ETAG,
+                &[1.],
+                &[0.],
+                &[1.],
+                10,
+                1,
+                if case == 4 { 1 } else { object.len() },
+                3,
+                &[],
+                Some(&mut trace),
+                Some(&window),
+                Some(split),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(result.stats, Sq8ReadStats::default());
+            assert_eq!(trace.outcome, "rejected_before_io");
+            assert!(fixture.snapshot().requests.is_empty());
+            assert_eq!(fixture.reader.transport_stats().attempts, 0);
+        }
+        fixture.finish();
     }
 
     fn unique_sq8_object(rows: usize) -> Vec<u8> {

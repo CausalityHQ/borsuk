@@ -3,7 +3,8 @@ use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{
-        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeTrace, Sq8ReadStats,
+        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeSplit, Sq8RangeTrace,
+        Sq8ReadStats,
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
@@ -43,9 +44,9 @@ const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v9";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v9";
-const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v10";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
@@ -307,8 +308,15 @@ struct Config {
     source_get_budget: usize,
     #[serde(default)]
     shared_byte_window: Option<SharedByteWindow>,
+    #[serde(deserialize_with = "explicit_sq8_range_split")]
+    sq8_range_split: Option<Sq8RangeSplit>,
     serving: Serving,
     execution: Execution,
+}
+fn explicit_sq8_range_split<'de, T: serde::Deserializer<'de>>(
+    deserializer: T,
+) -> std::result::Result<Option<Sq8RangeSplit>, T::Error> {
+    Option::<Sq8RangeSplit>::deserialize(deserializer)
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -738,6 +746,16 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         matches!(c.fetch_parallelism, 16 | 32 | 64 | 128),
         "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
+    if let Some(split) = c.sq8_range_split {
+        require(
+            (1..=MEMORY_CAP as usize).contains(&split.max_physical_range_bytes)
+                && (1..=128).contains(&split.max_physical_gets)
+                && split
+                    .scratch_bytes(c.sq8_byte_budget, c.fetch_parallelism)
+                    .is_some(),
+            "SQ8 split explicit physical byte/GET caps and checked scratch",
+        )?;
+    }
     if let Some(window) = c.shared_byte_window {
         require(
             (1..=MEMORY_CAP as usize).contains(&window.max_bytes)
@@ -752,7 +770,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v8; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v10; older formats refuse",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -1157,7 +1175,8 @@ fn caller_bytes(c: &Config) -> usize {
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
     let returned = TwoBitPlanTrace::scratch_bytes(c.rows)
         + 2 * c.rows.div_ceil(256) * (size_of::<usize>() + size_of::<std::ops::Range<usize>>())
-        + K * (size_of::<ScoredNominee>() + size_of::<Hit>());
+        + K * (size_of::<ScoredNominee>() + size_of::<Hit>())
+        + size_of::<[usize; K]>();
     let query = c.requests.bytes + size_of::<[f32; D]>() + returned;
     // Reduction drops generation/requests first: one capped JSONL line, one truth body,
     // 8KiB reader, k hits. Authentication uses one 64KiB stack block.
@@ -1185,17 +1204,20 @@ fn caller_bytes(c: &Config) -> usize {
 const ACTIVE_QUERIES: usize = 1;
 // SQ8 ranges one traced query can plan: the baseline SQ8 cap or the explicit direct cap.
 fn trace_ranges(c: &Config) -> usize {
+    if let Some(split) = c.sq8_range_split {
+        return split.max_physical_gets;
+    }
     c.serving
         .direct()
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
 // Most range futures any phase of a query can plan; baseline SOURCE batches are the largest.
 fn plan_ranges(c: &Config) -> usize {
-    c.serving
-        .direct()
-        .map_or(BASELINE_SOURCE_GETS.max(c.sq8_get_budget), |direct| {
-            direct.max_sq8_gets
-        })
+    if c.serving.direct().is_some() {
+        trace_ranges(c)
+    } else {
+        BASELINE_SOURCE_GETS.max(trace_ranges(c))
+    }
 }
 // Bytes one active diagnostic query holds on top of the production model, charged before
 // any query payload opens: bounded line scratch and its coexisting record tree for every
@@ -1613,7 +1635,7 @@ struct Anchors {
     process_cpu_start_ns: i128,
     process_cpu_end_ns: i128,
 }
-/// The one new field on query records: existing returned/charges/plan/trace fields are untouched.
+/// Physical GET diagnostics; successful records retain logical bounds in `plan.ranges`.
 #[derive(Serialize)]
 struct QueryDiagnostic<'a> {
     schema: &'static str,
@@ -2104,6 +2126,10 @@ async fn query_and_seal_with(
         )?,
         None => generation,
     };
+    let generation = match c.sq8_range_split {
+        Some(split) => generation.with_sq8_range_split(split)?,
+        None => generation,
+    };
     require(
         generation.rows() == c.rows
             && generation.discovery_mode() == DiscoveryMode::Semantic
@@ -2265,7 +2291,8 @@ async fn query_and_seal_with(
             "native returned count exceeds k",
         )?;
         let mut returned = Vec::with_capacity(K);
-        for hit in &result.ranked.candidates {
+        let mut returned_physical_ordinals = [0; K];
+        for (rank, hit) in result.ranked.candidates.iter().enumerate() {
             require(
                 hit.id >= 0 && hit.ordinal < c.rows,
                 "native returned identity",
@@ -2274,9 +2301,11 @@ async fn query_and_seal_with(
                 id: hit.id as u64,
                 score_bits: hit.score.to_bits(),
             });
+            returned_physical_ordinals[rank] = hit.ordinal;
         }
         #[cfg(test)]
         returned.truncate(shape.returned_limit);
+        let returned_physical_ordinals = &returned_physical_ordinals[..returned.len()];
         validate_hits(&returned, c.rows)?;
         let underfill = returned.len() < K;
         let mut charges = Charges::default();
@@ -2292,6 +2321,7 @@ async fn query_and_seal_with(
             page_rows: usize,
             selected_pages: &'a [usize],
             ranges: Vec<[usize; 2]>,
+            logical_range_count: usize,
             planned_bytes: usize,
             target_pages: usize,
             target_shortfall: usize,
@@ -2314,6 +2344,7 @@ async fn query_and_seal_with(
                 .iter()
                 .map(|r| [r.start, r.end])
                 .collect(),
+            logical_range_count: result.plan.ranges.len(),
             planned_bytes: result.plan.planned_bytes,
             target_pages: result.plan.target_pages,
             target_shortfall: result.plan.target_shortfall,
@@ -2332,6 +2363,7 @@ async fn query_and_seal_with(
             // direct = the cover computation alone (SOURCE nomination is skipped).
             planning_scope: &'static str,
             returned: &'a [Hit],
+            returned_physical_ordinals: &'a [usize],
             returned_count: usize,
             underfill: bool,
             charges: &'a Charges,
@@ -2371,6 +2403,7 @@ async fn query_and_seal_with(
             returned_count: returned.len(),
             underfill,
             returned: &returned,
+            returned_physical_ordinals,
             charges: &charges,
             sum: charges.sum(),
             plan,
@@ -2625,6 +2658,8 @@ fn execute_paths_status(
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false});
         // Added after the literal: json! recursion depth grows with the entry count.
+        identity["sq8_range_split"] =
+            json!(configured.as_ref().ok().and_then(|c| c.sq8_range_split));
         identity["execution"] = json!(configured.as_ref().ok().map(|c| &c.execution));
         identity["sq8_range_source_sha256"] = json!(hash(include_bytes!("../sq8_s3_range.rs")));
         identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
@@ -2657,6 +2692,7 @@ fn execute_paths_status(
         bound["derivation_receipt_sha256"] = json!(c.derivation_receipt.sha256);
         bound["producer_authority"] = json!(c.producer_authority);
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
+        bound["sq8_range_split"] = json!(c.sq8_range_split);
         bound["execution"] = json!(c.execution);
         bound["selected_count"] = json!(selected_len(&c));
         if let Some(window) = c.shared_byte_window {
@@ -2795,7 +2831,7 @@ mod tests {
         json!({"path":path,"bytes":bytes.len(),"sha256":hash(bytes)})
     }
     fn config_value(dir: &Path, shape: Shape) -> Value {
-        let mut value = json!({"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
+        let mut value = json!({"sq8_range_split":null,"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
             "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
             "reserved_query_interval":{"start":shape.rows,"end":shape.rows+shape.count},
             "corpus_intervals":[{"start":0,"end":shape.rows}],"corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
@@ -3177,6 +3213,59 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn cold_sq8_split_config_version_caps_trace_and_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let original: Config = serde_json::from_value(value.clone()).unwrap();
+        let split = json!({"max_physical_range_bytes":64 * 32 * (D + 12), "max_physical_gets":46});
+        value["sq8_range_split"] = split.clone();
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        assert_eq!(trace_ranges(&c), 46);
+        assert_eq!(plan_ranges(&c), BASELINE_SOURCE_GETS.max(46));
+        assert_eq!(
+            limits(&c).unwrap().max_query_gets,
+            limits(&original).unwrap().max_query_gets
+        );
+        assert_eq!(
+            limits(&c).unwrap().max_query_bytes,
+            limits(&original).unwrap().max_query_bytes
+        );
+        let (path, sha) = write_config(dir.path(), &value);
+        let output = dir.path().join("sq8-split-identity.jsonl");
+        assert!(
+            !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                Err("identity-only split fixture".into())
+            })
+            .unwrap()
+        );
+        let output = records(&output);
+        assert_eq!(output[0]["sq8_range_split"], split);
+        assert_eq!(output[1]["sq8_range_split"], split);
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("sq8_range_split");
+        assert!(serde_json::from_value::<Config>(missing).is_err());
+        for changed in [
+            json!({"max_physical_range_bytes":0,"max_physical_gets":46}),
+            json!({"max_physical_range_bytes":1,"max_physical_gets":0}),
+            json!({"max_physical_range_bytes":1,"max_physical_gets":129}),
+            json!({"max_physical_range_bytes":MEMORY_CAP+1,"max_physical_gets":46}),
+            json!({"max_physical_range_bytes":usize::MAX,"max_physical_gets":46}),
+        ] {
+            let mut bad = value.clone();
+            bad["sq8_range_split"] = changed;
+            let bad: Config = serde_json::from_value(bad).unwrap();
+            assert!(validate_config(&bad, shape).is_err());
+        }
+        let mut bad = value.clone();
+        bad["sq8_range_split"]["unrecorded"] = json!(true);
+        assert!(serde_json::from_value::<Config>(bad).is_err());
+        value["schema"] = json!("borsuk-cohere-native-baseline-config-v9");
+        assert!(validate_config(&serde_json::from_value(value).unwrap(), shape).is_err());
+    }
+
     #[test]
     fn cold_shared_byte_window_config_is_explicit_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
@@ -3952,6 +4041,10 @@ mod tests {
                 assert_eq!(oracle[K - 1].0, 256); // ID8 is the one-row SQ8 tail
                 assert!(oracle[..K].iter().all(|r| r.0 as u64 != r.1));
                 assert_eq!(query["returned_count"], 10);
+                assert_eq!(
+                    query["returned_physical_ordinals"],
+                    json!(oracle[..K].iter().map(|r| r.0).collect::<Vec<_>>())
+                );
                 for (rank, hit) in query["returned"].as_array().unwrap().iter().enumerate() {
                     assert_eq!(hit["id"], TRUTH_IDS[i][rank]);
                     assert_eq!(hit["score_bits"], oracle[rank].2);
@@ -4068,6 +4161,210 @@ mod tests {
             let summary = reduce(&config, &mut out, &seal, &mut progress).unwrap();
             assert_eq!(summary["status"], "MEASURED");
             assert_eq!(summary["total_hits10"], 20);
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_sq8_split_config_reaches_serving_and_preserves_parity() {
+        let shape = Shape::tiny(257);
+        let (dir, base) = fixture(shape).await;
+        let object_bytes = 257 * (D + 12);
+        let piece_bytes = 64 * (D + 12); // Two authenticated 32-row blocks per full piece.
+        for (mode, base) in [
+            ("baseline", base.clone()),
+            ("direct", with_direct(base, object_bytes, 2)),
+        ] {
+            let mut original = None;
+            for (name, cap, window) in [
+                ("null", None, false),
+                ("control", Some(33_554_432), false),
+                ("split", Some(piece_bytes), false),
+                ("split-window", Some(piece_bytes), true),
+            ] {
+                let mut value = with_panel(base.clone(), &[0, 1], true);
+                if let Some(cap) = cap {
+                    value["sq8_range_split"] = json!({"max_physical_range_bytes":cap,
+                        "max_physical_gets":46});
+                }
+                if window {
+                    value["shared_byte_window"] = json!({"max_bytes":object_bytes,
+                        "max_waiters":64,"max_state_bytes":16384});
+                }
+                let config: Config = serde_json::from_value(value).unwrap();
+                validate_config(&config, shape).unwrap();
+                let path = dir.path().join(format!("split-{mode}-{name}.jsonl"));
+                let mut out = Output::create(&path).unwrap();
+                let mut progress = Progress::default();
+                // File-backed serving evidence. Actual HTTP attempts/ETags/drain are covered
+                // by sq8_s3_range::tests::split_http_count_etag_auth_ordered_error_and_drain.
+                let seal = query_and_seal(&config, shape, &mut out, &mut progress)
+                    .await
+                    .unwrap();
+                let rows = records(&path);
+                let expected = if cap == Some(piece_bytes) {
+                    vec![
+                        [0, piece_bytes],
+                        [piece_bytes, 2 * piece_bytes],
+                        [2 * piece_bytes, 3 * piece_bytes],
+                        [3 * piece_bytes, 4 * piece_bytes],
+                        [4 * piece_bytes, object_bytes],
+                    ]
+                } else {
+                    vec![[0, object_bytes]]
+                };
+                let parity = rows
+                    .iter()
+                    .filter(|row| row["phase"] == "query")
+                    .map(|row| {
+                        assert_eq!(row["plan"]["ranges"], json!([[0, object_bytes]]));
+                        assert_eq!(row["plan"]["logical_range_count"], 1);
+                        assert_eq!(row["plan"]["planned_bytes"], object_bytes);
+                        let diag = &row["diagnostic"];
+                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v3");
+                        let trace = &diag["sq8_range_trace"];
+                        let fields = trace["range_fields"].as_array().unwrap();
+                        let at = |name: &str| fields.iter().position(|f| f == name).unwrap();
+                        let spans = trace["ranges"].as_array().unwrap();
+                        assert_eq!(spans.len(), expected.len());
+                        assert_eq!(trace["planned_ranges"], expected.len());
+                        assert_eq!(trace["dropped_ranges"], 0);
+                        assert_eq!(trace["outcome"], "ranked");
+                        assert_eq!(trace["rank"]["ranges"], row["plan"]["logical_range_count"]);
+                        let mut end = 0;
+                        for (index, (span, bounds)) in spans.iter().zip(&expected).enumerate() {
+                            assert_eq!(span[at("index")], index);
+                            assert_eq!(span[at("start_byte")], bounds[0]);
+                            assert_eq!(span[at("end_byte")], bounds[1]);
+                            assert_eq!(span[at("outcome")], "ok");
+                            assert_eq!(span[at("body_bytes")], bounds[1] - bounds[0]);
+                            assert_eq!(bounds[0], end); // Ordered, gap-free exact logical union.
+                            assert!(bounds[1] <= object_bytes);
+                            assert!(bounds[1] - bounds[0] <= cap.unwrap_or(object_bytes));
+                            end = bounds[1];
+                        }
+                        assert_eq!(end, object_bytes);
+                        if cap == Some(piece_bytes) {
+                            assert_eq!(expected.last().unwrap()[1] - expected.last().unwrap()[0], D + 12);
+                            assert!(spans.len() > 1); // Removing with_sq8_range_split must fail.
+                            assert!(spans.len() <= 46);
+                        }
+                        assert_eq!(row["charges"]["sq8"], json!({
+                            "submitted_gets":spans.len(), "verified_bytes":object_bytes, "failed_gets":0
+                        }));
+                        assert_eq!(row["returned_physical_ordinals"].as_array().unwrap().len(), K);
+                        json!({"returned":row["returned"],
+                            "returned_physical_ordinals":row["returned_physical_ordinals"],
+                            "trace":row["trace"],"plan":row["plan"],
+                            "source":row["charges"]["source"],"router":row["charges"]["router"],
+                            "sq8_bytes":row["charges"]["sq8"]["verified_bytes"]})
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(parity.len(), 2);
+                if let Some(original) = &original {
+                    assert_eq!(&parity, original);
+                } else {
+                    original = Some(parity);
+                }
+                let summary = reduce(&config, &mut out, &seal, &mut progress).unwrap();
+                assert_eq!(summary["total_hits10"], 20);
+                assert_eq!(summary["physical_s3_measured"], false);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sq8_split_multi_query_reservation_and_direct_memory_boundaries() {
+        let shape = Shape::tiny(257);
+        let (_dir, value) = fixture(shape).await;
+        let c: Config = serde_json::from_value(value).unwrap();
+        let reader = Reader::new(&c.backend).unwrap();
+        let prefix = ObjectPath::from(c.generation_prefix.clone());
+        let object_bytes = shape.rows * (D + 12);
+        let direct = DirectClosureLimits {
+            max_sq8_bytes: object_bytes,
+            max_sq8_gets: 2,
+        };
+        let split = Sq8RangeSplit {
+            max_physical_range_bytes: 64 * (D + 12),
+            max_physical_gets: 46,
+        };
+        let mut admission = limits(&c).unwrap();
+        admission.max_active_queries = 2;
+        admission.max_query_bytes = object_bytes;
+        admission.max_source_bytes = object_bytes;
+        let baseline = TwoBitGeneration::open_remote(
+            reader.store(),
+            &prefix,
+            &c.generation_root_sha256,
+            admission,
+            &c.scratch_parent,
+        )
+        .await
+        .unwrap();
+        let before = baseline.direct_closure_memory(direct).unwrap();
+        drop(baseline);
+        let scratch = split
+            .scratch_bytes(object_bytes, admission.max_parallel_gets)
+            .unwrap() as u64;
+        let resident = before.resident_bytes + 2 * scratch;
+        let total = before.total_bytes + 4 * scratch; // Both baseline and direct reserve A * E.
+        assert!(total <= MEMORY_CAP);
+        let query = request_row(&std::fs::read(&c.requests.path).unwrap(), 0).unwrap();
+        for cap in [resident - 1, resident, total - 1, total] {
+            admission.max_memory_bytes = cap;
+            let generation = TwoBitGeneration::open_remote(
+                reader.store(),
+                &prefix,
+                &c.generation_root_sha256,
+                admission,
+                &c.scratch_parent,
+            )
+            .await
+            .unwrap();
+            let split_generation = generation.with_sq8_range_split(split);
+            if cap == resident - 1 {
+                assert!(matches!(
+                    split_generation,
+                    Err(borsuk::two_bit_generation::TwoBitGenerationError::Invalid(
+                        "SQ8 split memory"
+                    ))
+                ));
+                continue;
+            }
+            let generation = split_generation.unwrap();
+            let memory = generation.direct_closure_memory(direct).unwrap();
+            assert_eq!(memory.resident_bytes, resident);
+            assert_eq!(
+                memory.direct_query_bytes,
+                before.direct_query_bytes + 2 * scratch
+            );
+            assert_eq!(memory.total_bytes, total);
+            let result = generation
+                .diagnostic_direct_closure_search_with_store(reader.store(), &query, K, direct)
+                .await;
+            if cap < total {
+                let error = result.err().unwrap();
+                assert_eq!(
+                    error.direct_resource_rejection(),
+                    Some(DirectClosureRejection::ModeledMemory)
+                );
+                assert_eq!(
+                    error.read_stats(),
+                    (Sq8ReadStats::default(), Sq8ReadStats::default())
+                );
+                assert_eq!(error.router_stats(), Sq8ReadStats::default());
+            } else {
+                let (result, _) = result.unwrap();
+                assert_eq!(
+                    result.ranked.stats,
+                    Sq8ReadStats {
+                        submitted_gets: 5,
+                        failed_gets: 0,
+                        verified_bytes: object_bytes,
+                    }
+                );
+                assert_eq!(result.ranked.candidates.len(), K);
+            }
         }
     }
 
@@ -4225,6 +4522,29 @@ mod tests {
         assert_eq!(summary["total_hits10"], 6);
         assert_eq!(summary["recall_denominator"], 20);
         assert_eq!(summary["mean_recall10"], 0.3);
+        let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
+        for row in records(&dir.path().join("underfill"))
+            .iter()
+            .filter(|row| row["phase"] == "query")
+        {
+            let ordinals = row["returned_physical_ordinals"].as_array().unwrap();
+            let hits = row["returned"].as_array().unwrap();
+            assert_eq!(row["returned_count"], 3);
+            assert_eq!((ordinals.len(), hits.len()), (3, 3));
+            for (ordinal, hit) in ordinals.iter().zip(hits) {
+                let ordinal = ordinal.as_u64().unwrap() as usize;
+                assert!(ordinal < shape.rows);
+                let record = &sq8[ordinal * (D + 12)..(ordinal + 1) * (D + 12)];
+                assert_eq!(
+                    hit["id"],
+                    u64::from_le_bytes(record[..8].try_into().unwrap())
+                );
+                let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+                let coordinate =
+                    -1. + f32::from(record[12 + row["ordinal"].as_u64().unwrap() as usize]) / 16.;
+                assert_eq!(hit["score_bits"], (norm + 1. - 2. * coordinate).to_bits());
+            }
+        }
         let mut capped = Output::create(&dir.path().join("capped")).unwrap();
         capped.cap = 100;
         let mut p = Progress::default();
@@ -5142,6 +5462,14 @@ mod tests {
                     .then(a.1.cmp(&b.1))
             });
             assert_eq!(query["returned_count"], 10);
+            assert_eq!(
+                query["returned_physical_ordinals"],
+                json!(oracle[..K].iter().map(|r| r.0).collect::<Vec<_>>())
+            );
+            assert_eq!(
+                query["returned_physical_ordinals"],
+                baseline_queries[i]["returned_physical_ordinals"]
+            );
             for (rank, hit) in query["returned"].as_array().unwrap().iter().enumerate() {
                 assert_eq!(hit["id"], oracle[rank].1);
                 assert_eq!(hit["score_bits"], oracle[rank].2);
@@ -5867,7 +6195,7 @@ mod tests {
             for query in &on {
                 let diag = &query["diagnostic"];
                 assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
-                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v2");
+                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v3");
                 let trace = &diag["sq8_range_trace"];
                 let fields = trace["range_fields"].as_array().unwrap();
                 assert_eq!(fields.len(), 22);
@@ -5875,6 +6203,11 @@ mod tests {
                 let ranges = trace["ranges"].as_array().unwrap();
                 let planned = query["plan"]["ranges"].as_array().unwrap();
                 assert_eq!(ranges.len(), planned.len());
+                assert_eq!(query["plan"]["logical_range_count"], planned.len());
+                assert_eq!(
+                    ranges.len() as u64,
+                    query["charges"]["sq8"]["submitted_gets"].as_u64().unwrap()
+                );
                 assert_eq!(trace["planned_ranges"], planned.len());
                 assert_eq!(trace["dropped_ranges"], 0);
                 assert_eq!(trace["outcome"], "ranked");
