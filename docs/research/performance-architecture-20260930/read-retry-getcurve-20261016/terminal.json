@@ -1,0 +1,13 @@
+{
+  "schema": "borsuk-get64-abba-closure-v1",
+  "status": "CLOSED_VALID_PARETO_CANDIDATE",
+  "all_four_native_readers_zero": true,
+  "all4000_exact_parity": true,
+  "source_snapshot": "c3b0e81e93fdb06a13cc38a25868d75030a87e04",
+  "protocol_sha256": "c610cce74b40c5f2334d0323ffd2a2841476e0147194221d88ef2007352b35f1",
+  "summary_sha256": "57fbd44a0ac6c89305fd7d7cf7059491b3028a1d3ba4f576166024578bebac47",
+  "archive_sha256": "7f0541a87d4e61fa0a2ecbedab2f33724b26761b34bfbac8f4b9ba438f1e4877",
+  "cold_s3_claim": false,
+  "vendor_win_claim": false,
+  "production_default_changed": false
+}
