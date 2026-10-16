@@ -113,7 +113,7 @@ parity_regular() {
 }
 parity_snapshot() {
  parity_regular "$1" "$2"
- stat -c '%d:%i:%s:%f:%y:%z' -- "$1"
+ stat -c '%d:%i:%s:%f:%y:%z' -- "$1" || return $?
  parity_sha "$1"
 }
 parity_compare_queries() {
@@ -143,7 +143,7 @@ parity_main() {
  export LC_ALL=C TZ=UTC
  umask 077
  local output_owned=0 hist_result null_result hist_bytes null_bytes hist_sha null_sha
- local reducer_before hist_cfg_before null_cfg_before hist_before null_before
+ local reducer_before hist_cfg_before null_cfg_before hist_before null_before canonical_sha
  trap 'parity_exit "$?" "$output_owned"' EXIT
  [[ $# == 0 ]] || parity_die 'Use the seven named environment variables'
  : "${REDUCER:?}" "${REDUCER_SHA:?}" "${HIST_COMPLETED_CFG:?}" "${HIST_CFG_SHA:?}" "${NULL_COMPLETED_CFG:?}" "${NULL_CFG_SHA:?}" "${NEW_OUTPUT_DIR:?}"
@@ -180,7 +180,9 @@ parity_main() {
  [[ $(stat -c %s -- "$hist_result") == "$hist_bytes" && $(parity_sha "$hist_result") == "$hist_sha" && $(stat -c %s -- "$null_result") == "$null_bytes" && $(parity_sha "$null_result") == "$null_sha" ]] || parity_die 'Original result pin mismatch'
  printf '%s\n' "$reducer_before" "$hist_cfg_before" "$null_cfg_before" "$hist_before" "$null_before" > "$NEW_OUTPUT_DIR/before.identities"
  parity_validate_compare
- jq -n --arg reducer "$REDUCER_SHA" --arg hist_cfg "$HIST_CFG_SHA" --arg null_cfg "$NULL_CFG_SHA" --slurpfile h "$HIST_COMPLETED_CFG" --slurpfile n "$NULL_COMPLETED_CFG" --arg canonical_sha "$(parity_sha "$NEW_OUTPUT_DIR/historical.canonical.json")" \
+ canonical_sha=$(parity_sha "$NEW_OUTPUT_DIR/historical.canonical.json") || parity_die 'Canonical digest failed'
+ [[ $canonical_sha =~ ^[0-9a-f]{64}$ ]] || parity_die 'Invalid canonical digest'
+ jq -n --arg reducer "$REDUCER_SHA" --arg hist_cfg "$HIST_CFG_SHA" --arg null_cfg "$NULL_CFG_SHA" --slurpfile h "$HIST_COMPLETED_CFG" --slurpfile n "$NULL_COMPLETED_CFG" --arg canonical_sha "$canonical_sha" \
   '{schema:"borsuk-disabled-historical-parity-v1",status:"EXACT_CANONICAL_PARITY",complete:true,
     reducer_sha256:$reducer,historical_config_sha256:$hist_cfg,null_config_sha256:$null_cfg,
     historical:$h[0],current_null:$n[0],canonical_sha256:$canonical_sha,query_count:32,
