@@ -766,7 +766,8 @@ mod session_tests {
             TwoBitGcSession::new(self.store.clone(), &self.prefix, self.directory.path()).unwrap()
         }
         async fn object(&self, name: &str, bytes: &'static [u8]) -> Path {
-            let path = self.prefix.clone().join(name);
+            // ObjectPath::join accepts one segment and escapes embedded slashes.
+            let path = Path::from(format!("{}/{name}", self.prefix.as_ref()));
             self.store
                 .put(&path, PutPayload::from_static(bytes))
                 .await
@@ -1985,10 +1986,11 @@ mod session_tests {
             let contents = tokio::time::timeout(DEADLINE, async {
                 let mut absent = 0;
                 for id in 0..ORPHANS {
-                    let path = f
-                        .prefix
-                        .clone()
-                        .join(format!("maintenance/{}/objects/{id:064x}", "a".repeat(48)));
+                    let path = Path::from(format!(
+                        "{}/maintenance/{}/objects/{id:064x}",
+                        f.prefix.as_ref(),
+                        "a".repeat(48)
+                    ));
                     absent += usize::from(matches!(
                         f.store.head(&path).await,
                         Err(object_store::Error::NotFound { .. })
