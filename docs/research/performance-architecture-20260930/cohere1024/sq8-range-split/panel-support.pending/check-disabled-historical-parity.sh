@@ -165,6 +165,9 @@ parity_main() {
  hist_cfg_before=$(parity_snapshot "$HIST_COMPLETED_CFG" 262144)
  null_cfg_before=$(parity_snapshot "$NULL_COMPLETED_CFG" 262144)
  [[ ${reducer_before##*$'\n'} == "$REDUCER_SHA" && ${hist_cfg_before##*$'\n'} == "$HIST_CFG_SHA" && ${null_cfg_before##*$'\n'} == "$NULL_CFG_SHA" ]] || parity_die 'Reducer/config changed before snapshot'
+ # Admit this exact historical/current experiment before hashing/opening results.
+ # Native decoders still reject duplicate keys before any query comparison.
+ jq -e -s "$parity_jq config_guard" "$HIST_COMPLETED_CFG" "$NULL_COMPLETED_CFG" > /dev/null || parity_die 'Parity protocol admission failed'
  # Descriptor reads only, no result/query parsing; native rejects duplicate keys.
  jq -e '.input | keys == ["bytes","path","sha256"]' "$HIST_COMPLETED_CFG" > /dev/null
  jq -e '.input | keys == ["bytes","path","sha256"]' "$NULL_COMPLETED_CFG" > /dev/null
