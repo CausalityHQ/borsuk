@@ -1,0 +1,11 @@
+
+running 1 test
+test tests::actual_sq8_split_config_reaches_serving_and_preserves_parity ... FAILED
+
+failures:
+
+failures:
+    tests::actual_sq8_split_config_reaches_serving_and_preserves_parity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.57s
+

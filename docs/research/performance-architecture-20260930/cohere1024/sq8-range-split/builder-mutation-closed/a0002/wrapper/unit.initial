@@ -1,0 +1,14 @@
+Result=success
+ExecMainCode=0
+ExecMainStatus=0
+ControlGroup=/system.slice/borsuk-sq8-split-mutation-a0002.service
+MemoryCurrent=3481600
+MemoryPeak=3481600
+MemorySwapPeak=0
+CPUUsageNSec=29594000
+TasksCurrent=3
+Description=borsuk-sq8-split-mutation-a0002.service:8e7076951936b0434b7947afd5b23e192c98fe70:83df03d1fc9b4ddae33a937846b70b911ab09406e1783528ca2d6ff6589f9059:682b5fd4-3fcb-42da-8eae-e4d95d780de6
+LoadState=loaded
+ActiveState=active
+SubState=running
+InvocationID=8149d75f09a34188a1e4876f355c2a2d

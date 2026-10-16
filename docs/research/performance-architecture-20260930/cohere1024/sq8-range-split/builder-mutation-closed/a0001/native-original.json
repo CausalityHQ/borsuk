@@ -1,0 +1,22 @@
+{
+    "CommandId": "17e37bd1-def9-43ba-b34d-3616780103c2",
+    "InstanceId": "i-0d53095d1fe75b546",
+    "Comment": "borsuk-sq8-builder-mutation-native",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 95,
+    "ExecutionStartDateTime": "2026-10-16T05:39:11.062Z",
+    "ExecutionElapsedTime": "PT3M2.414S",
+    "ExecutionEndDateTime": "2026-10-16T05:42:13.062Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-paired-qualification/run-builder-removal.sh: OK\n/mnt/borsuk-paired-qualification/prove-builder-removal.sh: OK\n/mnt/borsuk-paired-qualification/source-files.sha256: OK\n/mnt/borsuk-paired-qualification/source/crates/borsuk/src/bin/check_cohere_native_baseline.rs: OK\nprobe_exit=0\npublication_exit=95\nshutdown_request_exit=0\nwrapper_exit=95\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "failed to run commands: exit status 95",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

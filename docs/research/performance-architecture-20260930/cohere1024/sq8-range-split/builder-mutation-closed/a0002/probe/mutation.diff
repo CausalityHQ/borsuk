@@ -1,0 +1,11 @@
+--- /mnt/borsuk-paired-qualification/builder-removal-probe/runner.original.rs	2026-10-16 06:03:38.647884853 +0000
++++ /mnt/borsuk-paired-qualification/builder-removal-probe/runner.mutant.rs	2026-10-16 06:06:24.851946651 +0000
+@@ -2127,7 +2127,7 @@
+         None => generation,
+     };
+     let generation = match c.sq8_range_split {
+-        Some(split) => generation.with_sq8_range_split(split)?,
++        Some(_split) => generation,                            
+         None => generation,
+     };
+     require(

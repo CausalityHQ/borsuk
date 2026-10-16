@@ -1,0 +1,14 @@
+Result=success
+ExecMainCode=0
+ExecMainStatus=0
+ControlGroup=
+MemoryCurrent=[not set]
+MemoryPeak=[not set]
+MemorySwapPeak=[not set]
+CPUUsageNSec=[not set]
+TasksCurrent=[not set]
+Description=borsuk-sq8-split-mutation-a0002.service
+LoadState=not-found
+ActiveState=inactive
+SubState=dead
+InvocationID=

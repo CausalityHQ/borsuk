@@ -1,0 +1,5 @@
+crates/borsuk/src/bin/check_cohere_native_baseline.rs:4228:25
+thread 'tests::actual_sq8_split_config_reaches_serving_and_preserves_parity' (11054) panicked at crates/borsuk/src/bin/check_cohere_native_baseline.rs:4228:25:
+  left: 1
+ right: 5
+INNER_PROBE_ENDPOINTS_VERIFIED_OUTER_ATTEMPT_STILL_INVALID

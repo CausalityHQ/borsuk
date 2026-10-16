@@ -1,0 +1,40 @@
+true
+true
+/data/target/borsuk-sq8-panel-attribution.pending/launch-builder-mutation-a0002/collected/wrapper/run-builder-removal.sh: OK
+/data/target/borsuk-sq8-panel-attribution.pending/launch-builder-mutation-a0002/collected/probe/prove-builder-removal.sh: OK
+thread 'tests::actual_sq8_split_config_reaches_serving_and_preserves_parity' (11202) panicked at crates/borsuk/src/bin/check_cohere_native_baseline.rs:4228:25:
+  left: 1
+ right: 5
+InvocationID=8149d75f09a34188a1e4876f355c2a2d
+InvocationID=8149d75f09a34188a1e4876f355c2a2d
+ControlGroup=/system.slice/borsuk-sq8-split-mutation-a0002.service
+Result=success
+ExecMainCode=1
+ExecMainStatus=0
+ActiveState=active
+SubState=exited
+LoadState=not-found
+ActiveState=inactive
+launch-admission.json: OK
+cost-reconciliation.draft.json: OK
+source-review.md: OK
+launch-request.json: OK
+launch-user-data.txt: OK
+setup-command.sh: OK
+native-command.sh: OK
+launch-once.sh: OK
+await-readiness.sh: OK
+submit-setup-once.sh: OK
+submit-native-after-setup.sh: OK
+watch-terminal-once.sh: OK
+collect-terminal-once.sh: OK
+extract-evidence.pl: OK
+inputs.local.sha256: OK
+spot-quote.json: OK
+quote-observed.epoch: OK
+ami-preflight.json: OK
+inputs/source.tar.gz: OK
+inputs/source-files.sha256: OK
+inputs/prove-builder-removal.sh: OK
+inputs/run-builder-removal.sh: OK
+NATIVE_MUTATION_AND_RESTORATION_GATE_VERIFIED

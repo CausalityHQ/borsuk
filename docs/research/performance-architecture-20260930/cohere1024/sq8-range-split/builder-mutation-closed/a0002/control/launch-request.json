@@ -1,0 +1,59 @@
+{
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+        "DeleteOnTermination": true,
+        "Encrypted": true,
+        "Iops": 3000,
+        "Throughput": 125,
+        "VolumeSize": 96,
+        "VolumeType": "gp3"
+      }
+    }
+  ],
+  "ClientToken": "borsuk-sq8-builder-mutation-a0002-8e707695",
+  "IamInstanceProfile": {
+    "Name": "borsuk-bench-profile"
+  },
+  "ImageId": "ami-0b8a830d6339a9758",
+  "InstanceInitiatedShutdownBehavior": "terminate",
+  "InstanceMarketOptions": {
+    "MarketType": "spot",
+    "SpotOptions": {
+      "InstanceInterruptionBehavior": "terminate",
+      "MaxPrice": "0.415",
+      "SpotInstanceType": "one-time"
+    }
+  },
+  "InstanceType": "m6a.4xlarge",
+  "MaxCount": 1,
+  "MetadataOptions": {
+    "HttpEndpoint": "enabled",
+    "HttpTokens": "required"
+  },
+  "MinCount": 1,
+  "SecurityGroupIds": [
+    "sg-0b1fd3e4fbde4af0d"
+  ],
+  "SubnetId": "subnet-034528fbd6977848f",
+  "TagSpecifications": [
+    {
+      "ResourceType": "instance",
+      "Tags": [
+        {
+          "Key": "Name",
+          "Value": "borsuk-sq8-builder-mutation-a0002"
+        },
+        {
+          "Key": "borsuk-source",
+          "Value": "8e7076951936b0434b7947afd5b23e192c98fe70"
+        },
+        {
+          "Key": "borsuk-goal",
+          "Value": "sq8-builder-sensitivity-no-corpus"
+        }
+      ]
+    }
+  ]
+}

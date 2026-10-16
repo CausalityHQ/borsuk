@@ -1,0 +1,12 @@
+{
+  "verdict": "BUILDER_REMOVAL_CAUGHT",
+  "exit": 0,
+  "original_exit": 0,
+  "restoration_exit": 0,
+  "last_stage": "restored.elf-after",
+  "test": "tests::actual_sq8_split_config_reaches_serving_and_preserves_parity",
+  "runner_sha256": "941df2d29cc844a409f20c0dd22a0829150bf159aab7067c27b163aebe3b3b4d",
+  "source_manifest_sha256": "e8c7c66d19150c6662efcd30975186f5c4e9052f1b5137dd4d1e3a7fecf8802f",
+  "deadline_epoch": 1792130653,
+  "interpretation": "execution falsifier only; INVALID never rejects an algorithm"
+}

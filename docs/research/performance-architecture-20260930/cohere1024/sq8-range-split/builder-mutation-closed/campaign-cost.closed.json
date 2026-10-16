@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-split-compiler-campaign-cost-closed-v1",
+  "closed": true,
+  "ceiling_usd": 1,
+  "ancillary_reserved_usd": 0.15,
+  "prior_a0001_a0002_compute_upper_usd": 0.19778275,
+  "remaining_attempt_lifetimes": [
+    {
+      "attempt": "native-qualification-a0003",
+      "seconds": 3524
+    },
+    {
+      "attempt": "builder-mutation-a0001",
+      "seconds": 362
+    },
+    {
+      "attempt": "builder-mutation-a0002",
+      "seconds": 375
+    }
+  ],
+  "rate_cap_usd_hour": 0.415,
+  "aws_campaign_upper_usd": 0.8389813611111111,
+  "basis": "Original launch-started epochs to terminated/volume-absent cleanup marker mtimes; conservative bidcap for later attempts, first closed-window bound for earlier attempts; ancillary authorization reserve, not actual bill",
+  "all_instances_terminated": true,
+  "all_volumes_absent": true,
+  "all_external_timers_inactive": true,
+  "performance_claim": false
+}
