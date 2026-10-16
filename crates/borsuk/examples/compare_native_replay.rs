@@ -1532,6 +1532,7 @@ struct Rows {
     scale: bool,
     current: bool,
     v10: bool,
+    library_scheduler: bool,
     policy: ReadPolicy,
     line_cap: usize,
 }
@@ -1554,6 +1555,7 @@ impl Rows {
             scale: false,
             current: false,
             v10: false,
+            library_scheduler: false,
             policy: ReadPolicy::Existing,
             line_cap: LINE_CAP,
         })
@@ -1587,7 +1589,7 @@ impl Rows {
         if self.policy == ReadPolicy::Sq8SplitPanel {
             sq8_split_panel::validate_row(&self.line, phase)?;
         } else if self.v10 {
-            current_v10::validate_row(&self.line, phase)?;
+            current_v10::validate_row(&self.line, phase, self.library_scheduler)?;
         } else if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
             sq8_panel_attribution::validate_v8_row(&self.line, phase)?;
         } else if self.current {
@@ -1709,6 +1711,9 @@ fn read_run_observed_policy(
     }
     rows.policy = policy;
     rows.v10 = v10;
+    rows.library_scheduler = expected.is_some_and(|c| {
+        c.expected_identity["schema"] == current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
+    });
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
@@ -1909,7 +1914,7 @@ fn read_run_observed_policy(
                 "split admission/startup caller charge",
             )?;
         }
-        if v10 {
+        if v10 || (current && !panel) {
             current_v10::validate_startup(
                 &e.startup,
                 &expected
@@ -10398,6 +10403,7 @@ mod tests {
             "borsuk-cohere-native-baseline-result-v9",
             current_v10::RESULT_SCHEMA,
             current_v10::READ_RETRY_RESULT_SCHEMA,
+            current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA,
         ] {
             let mut expected = v9.clone();
             if current_v10::is_result_schema(schema) {
@@ -13316,7 +13322,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut identity = json!({"phase":"identity","schema":current_v10::RESULT_SCHEMA,
+        let mut identity = json!({"phase":"identity","schema":current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA,
             "config_sha256":sha(&config_bytes),"binary_sha256":binary_sha,
             "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
             "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
@@ -13355,7 +13361,9 @@ mod tests {
         ] {
             identity[key] = json!(sha(bytes));
         }
-        let mut bound = json!({"phase":"bound_inputs","truth_opened":false,"source_cache":"off","credential_source":null});
+        identity["range_scheduler_owner"] = json!("library");
+        let mut bound = json!({"phase":"bound_inputs","truth_opened":false,"source_cache":"off","credential_source":null,
+            "range_scheduler_owner":"library"});
         for key in "dataset revision metric tie_rule rows dimensions count k corpus_source_first query_source_first profile backend generation_prefix generation_root_sha256 corpus_intervals reserved_query_interval producer_authority max_memory_bytes".split_whitespace() {
             bound[key] = config[key].clone();
         }
@@ -13431,7 +13439,26 @@ mod tests {
                 "startup" => "serving",
                 "query" => "serving source_nomination_skipped planning_scope plan selected_slot",
                 "all_queries_sealed" => "selected_count population_count reserved_query_count",
-                "diagnostic_admission" => return row.clone(),
+                "diagnostic_admission" => {
+                    use borsuk::sq8_s3_range::Sq8RangeTrace;
+                    let mut legacy = row.clone();
+                    let traced = legacy["trace"] == true;
+                    let ranges = legacy["trace_ranges"].as_u64().unwrap() as usize;
+                    let parallel = current[0]["fetch_parallelism"].as_u64().unwrap() as usize;
+                    let both = Sq8RangeTrace::pending_futures_bytes(128.max(ranges), parallel);
+                    let pinned = both - if traced {
+                        Sq8RangeTrace::pending_futures_bytes(ranges, parallel)
+                    } else { 0 };
+                    for key in ["range_scheduler_owner", "range_state_charged_by_library_bytes",
+                        "trace_additional_bytes_charged_by_library"] {
+                        legacy.as_object_mut().unwrap().remove(key);
+                    }
+                    legacy["trace_peak_charged_by_library_at_traced_admission"] = json!(traced);
+                    legacy["range_state_pinned_by_runner_bytes"] = json!(pinned);
+                    legacy["range_state_both_paths_bytes"] = json!(both);
+                    legacy["caller_pinned_bytes"] = json!(legacy["caller_pinned_bytes"].as_u64().unwrap() + pinned as u64);
+                    return legacy;
+                },
                 _ => "",
             };
             let mut names = format!("{} {extras}", v2_row_fields(phase).unwrap());
@@ -13703,7 +13730,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_v11_headers_bind_exact_retry_policy_and_preserve_v10_completion() {
+    fn actual_v12_headers_bind_exact_retry_policy_and_preserve_v10_v11_completion() {
         let (dir, result) =
             scale_native_runner::scale_reducer_native_fixture(false, false).unwrap();
         let original = assert_current_native(dir.path(), &result);
@@ -13715,7 +13742,10 @@ mod tests {
             .take(2)
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(headers[0]["schema"], current_v10::READ_RETRY_RESULT_SCHEMA);
+        assert_eq!(
+            headers[0]["schema"],
+            current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
+        );
         let config_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
         assert_eq!(headers[0]["config_sha256"], sha(&config_bytes));
         for key in [
@@ -13767,7 +13797,10 @@ mod tests {
         let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
         current_v10::validate_completed(&pinned).unwrap();
         let run = read_run_with(&result, &pinned.input.sha256, Some(&pinned)).unwrap();
-        assert_eq!(run.identity.schema, current_v10::READ_RETRY_RESULT_SCHEMA);
+        assert_eq!(
+            run.identity.schema,
+            current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
+        );
         assert_eq!(run.samples.len(), 2);
 
         // One failed S3 response followed by a successful 206 adds one physical
@@ -13974,34 +14007,175 @@ mod tests {
             );
         }
         let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        // c3b0e81 full runs pin caller buffers plus pending(max(128, SQ8 cap), width).
+        let scheduler = borsuk::sq8_s3_range::Sq8RangeTrace::pending_futures_bytes(
+            128.max(rows[1]["sq8_get_budget"].as_u64().unwrap() as usize),
+            rows[1]["fetch_parallelism"].as_u64().unwrap() as usize,
+        ) as u64;
         for schema in [
+            "borsuk-cohere-native-baseline-result-v9",
             current_v10::RESULT_SCHEMA,
             current_v10::READ_RETRY_RESULT_SCHEMA,
         ] {
-            let mut bad = rows.clone();
-            if schema == current_v10::RESULT_SCHEMA {
-                bad[0]["schema"] = json!(schema);
-                for header in &mut bad[..2] {
-                    header.as_object_mut().unwrap().remove("config_schema");
-                    header.as_object_mut().unwrap().remove("s3_read_retry");
+            let v9 = schema == "borsuk-cohere-native-baseline-result-v9";
+            let mut historical = rows.clone();
+            historical[0]["schema"] = json!(schema);
+            for header in &mut historical[..2] {
+                let header = header.as_object_mut().unwrap();
+                header.remove("range_scheduler_owner");
+                if schema != current_v10::READ_RETRY_RESULT_SCHEMA {
+                    header.remove("config_schema");
+                    header.remove("s3_read_retry");
+                }
+                if v9 {
+                    header.remove("sq8_range_split");
                 }
             }
-            let (path, _) = write_fixture(dir.path(), "v10-v11-plan-parity.jsonl", bad.clone());
-            let (config, pin) = scale_config(dir.path(), &path, &bad);
-            let (valid, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
-            let valid = read_run_with(&path, &valid.input.sha256, Some(&valid)).unwrap();
-            assert_eq!(
-                valid.samples[0].physical_plan_sha256,
-                run.samples[0].physical_plan_sha256
-            );
+            historical[startup]
+                .as_object_mut()
+                .unwrap()
+                .remove("range_state_charged_by_library_bytes");
+            historical[startup]["caller_pinned_bytes"] =
+                json!(rows[startup]["caller_pinned_bytes"].as_u64().unwrap() + scheduler);
+            if v9 {
+                for row in historical.iter_mut().filter(|r| r["phase"] == "query") {
+                    row.as_object_mut()
+                        .unwrap()
+                        .remove("returned_physical_ordinals");
+                    row["plan"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("logical_range_count");
+                }
+            }
+            let (path, _) =
+                write_fixture(dir.path(), "v10-v11-plan-parity.jsonl", historical.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &historical);
+            let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
+            let valid = read_run_with(&path, &pinned.input.sha256, Some(&pinned)).unwrap();
+            if !v9 {
+                assert_eq!(
+                    valid.samples[0].physical_plan_sha256,
+                    run.samples[0].physical_plan_sha256
+                );
+            }
             assert!(valid.samples[0].charges == run.samples[0].charges);
             assert!(valid.samples[0].returned == run.samples[0].returned);
-            bad[query]["plan"]["logical_range_count"] = json!(2);
+
+            let cap = historical[startup]["library_cap_bytes"].as_u64().unwrap();
+            let scratch = historical[startup]["query_scratch_bytes"].as_u64().unwrap();
+            for (key, value, error) in [
+                (
+                    "caller_pinned_bytes",
+                    0,
+                    "historical full-run scheduler reservation",
+                ),
+                (
+                    "caller_pinned_bytes",
+                    scheduler - 1,
+                    "historical full-run scheduler reservation",
+                ),
+                (
+                    "caller_pinned_bytes",
+                    cap - scratch + 1,
+                    "split startup memory/config conservation",
+                ),
+                (
+                    "codec_scratch_bytes",
+                    0,
+                    "split startup memory/config conservation",
+                ),
+                (
+                    "trace_scratch_bytes",
+                    0,
+                    "split startup memory/config conservation",
+                ),
+                (
+                    "query_scratch_bytes",
+                    scratch + 1,
+                    "split startup memory/config conservation",
+                ),
+                (
+                    "library_cap_bytes",
+                    cap - 1,
+                    "split startup memory/config conservation",
+                ),
+            ] {
+                let mut bad = historical.clone();
+                bad[startup][key] = json!(value);
+                let (path, _) = write_fixture(dir.path(), "historical-startup-charge.jsonl", bad);
+                let body = std::fs::read(&path).unwrap();
+                // Re-seal the changed body and repin only its descriptor, preserving header authority.
+                let mut independent = serde_json::to_value(&pinned).unwrap();
+                independent["input"] = json!({"path":path,"bytes":body.len(),"sha256":sha(&body)});
+                let independent: CompletedConfig = serde_json::from_value(independent).unwrap();
+                assert_eq!(
+                    read_run_with(&path, &independent.input.sha256, Some(&independent))
+                        .err()
+                        .unwrap()
+                        .to_string(),
+                    error,
+                    "{schema} {key}={value}"
+                );
+            }
+            let mut bad = historical.clone();
+            bad[startup]["range_state_charged_by_library_bytes"] = json!(scheduler);
             let (path, _) =
-                write_fixture(dir.path(), "v10-v11-wrong-logical-count.jsonl", bad.clone());
+                write_fixture(dir.path(), "historical-library-owner.jsonl", bad.clone());
             let (config, pin) = scale_config(dir.path(), &path, &bad);
-            let error = reduce_scale(&config, &pin).unwrap_err().to_string();
-            assert_eq!(error, "v10 logical range count", "{schema}");
+            assert!(reduce_scale(&config, &pin).is_err(), "{schema}");
+
+            if !v9 {
+                historical[query]["plan"]["logical_range_count"] = json!(2);
+                let (path, _) = write_fixture(
+                    dir.path(),
+                    "v10-v11-wrong-logical-count.jsonl",
+                    historical.clone(),
+                );
+                let (config, pin) = scale_config(dir.path(), &path, &historical);
+                let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+                assert_eq!(error, "v10 logical range count", "{schema}");
+            }
+        }
+    }
+
+    #[test]
+    fn v12_library_scheduler_startup_and_protocol_binding_are_strict() {
+        let (dir, result) = scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
+        let rows = assert_current_native(dir.path(), &result);
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        let admission = rows
+            .iter()
+            .position(|r| r["phase"] == "diagnostic_admission")
+            .unwrap();
+        for (index, key, value) in [
+            (0, "schema", json!(current_v10::RESULT_SCHEMA)),
+            (1, "range_scheduler_owner", json!("runner")),
+            (
+                startup,
+                "range_state_charged_by_library_bytes",
+                json!(
+                    rows[startup]["range_state_charged_by_library_bytes"]
+                        .as_u64()
+                        .unwrap()
+                        + 1
+                ),
+            ),
+            (admission, "range_state_charged_by_library_bytes", json!(0)),
+            (admission, "range_state_pinned_by_runner_bytes", json!(0)),
+            (
+                admission,
+                "trace_peak_charged_by_library_at_traced_admission",
+                json!(false),
+            ),
+        ] {
+            let mut bad = rows.clone();
+            bad[index][key] = value;
+            let (path, _) =
+                write_fixture(dir.path(), "v12-accounting-falsifier.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(reduce_scale(&config, &pin).is_err(), "{index} {key}");
         }
     }
 
@@ -14012,7 +14186,10 @@ mod tests {
                 scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
             let rows = assert_current_native(dir.path(), &result);
             // Pin expected headers before any falsifier changes producer output.
-            assert_eq!(rows[0]["schema"], current_v10::RESULT_SCHEMA);
+            assert_eq!(
+                rows[0]["schema"],
+                current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
+            );
             assert_eq!(rows[0]["sq8_range_split"], Value::Null);
             let (config, pin) = scale_config(dir.path(), &result, &rows);
             let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();

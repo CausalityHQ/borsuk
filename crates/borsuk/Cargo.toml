@@ -101,6 +101,9 @@ name = "extract_closed_native_replay"
 name = "build_sq8_source"
 
 [[example]]
+name = "verify_canonical_f32"
+
+[[example]]
 name = "exact_sq8_runtime_probe"
 
 [[example]]

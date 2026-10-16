@@ -4,13 +4,17 @@ use serde_json::{Value, json};
 
 pub(super) const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
 pub(super) const READ_RETRY_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v11";
+pub(super) const LIBRARY_SCHEDULER_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v12";
 const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
 const SCOPE_NOTE: &str = "diagnostic selected original ordinals or prefix; not population p99, population recall or full-cohort qualification";
 const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const PLAN_FIELDS: &str = "page_rows selected_pages ranges logical_range_count planned_bytes target_pages target_shortfall primary_pages_retained covered_pages bridge_pages";
 
 pub(super) fn is_result_schema(schema: &str) -> bool {
-    matches!(schema, RESULT_SCHEMA | READ_RETRY_RESULT_SCHEMA)
+    matches!(
+        schema,
+        RESULT_SCHEMA | READ_RETRY_RESULT_SCHEMA | LIBRARY_SCHEDULER_RESULT_SCHEMA
+    )
 }
 
 fn number(v: &Value) -> Result<u64> {
@@ -43,7 +47,7 @@ pub(super) fn physical_cap(inputs: &Value) -> Result<u64> {
     })
 }
 
-pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
+pub(super) fn validate_row(line: &[u8], phase: &str, library_scheduler: bool) -> Result<()> {
     let super::UniqueJson(raw) = serde_json::from_slice(line)?;
     require(raw["phase"] == phase, "v10 row phase")?;
     let extras = match phase {
@@ -59,9 +63,20 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
         }
         "all_queries_sealed" => "selected_count population_count reserved_query_count",
         "diagnostic_admission" => {
+            let scheduler_fields = if library_scheduler {
+                "range_scheduler_owner range_state_charged_by_library_bytes trace_additional_bytes_charged_by_library"
+            } else {
+                "range_state_pinned_by_runner_bytes trace_peak_charged_by_library_at_traced_admission"
+            };
             fields(
                 &raw,
-                "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes trace_peak_charged_by_library_at_traced_admission range_state_pinned_by_runner_bytes range_state_both_paths_bytes",
+                &format!(
+                    "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes range_state_both_paths_bytes {scheduler_fields}"
+                ),
+            )?;
+            require(
+                !library_scheduler || raw["range_scheduler_owner"] == "library",
+                "v12 library scheduler owner",
             )?;
             return require(
                 raw["trace"].is_boolean()
@@ -76,8 +91,21 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
         _ => "",
     };
     let mut roster = format!("{} {extras}", super::v2_row_fields(phase)?);
+    if library_scheduler && matches!(phase, "identity" | "bound_inputs") {
+        roster.push_str(" range_scheduler_owner");
+        require(
+            raw["range_scheduler_owner"] == "library",
+            "v12 library scheduler owner",
+        )?;
+    }
+    if library_scheduler && phase == "startup" {
+        roster.push_str(" range_state_charged_by_library_bytes");
+    }
     let retry = match phase {
-        "identity" => raw["schema"] == READ_RETRY_RESULT_SCHEMA,
+        "identity" => {
+            raw["schema"] == READ_RETRY_RESULT_SCHEMA
+                || (library_scheduler && raw.get("s3_read_retry").is_some())
+        }
         "bound_inputs" => raw.get("config_schema").is_some(),
         _ => false,
     };
@@ -142,8 +170,15 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
             }
             if phase == "identity" {
                 require(
-                    raw["schema"].as_str().is_some_and(is_result_schema),
-                    "explicit v10/v11 result schema",
+                    if library_scheduler {
+                        raw["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA
+                    } else {
+                        matches!(
+                            raw["schema"].as_str(),
+                            Some(RESULT_SCHEMA | READ_RETRY_RESULT_SCHEMA)
+                        )
+                    },
+                    "explicit v10/v11/v12 result schema",
                 )?;
                 for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
                     require(
@@ -216,7 +251,11 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
     ] {
         let bytes = serde_json::to_vec(v)?;
         require(bytes.len() < 65536, "v10 header cap")?;
-        validate_row(&bytes, phase)?;
+        validate_row(
+            &bytes,
+            phase,
+            c.expected_identity["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA,
+        )?;
     }
     let i = &c.expected_identity;
     let b = &c.expected_bound_inputs;
@@ -237,6 +276,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "serving",
         "config_schema",
         "s3_read_retry",
+        "range_scheduler_owner",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }
@@ -444,6 +484,19 @@ pub(super) fn diagnostic_shape(diag: &Value) -> Result<()> {
     )
 }
 
+fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
+    use borsuk::sq8_s3_range::Sq8RangeTrace;
+    let width = usize::try_from(number(&inputs["fetch_parallelism"])?)?;
+    let source = usize::try_from(number(&inputs["source_get_budget"])?)?;
+    let sq8 = usize::try_from(physical_cap(inputs)?)?;
+    Ok(Sq8RangeTrace::checked_pending_futures_bytes(source, width)
+        .ok_or("v12 source scheduler overflow")?
+        .max(
+            Sq8RangeTrace::checked_pending_futures_bytes(sq8, width)
+                .ok_or("v12 SQ8 scheduler overflow")?,
+        ))
+}
+
 pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
     use borsuk::sq8_s3_range::Sq8RangeTrace;
     let traced = inputs["execution"]["trace"] == true;
@@ -454,14 +507,22 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
     } else {
         0
     };
-    let both = Sq8RangeTrace::pending_futures_bytes(128.max(ranges), width);
-    let pinned = both
-        .checked_sub(if traced {
+    let library_scheduler = inputs["range_scheduler_owner"] == "library";
+    let both = if library_scheduler {
+        library_scheduler_bytes(inputs)?
+    } else {
+        Sq8RangeTrace::pending_futures_bytes(128.max(ranges), width)
+    };
+    let pinned = if library_scheduler {
+        0
+    } else {
+        both.checked_sub(if traced {
             Sq8RangeTrace::pending_futures_bytes(ranges, width)
         } else {
             0
         })
-        .ok_or("v10 pinned subtraction")?;
+        .ok_or("v10 pinned subtraction")?
+    };
     require(
         cfg!(target_pointer_width = "64")
             && std::mem::size_of::<Option<u64>>() == 16
@@ -484,8 +545,32 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
             && raw["diagnostic_cap_bytes"] == 1048576
             && raw["host_read_cap_bytes"] == 131072
             && raw["range_state_both_paths_bytes"] == both
-            && raw["range_state_pinned_by_runner_bytes"] == pinned
-            && raw["trace_peak_charged_by_library_at_traced_admission"] == traced
+            && (if library_scheduler {
+                raw["range_scheduler_owner"] == "library"
+                    && raw["range_state_charged_by_library_bytes"] == both
+                    && raw.get("range_state_pinned_by_runner_bytes").is_none()
+            } else {
+                raw["range_state_pinned_by_runner_bytes"] == pinned
+                    && raw.get("range_scheduler_owner").is_none()
+                    && raw.get("range_state_charged_by_library_bytes").is_none()
+            })
+            && (if library_scheduler {
+                raw["trace_additional_bytes_charged_by_library"]
+                    == (if traced {
+                        peak - Sq8RangeTrace::checked_pending_futures_bytes(ranges, width)
+                            .ok_or("v12 trace scheduler overflow")?
+                    } else {
+                        0
+                    })
+                    && raw
+                        .get("trace_peak_charged_by_library_at_traced_admission")
+                        .is_none()
+            } else {
+                raw["trace_peak_charged_by_library_at_traced_admission"] == traced
+                    && raw
+                        .get("trace_additional_bytes_charged_by_library")
+                        .is_none()
+            })
             && number(&raw["caller_pinned_bytes"])? >= (diagnostic + pinned) as u64
             && number(&raw["caller_pinned_bytes"])? <= number(&inputs["max_memory_bytes"])?,
         "split trace admission conservation",
@@ -509,6 +594,32 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
+    require(
+        if inputs["range_scheduler_owner"] == "library" {
+            raw["range_state_charged_by_library_bytes"] == library_scheduler_bytes(inputs)?
+        } else {
+            raw.get("range_state_charged_by_library_bytes").is_none()
+        },
+        "v12 startup scheduler conservation",
+    )?;
+    if inputs["range_scheduler_owner"] != "library" && inputs["execution"]["mode"] == "full" {
+        // Historical baseline SOURCE reserved 128 ranges even with a 96-GET budget.
+        let ranges = if inputs.get("sq8_range_split").is_some() {
+            physical_cap(inputs)?
+        } else {
+            number(&inputs["sq8_get_budget"])?
+        };
+        let scheduler = borsuk::sq8_s3_range::Sq8RangeTrace::checked_pending_futures_bytes(
+            128.max(usize::try_from(ranges)?),
+            usize::try_from(number(&inputs["fetch_parallelism"])?)?,
+        )
+        .ok_or("historical scheduler overflow")?;
+        // shortcut: headers omit caller allocation capacities; exact totals need separately pinned evidence.
+        require(
+            number(&raw["caller_pinned_bytes"])? >= scheduler as u64,
+            "historical full-run scheduler reservation",
+        )?;
+    }
     let cap = number(&inputs["max_memory_bytes"])?;
     let dimensions = usize::try_from(number(&inputs["dimensions"])?)?;
     let codec =
@@ -543,6 +654,148 @@ mod tests {
                 "logical_range_count":1,"planned_bytes":910,"target_pages":2,
                 "target_shortfall":0,"primary_pages_retained":0,"covered_pages":3,"bridge_pages":1}});
         (query, inputs)
+    }
+
+    #[test]
+    fn historical_full_startup_uses_fixed_source_and_physical_sq8_reservation() {
+        use borsuk::{sq8_s3_range::Sq8RangeTrace, two_bit_generation::TwoBitPlanTrace};
+        for width in [16, 32, 64, 128] {
+            for source in [96, 128] {
+                for (sq8, split, physical) in [
+                    (32, None, 32),
+                    (32, Some(Value::Null), 32),
+                    (256, Some(Value::Null), 256),
+                    (
+                        32,
+                        Some(json!({"max_physical_range_bytes":4096,"max_physical_gets":46})),
+                        46,
+                    ),
+                ] {
+                    let mut inputs = json!({"rows":32,"dimensions":1024,"max_memory_bytes":MEMORY_CAP,
+                        "source_get_budget":source,"sq8_get_budget":sq8,"fetch_parallelism":width,
+                        "execution":{"mode":"full"}});
+                    if let Some(split) = split {
+                        inputs["sq8_range_split"] = split;
+                    }
+                    let scheduler =
+                        Sq8RangeTrace::pending_futures_bytes(128.max(physical), width) as u64;
+                    let trace = TwoBitPlanTrace::scratch_bytes(32) as u64;
+                    let query = 532480 + trace;
+                    let mut raw = json!({"caller_pinned_bytes":2097152 + scheduler,
+                        "library_cap_bytes":MEMORY_CAP,"codec_scratch_bytes":532480,
+                        "trace_scratch_bytes":trace,"query_scratch_bytes":query});
+                    validate_startup(&raw, &inputs).unwrap();
+                    for caller in [0, scheduler - 1, MEMORY_CAP - query + 1, u64::MAX] {
+                        raw["caller_pinned_bytes"] = json!(caller);
+                        assert!(
+                            validate_startup(&raw, &inputs).is_err(),
+                            "source={source} width={width} physical={physical} caller={caller}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v12_scheduler_ownership_and_trace_bytes_are_strict_and_legacy_stays_strict() {
+        use borsuk::sq8_s3_range::Sq8RangeTrace;
+        for traced in [false, true] {
+            for (source, ranges, width, split) in [(32, 32, 16, false), (128, 46, 128, true)] {
+                let peak = if traced {
+                    Sq8RangeTrace::modeled_bytes(ranges, width)
+                } else {
+                    0
+                };
+                let pending = Sq8RangeTrace::pending_futures_bytes(ranges, width);
+                let both = Sq8RangeTrace::pending_futures_bytes(128, width);
+                let diagnostic = if traced { 534097 } else { 131072 };
+                let legacy_pinned = both - if traced { pending } else { 0 };
+                let mut inputs = json!({"source_get_budget":source,"sq8_get_budget":32,
+                    "fetch_parallelism":width,"sq8_range_split":null,
+                    "execution":{"trace":traced},"max_memory_bytes":MEMORY_CAP});
+                if split {
+                    inputs["sq8_range_split"] =
+                        json!({"max_physical_range_bytes":4096,"max_physical_gets":ranges});
+                }
+                let mut raw = json!({"phase":"diagnostic_admission","execution":{"trace":traced},
+                    "selected_count":1,"population_count":2,"trace":traced,"truth_opened":false,
+                    "max_active_queries":1,"charged_in_caller_pinned_bytes":true,
+                    "population_percentiles_valid":false,"full_cohort_qualification":false,
+                    "diagnostic_bytes_per_active_query":diagnostic+peak,"diagnostic_cap_bytes":1048576,
+                    "caller_pinned_bytes":diagnostic+legacy_pinned,"panel_line_cap_bytes":65536,
+                    "host_read_cap_bytes":131072,"trace_ranges":ranges,"diagnostic_pinned_bytes":diagnostic,
+                    "trace_retained_bytes":if traced { json!(Sq8RangeTrace::retained_bytes(ranges)) } else { Value::Null },
+                    "trace_peak_bytes":if traced { json!(peak) } else { Value::Null },
+                    "trace_peak_charged_by_library_at_traced_admission":traced,
+                    "range_state_pinned_by_runner_bytes":legacy_pinned,"range_state_both_paths_bytes":both,
+                    "semantics":{"headers_interval":"get_opts_client_queue_connect_tls_server_combined",
+                        "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
+                        "ranges":"overlap_in_time_never_sum_intervals","host_counters":"host_wide_not_per_flow_null_means_unavailable",
+                        "unset":"a boundary never reached is null, never a fabricated timestamp"}});
+                validate_row(
+                    &serde_json::to_vec(&raw).unwrap(),
+                    "diagnostic_admission",
+                    false,
+                )
+                .unwrap();
+                validate_admission(&raw, &inputs).unwrap();
+                let mut invalid_legacy = raw.clone();
+                invalid_legacy["range_state_pinned_by_runner_bytes"] = json!(0);
+                assert!(validate_admission(&invalid_legacy, &inputs).is_err());
+                assert!(
+                    validate_row(
+                        &serde_json::to_vec(&raw).unwrap(),
+                        "diagnostic_admission",
+                        true
+                    )
+                    .is_err()
+                );
+                inputs["range_scheduler_owner"] = json!("library");
+                raw.as_object_mut()
+                    .unwrap()
+                    .remove("range_state_pinned_by_runner_bytes");
+                raw.as_object_mut()
+                    .unwrap()
+                    .remove("trace_peak_charged_by_library_at_traced_admission");
+                raw["range_scheduler_owner"] = json!("library");
+                let library = Sq8RangeTrace::checked_pending_futures_bytes(source, width)
+                    .unwrap()
+                    .max(pending);
+                raw["range_state_both_paths_bytes"] = json!(library);
+                raw["range_state_charged_by_library_bytes"] = json!(library);
+                raw["trace_additional_bytes_charged_by_library"] =
+                    json!(if traced { peak - pending } else { 0 });
+                raw["caller_pinned_bytes"] = json!(diagnostic);
+                validate_row(
+                    &serde_json::to_vec(&raw).unwrap(),
+                    "diagnostic_admission",
+                    true,
+                )
+                .unwrap();
+                validate_admission(&raw, &inputs).unwrap();
+                assert!(
+                    validate_row(
+                        &serde_json::to_vec(&raw).unwrap(),
+                        "diagnostic_admission",
+                        false
+                    )
+                    .is_err()
+                );
+                for (key, wrong) in [
+                    ("range_scheduler_owner", json!("runner")),
+                    ("range_state_charged_by_library_bytes", json!(library + 1)),
+                    ("range_state_both_paths_bytes", json!(library - 1)),
+                    ("trace_additional_bytes_charged_by_library", json!(peak + 1)),
+                    ("range_state_pinned_by_runner_bytes", json!(0)),
+                    ("caller_pinned_bytes", json!(diagnostic - 1)),
+                ] {
+                    let mut bad = raw.clone();
+                    bad[key] = wrong;
+                    assert!(validate_admission(&bad, &inputs).is_err(), "{key}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -606,7 +859,7 @@ mod tests {
         );
         let duplicate = br#"{"phase":"identity","schema":"borsuk-cohere-native-baseline-result-v10","schema":"borsuk-cohere-native-baseline-result-v10"}"#;
         assert!(
-            validate_row(duplicate, "identity")
+            validate_row(duplicate, "identity", false)
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate")

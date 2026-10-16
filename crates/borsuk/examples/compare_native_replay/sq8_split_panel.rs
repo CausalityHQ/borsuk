@@ -156,7 +156,7 @@ fn split_option(header: &Value) -> Result<()> {
 }
 
 pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
-    super::current_v10::validate_row(line, phase)?;
+    super::current_v10::validate_row(line, phase, false)?;
     let super::UniqueJson(raw) = serde_json::from_slice(line)?;
     if phase == "query" {
         returned_ordinals(&raw)?;

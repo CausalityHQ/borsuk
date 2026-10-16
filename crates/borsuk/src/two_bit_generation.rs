@@ -205,7 +205,8 @@ pub struct DirectClosureMemory {
     /// 512 bytes per page of closure/cover roster.
     pub direct_planner_bytes: u64,
     /// `(3 * max_sq8_bytes + planner + ranking) * max_active_queries`, where ranking
-    /// is `256 * min(rows, max_sq8_bytes / (D + 12)) + 4 * D`.
+    /// is `256 * min(rows, max_sq8_bytes / (D + 12)) + 4 * D`, plus split buffers
+    /// and any scheduler bound exceeding the one already in `resident_bytes`.
     pub direct_query_bytes: u64,
     /// `resident_bytes + direct_query_bytes`.
     pub total_bytes: u64,
@@ -1064,6 +1065,29 @@ fn rank_walked_source_with_limit(
     Ok(ranked)
 }
 
+// SOURCE and SQ8 drains are sequential; retain the larger bound for every active query.
+fn range_scheduler_memory(
+    limits: TwoBitGenerationLimits,
+    paged: bool,
+    sq8_gets: usize,
+) -> Result<u64> {
+    let bytes = || {
+        let source = if paged {
+            Sq8RangeTrace::checked_pending_futures_bytes(
+                limits.max_source_gets,
+                limits.max_parallel_source_gets,
+            )?
+        } else {
+            0
+        };
+        let sq8 = Sq8RangeTrace::checked_pending_futures_bytes(sq8_gets, limits.max_parallel_gets)?;
+        u64::try_from(source.max(sq8))
+            .ok()?
+            .checked_mul(limits.max_active_queries as u64)
+    };
+    bytes().ok_or(TwoBitGenerationError::Invalid("range scheduler memory"))
+}
+
 impl TwoBitGeneration {
     /// Physical row count of this immutable nonempty base.
     pub fn rows(&self) -> usize {
@@ -1086,11 +1110,25 @@ impl TwoBitGeneration {
         }
         let scratch = split
             .scratch_bytes(self.limits.max_query_bytes, self.limits.max_parallel_gets)
+            .and_then(|bytes| {
+                bytes.checked_sub(Sq8RangeTrace::checked_pending_futures_bytes(
+                    split.max_physical_gets,
+                    self.limits.max_parallel_gets,
+                )?)
+            })
             .ok_or(bad("SQ8 split scratch overflow"))?;
+        let previous = range_scheduler_memory(
+            self.limits,
+            self.source.is_some(),
+            self.limits.max_query_gets,
+        )?;
+        let scheduler =
+            range_scheduler_memory(self.limits, self.source.is_some(), split.max_physical_gets)?;
         let modeled = u64::try_from(scratch)
             .ok()
             .and_then(|bytes| bytes.checked_mul(self.limits.max_active_queries as u64))
-            .and_then(|bytes| bytes.checked_add(self.modeled_memory_bytes))
+            .and_then(|bytes| bytes.checked_add(self.modeled_memory_bytes.checked_sub(previous)?))
+            .and_then(|bytes| bytes.checked_add(scheduler))
             .filter(|&bytes| bytes <= self.limits.max_memory_bytes)
             .ok_or(bad("SQ8 split memory"))?;
         self.modeled_memory_bytes = modeled;
@@ -1544,6 +1582,7 @@ impl TwoBitGeneration {
         let planner_bytes = (limits.max_query_scratch_bytes as u64)
             .checked_add(planner_reserve)
             .ok_or(bad("query memory"))?;
+        let scheduler_memory = range_scheduler_memory(limits, paged, limits.max_query_gets)?;
         let query_memory = crate::returned_sq8::query_payload_bytes(
             crate::exact_sq8_nominee::Sq8Geometry {
                 rows: geometry.rows,
@@ -1609,6 +1648,7 @@ impl TwoBitGeneration {
                 })
             })
             .and_then(|n| n.checked_add(query_memory))
+            .and_then(|n| n.checked_add(scheduler_memory))
             .and_then(|n| n.checked_add(source_query_memory))
             .and_then(|n| n.checked_add(validation_page_bytes))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
@@ -2473,9 +2513,9 @@ impl TwoBitGeneration {
 
     // Diagnostic memory is modeled per active query on top of the admitted total, and
     // the span buffer must hold every GET this query may issue. Non-resource refusal:
-    // checked before the slot, any allocation or any request. This is the ONE place the trace's
-    // cumulative peak is charged: a caller must not also include it in `already_pinned_bytes`
-    // (the check would then count it twice), only the buffers it holds itself.
+    // checked before the slot, any allocation or any request. Scheduler state is already
+    // admitted at the physical query cap; add only the retained trace and completed probes.
+    // Callers pin only their own buffers, not this library-owned diagnostic state.
     fn admit_range_trace(
         &self,
         trace: &Sq8RangeTrace,
@@ -2486,7 +2526,14 @@ impl TwoBitGeneration {
         if trace.capacity() < max_gets {
             return Err(bad("diagnostic range capacity"));
         }
-        let bytes = (trace.reserved_bytes(self.limits.max_parallel_gets) as u64)
+        let diagnostic = trace
+            .reserved_bytes(self.limits.max_parallel_gets)
+            .checked_sub(Sq8RangeTrace::pending_futures_bytes(
+                trace.capacity(),
+                self.limits.max_parallel_gets,
+            ))
+            .ok_or(bad("diagnostic memory"))?;
+        let bytes = (diagnostic as u64)
             .checked_mul(self.limits.max_active_queries as u64)
             .and_then(|n| n.checked_add(admitted_total))
             .ok_or(bad("diagnostic memory"))?;
@@ -2668,10 +2715,27 @@ impl TwoBitGeneration {
         let split_scratch = self
             .sq8_range_split
             .map_or(Some(0), |split| {
-                split.scratch_bytes(limits.max_sq8_bytes, self.limits.max_parallel_gets)
+                split
+                    .scratch_bytes(limits.max_sq8_bytes, self.limits.max_parallel_gets)
+                    .and_then(|bytes| {
+                        bytes.checked_sub(Sq8RangeTrace::checked_pending_futures_bytes(
+                            split.max_physical_gets,
+                            self.limits.max_parallel_gets,
+                        )?)
+                    })
             })
             .and_then(|bytes| u64::try_from(bytes).ok())
             .ok_or(bad("SQ8 split scratch overflow"))?;
+        let scheduler = range_scheduler_memory(
+            self.limits,
+            false,
+            self.physical_sq8_cap(limits.max_sq8_gets),
+        )?
+        .saturating_sub(range_scheduler_memory(
+            self.limits,
+            self.source.is_some(),
+            self.physical_sq8_cap(self.limits.max_query_gets),
+        )?);
         let direct = crate::returned_sq8::query_payload_bytes(
             crate::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
             limits.max_sq8_bytes as u64,
@@ -2680,7 +2744,9 @@ impl TwoBitGeneration {
                 .ok_or(bad("SQ8 split scratch overflow"))?,
             self.limits.max_active_queries as u64,
         )
-        .map_err(|_| bad("direct closure query memory"))?;
+        .map_err(|_| bad("direct closure query memory"))?
+        .checked_add(scheduler)
+        .ok_or(bad("direct closure query memory"))?;
         Ok(DirectClosureMemory {
             resident_bytes: self.modeled_memory_bytes,
             direct_planner_bytes: planner,
@@ -4027,8 +4093,9 @@ mod source_walk_tests {
                 assert_eq!(generation.limits.max_parallel_source_gets, parallelism);
                 assert!(generation.source_cache.is_none());
                 let modeled = generation.modeled_memory_bytes();
-                if let Some(control) = control_memory { assert_eq!(modeled, control); }
-                control_memory = Some(modeled);
+                let scheduler = Sq8RangeTrace::pending_futures_bytes(128, parallelism) as u64;
+                if let Some(control) = control_memory { assert_eq!(modeled - scheduler, control); }
+                control_memory = Some(modeled - scheduler);
 
                 fixture.arm(None);
                 let rejected = TwoBitGeneration::open_remote(
@@ -5038,7 +5105,9 @@ mod source_walk_tests {
             eager_bytes - bounded_bytes,
             3 * fs::metadata(root.join("plane/records.bin")).unwrap().len()
                 - 2 * publication_limits.max_source_bytes as u64
-                - 32 * bounded.plane.receipt().record_bytes as u64,
+                - 32 * bounded.plane.receipt().record_bytes as u64
+                - (Sq8RangeTrace::pending_futures_bytes(128, 4)
+                    - Sq8RangeTrace::pending_futures_bytes(32, 4)) as u64,
         );
         let semantic_bytes = crate::semantic_unit_router::admit(
             crate::semantic_unit_router::Geometry {
@@ -8251,9 +8320,13 @@ mod source_walk_tests {
             max_physical_range_bytes: 64 * generation.pages.page_rows() * (dimensions + 12),
             max_physical_gets: 128,
         };
-        let scratch = split
+        let scratch = (split
             .scratch_bytes(limits.max_query_bytes, limits.max_parallel_gets)
-            .unwrap() as u64;
+            .unwrap()
+            - Sq8RangeTrace::pending_futures_bytes(
+                split.max_physical_gets,
+                limits.max_parallel_gets,
+            )) as u64;
         let before = generation.modeled_memory_bytes();
         generation.limits.max_memory_bytes = before + scratch;
         let mut generation = generation.with_sq8_range_split(split).unwrap();
@@ -9516,6 +9589,284 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
+    async fn native_scheduler_constructor_charges_phase_max_per_active_query() {
+        let tiny = tiny_direct(513, 24).await;
+        let pending = Sq8RangeTrace::pending_futures_bytes;
+        for active in [1, 2] {
+            let base_limits = TwoBitGenerationLimits {
+                max_active_queries: active,
+                max_source_gets: 1,
+                max_query_gets: 1,
+                already_pinned_bytes: 0,
+                ..tiny.limits
+            };
+            let base = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &tiny.root_sha,
+                base_limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            for (source, sq8, source_parallel, sq8_parallel) in [(128, 32, 32, 4), (2, 64, 1, 32)] {
+                let limits = TwoBitGenerationLimits {
+                    max_source_gets: source,
+                    max_query_gets: sq8,
+                    max_parallel_source_gets: source_parallel,
+                    max_parallel_gets: sq8_parallel,
+                    ..base_limits
+                };
+                let expected = base.modeled_memory_bytes()
+                    + active as u64
+                        * (pending(source, source_parallel).max(pending(sq8, sq8_parallel))
+                            - pending(1, 16)) as u64;
+                let exact = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &tiny.root_sha,
+                    TwoBitGenerationLimits {
+                        max_memory_bytes: expected,
+                        ..limits
+                    },
+                    tiny.temp.path(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(exact.modeled_memory_bytes(), expected);
+                assert_eq!(exact.slots.available_permits(), active);
+                tiny.store.inner.reads.lock().unwrap().clear();
+                let refused = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &tiny.root_sha,
+                    TwoBitGenerationLimits {
+                        max_memory_bytes: expected - 1,
+                        ..limits
+                    },
+                    tiny.temp.path(),
+                )
+                .await
+                .err()
+                .unwrap();
+                assert!(matches!(
+                    refused,
+                    TwoBitGenerationError::Invalid("memory cap")
+                ));
+                assert!(
+                    tiny.store
+                        .inner
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|(path, head, _, _)| {
+                            *head
+                                || (!path.ends_with("plane/records.bin")
+                                    && !path.ends_with("router/leaves.bin")
+                                    && path != tiny.key.as_ref())
+                        })
+                );
+                let root = tiny.temp.path().join("generation");
+                let local_base =
+                    TwoBitGeneration::open(&root, &tiny.root_sha, base_limits).unwrap();
+                let local = TwoBitGeneration::open(&root, &tiny.root_sha, limits).unwrap();
+                assert_eq!(
+                    local.modeled_memory_bytes() - local_base.modeled_memory_bytes(),
+                    active as u64 * (pending(sq8, sq8_parallel) - pending(1, 16)) as u64
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_direct_scheduler_excess_refuses_before_occupied_slot_or_io() {
+        let tiny = tiny_direct(513, 24).await;
+        let limits = TwoBitGenerationLimits {
+            max_active_queries: 2,
+            max_query_gets: 1,
+            max_source_gets: 1,
+            already_pinned_bytes: 0,
+            ..tiny.limits
+        };
+        let mut generation = TwoBitGeneration::open_remote(
+            &tiny.store,
+            &tiny.prefix,
+            &tiny.root_sha,
+            limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let narrow = DirectClosureLimits {
+            max_sq8_bytes: 513 * 36,
+            max_sq8_gets: 1,
+        };
+        let wide = DirectClosureLimits {
+            max_sq8_gets: 128,
+            ..narrow
+        };
+        let before = generation.direct_closure_memory(narrow).unwrap();
+        let memory = generation.direct_closure_memory(wide).unwrap();
+        let delta = 2
+            * (Sq8RangeTrace::pending_futures_bytes(128, 16)
+                - Sq8RangeTrace::pending_futures_bytes(1, 16)) as u64;
+        assert_eq!(memory.direct_query_bytes, before.direct_query_bytes + delta);
+        assert_eq!(memory.total_bytes, before.total_bytes + delta);
+        let query = tiny_query(24);
+        tiny.store.inner.reads.lock().unwrap().clear();
+        generation.limits.max_memory_bytes = memory.total_bytes - 1;
+        {
+            let _held = generation.slots.try_acquire_many(2).unwrap();
+            let mut refused = std::pin::pin!(generation.direct_closure_search_with_store(
+                &tiny.store,
+                &query,
+                10,
+                None,
+                wide,
+            ));
+            let std::task::Poll::Ready(Err(error)) = futures_util::poll!(refused.as_mut()) else {
+                panic!("memory refusal must precede an occupied query slot");
+            };
+            assert_eq!(
+                error.direct_resource_rejection(),
+                Some(DirectClosureRejection::ModeledMemory)
+            );
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            assert_eq!(generation.slots.available_permits(), 0);
+        }
+        generation.limits.max_memory_bytes = memory.total_bytes;
+        generation
+            .direct_closure_search_with_store(&tiny.store, &query, 10, None, wide)
+            .await
+            .unwrap();
+        assert_eq!(generation.slots.available_permits(), 2);
+        let mut trace = Sq8RangeTrace::new(128).unwrap();
+        let trace_bytes =
+            2 * (trace.reserved_bytes(16) - Sq8RangeTrace::pending_futures_bytes(128, 16)) as u64;
+        generation.limits.max_memory_bytes = memory.total_bytes + trace_bytes - 1;
+        tiny.store.inner.reads.lock().unwrap().clear();
+        {
+            let _held = generation.slots.try_acquire_many(2).unwrap();
+            let mut refused = std::pin::pin!(
+                generation.diagnostic_direct_closure_search_with_store_traced(
+                    &tiny.store,
+                    &query,
+                    10,
+                    wide,
+                    &mut trace,
+                )
+            );
+            let std::task::Poll::Ready(Err(error)) = futures_util::poll!(refused.as_mut()) else {
+                panic!("trace refusal must precede an occupied query slot");
+            };
+            assert!(matches!(
+                error,
+                TwoBitGenerationError::Invalid("diagnostic memory")
+            ));
+        }
+        assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+        assert_eq!(trace.outcome, "admission_refused");
+        generation.limits.max_memory_bytes = memory.total_bytes + trace_bytes;
+        generation
+            .diagnostic_direct_closure_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                wide,
+                &mut trace,
+            )
+            .await
+            .unwrap();
+        assert_eq!(trace.outcome, "ranked");
+        assert_eq!(generation.slots.available_permits(), 2);
+        assert!(
+            range_scheduler_memory(
+                TwoBitGenerationLimits {
+                    max_active_queries: usize::MAX,
+                    ..limits
+                },
+                true,
+                1
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            generation.direct_closure_memory(DirectClosureLimits {
+                max_sq8_gets: usize::MAX,
+                ..wide
+            }),
+            Err(TwoBitGenerationError::Invalid("range scheduler memory"))
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_split_replaces_scheduler_bound_without_double_charge() {
+        let tiny = tiny_direct(513, 24).await;
+        let root = tiny.temp.path().join("generation");
+        let limits = TwoBitGenerationLimits {
+            max_active_queries: 2,
+            max_query_gets: 1,
+            max_source_gets: 1,
+            already_pinned_bytes: 0,
+            ..tiny.limits
+        };
+        let base = TwoBitGeneration::open(&root, &tiny.root_sha, limits).unwrap();
+        let split = Sq8RangeSplit {
+            max_physical_range_bytes: 32 * 36,
+            max_physical_gets: 32,
+        };
+        let pending = Sq8RangeTrace::pending_futures_bytes;
+        let scratch = split.scratch_bytes(limits.max_query_bytes, 16).unwrap() - pending(32, 16);
+        let expected =
+            base.modeled_memory_bytes() + 2 * (scratch + pending(32, 16) - pending(1, 16)) as u64;
+        for cap in [expected - 1, expected] {
+            let generation = TwoBitGeneration::open(
+                &root,
+                &tiny.root_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: cap,
+                    ..limits
+                },
+            )
+            .unwrap();
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let result = generation.with_sq8_range_split(split);
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            if cap < expected {
+                assert!(matches!(
+                    result,
+                    Err(TwoBitGenerationError::Invalid("SQ8 split memory"))
+                ));
+            } else {
+                let generation = result.unwrap();
+                assert_eq!(generation.modeled_memory_bytes(), expected);
+                let direct = DirectClosureLimits {
+                    max_sq8_bytes: 513 * 36,
+                    max_sq8_gets: 1,
+                };
+                let memory = generation.direct_closure_memory(direct).unwrap();
+                let before = base.direct_closure_memory(direct).unwrap();
+                let direct_scratch =
+                    split.scratch_bytes(direct.max_sq8_bytes, 16).unwrap() - pending(32, 16);
+                assert_eq!(
+                    memory.direct_query_bytes,
+                    before.direct_query_bytes + 2 * direct_scratch as u64
+                );
+                assert_eq!(
+                    generation
+                        .direct_closure_memory(DirectClosureLimits {
+                            max_sq8_gets: 128,
+                            ..direct
+                        })
+                        .unwrap(),
+                    memory
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn native_direct_closure_tiny_widths_tail_ties_admission_and_authenticated_failures() {
         let rows = 513;
         for dimensions in [24_usize, 40] {
@@ -10051,7 +10402,11 @@ mod source_walk_tests {
         let query = tiny_query(dimensions);
         let mut trace = Sq8RangeTrace::new(1).unwrap();
         let charge = |trace: &Sq8RangeTrace, generation: &TwoBitGeneration| {
-            trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+            (trace.reserved_bytes(generation.limits.max_parallel_gets)
+                - Sq8RangeTrace::pending_futures_bytes(
+                    trace.capacity(),
+                    generation.limits.max_parallel_gets,
+                )) as u64
                 * generation.limits.max_active_queries as u64
         };
         let direct_charge = charge(&trace, &generation);
@@ -10234,7 +10589,11 @@ mod source_walk_tests {
         let mut trace = Sq8RangeTrace::new(32).unwrap();
         let mut narrow = Sq8RangeTrace::new(1).unwrap();
         let memory = generation.direct_closure_memory(dlimits).unwrap();
-        let direct_charge = trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+        let direct_charge = (trace.reserved_bytes(generation.limits.max_parallel_gets)
+            - Sq8RangeTrace::pending_futures_bytes(
+                trace.capacity(),
+                generation.limits.max_parallel_gets,
+            )) as u64
             * generation.limits.max_active_queries as u64;
         let wide = DirectClosureLimits {
             max_sq8_gets: 2,
@@ -10325,7 +10684,11 @@ mod source_walk_tests {
         pristine(&trace, "started", "direct planned bytes");
 
         // Baseline entry: the same guarantee for its three early refusals.
-        let baseline_charge = trace.reserved_bytes(generation.limits.max_parallel_gets) as u64
+        let baseline_charge = (trace.reserved_bytes(generation.limits.max_parallel_gets)
+            - Sq8RangeTrace::pending_futures_bytes(
+                trace.capacity(),
+                generation.limits.max_parallel_gets,
+            )) as u64
             * generation.limits.max_active_queries as u64;
         let cases: [(&str, bool, usize, bool); 3] = [
             ("baseline top_k zero", false, 0, false),

@@ -1,0 +1,30 @@
+{
+  "schema": "borsuk-library-delivery-artifacts-v1",
+  "build_source": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+  "prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261016/persistent-rust-workspace-a0001/library-delivery-packet-a0001/",
+  "source_archive": {
+    "name": "source.tar.gz",
+    "sha256": "1f26c2766c98d369fa02eb143a444076f18df43310dceb046ceaee6821525f32"
+  },
+  "qualification_archive": {
+    "name": "qualification-evidence.tar.gz",
+    "sha256": "9ee30a1b7e12ceb4ea5100c4003d3fea226c589cb1cfbbc6644bb844b2d85a84"
+  },
+  "binaries": [
+    {
+      "name": "binaries/check_cohere_native_baseline",
+      "sha256": "3f869830d05e17098e7317f1a66151a19efe9af6f26c453226ccb1dad7773de6"
+    },
+    {
+      "name": "binaries/compare_native_replay",
+      "sha256": "fb5a0046d4edbaf78f3f7059b31c3130e36f37c25db1471787b96bcbacb04ad2"
+    },
+    {
+      "name": "binaries/verify_canonical_f32",
+      "sha256": "6de1fb7b431aac9ffc594b6ea4027729977c9a4f836378e5964387e6a7863f6e"
+    }
+  ],
+  "source_file_hashes": "candidate.sha256",
+  "source_patch_sha256": "bb2d930f1f18d24d2d1519c7c42913fd310ddf26388cc4bc434ad7d19e596ac2",
+  "claims_performance": false
+}

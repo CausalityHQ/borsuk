@@ -362,10 +362,8 @@ impl Sq8RangeSplit {
                 .checked_add(2 * std::mem::size_of::<VerifiedRange>())?
                 .checked_add(std::mem::size_of::<ReturnedRange<'_>>())?,
         )?;
-        let pending = Sq8RangeTrace::pending_futures_bytes(self.max_physical_gets, parallel);
-        if pending == usize::MAX {
-            return None;
-        }
+        let pending =
+            Sq8RangeTrace::checked_pending_futures_bytes(self.max_physical_gets, parallel)?;
         max_bytes
             .checked_add(descriptors)?
             .checked_add(
@@ -2035,15 +2033,20 @@ impl Sq8RangeTrace {
     /// fixture on the base commit it is an unmeasured estimate of a few hundred bytes per
     /// pending range, inside the allowance charged above.
     pub fn pending_futures_bytes(ranges: usize, max_parallel: usize) -> usize {
+        Self::checked_pending_futures_bytes(ranges, max_parallel).unwrap_or(usize::MAX)
+    }
+
+    /// Checked form of the scheduler bound for admission and accounting reports.
+    pub fn checked_pending_futures_bytes(ranges: usize, max_parallel: usize) -> Option<usize> {
         let outcome = std::mem::size_of::<IndexedRangeOutcome>();
         let pending = ranges.min(max_parallel);
         pending
-            .saturating_mul(RANGE_FUTURE_ALLOWANCE_BYTES)
-            .saturating_add(pending.saturating_mul(outcome.saturating_add(8)))
-            .saturating_add(
+            .checked_mul(RANGE_FUTURE_ALLOWANCE_BYTES)?
+            .checked_add(pending.checked_mul(outcome.checked_add(8)?)?)?
+            .checked_add(
                 ranges
-                    .saturating_mul(outcome)
-                    .saturating_mul(OUTCOME_VECTOR_GROWTH_FACTOR),
+                    .checked_mul(outcome)?
+                    .checked_mul(OUTCOME_VECTOR_GROWTH_FACTOR)?,
             )
     }
 
@@ -5311,6 +5314,18 @@ mod tests {
         assert_eq!(
             Sq8RangeTrace::pending_futures_bytes(4, 64),
             Sq8RangeTrace::pending_futures_bytes(4, 4)
+        );
+        assert_eq!(
+            Sq8RangeTrace::checked_pending_futures_bytes(capacity, parallel),
+            Some(both_paths)
+        );
+        assert_eq!(
+            Sq8RangeTrace::checked_pending_futures_bytes(usize::MAX, 1),
+            None
+        );
+        assert_eq!(
+            Sq8RangeTrace::checked_pending_futures_bytes(1, usize::MAX),
+            Some(Sq8RangeTrace::pending_futures_bytes(1, 1))
         );
         let trace = Sq8RangeTrace::new(capacity).unwrap();
         assert_eq!(trace.reserved_bytes(parallel), peak);

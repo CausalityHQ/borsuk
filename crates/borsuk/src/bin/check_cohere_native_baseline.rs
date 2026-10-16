@@ -45,9 +45,8 @@ const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v10";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v12";
 const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
-const READ_RETRY_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v11";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -1235,13 +1234,18 @@ fn trace_ranges(c: &Config) -> usize {
         .direct()
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
-// Most range futures any phase of a query can plan; baseline SOURCE batches are the largest.
-fn plan_ranges(c: &Config) -> usize {
-    if c.serving.direct().is_some() {
-        trace_ranges(c)
-    } else {
-        BASELINE_SOURCE_GETS.max(trace_ranges(c))
-    }
+// The library retains the ordinary bound even for direct queries; direct adds only excess.
+fn range_scheduler_bytes(c: &Config) -> Result<usize> {
+    let pending = |ranges| {
+        Sq8RangeTrace::checked_pending_futures_bytes(ranges, c.fetch_parallelism)
+            .ok_or("range scheduler memory")
+    };
+    let sq8 = c
+        .sq8_range_split
+        .map_or(c.sq8_get_budget.max(trace_ranges(c)), |split| {
+            split.max_physical_gets
+        });
+    Ok(pending(c.source_get_budget)?.max(pending(sq8)?))
 }
 // Bytes one active diagnostic query holds on top of the production model, charged before
 // any query payload opens: bounded line scratch and its coexisting record tree for every
@@ -1272,11 +1276,19 @@ fn diagnostic_bytes(c: &Config) -> Result<usize> {
     )?;
     Ok(bytes)
 }
-// The trace's cumulative peak (zero with trace off). The library charges exactly this when a
-// traced query is admitted, before its slot or any GET, so the runner must not pin it too.
+// The diagnostic cap includes the full trace peak. Its scheduler share is already
+// in the library model; only retained spans and probes are added at traced admission.
 fn trace_peak_bytes(c: &Config) -> usize {
     if c.execution.trace() {
         Sq8RangeTrace::modeled_bytes(trace_ranges(c), c.fetch_parallelism)
+    } else {
+        0
+    }
+}
+fn library_trace_bytes(c: &Config) -> usize {
+    if c.execution.trace() {
+        trace_peak_bytes(c)
+            - Sq8RangeTrace::pending_futures_bytes(trace_ranges(c), c.fetch_parallelism)
     } else {
         0
     }
@@ -1285,37 +1297,12 @@ fn trace_peak_bytes(c: &Config) -> usize {
 fn diagnostic_pinned_bytes(c: &Config) -> Result<usize> {
     Ok(diagnostic_bytes(c)? - trace_peak_bytes(c))
 }
-// Range-drain state (pending futures, executor nodes, outcomes) the runner pins before the
-// generation opens. Tracing off: the whole worst-case phase. Tracing on: the library's trace
-// reservation already contains this state for the SQ8 phase (`trace_ranges`), and the SOURCE
-// and SQ8 phases never coexist (SOURCE bodies are released before the SQ8 wave starts), so
-// the peak is max(SOURCE, SQ8) = `plan_ranges` and only the excess of the larger phase over
-// the SQ8 share is pinned here. `pending_futures_bytes` is monotone in the range count and
-// `trace_ranges <= plan_ranges` (32 <= 128 baseline, equal direct), so the excess is exact:
-// pinned + library share = pending(plan_ranges), counted once.
-fn ordinary_range_state_pinned(c: &Config) -> usize {
-    let plan = Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism);
-    if c.execution.trace() {
-        plan.saturating_sub(Sq8RangeTrace::pending_futures_bytes(
-            trace_ranges(c),
-            c.fetch_parallelism,
-        ))
-    } else {
-        plan
-    }
-}
-// What a full (uninstrumented) run pins: the production model plus the worst-case range state.
+// Scheduler state belongs to the library; the runner pins only its own buffers.
 fn uninstrumented_pinned_bytes(c: &Config) -> u64 {
-    (caller_bytes(c) + Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism))
-        as u64
+    caller_bytes(c) as u64
 }
-// The production model plus the range state above, then the runner's own diagnostic bytes, all
-// multiplied across admitted active queries. The trace's reservation is NOT here: the library
-// charges it once at traced admission, so the complete figure (`diagnostic_bytes`, checked
-// against 1 MiB) is charged in non-overlapping parts.
 fn pinned_bytes(c: &Config) -> Result<u64> {
-    let ordinary = caller_bytes(c) + ordinary_range_state_pinned(c);
-    Ok(ordinary as u64 + (diagnostic_pinned_bytes(c)? as u64) * ACTIVE_QUERIES as u64)
+    Ok(caller_bytes(c) as u64 + (diagnostic_pinned_bytes(c)? as u64) * ACTIVE_QUERIES as u64)
 }
 fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
@@ -2109,13 +2096,11 @@ async fn query_and_seal_with(
         admission_record["trace_peak_bytes"] =
             json!(traced.map(|n| Sq8RangeTrace::modeled_bytes(n, c.fetch_parallelism)));
         admission_record["diagnostic_pinned_bytes"] = json!(diagnostic_pinned_bytes(c)?);
-        admission_record["trace_peak_charged_by_library_at_traced_admission"] =
-            json!(c.execution.trace());
-        admission_record["range_state_pinned_by_runner_bytes"] =
-            json!(ordinary_range_state_pinned(c));
-        admission_record["range_state_both_paths_bytes"] = json!(
-            Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism)
-        );
+        admission_record["trace_additional_bytes_charged_by_library"] =
+            json!(library_trace_bytes(c));
+        admission_record["range_scheduler_owner"] = json!("library");
+        admission_record["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
+        admission_record["range_state_both_paths_bytes"] = json!(range_scheduler_bytes(c)?);
         out.emit(&admission_record)?;
     }
     p.stage = "backend";
@@ -2168,6 +2153,7 @@ async fn query_and_seal_with(
         "library_cap_bytes":MEMORY_CAP,"caller_pinned_bytes":admission.already_pinned_bytes,
         "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
+    startup["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
     if let Some(bytes) = generation.byte_window_state_bytes() {
         startup["shared_byte_window_state_bytes"] = json!(bytes);
     }
@@ -2184,7 +2170,7 @@ async fn query_and_seal_with(
         // exceeded only by the complete total is a diagnostic error (INVALID) found here,
         // before any payload opens, never a rejection of the candidate.
         let diagnostic_pinned = diagnostic_pinned_bytes(c)? as u64 * ACTIVE_QUERIES as u64;
-        let library_trace = trace_peak_bytes(c) as u64 * ACTIVE_QUERIES as u64;
+        let library_trace = library_trace_bytes(c) as u64 * ACTIVE_QUERIES as u64;
         let algorithm_total = memory
             .total_bytes
             .saturating_sub(admission.already_pinned_bytes)
@@ -2684,17 +2670,7 @@ fn execute_paths_status(
     let cpu = cpu_ns();
     let result = (|| -> Result<Value> {
         let configured = config(config_path, config_sha, shape);
-        let result_schema = if configured
-            .as_ref()
-            .ok()
-            .and_then(|c| c.s3_read_retry)
-            .is_some()
-        {
-            READ_RETRY_RESULT_SCHEMA
-        } else {
-            RESULT_SCHEMA
-        };
-        let mut identity = json!({"schema":result_schema,"phase":"identity","config_sha256":config_sha,
+        let mut identity = json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
             "source_get_budget":configured.as_ref().ok().map(|c| c.source_get_budget),
             "sq8_get_budget":configured.as_ref().ok().map(|c| c.sq8_get_budget),
@@ -2712,6 +2688,7 @@ fn execute_paths_status(
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false});
         // Added after the literal: json! recursion depth grows with the entry count.
+        identity["range_scheduler_owner"] = json!("library");
         identity["sq8_range_split"] =
             json!(configured.as_ref().ok().and_then(|c| c.sq8_range_split));
         identity["execution"] = json!(configured.as_ref().ok().map(|c| &c.execution));
@@ -2750,6 +2727,7 @@ fn execute_paths_status(
         bound["derivation_receipt_sha256"] = json!(c.derivation_receipt.sha256);
         bound["producer_authority"] = json!(c.producer_authority);
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
+        bound["range_scheduler_owner"] = json!("library");
         bound["sq8_range_split"] = json!(c.sq8_range_split);
         bound["execution"] = json!(c.execution);
         bound["selected_count"] = json!(selected_len(&c));
@@ -3312,9 +3290,12 @@ mod tests {
         value = config_value(dir.path(), shape);
         value["fetch_parallelism"] = json!(64);
         let original: Config = serde_json::from_value(value).unwrap();
-        assert!(pinned_bytes(&config).unwrap() > pinned_bytes(&original).unwrap());
         assert_eq!(
-            ordinary_range_state_pinned(&config) - ordinary_range_state_pinned(&original),
+            pinned_bytes(&config).unwrap(),
+            pinned_bytes(&original).unwrap()
+        );
+        assert_eq!(
+            range_scheduler_bytes(&config).unwrap() - range_scheduler_bytes(&original).unwrap(),
             Sq8RangeTrace::pending_futures_bytes(128, 128)
                 - Sq8RangeTrace::pending_futures_bytes(128, 64)
         );
@@ -3410,7 +3391,7 @@ mod tests {
         );
         let output = records(&output);
         let policy = read_retry_identity(S3ReadRetryPolicy::OneRetry100Ms);
-        assert_eq!(output[0]["schema"], READ_RETRY_RESULT_SCHEMA);
+        assert_eq!(output[0]["schema"], RESULT_SCHEMA);
         assert_eq!(output[0]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
         assert_eq!(output[1]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
         assert_eq!(output[0]["s3_read_retry"], policy);
@@ -3444,7 +3425,10 @@ mod tests {
         let c: Config = serde_json::from_value(value.clone()).unwrap();
         validate_config(&c, shape).unwrap();
         assert_eq!(trace_ranges(&c), 46);
-        assert_eq!(plan_ranges(&c), BASELINE_SOURCE_GETS.max(46));
+        assert_eq!(
+            range_scheduler_bytes(&c).unwrap(),
+            Sq8RangeTrace::pending_futures_bytes(BASELINE_SOURCE_GETS, c.fetch_parallelism)
+        );
         assert_eq!(
             limits(&c).unwrap().max_query_gets,
             limits(&original).unwrap().max_query_gets
@@ -4523,9 +4507,13 @@ mod tests {
         .unwrap();
         let before = baseline.direct_closure_memory(direct).unwrap();
         drop(baseline);
-        let scratch = split
+        let scratch = (split
             .scratch_bytes(object_bytes, admission.max_parallel_gets)
-            .unwrap() as u64;
+            .unwrap()
+            - Sq8RangeTrace::pending_futures_bytes(
+                split.max_physical_gets,
+                admission.max_parallel_gets,
+            )) as u64;
         let resident = before.resident_bytes + 2 * scratch;
         let total = before.total_bytes + 4 * scratch; // Both baseline and direct reserve A * E.
         assert!(total <= MEMORY_CAP);
@@ -5984,14 +5972,11 @@ mod tests {
     fn diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::PRODUCTION;
-        let layout = |c: &Config| {
-            Sq8RangeTrace::pending_futures_bytes(plan_ranges(c), c.fetch_parallelism) as u64
-        };
         let full: Config = serde_json::from_value(config_value(dir.path(), shape)).unwrap();
         assert_eq!(diagnostic_bytes(&full).unwrap(), 0);
         assert_eq!(
             limits(&full).unwrap().already_pinned_bytes,
-            caller_bytes(&full) as u64 + layout(&full)
+            caller_bytes(&full) as u64
         );
         for (direct, trace, parallelism) in [
             (false, false, 16),
@@ -6025,9 +6010,8 @@ mod tests {
             } else {
                 assert_eq!(bytes, lines);
             }
-            // The complete coexistence figure is charged in two parts that never overlap: the
-            // runner pins everything but the trace peak before the generation opens, and the
-            // library charges the trace peak once when a traced query is admitted.
+            // The runner pins its own buffers; the library holds scheduler state at open
+            // and adds retained spans/probes only when a traced query is admitted.
             let peak = if trace {
                 Sq8RangeTrace::modeled_bytes(trace_ranges(&c), parallelism)
             } else {
@@ -6040,25 +6024,13 @@ mod tests {
             assert_eq!(
                 admission.already_pinned_bytes,
                 caller_bytes(&c) as u64
-                    + ordinary_range_state_pinned(&c) as u64
                     + (bytes - peak) as u64 * admission.max_active_queries as u64
             );
-            // Common range state is counted once: the SOURCE and SQ8 phases never coexist, so
-            // the peak is the larger phase. With a trace the library's reservation holds the
-            // SQ8 share and the runner pins only the excess; without one it pins all of it.
-            assert!(trace_ranges(&c) <= plan_ranges(&c));
-            let library_share = if trace {
-                Sq8RangeTrace::pending_futures_bytes(trace_ranges(&c), parallelism)
-            } else {
-                0
-            };
             assert_eq!(
-                ordinary_range_state_pinned(&c) + library_share,
-                Sq8RangeTrace::pending_futures_bytes(plan_ranges(&c), parallelism)
-            );
-            assert_eq!(
-                uninstrumented_pinned_bytes(&c),
-                caller_bytes(&c) as u64 + layout(&c)
+                range_scheduler_bytes(&c).unwrap(),
+                Sq8RangeTrace::pending_futures_bytes(c.source_get_budget, parallelism).max(
+                    Sq8RangeTrace::pending_futures_bytes(trace_ranges(&c), parallelism)
+                )
             );
         }
     }
@@ -6296,17 +6268,15 @@ mod tests {
                 admission["range_state_both_paths_bytes"],
                 Sq8RangeTrace::pending_futures_bytes(128, 16)
             );
-            // Baseline with a trace: the SOURCE phase (128 ranges) is the larger one, so the runner
-            // pins only its excess over the library-held SQ8 share (32 ranges).
-            let config = serde_json::from_value::<Config>(value.clone()).unwrap();
+            assert_eq!(admission["range_scheduler_owner"], "library");
             assert_eq!(
-                admission["range_state_pinned_by_runner_bytes"],
-                ordinary_range_state_pinned(&config)
+                admission["range_state_charged_by_library_bytes"],
+                Sq8RangeTrace::pending_futures_bytes(128, 16)
             );
-            assert_eq!(
-                ordinary_range_state_pinned(&config)
-                    == Sq8RangeTrace::pending_futures_bytes(128, 16),
-                !trace
+            assert!(
+                admission
+                    .get("range_state_pinned_by_runner_bytes")
+                    .is_none()
             );
             if trace {
                 assert_eq!(
@@ -6648,7 +6618,7 @@ mod tests {
             let config = serde_json::from_value::<Config>(panel(object_bytes)).unwrap();
             let pinned = limits(&config).unwrap().already_pinned_bytes;
             let reservation = figure(&admission, "library_trace_reservation_bytes");
-            assert_eq!(reservation, trace_peak_bytes(&config) as u64);
+            assert_eq!(reservation, library_trace_bytes(&config) as u64);
             assert_eq!(reservation > 0, trace);
             let diagnostic_pinned = figure(&admission, "diagnostic_pinned_bytes");
             assert!(diagnostic_pinned >= 2 * PANEL_LINE_CAP as u64);

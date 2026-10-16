@@ -1,0 +1,58 @@
+{
+  "schema": "borsuk-library-scheduler-qualification-v1",
+  "status": "COMPILER_AND_NATIVE_CORRECTNESS_QUALIFIED",
+  "build_source": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+  "base_source": "c3b0e81e93fdb06a13cc38a25868d75030a87e04",
+  "canonical_parent": "321822a3e6f156c42d2a74ad3eeead444c45e6e1",
+  "instance": "i-04933959e7bb82dfc",
+  "native_tests": {
+    "precursor": {
+      "source": "87f8f72a41b41c22cb8dbc3cb6a82ac6ffc402ab",
+      "source_walk": 40,
+      "range": 37,
+      "runner": 55,
+      "reducer": 307,
+      "all_exit": 0,
+      "command": "f21031a5-7c28-4012-8133-889b89175a6d"
+    },
+    "helper": {
+      "source": "243825a01a9b55416760f40c96754c865046307e",
+      "tests": 13,
+      "exit": 0,
+      "command": "e8b9d212-7547-47f1-93dd-928426e3abd7"
+    },
+    "combined": {
+      "source": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+      "historical_module": 4,
+      "historical_full": 1,
+      "startup_binding": 1,
+      "all_exit": 0,
+      "command": "689bf670-be63-43bf-821a-c95b344fa5b4",
+      "later_release_exit": 101
+    }
+  },
+  "final_gates": {
+    "command": "bca9c998-6fec-4557-8215-2892f0abfa6c",
+    "release": 0,
+    "workspace_clippy_correctness_suspicious": 0,
+    "actual_shim_unset_workspace_testbuild": 0,
+    "jobs": 4,
+    "memory_max_bytes": 60129542144,
+    "swap_max_bytes": 0
+  },
+  "prior_build_failures": {
+    "commands": [
+      "689bf670-be63-43bf-821a-c95b344fa5b4",
+      "0b3f40da-cf94-47e3-ab8c-087a2cb5664c"
+    ],
+    "classification": "BUILD_ARTIFACT_COHERENCE_INVALID",
+    "repair": "explicit cargo clean -p borsuk --release; unchanged source"
+  },
+  "source_review": {
+    "group": "a106298e332c426b",
+    "historical_validation_finding_repaired_by": "fa66eeb029c2dc85a2ffeb387edd1e501c5159a8"
+  },
+  "claims_performance_improvement": false,
+  "claims_vendor_win": false,
+  "memory_claim": "checked conservative model; not measured allocator or RSS ceiling"
+}
