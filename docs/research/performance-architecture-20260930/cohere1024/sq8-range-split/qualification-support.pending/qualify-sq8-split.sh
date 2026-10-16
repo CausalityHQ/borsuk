@@ -268,6 +268,7 @@ for profile in debug release; do
  done
 done
 run_stage release-production-build 4200 30 cargo build --locked -p borsuk --release --bin check_cohere_native_baseline --example compare_native_replay
+mkdir "$ev/binaries"
 for artifact in target/release/check_cohere_native_baseline target/release/examples/compare_native_replay; do
  current_stage=production-authenticate
  [[ -f $artifact && ! -L $artifact && -x $artifact ]]
@@ -276,6 +277,8 @@ for artifact in target/release/check_cohere_native_baseline target/release/examp
  run_stage "production-$name-elf" 10 5 readelf -h "$artifact"
  run_stage "production-$name-sha" 10 5 sha256sum "$artifact"
  cat "$ev/production-$name-sha.log" >> "$ev/binaries.sha256"
+ run_stage "production-$name-retain" 30 5 cp -- "$artifact" "$ev/binaries/$name"
+ run_stage "production-$name-retained-parity" 10 5 cmp -- "$artifact" "$ev/binaries/$name"
 done
 run_stage workspace-clippy 4200 30 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious
 run_stage workspace-test-build 4200 30 env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=2 CARGO_BUILD_JOBS=2 bash scripts/check_rust_test_build.sh
