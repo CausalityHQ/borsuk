@@ -271,7 +271,12 @@ mapfile -t names < "$roster"
  && ${names[21]} == tests::leaf_coverage_actual_reducer_rejects_rehashed_nontruth_return_outside_sq8 ]] || die 'Original repair roster changed'
 jq_check terminal --arg commit "$revision" --arg inner "$inner_sha" --arg map "$map_sha" --arg roster_sha "$roster_sha" --arg prefix "$prefix" --rawfile roster "$roster" "$terminal"
 jq_check ssm --arg command "$command" --arg instance "$instance" "$closed/get-command-invocation.json"
-jq_read ssm-stdout "$closed/get-command-invocation.json" > "$work/ssm-stdout.json"
+jq_read ssm-stdout "$closed/get-command-invocation.json" > "$work/ssm-stdout.txt"
+# The frozen native SSM preflight emits exactly this successful outer SHA check
+# before the supervisor prints its terminal object. Authenticate, then remove
+# only that one line; the remainder still must be exactly one matching JSON doc.
+[[ $(head -n 1 "$work/ssm-stdout.txt") == "$remote/supervise-sq8-split.sh: OK" ]] || die 'Unexpected native preflight stdout'
+tail -n +2 "$work/ssm-stdout.txt" > "$work/ssm-stdout.json"
 json "$work/ssm-stdout.json"
 jq_check equal --slurpfile original "$terminal" "$work/ssm-stdout.json"
 
