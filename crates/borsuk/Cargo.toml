@@ -136,3 +136,6 @@ name = "v246_publish_graph_s3"
 [[bench]]
 name = "local_search"
 harness = false
+
+[[example]]
+name = "source_capsule_geometry"

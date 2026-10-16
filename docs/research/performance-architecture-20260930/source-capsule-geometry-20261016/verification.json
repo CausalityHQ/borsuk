@@ -1,0 +1,44 @@
+{
+  "affected_test_count": 6,
+  "base_revision": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+  "capsule_implementation_selected": false,
+  "config_sha256": "ac1a6738cb7c79c99e42726d102da7e8f411ffb3a4f7a5108a23d62d5bc97e68",
+  "decision_sha256": "803d3f4cd14320a94e5866fdbff24a7967c4a32b4656b96691278272049bb148",
+  "diagnostic_limits": {
+    "cpu": 12,
+    "memory_bytes": 134217728,
+    "runtime_seconds": 60,
+    "swap_bytes": 0
+  },
+  "evidence_archive_sha256": "50879cbe42e728e4b47ec99cebe67b0c13e8641c7056297a3a16e40bd8c1d3de",
+  "example_sha256": "d29fc5ec7ddb1ee95e37a7e95a54e2d721926278f38b99c26cbf87148cb34c3f",
+  "executed_elf_sha256": "4112f10707fff320d7e2554246cf27aa6f76662bc70923f7511b864e9561fb0e",
+  "instance_id": "i-066ea3c7f390e7095",
+  "manifest_sha256": "33116269ff377a0dc90cf7b0669fa5c178f323fba14ae7caae472eb771bf6c04",
+  "original_count_ssm": "e7fc07b7-0ba2-43cb-af34-79fd9bf5a4d7",
+  "original_dispatch_ssm": "0768c3fa-527f-49fb-808b-72fb57bd5902",
+  "output_sha256": "515a037fc55b91347a3c9fd2a8211d1d22644b2967c9c3cf76ecdae76f62eae4",
+  "qualification_commands_sha256": "e1d9b4ffdc93f889aadfd857e2ee4ae52010766c0bf093f690081a2fc8659ddf",
+  "qualification_invocation": "aa97bd6e98a142b6b920ca547d10517a",
+  "qualification_limits": {
+    "cpus": "8-11",
+    "jobs": 4,
+    "memory_bytes": 8589934592,
+    "runtime_seconds": 2400,
+    "swap_bytes": 0
+  },
+  "qualification_unit": "borsuk-source-capsule-geometry-qualification-a0001",
+  "schema": "borsuk-source-capsule-geometry-qualification-v1",
+  "scope": "metadata-only; no ANN quality/latency/physical GET measurement",
+  "source_formatting_only_after_worker_handoff": true,
+  "source_patch_sha256": "e3869d117ef1288d9fe015ba367cb00d470b3194e3202acc7754cdc91e6e5738",
+  "source_revision": "39c8c570e4706f9482da7a6636baeff5dc161eb5",
+  "stage_exits": {
+    "affected-tests": 0,
+    "clippy": 0,
+    "geometry": 0,
+    "release": 0,
+    "runner": 0,
+    "testbuild": 0
+  }
+}
