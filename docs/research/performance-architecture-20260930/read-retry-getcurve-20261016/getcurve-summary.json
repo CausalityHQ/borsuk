@@ -1,0 +1,482 @@
+{
+  "schema": "borsuk-sq8-shortlist-get-curve-v2",
+  "status": "MEASURED",
+  "complete": true,
+  "query_count": 1000,
+  "get_budgets": [
+    30,
+    38,
+    46,
+    64
+  ],
+  "admissible_queries": [
+    1000,
+    1000,
+    1000,
+    1000
+  ],
+  "measured_hit_subtotals": [
+    9786,
+    9784,
+    9780,
+    9780
+  ],
+  "planned_target_gets_totals": [
+    28358,
+    34857,
+    40911,
+    52384
+  ],
+  "planned_target_bytes_totals": [
+    11497411968,
+    8562100736,
+    6821620736,
+    5067448960
+  ],
+  "native_quality_io_totals": {
+    "block_expansion_rescued_hits": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "bridge_bytes": [
+      7463741824,
+      4493521536,
+      2745913856,
+      990416000
+    ],
+    "bridge_rescued_hits": [
+      7,
+      5,
+      1,
+      1
+    ],
+    "bytes": [
+      11497411968,
+      8562100736,
+      6821620736,
+      5067448960
+    ],
+    "gained": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "gets": [
+      28358,
+      34857,
+      40911,
+      52384
+    ],
+    "hits": [
+      9786,
+      9784,
+      9780,
+      9780
+    ],
+    "lost": [
+      1,
+      1,
+      5,
+      5
+    ],
+    "miss_buckets": [
+      [
+        147,
+        0,
+        67,
+        0
+      ],
+      [
+        149,
+        0,
+        67,
+        0
+      ],
+      [
+        153,
+        0,
+        67,
+        0
+      ],
+      [
+        153,
+        0,
+        67,
+        0
+      ]
+    ],
+    "pre_cap_runs": [
+      67029,
+      67953,
+      68151,
+      68185
+    ],
+    "selected_block_truth_rows": [
+      9846,
+      9846,
+      9846,
+      9846
+    ],
+    "selected_blocks": [
+      121672,
+      122725,
+      122940,
+      122980
+    ],
+    "selected_rows": [
+      254650,
+      255739,
+      255959,
+      256000
+    ],
+    "shortlist_truth_rows": [
+      9846,
+      9846,
+      9846,
+      9846
+    ]
+  },
+  "baseline_hits10": 9785,
+  "baseline_sq8_bytes_total": 10625249152,
+  "baseline_sq8_gets_total": 30033,
+  "io_statistics": [
+    {
+      "bytes": {
+        "count": 1000,
+        "max": 33549824,
+        "p50": 7989632,
+        "p90": 31229184,
+        "p95": 33483520,
+        "p99": 33549824,
+        "total": 11497411968
+      },
+      "get_budget": 30,
+      "gets": {
+        "count": 1000,
+        "max": 30,
+        "p50": 30,
+        "p90": 30,
+        "p95": 30,
+        "p99": 30,
+        "total": 28358
+      }
+    },
+    {
+      "bytes": {
+        "count": 1000,
+        "max": 33549824,
+        "p50": 6232576,
+        "p90": 18034688,
+        "p95": 25891712,
+        "p99": 33549824,
+        "total": 8562100736
+      },
+      "get_budget": 38,
+      "gets": {
+        "count": 1000,
+        "max": 38,
+        "p50": 38,
+        "p90": 38,
+        "p95": 38,
+        "p99": 38,
+        "total": 34857
+      }
+    },
+    {
+      "bytes": {
+        "count": 1000,
+        "max": 33549824,
+        "p50": 5370624,
+        "p90": 13360256,
+        "p95": 18034688,
+        "p99": 29173760,
+        "total": 6821620736
+      },
+      "get_budget": 46,
+      "gets": {
+        "count": 1000,
+        "max": 46,
+        "p50": 46,
+        "p90": 46,
+        "p95": 46,
+        "p99": 46,
+        "total": 40911
+      }
+    },
+    {
+      "bytes": {
+        "count": 1000,
+        "max": 21615104,
+        "p50": 4442368,
+        "p90": 8851584,
+        "p95": 10542336,
+        "p99": 15415680,
+        "total": 5067448960
+      },
+      "get_budget": 64,
+      "gets": {
+        "count": 1000,
+        "max": 64,
+        "p50": 64,
+        "p90": 64,
+        "p95": 64,
+        "p99": 64,
+        "total": 52384
+      }
+    }
+  ],
+  "historical_comparison": {
+    "arm_invariant_mismatched_queries": 0,
+    "arm_invariant_parity": true,
+    "arm_invariant_scope": "GEOMETRY_AND_QUALITY_EXCLUDING_GAIN_LOSS",
+    "baseline_relative_mismatched_queries": 4,
+    "baseline_relative_parity": false,
+    "baseline_relative_scope": "BASELINE_HITS_AND_ARM_GAIN_LOSS",
+    "evidence_limit": 8,
+    "id_mismatched_positions": 0,
+    "mismatch_evidence": [
+      {
+        "current_arm": {
+          "bridge_bytes": 4773888,
+          "gets": 30,
+          "physical_bytes": 10045056,
+          "pre_cap_runs": 80,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 1,
+            "gained": 0,
+            "hits10": 10,
+            "lost": 0,
+            "miss_buckets": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 159,
+          "selected_rows": 256,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "current_baseline_hits10": 10,
+        "historical_arm": {
+          "bridge_bytes": 4773888,
+          "gets": 30,
+          "physical_bytes": 10045056,
+          "pre_cap_runs": 80,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 1,
+            "gained": 1,
+            "hits10": 10,
+            "lost": 0,
+            "miss_buckets": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 159,
+          "selected_rows": 256,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "historical_baseline_hits10": 9,
+        "ordinal": 89,
+        "rank_differences": []
+      },
+      {
+        "current_arm": {
+          "bridge_bytes": 28245504,
+          "gets": 30,
+          "physical_bytes": 33549824,
+          "pre_cap_runs": 116,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 0,
+            "gained": 0,
+            "hits10": 9,
+            "lost": 1,
+            "miss_buckets": [
+              1,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 160,
+          "selected_rows": 224,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "current_baseline_hits10": 10,
+        "historical_arm": {
+          "bridge_bytes": 28245504,
+          "gets": 30,
+          "physical_bytes": 33549824,
+          "pre_cap_runs": 116,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 0,
+            "gained": 0,
+            "hits10": 9,
+            "lost": 0,
+            "miss_buckets": [
+              1,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 160,
+          "selected_rows": 224,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "historical_baseline_hits10": 9,
+        "ordinal": 113,
+        "rank_differences": []
+      },
+      {
+        "current_arm": {
+          "bridge_bytes": 27383552,
+          "gets": 30,
+          "physical_bytes": 33052544,
+          "pre_cap_runs": 118,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 1,
+            "gained": 0,
+            "hits10": 10,
+            "lost": 0,
+            "miss_buckets": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 171,
+          "selected_rows": 248,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "current_baseline_hits10": 10,
+        "historical_arm": {
+          "bridge_bytes": 27383552,
+          "gets": 30,
+          "physical_bytes": 33052544,
+          "pre_cap_runs": 118,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 1,
+            "gained": 1,
+            "hits10": 10,
+            "lost": 0,
+            "miss_buckets": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 9,
+            "shortlist_truth_rows": 9
+          },
+          "selected_blocks": 171,
+          "selected_rows": 248,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "historical_baseline_hits10": 9,
+        "ordinal": 294,
+        "rank_differences": []
+      },
+      {
+        "current_arm": {
+          "bridge_bytes": 25924864,
+          "gets": 30,
+          "physical_bytes": 32422656,
+          "pre_cap_runs": 124,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 3,
+            "gained": 1,
+            "hits10": 9,
+            "lost": 0,
+            "miss_buckets": [
+              1,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 6,
+            "shortlist_truth_rows": 6
+          },
+          "selected_blocks": 196,
+          "selected_rows": 255,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "current_baseline_hits10": 8,
+        "historical_arm": {
+          "bridge_bytes": 25924864,
+          "gets": 30,
+          "physical_bytes": 32422656,
+          "pre_cap_runs": 124,
+          "quality": {
+            "block_expansion_rescued_hits": 0,
+            "bridge_rescued_hits": 3,
+            "gained": 3,
+            "hits10": 9,
+            "lost": 0,
+            "miss_buckets": [
+              1,
+              0,
+              0,
+              0
+            ],
+            "selected_block_truth_rows": 6,
+            "shortlist_truth_rows": 6
+          },
+          "selected_blocks": 196,
+          "selected_rows": 255,
+          "size": 256,
+          "status": "MEASURED"
+        },
+        "historical_baseline_hits10": 6,
+        "ordinal": 665,
+        "rank_differences": []
+      }
+    ],
+    "ordered_rank_parity": true,
+    "query_count": 1000,
+    "rank_mismatched_positions": 0,
+    "rank_mismatched_queries": 0,
+    "rank_scope": "ORDERED_ID_TARGET_ROW_SCORE_BITS",
+    "scope": "CURRENT_G30_VS_PINNED_HISTORICAL_COUNT_ARM0_DESCRIPTIVE",
+    "score_bits_mismatched_positions": 0,
+    "target_row_mismatched_positions": 0
+  },
+  "baseline_exact_plan_trace_charges_ids_scorebits": true,
+  "truth_file_opened_after_all_baseline_controls": true,
+  "source_capture_routing_scoring_unchanged": true,
+  "single_causal_get_change": true,
+  "cold_latency_claim": false,
+  "qps_claim": false,
+  "vendor_win_claim": false
+}
