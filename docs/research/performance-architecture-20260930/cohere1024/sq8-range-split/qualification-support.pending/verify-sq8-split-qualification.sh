@@ -216,7 +216,7 @@ jq_run() {
   equal|binary-roster|output) defaults=(--arg manifest '' --arg roster '') ;;
   *) defaults=(--arg manifest '' --arg roster '' --argjson original '[]') ;;
  esac
- jq "$flags" "${defaults[@]}" --arg action "$action" "$@" "$jq_program"
+ jq "$flags" "${defaults[@]}" --arg action "$action" "$jq_program" "$@"
 }
 jq_check() { jq_run -e "$@" > /dev/null; }
 jq_read() { jq_run -er "$@"; }
