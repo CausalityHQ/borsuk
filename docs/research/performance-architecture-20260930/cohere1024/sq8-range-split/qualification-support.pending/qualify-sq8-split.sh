@@ -155,6 +155,9 @@ required_bin=(
  tests::sq8_split_multi_query_reservation_and_direct_memory_boundaries
 )
 required_example=(
+ current_v10::tests::ordinary_v10_geometry_uses_input_dimensions_budgets_and_partial_tail
+ current_v10::tests::ordinary_v10_refuses_uncovered_ordinals_and_duplicate_unknown_missing_fields
+ tests::sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth
  sq8_split_panel::tests::sq8_split_panel_sealed_six_runs_and_screen
  sq8_split_panel::tests::sq8_split_panel_coherently_resealed_negatives
  sq8_split_panel::tests::sq8_split_panel_late_auth_tail_growth_and_source_pins
@@ -162,7 +165,13 @@ required_example=(
  sq8_split_panel::tests::sq8_split_panel_stage_clock_and_conservation
  sq8_split_panel::tests::sq8_split_panel_output_collision_and_sync_errors
 )
-printf '%s\n' "${required_lib[@]}" "${required_bin[@]}" "${required_example[@]}" > "$ev/required-exact-tests.txt"
+required_repair=(
+ paired_partition_coverage::tests::paired_real_d1024_public_build_tail_prepare_independent_reopen
+ tests::actual_native_scale_runner_reducer_seal_count_mismatches
+ tests::leaf_coverage_actual_orchestration_refuses_terminal_and_sync_before_truth
+ tests::leaf_coverage_actual_reducer_rejects_rehashed_nontruth_return_outside_sq8
+)
+printf '%s\n' "${required_lib[@]}" "${required_bin[@]}" "${required_example[@]}" "${required_repair[@]}" > "$ev/required-exact-tests.txt"
 cmp "$ev/required-exact-tests.txt" "$root/required-exact-tests.txt"
 printf '%s\n' 'EXTERNAL NOT_RUN: root builder-removal mutation falsifier; not executed by this driver.' > "$ev/builder-removal-falsifier.txt"
 resolve_binary() {
@@ -196,18 +205,31 @@ exact_test() {
  selected=$(grep -c ': test$' "$ev/$stage-selected.log" || true)
  [[ $selected == 1 ]]
  grep -Fxq "$name: test" "$ev/$stage-selected.log"
- run_stage "$stage" "$cap" 5 "$binary" --test-threads=1 --exact "$name"
- grep -Fxq "test $name ... ok" "$ev/$stage.log"
+ run_stage "$stage" "$cap" 5 "$binary" --test-threads=1 --exact "$name" --nocapture
+ # The exact selector was authenticated above. nocapture may interleave a test's
+ # own stdout/panic witnesses with the pretty per-name line; require exit0 and
+ # the one-pass/zero-failure/zero-ignore harness summary instead.
  grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;' "$ev/$stage.log"
 }
 regression() {
- local stage=$1 filter=${2:-} selected
+ local stage=$1 filter=${2:-} selected cap=600
+ if [[ $stage == *-example-full ]]; then cap=1800; fi
  run_stage "$stage-selected" 10 5 "$binary" --list "$filter"
  selected=$(grep -c ': test$' "$ev/$stage-selected.log")
  [[ $selected -gt 0 ]]
- run_stage "$stage" 600 5 "$binary" --test-threads=1 "$filter"
+ run_stage "$stage" "$cap" 5 "$binary" --test-threads=1 "$filter" --nocapture
  grep -Eq "^test result: ok\. $selected passed; 0 failed; 0 ignored; 0 measured;" "$ev/$stage.log"
 }
+# Reproduce the four observed failures before compiling unrelated test harnesses.
+# Source and test assertions stay frozen; only diagnostic capture/order changes.
+run_stage repair-example-compile 4200 30 cargo test --locked -p borsuk --example compare_native_replay --no-run --message-format=json
+resolve_binary repair-example debug compare_native_replay example
+n=0
+for name in "${required_repair[@]}"; do
+ n=$((n+1))
+ exact_test "repair-example-exact-$n" "$name" 300
+done
+verify_binary repair-example-sha-after "$ev/repair-example-sha.log"
 # Finish debug correctness before paying for the release compile. Within each
 # profile, compile and inventory all three harnesses before the first test.
 for profile in debug release; do
@@ -232,7 +254,7 @@ for profile in debug release; do
   case $kind in
    lib) required=("${required_lib[@]}") ;;
    bin) required=("${required_bin[@]}") ;;
-   example) required=("${required_example[@]}") ;;
+   example) required=("${required_example[@]}" "${required_repair[@]}") ;;
   esac
   for name in "${required[@]}"; do
    [[ $(grep -Fxc "$name: test" "$ev/$stage-inventory.log") == 1 ]]
@@ -245,7 +267,7 @@ for profile in debug release; do
   case $kind in
    lib) required=("${required_lib[@]}") ;;
    bin) required=("${required_bin[@]}") ;;
-   example) required=("${required_example[@]}") ;;
+   example) required=("${required_example[@]}" "${required_repair[@]}") ;;
   esac
   n=0
   for name in "${required[@]}"; do
