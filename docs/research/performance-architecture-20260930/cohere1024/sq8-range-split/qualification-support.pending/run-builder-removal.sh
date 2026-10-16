@@ -70,12 +70,28 @@ run() {
 
 owned_status() {
  local seen
+ [[ $systemd_start_exit == 0 ]] || return 96
  run show 5 systemctl show "$unit" "${show_args[@]}" || return
+ grep -Fxq 'LoadState=loaded' "$work/show.stdout" || return 96
  grep -Fxq "Description=$owner" "$work/show.stdout" || return 96
- grep -Fxq "ControlGroup=$cg" "$work/show.stdout" || return 96
  seen=$(sed -n 's/^InvocationID=//p' "$work/show.stdout")
  [[ $seen =~ ^[0-9a-f]{32}$ && ( -z $invocation || $seen == "$invocation" ) ]] || return 96
- invocation=$seen
+ if [[ -z $invocation ]]; then
+  grep -Fxq "ControlGroup=$cg" "$work/show.stdout" || return 96
+  cp -- "$work/show.stdout" "$work/unit.initial" || return 94
+  invocation=$seen
+ fi
+ if ! grep -Fxq "ControlGroup=$cg" "$work/show.stdout"; then
+  # RemainAfterExit may release the cgroup after this bound invocation succeeds.
+  grep -Fxq 'ControlGroup=' "$work/show.stdout" &&
+   grep -Fxq 'Result=success' "$work/show.stdout" &&
+   grep -Fxq 'ExecMainCode=1' "$work/show.stdout" &&
+   grep -Fxq 'ExecMainStatus=0' "$work/show.stdout" &&
+   grep -Fxq 'ActiveState=active' "$work/show.stdout" &&
+   grep -Fxq 'SubState=exited' "$work/show.stdout" || return 96
+  [[ ! -e /sys/fs/cgroup$cg ]] ||
+   grep -Fxq 'populated 0' "/sys/fs/cgroup$cg/cgroup.events" || return 96
+ fi
 }
 
 # Missing receipts are allowed in an INVALID archive; arbitrary files are never selected.
@@ -107,8 +123,8 @@ collect() {
  bundle=$work/archive
  mkdir -- "$bundle" "$bundle/wrapper" "$bundle/probe" || return 94
  : > "$bundle/files.tsv" || return 94
- for name in pins.json input.sha256 wrapper.sha256 owner.txt unit.final probe.exit manager.original.exit \
-  cgroup.events.before cgroup.events.after; do
+ for name in pins.json input.sha256 wrapper.sha256 owner.txt unit.initial unit.final unit.stopped \
+  unit.stopped.exit probe.exit manager.original.exit cgroup.events.before cgroup.events.after; do
   copy_receipt "$work/$name" "wrapper/$name" || return
  done
  for name in load pins-before pins-after start show stop drain; do
@@ -181,11 +197,32 @@ finalize() {
    # cgroup.events populated includes every descendant, not just cgroup.procs.
    # shellcheck disable=SC2016
    if run drain 20 /bin/bash -c '
-    while [[ -d $1 ]]; do
-     grep -Fxq "populated 0" "$1/cgroup.events" && exit 0
+    cg=$1; unit=$2; work=$3; owner=$4; invocation=$5
+    shift 5
+    while :; do
+     systemctl show "$unit" "$@" > "$work/unit.stopped"
+     rc=$?
+     printf "%s\n" "$rc" > "$work/unit.stopped.exit" || exit 94
+     grep -Fxq "ControlGroup=$cg" "$work/unit.stopped" ||
+      grep -Fxq "ControlGroup=" "$work/unit.stopped" || exit 96
+     if grep -Fxq "LoadState=not-found" "$work/unit.stopped"; then
+      [[ ( $rc == 0 || $rc == 1 ) && ! -e /sys/fs/cgroup$cg ]] && exit 0
+      exit 96
+     fi
+     [[ $rc == 0 ]] &&
+      grep -Fxq "LoadState=loaded" "$work/unit.stopped" &&
+      grep -Fxq "Description=$owner" "$work/unit.stopped" || exit 96
+     if ! grep -Fxq "InvocationID=$invocation" "$work/unit.stopped"; then
+      # A stopped unit may clear its ID before unloading; this is not drain proof.
+      grep -Fxq "InvocationID=" "$work/unit.stopped" &&
+       grep -Fxq "ActiveState=inactive" "$work/unit.stopped" || exit 96
+     elif grep -Eq "^ActiveState=(inactive|failed)$" "$work/unit.stopped"; then
+      [[ ! -e /sys/fs/cgroup$cg ]] && exit 0
+      grep -Fxq "populated 0" "/sys/fs/cgroup$cg/cgroup.events" && exit 0
+     fi
      sleep 0.1
     done
-   ' bash "/sys/fs/cgroup$cg"; then drained=true; fi
+   ' bash "$cg" "$unit" "$work" "$owner" "$invocation" "${show_args[@]}"; then drained=true; fi
   fi
   if [[ -d /sys/fs/cgroup$cg ]]; then
    cat "/sys/fs/cgroup$cg/cgroup.events" > "$work/cgroup.events.after" || return 94
