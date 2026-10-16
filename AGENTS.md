@@ -155,3 +155,14 @@ verified handoff. If the assignment grows, use supported context compaction
 at a safe checkpoint and verify that task, jobs and evidence survived. If
 compaction is unavailable, finish with a durable handoff; do not leave a
 specialist polling indefinitely.
+
+## Experiment speed and resource priority
+
+Prioritize useful native measurements and iteration speed over penny-level
+experiment savings. Use adequate bounded Causality EC2 resources for builds,
+tests and experiments; the operator accepts ordinary research expenditure
+below hundreds of dollars daily. This is spending tolerance, not a spending
+target. Keep aggregate spend monitoring, deliberate concurrency, no duplicate
+runs and immediate cleanup of terminal compute. Do not carry a historical
+arm's tiny cost ceiling into a new prospective experiment as a universal gate.
+Keep historical budgets, scientific thresholds and dispositions immutable.
