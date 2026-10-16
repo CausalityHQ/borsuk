@@ -3,7 +3,8 @@ use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{
-        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeTrace, Sq8ReadStats,
+        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeSplit, Sq8RangeTrace,
+        Sq8ReadStats,
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
@@ -43,8 +44,8 @@ const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v9";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v9";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v10";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v2";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -307,8 +308,15 @@ struct Config {
     source_get_budget: usize,
     #[serde(default)]
     shared_byte_window: Option<SharedByteWindow>,
+    #[serde(deserialize_with = "explicit_sq8_range_split")]
+    sq8_range_split: Option<Sq8RangeSplit>,
     serving: Serving,
     execution: Execution,
+}
+fn explicit_sq8_range_split<'de, T: serde::Deserializer<'de>>(
+    deserializer: T,
+) -> std::result::Result<Option<Sq8RangeSplit>, T::Error> {
+    Option::<Sq8RangeSplit>::deserialize(deserializer)
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -738,6 +746,16 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         matches!(c.fetch_parallelism, 16 | 32 | 64 | 128),
         "fetch_parallelism must be 16, 32, 64 or 128",
     )?;
+    if let Some(split) = c.sq8_range_split {
+        require(
+            (1..=MEMORY_CAP as usize).contains(&split.max_physical_range_bytes)
+                && (1..=128).contains(&split.max_physical_gets)
+                && split
+                    .scratch_bytes(c.sq8_byte_budget, c.fetch_parallelism)
+                    .is_some(),
+            "SQ8 split explicit physical byte/GET caps and checked scratch",
+        )?;
+    }
     if let Some(window) = c.shared_byte_window {
         require(
             (1..=MEMORY_CAP as usize).contains(&window.max_bytes)
@@ -752,7 +770,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v8; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v10; older formats refuse",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -1185,17 +1203,20 @@ fn caller_bytes(c: &Config) -> usize {
 const ACTIVE_QUERIES: usize = 1;
 // SQ8 ranges one traced query can plan: the baseline SQ8 cap or the explicit direct cap.
 fn trace_ranges(c: &Config) -> usize {
+    if let Some(split) = c.sq8_range_split {
+        return split.max_physical_gets;
+    }
     c.serving
         .direct()
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
 // Most range futures any phase of a query can plan; baseline SOURCE batches are the largest.
 fn plan_ranges(c: &Config) -> usize {
-    c.serving
-        .direct()
-        .map_or(BASELINE_SOURCE_GETS.max(c.sq8_get_budget), |direct| {
-            direct.max_sq8_gets
-        })
+    if c.serving.direct().is_some() {
+        trace_ranges(c)
+    } else {
+        BASELINE_SOURCE_GETS.max(trace_ranges(c))
+    }
 }
 // Bytes one active diagnostic query holds on top of the production model, charged before
 // any query payload opens: bounded line scratch and its coexisting record tree for every
@@ -2104,6 +2125,10 @@ async fn query_and_seal_with(
         )?,
         None => generation,
     };
+    let generation = match c.sq8_range_split {
+        Some(split) => generation.with_sq8_range_split(split)?,
+        None => generation,
+    };
     require(
         generation.rows() == c.rows
             && generation.discovery_mode() == DiscoveryMode::Semantic
@@ -2625,6 +2650,8 @@ fn execute_paths_status(
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false});
         // Added after the literal: json! recursion depth grows with the entry count.
+        identity["sq8_range_split"] =
+            json!(configured.as_ref().ok().and_then(|c| c.sq8_range_split));
         identity["execution"] = json!(configured.as_ref().ok().map(|c| &c.execution));
         identity["sq8_range_source_sha256"] = json!(hash(include_bytes!("../sq8_s3_range.rs")));
         identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
@@ -2657,6 +2684,7 @@ fn execute_paths_status(
         bound["derivation_receipt_sha256"] = json!(c.derivation_receipt.sha256);
         bound["producer_authority"] = json!(c.producer_authority);
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
+        bound["sq8_range_split"] = json!(c.sq8_range_split);
         bound["execution"] = json!(c.execution);
         bound["selected_count"] = json!(selected_len(&c));
         if let Some(window) = c.shared_byte_window {
@@ -2795,7 +2823,7 @@ mod tests {
         json!({"path":path,"bytes":bytes.len(),"sha256":hash(bytes)})
     }
     fn config_value(dir: &Path, shape: Shape) -> Value {
-        let mut value = json!({"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
+        let mut value = json!({"sq8_range_split":null,"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
             "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
             "reserved_query_interval":{"start":shape.rows,"end":shape.rows+shape.count},
             "corpus_intervals":[{"start":0,"end":shape.rows}],"corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
@@ -3177,6 +3205,59 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn cold_sq8_split_config_version_caps_trace_and_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let original: Config = serde_json::from_value(value.clone()).unwrap();
+        let split = json!({"max_physical_range_bytes":64 * 32 * (D + 12), "max_physical_gets":46});
+        value["sq8_range_split"] = split.clone();
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        assert_eq!(trace_ranges(&c), 46);
+        assert_eq!(plan_ranges(&c), BASELINE_SOURCE_GETS.max(46));
+        assert_eq!(
+            limits(&c).unwrap().max_query_gets,
+            limits(&original).unwrap().max_query_gets
+        );
+        assert_eq!(
+            limits(&c).unwrap().max_query_bytes,
+            limits(&original).unwrap().max_query_bytes
+        );
+        let (path, sha) = write_config(dir.path(), &value);
+        let output = dir.path().join("sq8-split-identity.jsonl");
+        assert!(
+            !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                Err("identity-only split fixture".into())
+            })
+            .unwrap()
+        );
+        let output = records(&output);
+        assert_eq!(output[0]["sq8_range_split"], split);
+        assert_eq!(output[1]["sq8_range_split"], split);
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("sq8_range_split");
+        assert!(serde_json::from_value::<Config>(missing).is_err());
+        for changed in [
+            json!({"max_physical_range_bytes":0,"max_physical_gets":46}),
+            json!({"max_physical_range_bytes":1,"max_physical_gets":0}),
+            json!({"max_physical_range_bytes":1,"max_physical_gets":129}),
+            json!({"max_physical_range_bytes":MEMORY_CAP+1,"max_physical_gets":46}),
+            json!({"max_physical_range_bytes":usize::MAX,"max_physical_gets":46}),
+        ] {
+            let mut bad = value.clone();
+            bad["sq8_range_split"] = changed;
+            let bad: Config = serde_json::from_value(bad).unwrap();
+            assert!(validate_config(&bad, shape).is_err());
+        }
+        let mut bad = value.clone();
+        bad["sq8_range_split"]["unrecorded"] = json!(true);
+        assert!(serde_json::from_value::<Config>(bad).is_err());
+        value["schema"] = json!("borsuk-cohere-native-baseline-config-v9");
+        assert!(validate_config(&serde_json::from_value(value).unwrap(), shape).is_err());
+    }
+
     #[test]
     fn cold_shared_byte_window_config_is_explicit_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
@@ -4067,6 +4148,46 @@ mod tests {
             }
             let summary = reduce(&config, &mut out, &seal, &mut progress).unwrap();
             assert_eq!(summary["status"], "MEASURED");
+            assert_eq!(summary["total_hits10"], 20);
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_sq8_split_config_reaches_serving_and_preserves_parity() {
+        let shape = Shape::tiny(257);
+        let (dir, value) = fixture(shape).await;
+        let mut original = None;
+        for split in [false, true] {
+            let mut value = value.clone();
+            if split {
+                value["sq8_range_split"] = json!({"max_physical_range_bytes":256 * (D + 12),
+                    "max_physical_gets":46});
+            }
+            let config: Config = serde_json::from_value(value).unwrap();
+            validate_config(&config, shape).unwrap();
+            let path = dir.path().join(format!("split-{split}.jsonl"));
+            let mut out = Output::create(&path).unwrap();
+            let mut progress = Progress::default();
+            let seal = query_and_seal(&config, shape, &mut out, &mut progress)
+                .await
+                .unwrap();
+            let rows = records(&path);
+            let parity = rows
+                .iter()
+                .filter(|row| row["phase"] == "query")
+                .map(|row| {
+                    json!({"returned":row["returned"],"trace":row["trace"],"plan":row["plan"],
+                    "source":row["charges"]["source"],"router":row["charges"]["router"],
+                    "sq8_bytes":row["charges"]["sq8"]["verified_bytes"]})
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(parity.len(), 2);
+            if let Some(original) = &original {
+                assert_eq!(&parity, original);
+            } else {
+                original = Some(parity);
+            }
+            let summary = reduce(&config, &mut out, &seal, &mut progress).unwrap();
             assert_eq!(summary["total_hits10"], 20);
         }
     }

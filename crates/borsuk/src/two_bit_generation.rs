@@ -14,9 +14,9 @@ use crate::{
         plan_source_shortlist_blocks,
     },
     sq8_s3_range::{
-        InFlightBytes, OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeTrace, Sq8ReadStats,
-        VerifiedRange, fetch_verified_ranges_traced_with_byte_window,
-        rank_verified_sq8_pages_traced_with_byte_window,
+        InFlightBytes, OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeSplit, Sq8RangeTrace,
+        Sq8ReadStats, VerifiedRange, fetch_verified_ranges_traced_with_byte_window,
+        rank_verified_sq8_pages_traced_with_split,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -164,7 +164,7 @@ pub struct TwoBitGenerationLimits {
     pub max_active_queries: usize,
     /// Physical SQ8 bytes per query.
     pub max_query_bytes: usize,
-    /// Physical range GETs per query.
+    /// Logical cover range limit; also the physical GET limit when splitting is off.
     pub max_query_gets: usize,
     /// Concurrent GETs per admitted query, bounded by the admitted batch length.
     /// Retained payload is charged in full; transport overhead needs an RSS gate.
@@ -188,7 +188,7 @@ pub struct TwoBitGenerationLimits {
 pub struct DirectClosureLimits {
     /// Physical SQ8 bytes, including every bridge page, per query.
     pub max_sq8_bytes: usize,
-    /// Physical SQ8 range GETs per query.
+    /// Logical SQ8 cover range limit; physical GET limit when splitting is off.
     pub max_sq8_gets: usize,
 }
 
@@ -603,6 +603,7 @@ pub struct TwoBitGeneration {
     source: Option<RemoteSource>,
     source_cache: Option<std::sync::Mutex<SourceCache>>,
     byte_window: Option<std::sync::Arc<InFlightBytes>>,
+    sq8_range_split: Option<Sq8RangeSplit>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -1074,6 +1075,32 @@ impl TwoBitGeneration {
     }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
+    }
+
+    /// Opt in once to transport-only splitting. Reserve all additional per-query
+    /// buffers before any query can allocate or perform I/O; logical budgets stay fixed.
+    pub fn with_sq8_range_split(mut self, split: Sq8RangeSplit) -> Result<Self> {
+        let bad = TwoBitGenerationError::Invalid;
+        if self.sq8_range_split.is_some() {
+            return Err(bad("SQ8 split already configured"));
+        }
+        let scratch = split
+            .scratch_bytes(self.limits.max_query_bytes, self.limits.max_parallel_gets)
+            .ok_or(bad("SQ8 split scratch overflow"))?;
+        let modeled = u64::try_from(scratch)
+            .ok()
+            .and_then(|bytes| bytes.checked_mul(self.limits.max_active_queries as u64))
+            .and_then(|bytes| bytes.checked_add(self.modeled_memory_bytes))
+            .filter(|&bytes| bytes <= self.limits.max_memory_bytes)
+            .ok_or(bad("SQ8 split memory"))?;
+        self.modeled_memory_bytes = modeled;
+        self.sq8_range_split = Some(split);
+        Ok(self)
+    }
+
+    fn physical_sq8_cap(&self, logical_cap: usize) -> usize {
+        self.sq8_range_split
+            .map_or(logical_cap, |split| split.max_physical_gets)
     }
 
     /// Actual allocated shared controller state, separate from payload residency.
@@ -1756,6 +1783,7 @@ impl TwoBitGeneration {
             source,
             source_cache: None,
             byte_window: None,
+            sq8_range_split: None,
         })
     }
     /// Authenticated concrete discovery mode.
@@ -2421,7 +2449,7 @@ impl TwoBitGeneration {
         }
         self.admit_range_trace(
             range_trace,
-            self.limits.max_query_gets,
+            self.physical_sq8_cap(self.limits.max_query_gets),
             self.modeled_memory_bytes,
         )?;
         let _permit = self
@@ -2561,7 +2589,7 @@ impl TwoBitGeneration {
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
         stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
-        let ranked = rank_verified_sq8_pages_traced_with_byte_window(
+        let ranked = rank_verified_sq8_pages_traced_with_split(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2577,6 +2605,7 @@ impl TwoBitGeneration {
             excluded_ids.unwrap_or(&[]),
             range_trace,
             self.byte_window.as_ref(),
+            self.sq8_range_split,
         )
         .await;
         stages.sq8.end_ns = started.elapsed().as_nanos();
@@ -2636,10 +2665,19 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
             .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
             .ok_or(bad("direct closure planner memory"))?;
+        let split_scratch = self
+            .sq8_range_split
+            .map_or(Some(0), |split| {
+                split.scratch_bytes(limits.max_sq8_bytes, self.limits.max_parallel_gets)
+            })
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(bad("SQ8 split scratch overflow"))?;
         let direct = crate::returned_sq8::query_payload_bytes(
             crate::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
             limits.max_sq8_bytes as u64,
-            planner,
+            planner
+                .checked_add(split_scratch)
+                .ok_or(bad("SQ8 split scratch overflow"))?,
             self.limits.max_active_queries as u64,
         )
         .map_err(|_| bad("direct closure query memory"))?;
@@ -2712,7 +2750,11 @@ impl TwoBitGeneration {
         // Opt-in range diagnostics are a separate, non-resource charge on top of the
         // unchanged direct model: refused here, before the slot or any request.
         if let Some(range_trace) = range_trace {
-            self.admit_range_trace(range_trace, limits.max_sq8_gets, memory.total_bytes)?;
+            self.admit_range_trace(
+                range_trace,
+                self.physical_sq8_cap(limits.max_sq8_gets),
+                memory.total_bytes,
+            )?;
         }
         Ok(())
     }
@@ -2778,7 +2820,7 @@ impl TwoBitGeneration {
             .iter()
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
-        let ranked = rank_verified_sq8_pages_traced_with_byte_window(
+        let ranked = rank_verified_sq8_pages_traced_with_split(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
             &self.pages,
@@ -2794,6 +2836,7 @@ impl TwoBitGeneration {
             excluded_ids.unwrap_or(&[]),
             range_trace,
             self.byte_window.as_ref(),
+            self.sq8_range_split,
         )
         .await
         .map_err(|sq8| TwoBitGenerationError::charged_read(Sq8ReadStats::default(), sq8))?;
@@ -8156,6 +8199,154 @@ mod source_walk_tests {
             fixture.release(1);
         });
         value
+    }
+
+    #[tokio::test]
+    async fn generation_sq8_split_admission_and_serving_parity() {
+        let ClassFixture {
+            temp,
+            root_sha,
+            key,
+            prefix,
+            objects,
+            limits,
+            rows,
+            dimensions,
+            ..
+        } = class_fixture(32);
+        let fixture = DirectHttp::new(objects, Instant::now() + Duration::from_secs(90));
+        let mut generation = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &prefix,
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        let query = class_query(dimensions);
+        let direct_limits = DirectClosureLimits {
+            max_sq8_bytes: rows * (dimensions + 12),
+            max_sq8_gets: 32,
+        };
+        let plain = run_source_and_sq8_http(
+            &fixture,
+            generation.search_with_store(fixture.reader.store(), &query, 10, None),
+        )
+        .await
+        .unwrap();
+        let plain_direct = run_direct_http(
+            &fixture,
+            generation.direct_closure_search_with_store(
+                fixture.reader.store(),
+                &query,
+                10,
+                None,
+                direct_limits,
+            ),
+        )
+        .await
+        .unwrap();
+        // Sixty-four authenticated blocks per piece; the scorer stays generic.
+        let split = Sq8RangeSplit {
+            max_physical_range_bytes: 64 * generation.pages.page_rows() * (dimensions + 12),
+            max_physical_gets: 128,
+        };
+        let scratch = split
+            .scratch_bytes(limits.max_query_bytes, limits.max_parallel_gets)
+            .unwrap() as u64;
+        let before = generation.modeled_memory_bytes();
+        generation.limits.max_memory_bytes = before + scratch;
+        let mut generation = generation.with_sq8_range_split(split).unwrap();
+        assert_eq!(generation.modeled_memory_bytes(), before + scratch);
+        assert_eq!(generation.limits.max_query_gets, limits.max_query_gets);
+        generation.limits.max_memory_bytes = limits.max_memory_bytes;
+        let bits = |result: &TwoBitSearchResult| {
+            result
+                .ranked
+                .candidates
+                .iter()
+                .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                .collect::<Vec<_>>()
+        };
+        let mut narrow = Sq8RangeTrace::new(limits.max_query_gets).unwrap();
+        fixture.arm(None);
+        assert!(
+            generation
+                .diagnostic_search_with_store_traced(
+                    fixture.reader.store(),
+                    &query,
+                    10,
+                    &mut narrow
+                )
+                .await
+                .is_err()
+        );
+        assert!(fixture.snapshot().requests.is_empty());
+        let mut trace = Sq8RangeTrace::new(split.max_physical_gets).unwrap();
+        let (ranked, _) = run_source_and_sq8_http(
+            &fixture,
+            generation.diagnostic_search_with_store_traced(
+                fixture.reader.store(),
+                &query,
+                10,
+                &mut trace,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bits(&plain), bits(&ranked));
+        assert_eq!(plain.plan.ranges, ranked.plan.ranges);
+        assert_eq!(
+            plain.ranked.stats.verified_bytes,
+            ranked.ranked.stats.verified_bytes
+        );
+        assert_eq!(plain.source_stats, ranked.source_stats);
+        assert_eq!(ranked.ranked.stats.submitted_gets, trace.ranges().len());
+        assert!(
+            fixture
+                .snapshot()
+                .requests
+                .iter()
+                .filter(|(path, head, _, _)| path == &key.to_string() && !*head)
+                .all(|(_, _, range, _)| range
+                    .is_some_and(|(first, end)| end - first <= split.max_physical_range_bytes))
+        );
+        let ranked_direct = run_direct_http(
+            &fixture,
+            generation.direct_closure_search_with_store(
+                fixture.reader.store(),
+                &query,
+                10,
+                None,
+                direct_limits,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bits(&plain_direct), bits(&ranked_direct));
+        assert_eq!(plain_direct.plan.ranges, ranked_direct.plan.ranges);
+        assert_eq!(
+            plain_direct.ranked.stats.verified_bytes,
+            ranked_direct.ranked.stats.verified_bytes
+        );
+        let mut refused = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &prefix,
+            &root_sha,
+            limits,
+            temp.path(),
+        )
+        .await
+        .unwrap();
+        refused.limits.max_memory_bytes = refused.modeled_memory_bytes() + scratch - 1;
+        fixture.arm(None);
+        assert!(matches!(
+            refused.with_sq8_range_split(split),
+            Err(TwoBitGenerationError::Invalid("SQ8 split memory"))
+        ));
+        assert!(fixture.snapshot().requests.is_empty());
+        fixture.finish();
     }
 
     #[tokio::test]
