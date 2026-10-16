@@ -1,0 +1,7 @@
+Result=success
+ExecMainCode=0
+ExecMainStatus=0
+ControlGroup=
+Description=borsuk-sq8-panel-47b886ff-983b-4729-b9c6-c5f6b976ac13-C0.service
+LoadState=not-found
+InvocationID=

@@ -1,0 +1,22 @@
+{
+    "CommandId": "a7041eb0-1de5-4122-a9f4-bf4fe9459a13",
+    "InstanceId": "i-077e5992d442c343f",
+    "Comment": "borsuk-sq8-split-prerequisites-setup",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 1,
+    "ExecutionStartDateTime": "2026-10-16T07:02:57.069Z",
+    "ExecutionElapsedTime": "PT0.015S",
+    "ExecutionEndDateTime": "2026-10-16T07:02:57.069Z",
+    "Status": "Failed",
+    "StatusDetails": "Failed",
+    "StandardOutputContent": "/mnt/borsuk-sq8-split-bootstrap/setup-runtime.sh: FAILED\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "sha256sum: WARNING: 1 computed checksum did NOT match\nfailed to run commands: exit status 1",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

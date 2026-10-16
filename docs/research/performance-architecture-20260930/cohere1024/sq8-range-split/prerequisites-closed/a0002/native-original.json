@@ -1,0 +1,22 @@
+{
+    "CommandId": "b2184862-5483-4914-934a-942c199b0fde",
+    "InstanceId": "i-05113071a227077e5",
+    "Comment": "borsuk-sq8-split-prerequisites-a0002",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-16T07:14:04.733Z",
+    "ExecutionElapsedTime": "PT26.166S",
+    "ExecutionEndDateTime": "2026-10-16T07:14:30.733Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-sq8-split-panel/master.json: OK\n/mnt/borsuk-sq8-split-panel/support/publish-prerequisites.sh: OK\n/mnt/borsuk-sq8-split-panel/master.json: OK\n/mnt/borsuk-sq8-split-panel/support/run-split-prerequisites.sh: OK\nprerequisite_exit=0\npublication_exit=0\nshutdown_request_exit=0\nwrapper_exit=0\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

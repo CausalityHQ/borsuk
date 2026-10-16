@@ -1,0 +1,14 @@
+{
+  "schema": "borsuk-historical-panel-input-authority-v1",
+  "status": "HISTORICAL_CLOSED_INPUT_METADATA",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "archive_key": "research/semantic-router/20261015/sq8-panel-diagnostic-a0001/terminal/evidence.tar.gz",
+  "archive_bytes": 7230615,
+  "archive_sha256": "8794d773c99ccf3323cda692fead6377609e521196f355e653ce2290f2ae93fe",
+  "member": "results/panel-b0.jsonl",
+  "bytes": 1152331,
+  "sha256": "3f5db1a50db1ccec8ababb7468d2122ee27ce7ecc54018621136f3a46f22068f",
+  "original_runtime_sha256": "a0a7f642207a151af6e267b281f72a3e499d8b8540f5679a4dc947ab6d8955bd",
+  "source": "closed original terminal + panel.input-descriptors.tsv + frozen b0.expected.json; runtime SHA independently rechecked",
+  "new_parity_executed": false
+}

@@ -1,0 +1,6 @@
+Result=success
+ExecMainCode=1
+ExecMainStatus=0
+ControlGroup=/system.slice/borsuk-sq8-panel-7f5eab86-4cf4-4f40-a438-679505b4e0b1-reducer.service
+Description=borsuk-sq8-panel-7f5eab86-4cf4-4f40-a438-679505b4e0b1-reducer.service:e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b
+InvocationID=1715130f4a4549a6b4814595f5c796eb

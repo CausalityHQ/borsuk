@@ -1,0 +1,16 @@
+MOCKED identical exit=0
+MOCKED score exit=1
+MOCKED id exit=1
+MOCKED returned-order exit=1
+MOCKED trace exit=1
+MOCKED plan exit=1
+MOCKED source-charge exit=1
+MOCKED sq8-charge exit=1
+MOCKED ordinal exit=5
+MOCKED query-order exit=5
+MOCKED duplicate-query exit=5
+MOCKED missing-query exit=5
+MOCKED missing-field exit=5
+MOCKED validator-historical exit=73
+MOCKED validator-null exit=73
+MOCKED source-bound canonical/guard cases passed; native and real-input gates remain UNRUN

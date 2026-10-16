@@ -1,0 +1,124 @@
+{
+  "schema": "borsuk-split-prerequisite-runner-static-v1",
+  "status": "SOURCE_ONLY_UNVERIFIED",
+  "base_commit": "63e63dfd2288fd7c8d125d1c1702c57ec47edae1",
+  "source_path": "docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/run-split-prerequisites.sh",
+  "source_sha256": "cbc0f0749d1a54d89ef1545f95a82b7065a7b964e6f9b71cf698ca306c50bfa4",
+  "source_bytes": 15345,
+  "api": "bash run-split-prerequisites.sh ROOT MASTER_MANIFEST MASTER_SHA",
+  "contract": "/data/orchestration/borsuk-split-prerequisite-runner-contract.json",
+  "original_brief": "/data/orchestration/borsuk%split-prerequisite-native-runner.brief.json",
+  "instance": "aced9cf4-40ae-4d57-b65b-509d4b13bdc1",
+  "resources": {
+    "CPUQuota": "100%",
+    "AllowedCPUs": "0",
+    "MemoryMax": "256M",
+    "MemorySwapMax": 0,
+    "TasksMax": 128,
+    "RuntimeMaxSec": 120
+  },
+  "source_extraction": {
+    "exit": 0,
+    "functions": [
+      "safe_path",
+      "bounded",
+      "pin",
+      "verify_inputs",
+      "read_exit",
+      "exact_owner",
+      "drain_empty",
+      "settle",
+      "run_stage"
+    ],
+    "jq_filters": 13
+  },
+  "checks": [
+    {
+      "name": "bash_n",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/bash -n /home/rb/worktrees/borsuk-split-prerequisite-native-runner/docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/run-split-prerequisites.sh",
+      "chunk_id": "aadf9b",
+      "wall_time_seconds": 2.071271606,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "shellcheck",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/shellcheck --external-sources --severity=style /home/rb/worktrees/borsuk-split-prerequisite-native-runner/docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/run-split-prerequisites.sh",
+      "chunk_id": "312f2a",
+      "wall_time_seconds": 2.031100061,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "jq_compile_only",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/jq -n --arg phase '' --arg evidence '' --arg sha '' --arg root '' --arg machine '' --arg path '' --argjson original 0 --argjson exit 0 --argjson completed 0 --argjson c '[]' --argjson h '[]' --argjson m '[]' --argjson old '[]' --argjson slot 0 --argjson bytes 0 -f /data/orchestration/borsuk-split-prerequisite-runner-filters.jq",
+      "chunk_id": "bf6bb3",
+      "wall_time_seconds": 1.987460971,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "source_sha",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/sha256sum /home/rb/worktrees/borsuk-split-prerequisite-native-runner/docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/run-split-prerequisites.sh",
+      "chunk_id": "6bfadc",
+      "wall_time_seconds": 2.169479918,
+      "exit_code": 0,
+      "original_token_count": 63,
+      "output": "cbc0f0749d1a54d89ef1545f95a82b7065a7b964e6f9b71cf698ca306c50bfa4  /home/rb/worktrees/borsuk-split-prerequisite-native-runner/docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/run-split-prerequisites.sh\n"
+    },
+    {
+      "name": "expanded_bash_n",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/bash -n /data/orchestration/borsuk-split-prerequisite-runner-expanded-static-v2.sh",
+      "chunk_id": "cfea2a",
+      "wall_time_seconds": 0.105148782,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    },
+    {
+      "name": "expanded_shellcheck",
+      "cmd": "rtk proxy systemd-run --user --quiet --wait --pipe -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120 /usr/bin/shellcheck --external-sources --severity=style /data/orchestration/borsuk-split-prerequisite-runner-expanded-static-v2.sh",
+      "chunk_id": "56990d",
+      "wall_time_seconds": 0.362234851,
+      "exit_code": 0,
+      "original_token_count": 0,
+      "output": ""
+    }
+  ],
+  "staged_diff_check": {
+    "exit_code": 0,
+    "output_chunk_id": "e0a80f",
+    "files": 1,
+    "insertions": 233
+  },
+  "helper_only_failure": "Initial expanded static artifact used JS replacement-string substitution, which interpreted Bash dollar-single-quote as a suffix token. Corrected with callback substitution in expanded-static-v2.sh. Runner source was unaffected. Failed helper artifact retained, never executed.",
+  "execution_not_performed": [
+    "runner",
+    "extracted Bash functions",
+    "mock fixture",
+    "native binaries",
+    "Cargo",
+    "rustc",
+    "scientific data",
+    "network",
+    "AWS",
+    "consultation",
+    "children"
+  ],
+  "git_hooks": "disabled for source-only commit; no local script hooks executed",
+  "root_pending": [
+    "remote qualification",
+    "publication",
+    "compute closure",
+    "scientific admission and freeze"
+  ],
+  "scientific_performance_claim": false,
+  "commit": "6c05d7f764bcbb4bfdd6801b67e5144ec8eb7b22",
+  "commit_parent_verified": true,
+  "clean_worktree": true,
+  "commit_author": "Roman Bartusiak <riomus@gmail.com>",
+  "commit_verification_chunk_id": "85859d"
+}

@@ -1,0 +1,7 @@
+Result=success
+ExecMainCode=0
+ExecMainStatus=0
+ControlGroup=
+Description=borsuk-sq8-panel-e58cbb38-387e-4108-8a65-ff24d712e63d-reducer.service
+LoadState=not-found
+InvocationID=

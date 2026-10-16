@@ -1,0 +1,3 @@
+ControlGroup=/system.slice/borsuk-sq8-panel-47b886ff-983b-4729-b9c6-c5f6b976ac13-C0.service
+Description=borsuk-sq8-panel-47b886ff-983b-4729-b9c6-c5f6b976ac13-C0.service:e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b
+InvocationID=9d18d724cb4b49d2af1235ad848ffb05

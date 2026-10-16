@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-split-prerequisites-publication-v1",
+  "scope": "UNMEASURED_PREREQUISITES",
+  "original_exit": 0,
+  "archive_sha256": "3e147a76b75c8a82ea9ce772fd8c954854f3029196581371411c3c2c8a267fc9",
+  "master_sha256": "e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b",
+  "runner_sha256": "cbc0f0749d1a54d89ef1545f95a82b7065a7b964e6f9b71cf698ca306c50bfa4",
+  "publication_complete": true,
+  "compute_closed": false,
+  "root_independent_verification_required": true,
+  "performance_claim": false
+}

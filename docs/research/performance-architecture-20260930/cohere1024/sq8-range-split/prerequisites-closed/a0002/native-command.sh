@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set -C
+umask 077
+root=/mnt/borsuk-sq8-split-panel
+cat > "$root/master.json" <<'MASTER_METADATA_EOF'
+{
+  "schema": "borsuk-split-prerequisites-input-v1",
+  "root": "/mnt/borsuk-sq8-split-panel",
+  "source_commit": "63e63dfd2288fd7c8d125d1c1702c57ec47edae1",
+  "remote_machine_id": "ec251de23cfb7a9f1e7db1182276bffd",
+  "machine_started_epoch": 1792134543,
+  "shared_deadline_epoch": 1792138263,
+  "runner": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/run-split-prerequisites.sh",
+    "bytes": 15345,
+    "sha256": "cbc0f0749d1a54d89ef1545f95a82b7065a7b964e6f9b71cf698ca306c50bfa4"
+  },
+  "driver": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/run-sq8-split-panel.sh",
+    "bytes": 21270,
+    "sha256": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644"
+  },
+  "worker": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/panel-stage.sh",
+    "bytes": 3821,
+    "sha256": "b046c34d6276c055ddac939ecc5dcb18cf5bc8d3ca71fff42daae5cb3ebab433"
+  },
+  "producer": {
+    "path": "/mnt/borsuk-sq8-split-panel/bin/check_cohere_native_baseline",
+    "bytes": 17629808,
+    "sha256": "65ad16cd5aecc22731a9752ca7233226b11611d21c3a1468be30cc384c14ea33"
+  },
+  "reducer": {
+    "path": "/mnt/borsuk-sq8-split-panel/bin/compare_native_replay",
+    "bytes": 13384312,
+    "sha256": "4efc0af9855e1320a915053dcbbd7e242bc7f03a541460be3d73290ce66dc25f"
+  },
+  "shell": {
+    "path": "/usr/bin/bash",
+    "bytes": 1446024,
+    "sha256": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1"
+  },
+  "parity": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/check-disabled-historical-parity.sh",
+    "bytes": 14576,
+    "sha256": "f778257603cb046f9d279b5e1ce765830dbabab0e331b3a64255fdaee796a9b3"
+  },
+  "fixture": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/fault-fixture.sh",
+    "bytes": 5861,
+    "sha256": "b0da310c1d80b4fe5e7087f5c754be802374d9ac8063aed43e1739fbd35d4f52"
+  },
+  "authority": {
+    "source": {
+      "path": "/mnt/borsuk-sq8-split-panel/authority/native-source.json",
+      "bytes": 50968,
+      "sha256": "26a2e525120824fc41fe53d898db5fd3cd213a84a1c0478f774a8aa752c7d065"
+    },
+    "protocol": {
+      "path": "/mnt/borsuk-sq8-split-panel/authority/protocol.md",
+      "bytes": 7095,
+      "sha256": "87e59d4953bccd3e3127a97425ae125c66e85f2d10fdc8225e609d67553ba963"
+    },
+    "cohort": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/prepared-parent_cohort_complete.json",
+      "bytes": 6238,
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    },
+    "historical": {
+      "path": "/mnt/borsuk-sq8-split-panel/authority/historical.json",
+      "bytes": 777,
+      "sha256": "88de6c16e09da67cf01d5baef8da31346e0ae1115408497a81e04758aeeae8ff"
+    }
+  },
+  "original_inputs": {
+    "requests": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/queries.f32",
+      "bytes": 4096000,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+    },
+    "truth": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/truth.u64",
+      "bytes": 80000,
+      "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+    },
+    "cohort_receipt": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/prepared-parent_cohort_complete.json",
+      "bytes": 6238,
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    },
+    "derivation_receipt": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/prepared-parent_derived_derivation.json",
+      "bytes": 23128,
+      "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+    }
+  },
+  "historical_completed": {
+    "path": "/mnt/borsuk-sq8-split-panel/runtime/HIST_B0.completed.json",
+    "bytes": 5880,
+    "sha256": "c69e3082bfb1d09f610be358e689bea81ce1c94c985eb6f981c94bc446e4beca"
+  },
+  "phases": [
+    {
+      "label": "C1",
+      "runtime_config": {
+        "path": "/data/target/borsuk-sq8-panel-attribution.pending/split-runtime.pending/C1.runtime.json",
+        "bytes": 3600,
+        "sha256": "cd99577674e67825eb756ecd8a80ba38dee51743130e44b1488a76ea430a5994"
+      },
+      "expected_headers": {
+        "path": "/data/target/borsuk-sq8-panel-attribution.pending/split-runtime.pending/C1.expected.json",
+        "bytes": 5843,
+        "sha256": "d1bb14698e275142fe0e349ac6d136578effe1b0f5246819f959abc5a2f6d556"
+      }
+    },
+    {
+      "label": "NULL_SMOKE",
+      "runtime_config": {
+        "path": "/data/target/borsuk-sq8-panel-attribution.pending/split-runtime.pending/NULL_SMOKE.runtime.json",
+        "bytes": 3531,
+        "sha256": "eb103785bdb91d9a33e054f5ae7a29a097cba38765e58e69d787a5332c7cc76c"
+      },
+      "expected_headers": {
+        "path": "/data/target/borsuk-sq8-panel-attribution.pending/split-runtime.pending/NULL_SMOKE.expected.json",
+        "bytes": 5693,
+        "sha256": "e78920ed07e7ee3c48e666054fd0e7bca9d064af9061cf2a495d51f496bb6a96"
+      }
+    }
+  ]
+}
+MASTER_METADATA_EOF
+printf '%s  %s\n%s  %s\n' e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b "$root/master.json" 5ae834475087462f5ec219dcd8b637ce23bce644faa0aac18403b524b19ea71a "$root/support/publish-prerequisites.sh" | sha256sum --strict --check -
+exec /bin/bash "$root/support/publish-prerequisites.sh" "$root" "$root/master.json" e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b cbc0f0749d1a54d89ef1545f95a82b7065a7b964e6f9b71cf698ca306c50bfa4

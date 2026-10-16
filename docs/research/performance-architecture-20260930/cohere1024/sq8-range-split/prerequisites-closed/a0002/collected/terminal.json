@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-split-prerequisites-local-v1",
+  "scope": "LOCAL_ONLY",
+  "status": "LOCAL_EXECUTION_COMPLETE",
+  "input_manifest_sha256": "e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b",
+  "final_stage": "local-only-complete",
+  "evidence_dir": "/mnt/borsuk-sq8-split-panel/split-prerequisites.pending/PARITY/reducer",
+  "original_exit": 0,
+  "exit": 0,
+  "completed_unmeasured_phases": 2,
+  "scientific_cells_executed": 0,
+  "original_native_results_preserved": true,
+  "full_qualification": false,
+  "cloud_publication": false,
+  "compute_closed": false,
+  "root_external_gates_required": true,
+  "scientific_performance_claim": false
+}
