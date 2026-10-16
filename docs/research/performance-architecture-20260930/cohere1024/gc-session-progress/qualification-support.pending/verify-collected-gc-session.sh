@@ -90,7 +90,12 @@ json_is "$out/instance-final.json" -s --arg i "$instance" '
 text_is "$out/volume-final.exit" 254
 file "$out/volume-final.stderr"
 awk -v expected="An error occurred (InvalidVolume.NotFound) when calling the DescribeVolumes operation: The volume '$volume' does not exist." '
- NF {n++; if($0!=expected) bad=1} END {exit(n!=1 || bad)}' "$out/volume-final.stderr" || fail 'exact volume absence receipt'
+ NF {
+  n++; line=$0
+  sub(/^aws: \[ERROR\]: /,"",line)
+  sub(/ when calling the DescribeVolumes operation \(reached max retries: 0\): /," when calling the DescribeVolumes operation: ",line)
+  if(line!=expected) bad=1
+ } END {exit(n!=1 || bad)}' "$out/volume-final.stderr" || fail 'exact volume absence receipt'
 property_is "$out/external-timer-final.txt" ActiveState inactive
 
 # These pins bind the independently expanded roster below to the exact driver source.
