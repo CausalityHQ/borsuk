@@ -1,0 +1,18 @@
+
+running 1 test
+test session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations ... FAILED
+
+failures:
+
+---- session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations stdout ----
+
+thread 'session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations' (10216) panicked at crates/borsuk/tests/two_bit_gc_delayed_delete.rs:1123:36:
+called `Result::unwrap_err()` on an `Ok` value: TwoBitGcReport { objects_scanned: 2, unknown_objects: 1, delete_attempts: 0, objects_deleted: 0, deleted_object_bytes: 0, scan_complete: true, restart_required: false, pending_object_bytes: None, required_deleted_object_bytes: None, delete_outcome_unknown: false }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.02s
+

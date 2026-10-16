@@ -1,0 +1,1 @@
+timeout -k 5 20 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/source-files.sha256 /mnt/borsuk-paired-qualification/evidence/gc-session/admission-input-sha.log 

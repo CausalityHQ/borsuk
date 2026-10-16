@@ -1,0 +1,19 @@
+
+running 14 tests
+test application_ids_survive_ordered_build_publication_reload_and_ranking ... ok
+test durable_fence_rejects_delayed_mutation_and_generation_commits_after_release ... ok
+test fresh_profile_target_refuses_before_seal_and_explicit_scale_transition_works ... ok
+test gc_rejects_inconsistent_mutation_caps_before_remote_io ... ok
+test native_overpopulation_unready_job_recovers_with_explicit_scale_profile ... ok
+test native_s3_conditional_fence_and_gc_smoke ... ignored, requires owned AWS test prefix and instance-role credentials
+test scale_profile_explicit_empty_creation_and_missing_profile_authority_refuse ... ok
+test scale_profile_recovers_build_ready_and_prehead_with_exact_profile ... ok
+test scale_profile_remaining_mutation_budget_refuses_before_body_read ... ok
+test scale_profile_varied_dimensions_scalar_codes_norms_scores_topk_and_refill ... ok
+test semantic_d1024_compaction_recovers_ready_publication_in_memory ... ok
+test semantic_d1024_compaction_reopens_with_application_ids_and_score_bits ... ok
+test semantic_d1025_compaction_refuses_before_side_effects ... ok
+test semantic_d768_compaction_reopens_with_application_ids_and_score_bits ... ok
+
+test result: ok. 13 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.39s
+

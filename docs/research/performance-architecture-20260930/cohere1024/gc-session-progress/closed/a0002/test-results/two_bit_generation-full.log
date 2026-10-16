@@ -1,0 +1,15 @@
+
+running 10 tests
+test graph_variant_adapter_preserves_components_and_rejects_untrusted_roots ... ok
+test pinned_generation_reloads_plans_without_pq_and_rejects_corruption_or_budget ... ok
+test retained_semantic_republication_preserves_payload_and_score_bits ... ok
+test retained_semantic_republication_refuses_unapproved_changed_or_unbounded_inputs ... ok
+test retained_semantic_router_replacement_accepts_versioned_roster_and_refuses_version_change ... ok
+test retained_semantic_router_replacement_preserves_unchanged_transport_and_search ... ok
+test retained_semantic_router_replacement_rechecks_source_and_control_after_staging ... ok
+test retained_semantic_router_replacement_refuses_extra_destination_without_deleting_foreign_object ... ok
+test retained_semantic_router_replacement_refuses_pins_provenance_roster_and_caps ... ok
+test retained_semantic_router_replacement_rejects_valid_publication_with_changed_groups ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.92s
+

@@ -1,0 +1,29 @@
+
+running 24 tests
+test acknowledged_compaction_survives_an_earlier_ambiguous_metadata_delete ... ok
+test acknowledged_empty_generation_survives_an_earlier_ambiguous_delete ... ok
+test acknowledged_mutation_survives_an_earlier_ambiguous_delete ... ok
+test empty_generation_rejects_invalid_geometry_before_io ... ok
+test session_tests::a_new_authenticated_head_protects_the_pending_candidate ... ok
+test session_tests::admission_reader_lock_and_keep_validation_failures_do_not_advance ... ok
+test session_tests::admission_reserves_continuation_and_rejects_zero_or_overflowing_caps_before_io ... ok
+test session_tests::caller_runtime_and_session_drop_leave_accepted_work_owned_until_teardown ... ok
+test session_tests::delete_cap_does_not_consume_the_next_entry_and_eof_requires_a_poll ... ok
+test session_tests::delete_errors_before_or_after_effect_retain_candidate_and_durable_fence ... ok
+test session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress ... ok
+test session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress ... ok
+test session_tests::dropped_waiter_keeps_delete_lock_and_rejects_busy_session ... ok
+test session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation ... ok
+test session_tests::four_retained_or_unknown_entries_cannot_starve_an_unordered_orphan ... ok
+test session_tests::list_failure_discards_only_traversal_and_reports_restart ... ok
+test session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations ... ok
+test session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata ... ok
+test session_tests::real_filesystem_list_survives_caps_and_fresh_metadata_io ... ok
+test session_tests::recreation_restarts_safely_and_invalid_prefix_never_starts_io ... ok
+test session_tests::residual_bytes_retain_one_candidate_and_pending_inspection_uses_scan_budget ... ok
+test session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers ... ok
+test session_tests::whole_cap_refusal_allows_mutation_then_larger_retry ... ok
+test session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+

@@ -1,0 +1,3 @@
+session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress: test
+
+1 test, 0 benchmarks

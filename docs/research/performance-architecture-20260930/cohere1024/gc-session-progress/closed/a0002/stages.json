@@ -1,0 +1,692 @@
+[
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source-files.sha256 /mnt/borsuk-paired-qualification/native-source.json /mnt/borsuk-paired-qualification/required-exact-tests.txt /mnt/borsuk-paired-qualification/qualify-gc-session.sh /mnt/borsuk-paired-qualification/supervise-gc-session.sh \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "admission-input-sha",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source-files.sha256 /mnt/borsuk-paired-qualification/native-source.json /mnt/borsuk-paired-qualification/required-exact-tests.txt /mnt/borsuk-paired-qualification/qualify-gc-session.sh /mnt/borsuk-paired-qualification/supervise-gc-session.sh\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3712\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 334\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq --stream -se --rawfile manifest /mnt/borsuk-paired-qualification/evidence/gc-session/source-files.sha256 $'\\n ($manifest | split(\"\\\\n\")) as $lines\\n | ($lines[0:-1] | map(capture(\"^(?<sha>[0-9a-f]{64})  (?<path>.+)$\"))) as $files\\n | ($files | map({key:.path, value:.sha}) | from_entries) as $by_path\\n | [.[] | select(length == 2)] as $entries\\n | if ($lines | length) == 479 and $lines[-1] == \"\"\\n  and ($files | length) == 478 and ($by_path | length) == 478\\n  and all($files[]; (.path | startswith(\"/\") | not)\\n   and (.path | contains(\"\\\\\\\\\") | not)\\n   and (.path | split(\"/\") | all(. != \"\" and . != \".\" and . != \"..\")))\\n  and ($entries | length) == 445\\n  and ([$entries[] | .[0][0]] | unique | length) == 445\\n  and all($entries[]; (.[0] | length) == 1 and (.[0][0] | type) == \"string\"\\n   and (.[1] | type) == \"string\" and (.[1] | test(\"^[0-9a-f]{64}$\"))\\n   and $by_path[.[0][0]] == .[1])\\n then {source_files:478, native_source_files:445}\\n else error(\"malformed, duplicate or mismatched source/native inventory\") end\\n' /mnt/borsuk-paired-qualification/evidence/gc-session/native-source.json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "source-inventory",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq --stream -se --rawfile manifest /mnt/borsuk-paired-qualification/evidence/gc-session/source-files.sha256 \n ($manifest | split(\"\\n\")) as $lines\n | ($lines[0:-1] | map(capture(\"^(?<sha>[0-9a-f]{64})  (?<path>.+)$\"))) as $files\n | ($files | map({key:.path, value:.sha}) | from_entries) as $by_path\n | [.[] | select(length == 2)] as $entries\n | if ($lines | length) == 479 and $lines[-1] == \"\"\n  and ($files | length) == 478 and ($by_path | length) == 478\n  and all($files[]; (.path | startswith(\"/\") | not)\n   and (.path | contains(\"\\\\\") | not)\n   and (.path | split(\"/\") | all(. != \"\" and . != \".\" and . != \"..\")))\n  and ($entries | length) == 445\n  and ([$entries[] | .[0][0]] | unique | length) == 445\n  and all($entries[]; (.[0] | length) == 1 and (.[0][0] | type) == \"string\"\n   and (.[1] | type) == \"string\" and (.[1] | test(\"^[0-9a-f]{64}$\"))\n   and $by_path[.[0][0]] == .[1])\n then {source_files:478, native_source_files:445}\n else error(\"malformed, duplicate or mismatched source/native inventory\") end\n /mnt/borsuk-paired-qualification/evidence/gc-session/native-source.json\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 78%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4428\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 4\n\tMinor (reclaiming a frame) page faults: 549\n\tVoluntary context switches: 8\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 728\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 120,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/source-files.sha256 /mnt/borsuk-paired-qualification/evidence/gc-session/admission-input-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "source-before",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 120 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/source-files.sha256 /mnt/borsuk-paired-qualification/evidence/gc-session/admission-input-sha.log\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3556\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 333\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 48\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "rustc -vV \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "rustc-version",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 rustc -vV\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 108%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 82872\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 2568\n\tVoluntary context switches: 31\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "rustc --print cfg \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "rustc-cfg",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 rustc --print cfg\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.01\n\tPercent of CPU this job got: 107%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 90072\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 2916\n\tVoluntary context switches: 34\n\tInvoluntary context switches: 3\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "cargo -vV \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:42:58Z\n",
+      "grace_seconds" : 5,
+      "name" : "cargo-version",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 cargo -vV\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.01\n\tPercent of CPU this job got: 105%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 13520\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 1\n\tMinor (reclaiming a frame) page faults: 2945\n\tVoluntary context switches: 80\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 56\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo test --locked -p borsuk --test two_bit_gc_delayed_delete --no-run --message-format=json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 30,
+      "name" : "debug-gc-compile",
+      "started" : "2026-10-16T00:42:58Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 4139 cargo test --locked -p borsuk --test two_bit_gc_delayed_delete --no-run --message-format=json\"\n\tUser time (seconds): 268.67\n\tSystem time (seconds): 45.46\n\tPercent of CPU this job got: 96%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 5:25.57\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4001764\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 3017\n\tMinor (reclaiming a frame) page faults: 14716767\n\tVoluntary context switches: 189327\n\tInvoluntary context switches: 3182\n\tSwaps: 0\n\tFile system inputs: 464\n\tFile system outputs: 6562840\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq -Rsc --arg target two_bit_gc_delayed_delete --arg kind test $'\\n  [split(\"\\\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\\n   and .target.name == $target and .profile.test == true\\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\\n ' /mnt/borsuk-paired-qualification/evidence/gc-session/debug-gc-compile.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-artifact",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq -Rsc --arg target two_bit_gc_delayed_delete --arg kind test \n  [split(\"\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\n   and .target.name == $target and .profile.test == true\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\n  /mnt/borsuk-paired-qualification/evidence/gc-session/debug-gc-compile.log\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 7540\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 1846\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-elf",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 2852\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 233\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-sha",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 93%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3712\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 331\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 5\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-inventory",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4536\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 317\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-1-selected",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4728\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 316\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-1",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 13%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.09\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8880\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 526\n\tVoluntary context switches: 145\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 72\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-2-selected",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4560\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 313\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-2",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 3%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.33\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8640\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 459\n\tVoluntary context switches: 44\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-3-selected",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4608\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 315\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-3",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 2%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.20\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8660\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 459\n\tVoluntary context switches: 26\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-4-selected",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4624\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 313\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:25Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-4",
+      "started" : "2026-10-16T00:48:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 4%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.14\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8612\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 444\n\tVoluntary context switches: 27\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:25Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-5-selected",
+      "started" : "2026-10-16T00:48:25Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4432\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 317\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 60,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:28Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-5",
+      "started" : "2026-10-16T00:48:25Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 60 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata\"\n\tUser time (seconds): 1.01\n\tSystem time (seconds): 0.43\n\tPercent of CPU this job got: 39%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:03.70\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 9068\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 564\n\tVoluntary context switches: 33687\n\tInvoluntary context switches: 2\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8304\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:28Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-6-selected",
+      "started" : "2026-10-16T00:48:28Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4656\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 313\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:28Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-6",
+      "started" : "2026-10-16T00:48:28Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 26%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8444\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 448\n\tVoluntary context switches: 27\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:28Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-7-selected",
+      "started" : "2026-10-16T00:48:28Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --list --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4572\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 311\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:28Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-exact-7",
+      "started" : "2026-10-16T00:48:28Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 18%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 10068\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 507\n\tVoluntary context switches: 34\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 300,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-full",
+      "started" : "2026-10-16T00:48:28Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 300 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_gc_delayed_delete-eec096e4e20e02c9 --test-threads=1\"\n\tUser time (seconds): 1.08\n\tSystem time (seconds): 0.45\n\tPercent of CPU this job got: 37%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:04.10\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 11184\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 1564\n\tVoluntary context switches: 34691\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8936\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/debug-gc-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T00:48:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "debug-gc-sha-after",
+      "started" : "2026-10-16T00:48:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/debug-gc-sha.log\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3556\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 334\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo test --locked -p borsuk --test two_bit_gc_delayed_delete --release --no-run --message-format=json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 30,
+      "name" : "release-gc-compile",
+      "started" : "2026-10-16T00:48:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 3804 cargo test --locked -p borsuk --test two_bit_gc_delayed_delete --release --no-run --message-format=json\"\n\tUser time (seconds): 1003.39\n\tSystem time (seconds): 48.29\n\tPercent of CPU this job got: 97%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 18:00.44\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4402112\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 1653\n\tMinor (reclaiming a frame) page faults: 17070842\n\tVoluntary context switches: 173799\n\tInvoluntary context switches: 7035\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 3911592\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq -Rsc --arg target two_bit_gc_delayed_delete --arg kind test $'\\n  [split(\"\\\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\\n   and .target.name == $target and .profile.test == true\\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\\n ' /mnt/borsuk-paired-qualification/evidence/gc-session/release-gc-compile.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-artifact",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq -Rsc --arg target two_bit_gc_delayed_delete --arg kind test \n  [split(\"\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\n   and .target.name == $target and .profile.test == true\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\n  /mnt/borsuk-paired-qualification/evidence/gc-session/release-gc-compile.log\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.01\n\tPercent of CPU this job got: 96%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 7632\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 1998\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "readelf -h /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-elf",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 readelf -h /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3036\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 238\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-sha",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 87%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3708\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 334\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 2\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-inventory",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3864\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 251\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-1-selected",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3928\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 251\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-1",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::real_filesystem_absent_pending_candidate_reopens_reads_and_mutations\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 18%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5516\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 370\n\tVoluntary context switches: 146\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 72\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-2-selected",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3956\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 250\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-2",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::fence_release_reconciliation_and_unresolved_errors_preserve_continuation\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 10%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5492\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 313\n\tVoluntary context switches: 44\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 32\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-3-selected",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3976\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 250\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-3",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::dropped_waiter_during_keep_validation_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 8%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5396\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 313\n\tVoluntary context switches: 26\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-4-selected",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 4104\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 252\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-4",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::dropped_waiter_during_list_poll_keeps_lock_and_progress\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 6%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5500\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 314\n\tVoluntary context switches: 26\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:33Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-5-selected",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3952\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 251\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 60,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:36Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-5",
+      "started" : "2026-10-16T01:06:33Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 60 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::real_filesystem_list_crosses_sdk_batch_with_small_caps_and_fresh_metadata\"\n\tUser time (seconds): 0.20\n\tSystem time (seconds): 0.38\n\tPercent of CPU this job got: 21%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:02.77\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6108\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 438\n\tVoluntary context switches: 33719\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8304\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:36Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-6-selected",
+      "started" : "2026-10-16T01:06:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 50%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3960\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 249\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:36Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-6",
+      "started" : "2026-10-16T01:06:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::session_drop_terminates_recorded_worker_and_runtime_helpers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 20%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5756\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 321\n\tVoluntary context switches: 27\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 16\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:36Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-7-selected",
+      "started" : "2026-10-16T01:06:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --list --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3968\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 255\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 20,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:36Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-exact-7",
+      "started" : "2026-10-16T01:06:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 20 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 --exact session_tests::worker_panic_reports_unknown_progress_and_recreation_recovers\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 11%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 6388\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 330\n\tVoluntary context switches: 36\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 24\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 300,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:40Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-full",
+      "started" : "2026-10-16T01:06:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 300 /mnt/borsuk-paired-qualification/source/target/release/deps/two_bit_gc_delayed_delete-2880a39ee1e81d9c --test-threads=1\"\n\tUser time (seconds): 0.25\n\tSystem time (seconds): 0.41\n\tPercent of CPU this job got: 19%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:03.41\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 7360\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 578\n\tVoluntary context switches: 34757\n\tInvoluntary context switches: 2\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8936\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/release-gc-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:40Z\n",
+      "grace_seconds" : 5,
+      "name" : "release-gc-sha-after",
+      "started" : "2026-10-16T01:06:40Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/release-gc-sha.log\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 87%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3552\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 334\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo test --locked -p borsuk --test two_bit_application_ids --no-run --message-format=json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:44Z\n",
+      "grace_seconds" : 30,
+      "name" : "two_bit_application_ids-compile",
+      "started" : "2026-10-16T01:06:40Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 2717 cargo test --locked -p borsuk --test two_bit_application_ids --no-run --message-format=json\"\n\tUser time (seconds): 3.85\n\tSystem time (seconds): 0.59\n\tPercent of CPU this job got: 109%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:04.04\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 904724\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 154\n\tMinor (reclaiming a frame) page faults: 218229\n\tVoluntary context switches: 4058\n\tInvoluntary context switches: 38\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 93920\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq -Rsc --arg target two_bit_application_ids --arg kind test $'\\n  [split(\"\\\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\\n   and .target.name == $target and .profile.test == true\\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\\n ' /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_application_ids-compile.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:44Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_application_ids-artifact",
+      "started" : "2026-10-16T01:06:44Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq -Rsc --arg target two_bit_application_ids --arg kind test \n  [split(\"\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\n   and .target.name == $target and .profile.test == true\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\n  /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_application_ids-compile.log\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 97%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 9072\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 2375\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 2\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:44Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_application_ids-elf",
+      "started" : "2026-10-16T01:06:44Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 2884\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 234\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:44Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_application_ids-sha",
+      "started" : "2026-10-16T01:06:44Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 96%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3712\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 335\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 300,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd --test-threads=1 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:52Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_application_ids-full",
+      "started" : "2026-10-16T01:06:44Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 300 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_application_ids-d835d8413c9c95fd --test-threads=1\"\n\tUser time (seconds): 4.77\n\tSystem time (seconds): 1.13\n\tPercent of CPU this job got: 70%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:08.39\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 34256\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 8149\n\tVoluntary context switches: 6493\n\tInvoluntary context switches: 27\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 41688\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_application_ids-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:52Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_application_ids-sha-after",
+      "started" : "2026-10-16T01:06:52Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_application_ids-sha.log\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3556\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 332\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo test --locked -p borsuk --test two_bit_generation --no-run --message-format=json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:55Z\n",
+      "grace_seconds" : 30,
+      "name" : "two_bit_generation-compile",
+      "started" : "2026-10-16T01:06:52Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 2705 cargo test --locked -p borsuk --test two_bit_generation --no-run --message-format=json\"\n\tUser time (seconds): 2.35\n\tSystem time (seconds): 0.47\n\tPercent of CPU this job got: 114%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:02.47\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 864720\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 83\n\tMinor (reclaiming a frame) page faults: 175048\n\tVoluntary context switches: 3702\n\tInvoluntary context switches: 49\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 52824\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq -Rsc --arg target two_bit_generation --arg kind test $'\\n  [split(\"\\\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\\n   and .target.name == $target and .profile.test == true\\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\\n ' /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_generation-compile.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:55Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_generation-artifact",
+      "started" : "2026-10-16T01:06:55Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq -Rsc --arg target two_bit_generation --arg kind test \n  [split(\"\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\n   and .target.name == $target and .profile.test == true\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\n  /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_generation-compile.log\"\n\tUser time (seconds): 0.03\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 97%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.03\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 8764\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 2262\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:55Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_generation-elf",
+      "started" : "2026-10-16T01:06:55Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 2924\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 237\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:06:55Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_generation-sha",
+      "started" : "2026-10-16T01:06:55Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 93%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3704\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 334\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 300,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7 --test-threads=1 \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:07:16Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_generation-full",
+      "started" : "2026-10-16T01:06:55Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 300 /mnt/borsuk-paired-qualification/source/target/debug/deps/two_bit_generation-8737d949d31ba1b7 --test-threads=1\"\n\tUser time (seconds): 19.72\n\tSystem time (seconds): 0.71\n\tPercent of CPU this job got: 97%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:20.92\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 50380\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 18938\n\tVoluntary context switches: 48109\n\tInvoluntary context switches: 96\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 397384\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_generation-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:07:16Z\n",
+      "grace_seconds" : 5,
+      "name" : "two_bit_generation-sha-after",
+      "started" : "2026-10-16T01:07:16Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/two_bit_generation-sha.log\"\n\tUser time (seconds): 0.01\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.01\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3552\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 336\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo test --locked -p borsuk --lib --no-run --message-format=json \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:24Z\n",
+      "grace_seconds" : 30,
+      "name" : "library-compile",
+      "started" : "2026-10-16T01:07:16Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 2681 cargo test --locked -p borsuk --lib --no-run --message-format=json\"\n\tUser time (seconds): 122.30\n\tSystem time (seconds): 6.94\n\tPercent of CPU this job got: 101%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:07.89\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5533944\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 895\n\tMinor (reclaiming a frame) page faults: 2910532\n\tVoluntary context switches: 5880\n\tInvoluntary context switches: 742\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 1396136\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "jq -Rsc --arg target borsuk --arg kind lib $'\\n  [split(\"\\\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\\n   and .target.name == $target and .profile.test == true\\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\\n ' /mnt/borsuk-paired-qualification/evidence/gc-session/library-compile.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-artifact",
+      "started" : "2026-10-16T01:09:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 jq -Rsc --arg target borsuk --arg kind lib \n  [split(\"\\n\")[] | fromjson? | select(.reason == \"compiler-artifact\"\n   and .target.name == $target and .profile.test == true\n   and (.target.kind | index($kind)) != null and (.executable | type) == \"string\") | .executable]\n  | if length == 1 then .[0] else error(\"expected exactly one test executable from this compile log\") end\n  /mnt/borsuk-paired-qualification/evidence/gc-session/library-compile.log\"\n\tUser time (seconds): 0.02\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.02\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5716\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 1501\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-elf",
+      "started" : "2026-10-16T01:09:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 readelf -h /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3060\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 235\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 0\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-sha",
+      "started" : "2026-10-16T01:09:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a\"\n\tUser time (seconds): 0.16\n\tSystem time (seconds): 0.02\n\tPercent of CPU this job got: 100%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.18\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3556\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 332\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a --list --exact two_bit_generation::source_walk_tests::semantic_object_store_parity \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:24Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-semantic-object-store-parity-selected",
+      "started" : "2026-10-16T01:09:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a --list --exact two_bit_generation::source_walk_tests::semantic_object_store_parity\"\n\tUser time (seconds): 0.00\n\tSystem time (seconds): 0.00\n\tPercent of CPU this job got: 83%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 14432\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 1374\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 1\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 300,
+      "command" : "/mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a --test-threads=1 --exact two_bit_generation::source_walk_tests::semantic_object_store_parity \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:26Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-semantic-object-store-parity",
+      "started" : "2026-10-16T01:09:24Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 300 /mnt/borsuk-paired-qualification/source/target/debug/deps/borsuk-467bf37fb451870a --test-threads=1 --exact two_bit_generation::source_walk_tests::semantic_object_store_parity\"\n\tUser time (seconds): 1.13\n\tSystem time (seconds): 0.17\n\tPercent of CPU this job got: 80%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:01.61\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 79816\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 3661\n\tVoluntary context switches: 720\n\tInvoluntary context switches: 7\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 9528\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 10,
+      "command" : "sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/library-sha.log \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:09:26Z\n",
+      "grace_seconds" : 5,
+      "name" : "library-sha-after",
+      "started" : "2026-10-16T01:09:26Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 5 10 sha256sum --strict --check /mnt/borsuk-paired-qualification/evidence/gc-session/library-sha.log\"\n\tUser time (seconds): 0.15\n\tSystem time (seconds): 0.02\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.18\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3552\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 331\n\tVoluntary context switches: 3\n\tInvoluntary context switches: 4\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 8\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:14:36Z\n",
+      "grace_seconds" : 30,
+      "name" : "workspace-clippy",
+      "started" : "2026-10-16T01:09:26Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 2551 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious\"\n\tUser time (seconds): 243.00\n\tSystem time (seconds): 40.91\n\tPercent of CPU this job got: 91%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 5:10.43\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 3915640\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 1915\n\tMinor (reclaiming a frame) page faults: 12425412\n\tVoluntary context switches: 45166\n\tInvoluntary context switches: 1826\n\tSwaps: 0\n\tFile system inputs: 120\n\tFile system outputs: 2236400\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   },
+   {
+      "cap_seconds" : 4200,
+      "command" : "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh \n",
+      "exit" : 0,
+      "finished" : "2026-10-16T01:22:36Z\n",
+      "grace_seconds" : 30,
+      "name" : "workspace-test-build",
+      "started" : "2026-10-16T01:14:36Z\n",
+      "time" : "\tCommand being timed: \"timeout -k 30 2241 env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=1 CARGO_BUILD_JOBS=1 bash scripts/check_rust_test_build.sh\"\n\tUser time (seconds): 461.38\n\tSystem time (seconds): 80.76\n\tPercent of CPU this job got: 112%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 7:59.78\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 5533016\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 27017\n\tMinor (reclaiming a frame) page faults: 26039361\n\tVoluntary context switches: 567545\n\tInvoluntary context switches: 6413\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 19287600\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+   }
+]

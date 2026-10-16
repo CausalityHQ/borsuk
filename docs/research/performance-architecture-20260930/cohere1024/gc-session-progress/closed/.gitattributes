@@ -1,0 +1,3 @@
+# Native receipts keep their exact final blank lines and shell quoting delimiters.
+*.log -diff -whitespace
+*-command.txt -diff -whitespace
