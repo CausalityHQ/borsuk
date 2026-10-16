@@ -482,6 +482,7 @@ pub struct NativeTransportStats {
     pub method_counts: [u64; 10],
     /// Nonzero (HTTP status code, count) pairs from a fixed 100..=999 histogram.
     pub status_counts: Vec<(u16, u64)>,
+    /// Service errors, including header-policy refusals before body consumption.
     pub transport_failures: u64,
     pub stream_failures: u64,
     pub consumed_payload_bytes: u64,
@@ -519,19 +520,83 @@ impl Default for TransportCounters {
 static PROCESS_TRANSPORT: LazyLock<Arc<Mutex<TransportCounters>>> =
     LazyLock::new(|| Arc::new(Mutex::new(TransportCounters::default())));
 
-/// S3 data reader with the `object_store` request retry loop disabled. The
-/// query coordinator owns explicit retries and must charge every wire GET
-/// against the physical cap. A live HTTP fixture must still verify this
-/// transport's request accounting before a bounded-cost claim.
+/// S3 reader with SDK and reqwest retries disabled. Logical reads and consumed
+/// payload observations remain separate; callers do not retry whole queries.
 pub struct OneAttemptS3 {
     store: PrefixStore<AmazonS3>,
     counters: Arc<Mutex<TransportCounters>>,
+}
+
+/// Explicit opt-in for readonly data requests; status and body-resume retries
+/// share the SDK's single retry counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub enum S3ReadRetryPolicy {
+    #[serde(rename = "one_retry_100ms")]
+    OneRetry100Ms,
+}
+
+impl S3ReadRetryPolicy {
+    fn retry_config(self) -> RetryConfig {
+        RetryConfig {
+            max_retries: 1,
+            backoff: object_store::BackoffConfig {
+                init_backoff: std::time::Duration::from_millis(100),
+                max_backoff: std::time::Duration::from_millis(100),
+                ..Default::default()
+            },
+            // SDK checks before backoff: this is not a hard request deadline.
+            retry_timeout: std::time::Duration::from_secs(1),
+        }
+    }
+}
+
+/// Readonly S3 transport with at most two submissions per logical GET/HEAD,
+/// including body resume. Mutations are refused before reqwest submission.
+pub struct BoundedReadS3 {
+    store: PrefixStore<AmazonS3>,
+    counters: Arc<Mutex<TransportCounters>>,
+}
+
+impl BoundedReadS3 {
+    pub fn new_with_prefix(
+        bucket: &str,
+        region: &str,
+        prefix: Path,
+        policy: S3ReadRetryPolicy,
+    ) -> Result<Self, RangeFetchError> {
+        let counters = PROCESS_TRANSPORT.clone();
+        let timeout = std::time::Duration::from_secs(30);
+        // Keep IMDS (including its token PUT) on the existing zero-retry client.
+        let credentials = one_attempt_builder(bucket, region, counters.clone(), timeout)?
+            .build()
+            .map_err(RangeFetchError::Store)?
+            .credentials()
+            .clone();
+        let store = native_builder(bucket, region, counters.clone(), timeout, Some(policy))?
+            .with_credentials(credentials)
+            .build()
+            .map_err(RangeFetchError::Store)?;
+        Ok(Self {
+            store: PrefixStore::new(store, prefix),
+            counters,
+        })
+    }
+
+    pub fn store(&self) -> &dyn ObjectStore {
+        &self.store
+    }
+
+    /// Same cumulative process observations as the zero-retry reader.
+    pub fn transport_stats(&self) -> NativeTransportStats {
+        transport_snapshot(&self.counters)
+    }
 }
 
 #[derive(Debug)]
 struct NativeConnector {
     client: reqwest::Client,
     counters: Arc<Mutex<TransportCounters>>,
+    read_only: bool,
 }
 
 impl HttpConnector for NativeConnector {
@@ -539,6 +604,7 @@ impl HttpConnector for NativeConnector {
         Ok(HttpClient::new(NativeHttp {
             client: self.client.clone(),
             counters: self.counters.clone(),
+            read_only: self.read_only,
             allow_http: options
                 .get_config_value(&ClientConfigKey::AllowHttp)
                 .as_deref()
@@ -552,6 +618,7 @@ struct NativeHttp {
     client: reqwest::Client,
     counters: Arc<Mutex<TransportCounters>>,
     allow_http: bool,
+    read_only: bool,
 }
 
 #[async_trait::async_trait]
@@ -574,6 +641,16 @@ impl HttpService for NativeHttp {
             };
             counters.methods[method] = counters.methods[method].saturating_add(1);
         }
+        if self.read_only && !matches!(request.method().as_str(), "GET" | "HEAD") {
+            let mut counters = self.counters.lock().unwrap();
+            counters.transport_failures = counters.transport_failures.saturating_add(1);
+            return Err(HttpError::new(
+                HttpErrorKind::Decode,
+                std::io::Error::other("bounded read transport refuses mutations"),
+            ));
+        }
+        let range = request.headers().get("range").cloned();
+        let etag = request.headers().get("if-match").cloned();
         if request.uri().scheme_str() != Some("https")
             && !(self.allow_http && request.uri().scheme_str() == Some("http"))
         {
@@ -596,6 +673,28 @@ impl HttpService for NativeHttp {
             counters.statuses[status] = counters.statuses[status].saturating_add(1);
             if !response.status().is_success() {
                 counters.dropped_error_bodies = counters.dropped_error_bodies.saturating_add(1);
+            }
+        }
+        if self.read_only && response.status().is_success() {
+            let exact = match range.as_ref() {
+                Some(range) => range
+                    .to_str()
+                    .ok()
+                    .is_some_and(|range| exact_read_response(Some(range), &response)),
+                None => exact_read_response(None, &response),
+            };
+            if !exact
+                || etag
+                    .as_ref()
+                    .is_some_and(|etag| response.headers().get("etag") != Some(etag))
+            {
+                let mut counters = self.counters.lock().unwrap();
+                counters.transport_failures = counters.transport_failures.saturating_add(1);
+                // Decode is terminal in the SDK; never consume a refused body.
+                return Err(HttpError::new(
+                    HttpErrorKind::Decode,
+                    std::io::Error::other("bounded read response range/length/ETag mismatch"),
+                ));
             }
         }
         // SDK error handling collects bodies before the range guard. Drop them
@@ -627,11 +726,54 @@ impl HttpService for NativeHttp {
     }
 }
 
+// Check every underlying 206, including SDK resume, before any body polling.
+fn exact_read_response(range: Option<&str>, response: &HttpResponse) -> bool {
+    let Some(range) = range else {
+        return response.status().as_u16() != 206;
+    };
+    let parse = |range: &str| -> Option<(u64, u64)> {
+        let (first, last) = range.split_once('-')?;
+        Some((first.parse().ok()?, last.parse().ok()?))
+    };
+    let Some((first, last)) = range.strip_prefix("bytes=").and_then(parse) else {
+        return false;
+    };
+    let Some((actual, total)) = response
+        .headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("bytes "))
+        .and_then(|v| v.split_once('/'))
+    else {
+        return false;
+    };
+    response.status().as_u16() == 206
+        && first <= last
+        && parse(actual) == Some((first, last))
+        && total.parse::<u64>().is_ok_and(|total| last < total)
+        && response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            == last.checked_sub(first).and_then(|n| n.checked_add(1))
+}
+
 fn one_attempt_builder(
     bucket: &str,
     region: &str,
     counters: Arc<Mutex<TransportCounters>>,
     timeout: std::time::Duration,
+) -> Result<AmazonS3Builder, RangeFetchError> {
+    native_builder(bucket, region, counters, timeout, None)
+}
+
+fn native_builder(
+    bucket: &str,
+    region: &str,
+    counters: Arc<Mutex<TransportCounters>>,
+    timeout: std::time::Duration,
+    policy: Option<S3ReadRetryPolicy>,
 ) -> Result<AmazonS3Builder, RangeFetchError> {
     if bucket.is_empty() || region.is_empty() || timeout.is_zero() {
         return Err(RangeFetchError::UnexpectedMetadata);
@@ -657,11 +799,37 @@ fn one_attempt_builder(
         // ponytail: one copy part, at most 5 GiB per copied sidecar; split parts
         // only when an admitted workload requires larger sidecars.
         .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
-        .with_http_connector(NativeConnector { client, counters })
-        .with_retry(RetryConfig {
-            max_retries: 0,
-            ..Default::default()
-        }))
+        .with_http_connector(NativeConnector {
+            client,
+            counters,
+            read_only: policy.is_some(),
+        })
+        .with_retry(policy.map_or_else(
+            || RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            },
+            S3ReadRetryPolicy::retry_config,
+        )))
+}
+
+fn transport_snapshot(counters: &Mutex<TransportCounters>) -> NativeTransportStats {
+    let counters = counters.lock().unwrap();
+    NativeTransportStats {
+        attempts: counters.attempts,
+        method_counts: counters.methods,
+        status_counts: counters
+            .statuses
+            .iter()
+            .enumerate()
+            .filter(|(_, count)| **count != 0)
+            .map(|(index, count)| ((index + 100) as u16, *count))
+            .collect(),
+        transport_failures: counters.transport_failures,
+        stream_failures: counters.stream_failures,
+        consumed_payload_bytes: counters.consumed_payload_bytes,
+        dropped_error_bodies: counters.dropped_error_bodies,
+    }
 }
 
 impl OneAttemptS3 {
@@ -670,22 +838,7 @@ impl OneAttemptS3 {
     /// Unread/cancelled bodies, headers and kernel/TLS wire bytes are unknown.
     /// Counters saturate at u64::MAX and never reset between queries.
     pub fn transport_stats(&self) -> NativeTransportStats {
-        let counters = self.counters.lock().unwrap();
-        NativeTransportStats {
-            attempts: counters.attempts,
-            method_counts: counters.methods,
-            status_counts: counters
-                .statuses
-                .iter()
-                .enumerate()
-                .filter(|(_, count)| **count != 0)
-                .map(|(index, count)| ((index + 100) as u16, *count))
-                .collect(),
-            transport_failures: counters.transport_failures,
-            stream_failures: counters.stream_failures,
-            consumed_payload_bytes: counters.consumed_payload_bytes,
-            dropped_error_bodies: counters.dropped_error_bodies,
-        }
+        transport_snapshot(&self.counters)
     }
 
     /// Reuse the same bounded transport for metadata and HEAD admission.
@@ -1976,6 +2129,7 @@ pub(crate) mod cold_http_fixture {
         released: [bool; 3],
         // Stage, then starts of delayed stream error, early digest error, held sibling.
         fault: Option<(usize, [usize; 3])>,
+        retry_status: bool,
         error_released: bool,
         sibling_released: bool,
         stop: bool,
@@ -1984,6 +2138,7 @@ pub(crate) mod cold_http_fixture {
 
     pub struct Fixture {
         pub reader: OneAttemptS3,
+        endpoint: String,
         state: Arc<(Mutex<State>, Condvar)>,
         server: Option<JoinHandle<()>>,
         deadline: Instant,
@@ -1996,6 +2151,7 @@ pub(crate) mod cold_http_fixture {
             assert!(objects.values().map(Vec::len).sum::<usize>() <= 64 * 1024 * 1024);
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
+            let endpoint = format!("http://{address}");
             listener.set_nonblocking(true).unwrap();
             let counters = Arc::new(Mutex::new(TransportCounters::default()));
             let store = one_attempt_builder(
@@ -2005,7 +2161,7 @@ pub(crate) mod cold_http_fixture {
                 Duration::from_secs(10),
             )
             .unwrap()
-            .with_endpoint(format!("http://{address}"))
+            .with_endpoint(endpoint.clone())
             .with_allow_http(true)
             .with_access_key_id("fixture")
             .with_secret_access_key("fixture")
@@ -2076,10 +2232,40 @@ pub(crate) mod cold_http_fixture {
                     store: PrefixStore::new(store, Path::default()),
                     counters,
                 },
+                endpoint,
                 state,
                 server: Some(server),
                 deadline,
             }
+        }
+
+        pub fn retry_reader(&self) -> BoundedReadS3 {
+            let counters = self.reader.counters.clone();
+            let store = native_builder(
+                "fixture",
+                "eu-central-1",
+                counters.clone(),
+                Duration::from_secs(10),
+                Some(S3ReadRetryPolicy::OneRetry100Ms),
+            )
+            .unwrap()
+            .with_endpoint(self.endpoint.clone())
+            .with_allow_http(true)
+            .with_access_key_id("fixture")
+            .with_secret_access_key("fixture")
+            .build()
+            .unwrap();
+            BoundedReadS3 {
+                store: PrefixStore::new(store, Path::default()),
+                counters,
+            }
+        }
+
+        pub fn arm_retry_status(&self, starts: [usize; 3]) {
+            self.arm(Some((1, starts)));
+            let mut state = self.state.0.lock().unwrap();
+            state.retry_status = true;
+            state.released[1] = false;
         }
 
         pub fn snapshot(&self) -> State {
@@ -2253,6 +2439,30 @@ pub(crate) mod cold_http_fixture {
             .fault
             .filter(|(s, _)| Some(*s) == stage)
             .map(|(_, starts)| starts);
+        if state.retry_status && fault.is_some_and(|starts| first == starts[0]) {
+            let stage = stage.unwrap();
+            let retried = state.finished[stage].contains(&first);
+            state.active[stage] += 1;
+            state.peak[stage] = state.peak[stage].max(state.active[stage]);
+            // Hold the retry at headers while another logical read finishes.
+            while retried && !state.error_released && !state.stop && Instant::now() < deadline {
+                state = shared
+                    .1
+                    .wait_timeout(state, Duration::from_millis(50))
+                    .unwrap()
+                    .0;
+            }
+            let result = if state.stop || Instant::now() >= deadline {
+                Ok(())
+            } else {
+                socket.write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+            };
+            state.active[stage] -= 1;
+            state.finished[stage].push(first);
+            return result;
+        }
         drop(state);
         let status = if range.is_some() {
             "206 Partial Content"
@@ -2843,6 +3053,36 @@ mod tests {
         Arc<Mutex<Vec<String>>>,
         thread::JoinHandle<()>,
     ) {
+        let (store, counters, stop, requests, server) = http_transport_fixture(
+            response,
+            source_response,
+            prefix,
+            copy_success,
+            request_timeout,
+            response_byte_delay,
+            None,
+            None,
+        );
+        (OneAttemptS3 { store, counters }, stop, requests, server)
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn http_transport_fixture(
+        response: Vec<u8>,
+        source_response: Option<Vec<u8>>,
+        prefix: Path,
+        copy_success: Option<bool>,
+        request_timeout: Duration,
+        response_byte_delay: Option<Duration>,
+        policy: Option<S3ReadRetryPolicy>,
+        sequence: Option<Vec<Vec<u8>>>,
+    ) -> (
+        PrefixStore<AmazonS3>,
+        Arc<Mutex<TransportCounters>>,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -2851,6 +3091,7 @@ mod tests {
         let server_stop = Arc::clone(&stop);
         let server_requests = Arc::clone(&requests);
         let server = thread::spawn(move || {
+            let mut sequence = sequence.map(std::collections::VecDeque::from);
             let deadline = Instant::now() + Duration::from_secs(8);
             while !server_stop.load(Ordering::Relaxed) && Instant::now() < deadline {
                 match listener.accept() {
@@ -2909,7 +3150,10 @@ mod tests {
                             .unwrap()
                             .contains("/plane/records.bin ");
                         server_requests.lock().unwrap().push(request);
-                        let body = if let Some(body) = &copy_response {
+                        let next_response = sequence.as_mut().and_then(|v| v.pop_front());
+                        let body = if let Some(body) = &next_response {
+                            body
+                        } else if let Some(body) = &copy_response {
                             body
                         } else if source {
                             source_response.as_ref().unwrap_or(&response)
@@ -2947,20 +3191,49 @@ mod tests {
         });
         // Isolate live fixtures from each other while exercising the same boundary.
         let counters = Arc::new(Mutex::new(TransportCounters::default()));
-        let store =
-            one_attempt_builder("fixture", "eu-central-1", counters.clone(), request_timeout)
-                .unwrap()
-                .with_endpoint(format!("http://{address}"))
-                .with_allow_http(true)
-                .with_access_key_id("fixture")
-                .with_secret_access_key("fixture")
-                .build()
-                .unwrap();
-        let reader = OneAttemptS3 {
-            store: PrefixStore::new(store, prefix),
+        let store = native_builder(
+            "fixture",
+            "eu-central-1",
+            counters.clone(),
+            request_timeout,
+            policy,
+        )
+        .unwrap()
+        .with_endpoint(format!("http://{address}"))
+        .with_allow_http(true)
+        .with_access_key_id("fixture")
+        .with_secret_access_key("fixture")
+        .build()
+        .unwrap();
+        (
+            PrefixStore::new(store, prefix),
             counters,
-        };
-        (reader, stop, requests, server)
+            stop,
+            requests,
+            server,
+        )
+    }
+
+    fn read_retry_fixture(
+        responses: Vec<Vec<u8>>,
+    ) -> (
+        BoundedReadS3,
+        Arc<AtomicBool>,
+        Arc<Mutex<Vec<String>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let fallback = responses.last().unwrap().clone();
+        let (store, counters, stop, requests, server) = http_transport_fixture(
+            fallback,
+            None,
+            Path::default(),
+            None,
+            Duration::from_secs(30),
+            None,
+            Some(S3ReadRetryPolicy::OneRetry100Ms),
+            Some(responses),
+        );
+        (BoundedReadS3 { store, counters }, stop, requests, server)
     }
 
     #[tokio::test]
@@ -3185,6 +3458,480 @@ mod tests {
                 0
             );
         }
+    }
+
+    async fn retry_tail(
+        responses: Vec<Vec<u8>>,
+    ) -> (
+        Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure>,
+        Vec<String>,
+        NativeTransportStats,
+    ) {
+        let (authority, object) = short_tail_authority();
+        let (reader, stop, requests, server) = read_retry_fixture(responses);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_verified_ranges_inner(
+                reader.store(),
+                &Path::from("sq8.bin"),
+                &authority,
+                &[(1, 1)],
+                "\"frozen\"",
+                1,
+                object.len() - 3328,
+                1,
+            ),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let requests = requests.lock().unwrap().clone();
+        (
+            result.expect("bounded retry deadline"),
+            requests,
+            reader.transport_stats(),
+        )
+    }
+
+    #[tokio::test]
+    async fn read_retry_status_policy_is_explicit_and_finite() {
+        let (authority, object) = short_tail_authority();
+        let tail = &object[3328..];
+        let error = http_response("500 Internal Server Error", None, "\"frozen\"", 0, b"");
+        let good = http_response(
+            "206 Partial Content",
+            Some("bytes 3328-3548/3549"),
+            "\"frozen\"",
+            tail.len(),
+            tail,
+        );
+        let (off, requests, stats) = request_fixture_once(&authority, error.clone()).await;
+        assert!(off.is_err());
+        assert_eq!(requests.len(), 1);
+        assert_eq!(stats.attempts, 1);
+
+        let (on, requests, stats) = retry_tail(vec![error.clone(), good]).await;
+        let (ranges, logical) = on.unwrap();
+        assert_eq!(ranges[0].bytes.as_ref(), tail);
+        assert_eq!(
+            logical,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: tail.len(),
+                failed_gets: 0,
+            }
+        );
+        assert_eq!(requests.len(), 2);
+        assert_eq!(stats.attempts, 2);
+        assert_eq!(stats.status_counts, vec![(206, 1), (500, 1)]);
+        assert_eq!(stats.consumed_payload_bytes, tail.len() as u64);
+        assert_eq!(stats.dropped_error_bodies, 1);
+
+        let (failed, requests, stats) = retry_tail(vec![error]).await;
+        assert_eq!(
+            failed.err().unwrap().stats,
+            Sq8ReadStats {
+                submitted_gets: 1,
+                verified_bytes: 0,
+                failed_gets: 1,
+            }
+        );
+        assert_eq!(requests.len(), 2);
+        assert_eq!(stats.attempts, 2);
+        assert_eq!(stats.status_counts, vec![(500, 2)]);
+        assert_eq!(stats.consumed_payload_bytes, 0);
+        assert_eq!(stats.dropped_error_bodies, 2);
+    }
+
+    #[tokio::test]
+    async fn read_retry_head_uses_the_same_bounded_status_policy() {
+        let (reader, stop, requests, server) = read_retry_fixture(vec![
+            http_response("500 Internal Server Error", None, "\"frozen\"", 0, b""),
+            http_response("200 OK", None, "\"frozen\"", 3549, b""),
+        ]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            reader.store().head(&Path::from("sq8.bin")),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(result.unwrap().unwrap().size, 3549);
+        assert_eq!(requests.lock().unwrap().len(), 2);
+        let stats = reader.transport_stats();
+        assert_eq!(stats.attempts, 2);
+        assert_eq!(stats.method_counts, [0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(stats.status_counts, vec![(200, 1), (500, 1)]);
+        assert_eq!(stats.consumed_payload_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn read_retry_terminal_status_and_integrity_errors_do_not_retry() {
+        let (_, object) = short_tail_authority();
+        let tail = &object[3328..];
+        let mut corrupt = tail.to_vec();
+        corrupt[0] ^= 1;
+        for (response, consumed) in [
+            (http_response("401 Unauthorized", None, "\"frozen\"", 0, b""), 0),
+            (http_response("403 Forbidden", None, "\"frozen\"", 0, b""), 0),
+            (http_response("404 Not Found", None, "\"frozen\"", 0, b""), 0),
+            (http_response("412 Precondition Failed", None, "\"frozen\"", 0, b""), 0),
+            (b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /other\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(), 0),
+            (http_response("206 Partial Content", Some("bytes 3328-3548/3549"),
+                "\"foreign\"", tail.len(), tail), 0),
+            (http_response("206 Partial Content", Some("bytes 0-3548/3549"),
+                "\"frozen\"", object.len(), &object), 0),
+            (http_response("206 Partial Content", Some("bytes 3328-3548/3549"),
+                "\"frozen\"", tail.len(), &corrupt), tail.len() as u64),
+        ] {
+            let (result, requests, stats) = retry_tail(vec![response]).await;
+            assert!(result.is_err());
+            assert_eq!(requests.len(), 1);
+            assert_eq!(stats.attempts, 1);
+            assert_eq!(stats.consumed_payload_bytes, consumed);
+        }
+    }
+
+    #[tokio::test]
+    async fn read_retry_body_resume_is_exact_and_shares_attempt_limit() {
+        let (_, object) = short_tail_authority();
+        let tail = &object[3328..];
+        let partial = http_response(
+            "206 Partial Content",
+            Some("bytes 3328-3548/3549"),
+            "\"frozen\"",
+            tail.len(),
+            &tail[..100],
+        );
+        for mode in [
+            "exact",
+            "etag",
+            "superset",
+            "partial",
+            "partial_then_status",
+            "status_then_partial",
+        ] {
+            let resumed = match mode {
+                "partial_then_status" => {
+                    http_response("500 Internal Server Error", None, "\"frozen\"", 0, b"")
+                }
+                "etag" => http_response(
+                    "206 Partial Content",
+                    Some("bytes 3428-3548/3549"),
+                    "\"changed\"",
+                    121,
+                    &tail[100..],
+                ),
+                "superset" => http_response(
+                    "206 Partial Content",
+                    Some("bytes 3328-3548/3549"),
+                    "\"frozen\"",
+                    tail.len(),
+                    tail,
+                ),
+                "partial" => http_response(
+                    "206 Partial Content",
+                    Some("bytes 3428-3548/3549"),
+                    "\"frozen\"",
+                    121,
+                    &tail[100..160],
+                ),
+                _ => http_response(
+                    "206 Partial Content",
+                    Some("bytes 3428-3548/3549"),
+                    "\"frozen\"",
+                    121,
+                    &tail[100..],
+                ),
+            };
+            let responses = if mode == "status_then_partial" {
+                vec![
+                    http_response("500 Internal Server Error", None, "\"frozen\"", 0, b""),
+                    partial.clone(),
+                ]
+            } else {
+                vec![partial.clone(), resumed]
+            };
+            let (result, requests, stats) = retry_tail(responses).await;
+            assert_eq!(requests.len(), 2, "{mode}");
+            assert_eq!(stats.attempts, 2, "{mode}");
+            assert_eq!(
+                stats.method_counts,
+                [2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                "{mode}"
+            );
+            if mode != "status_then_partial" {
+                assert!(
+                    requests[1]
+                        .to_ascii_lowercase()
+                        .contains("range: bytes=3428-3548"),
+                    "{mode}"
+                );
+                assert!(
+                    requests[1]
+                        .to_ascii_lowercase()
+                        .contains("if-match: \"frozen\""),
+                    "{mode}"
+                );
+            }
+            match mode {
+                "exact" => {
+                    assert_eq!(result.unwrap().0[0].bytes.as_ref(), tail);
+                    assert_eq!(stats.consumed_payload_bytes, tail.len() as u64);
+                    assert_eq!(stats.stream_failures, 1);
+                }
+                "etag" | "superset" => {
+                    assert!(result.is_err(), "{mode}");
+                    assert_eq!(stats.consumed_payload_bytes, 100, "{mode}");
+                    assert_eq!(stats.transport_failures, 1, "{mode}");
+                    assert_eq!(stats.stream_failures, 1, "{mode}");
+                }
+                "partial" => {
+                    assert!(result.is_err());
+                    assert_eq!(stats.consumed_payload_bytes, 160);
+                    assert_eq!(stats.stream_failures, 2);
+                }
+                "partial_then_status" => {
+                    assert_eq!(
+                        result.err().unwrap().stats,
+                        Sq8ReadStats {
+                            submitted_gets: 1,
+                            verified_bytes: 0,
+                            failed_gets: 1,
+                        }
+                    );
+                    assert_eq!(stats.consumed_payload_bytes, 100);
+                    assert_eq!(stats.status_counts, vec![(206, 1), (500, 1)]);
+                    assert_eq!(stats.stream_failures, 1);
+                    assert_eq!(stats.dropped_error_bodies, 1);
+                }
+                _ => {
+                    assert!(result.is_err());
+                    assert_eq!(stats.consumed_payload_bytes, 100);
+                    assert_eq!(stats.status_counts, vec![(206, 1), (500, 1)]);
+                    assert_eq!(stats.stream_failures, 1);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn read_retry_ordered_error_drains_queued_reads_and_accounts_physical_calls() {
+        let object = unique_sq8_object(600);
+        let authority = sq8_authority(&object, 600);
+        let mut corrupt = object[3328..6656].to_vec();
+        corrupt[0] ^= 1;
+        let error = http_response("500 Internal Server Error", None, "\"frozen\"", 0, b"");
+        let (reader, stop, requests, server) = read_retry_fixture(vec![
+            error.clone(),
+            error,
+            http_response(
+                "206 Partial Content",
+                Some("bytes 3328-6655/7800"),
+                "\"frozen\"",
+                corrupt.len(),
+                &corrupt,
+            ),
+            http_response(
+                "206 Partial Content",
+                Some("bytes 6656-7799/7800"),
+                "\"frozen\"",
+                1144,
+                &object[6656..],
+            ),
+        ]);
+        let window = InFlightBytes::new(3328);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_verified_ranges_with_byte_window(
+                reader.store(),
+                &Path::from("sq8.bin"),
+                &authority,
+                &[(0, 0), (1, 1), (2, 2)],
+                "\"frozen\"",
+                3,
+                object.len(),
+                1,
+                &window,
+            ),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        let failure = result.unwrap().err().unwrap();
+        assert!(matches!(failure.error, RangeFetchError::Store(_)));
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                verified_bytes: 1144,
+                failed_gets: 2,
+            }
+        );
+        assert_eq!(*window.available.lock().unwrap(), 3328);
+        assert_eq!(requests.lock().unwrap().len(), 4);
+        let stats = reader.transport_stats();
+        assert_eq!(stats.attempts, 4);
+        assert_eq!(stats.status_counts, vec![(206, 2), (500, 2)]);
+        assert_eq!(stats.consumed_payload_bytes, 4472);
+        assert_eq!(stats.dropped_error_bodies, 2);
+    }
+
+    #[tokio::test]
+    async fn read_retry_concurrent_ordered_error_drains_queued_reads_and_restores_window() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let object = unique_sq8_object(4 * 256);
+        let authority = sq8_authority(&object, 4 * 256);
+        let key = "gen/objects/sq8";
+        let location = Path::from(key);
+        let ranges = [(0, 0), (1, 1), (2, 2), (3, 3)];
+        let window = InFlightBytes::new(2 * 3328);
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), object.clone())]),
+            Instant::now() + Duration::from_secs(15),
+        );
+        let reader = fixture.retry_reader();
+        fixture.arm_retry_status([0, 3328, 6656]);
+        let mut trace = Sq8RangeTrace::new(4).unwrap();
+        trace.begin(Instant::now());
+        let mut work = Box::pin(fetch_verified_ranges_traced_with_byte_window(
+            reader.store(),
+            &location,
+            &authority,
+            &ranges,
+            ETAG,
+            4,
+            object.len(),
+            4,
+            Some(&mut trace),
+            Some(&window),
+        ));
+
+        // The first read is on its held second submission; the corrupt body is also active.
+        tokio::select! {
+            _ = &mut work => panic!("returned before overlapping retry and corrupt read"),
+            () = fixture.wait(|state| {
+                state.active[1] == 2
+                    && state.requests.iter().filter(|request| {
+                        request.2 == Some((0, 3328))
+                    }).count() == 2
+            }) => {}
+        }
+        let state = fixture.snapshot();
+        assert_eq!(state.finished[1], vec![0]);
+        assert_eq!(state.requests.len(), 3);
+        assert_eq!(*window.available.lock().unwrap(), 0);
+        assert_eq!(window.waiters.lock().unwrap().len(), 2);
+
+        // Authentication of the later corrupt read frees a permit for the held sibling.
+        fixture.release(1);
+        tokio::select! {
+            _ = &mut work => panic!("returned before delayed retry failure"),
+            () = fixture.wait(|state| {
+                state.finished[1].contains(&3328)
+                    && state.active[1] == 2
+                    && state.requests.iter().any(|request| request.2 == Some((6656, 9984)))
+            }) => {}
+        }
+        assert_eq!(fixture.snapshot().finished[1], vec![0, 3328]);
+        assert_eq!(window.waiters.lock().unwrap().len(), 1);
+
+        // The terminal 500 frees the other permit: queued work drains before the sibling.
+        fixture.release_error();
+        tokio::select! {
+            _ = &mut work => panic!("returned before held sibling drained"),
+            () = fixture.wait(|state| state.finished[1].contains(&9984)) => {}
+        }
+        let state = fixture.snapshot();
+        assert_eq!(state.finished[1], vec![0, 3328, 0, 9984]);
+        assert_eq!(state.active[1], 1);
+        assert!(futures_util::poll!(work.as_mut()).is_pending());
+        fixture.release_sibling();
+        let failure = tokio::time::timeout(Duration::from_secs(5), &mut work)
+            .await
+            .expect("bounded retry drain")
+            .err()
+            .unwrap();
+        drop(work);
+
+        assert!(matches!(failure.error, RangeFetchError::Store(_)));
+        assert_eq!(
+            failure.stats,
+            Sq8ReadStats {
+                submitted_gets: 4,
+                verified_bytes: 2 * 3328,
+                failed_gets: 2,
+            }
+        );
+        let state = fixture.snapshot();
+        assert_eq!(state.finished[1], vec![0, 3328, 0, 9984, 6656]);
+        assert_eq!(state.active, [0; 3]);
+        assert_eq!(state.peak[1], 2);
+        assert!(state.errors.is_empty());
+        let mut requested = state
+            .requests
+            .iter()
+            .map(|request| request.2)
+            .collect::<Vec<_>>();
+        requested.sort_unstable();
+        assert_eq!(
+            requested,
+            vec![
+                Some((0, 3328)),
+                Some((0, 3328)),
+                Some((3328, 6656)),
+                Some((6656, 9984)),
+                Some((9984, 13312)),
+            ]
+        );
+        assert_eq!(*window.available.lock().unwrap(), 2 * 3328);
+        assert!(window.waiters.lock().unwrap().is_empty());
+        assert_eq!(trace.outcome, "fetch_failed");
+        assert_eq!(trace.ranges.len(), 4);
+        assert_eq!(trace.ranges[0].outcome, "store_headers");
+        assert_eq!(trace.ranges[1].outcome, "page_auth");
+        assert_eq!(trace.ranges[2].outcome, "ok");
+        assert_eq!(trace.ranges[3].outcome, "ok");
+        for span in &trace.ranges {
+            assert!(span.complete_ns.is_some());
+            assert!(span.complete_ns.unwrap() <= trace.all_ranges_complete_ns.unwrap());
+        }
+        assert!(trace.ranges[1].complete_ns.unwrap() < trace.ranges[0].complete_ns.unwrap());
+        assert!(trace.ranges[3].complete_ns.unwrap() < trace.ranges[2].complete_ns.unwrap());
+        let stats = reader.transport_stats();
+        assert_eq!(stats.attempts, 5);
+        assert_eq!(stats.method_counts, [5, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(stats.status_counts, vec![(206, 3), (500, 2)]);
+        assert_eq!(stats.consumed_payload_bytes, 3 * 3328);
+        assert_eq!(stats.dropped_error_bodies, 2);
+        assert_eq!(stats.transport_failures, 0);
+        assert_eq!(stats.stream_failures, 0);
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn read_retry_refuses_publication_before_network_submission() {
+        let (reader, stop, requests, server) = read_retry_fixture(vec![http_response(
+            "500 Internal Server Error",
+            None,
+            "\"frozen\"",
+            0,
+            b"",
+        )]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            reader.store().put(
+                &Path::from("never-published"),
+                PutPayload::from_static(b"x"),
+            ),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert!(result.unwrap().is_err());
+        assert!(requests.lock().unwrap().is_empty());
+        assert_eq!(reader.transport_stats().attempts, 1);
+        assert_eq!(reader.transport_stats().transport_failures, 1);
     }
 
     #[tokio::test]

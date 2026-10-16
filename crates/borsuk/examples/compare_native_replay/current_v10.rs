@@ -3,9 +3,15 @@ use super::{CompletedConfig, Result, fields, plus, require};
 use serde_json::{Value, json};
 
 pub(super) const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
+pub(super) const READ_RETRY_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v11";
+const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
 const SCOPE_NOTE: &str = "diagnostic selected original ordinals or prefix; not population p99, population recall or full-cohort qualification";
 const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const PLAN_FIELDS: &str = "page_rows selected_pages ranges logical_range_count planned_bytes target_pages target_shortfall primary_pages_retained covered_pages bridge_pages";
+
+pub(super) fn is_result_schema(schema: &str) -> bool {
+    matches!(schema, RESULT_SCHEMA | READ_RETRY_RESULT_SCHEMA)
+}
 
 fn number(v: &Value) -> Result<u64> {
     v.as_u64().ok_or_else(|| "v10 unsigned integer".into())
@@ -70,6 +76,14 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
         _ => "",
     };
     let mut roster = format!("{} {extras}", super::v2_row_fields(phase)?);
+    let retry = match phase {
+        "identity" => raw["schema"] == READ_RETRY_RESULT_SCHEMA,
+        "bound_inputs" => raw.get("config_schema").is_some(),
+        _ => false,
+    };
+    if retry {
+        roster.push_str(" config_schema s3_read_retry");
+    }
     for key in match phase {
         "identity" | "bound_inputs" => &["shared_byte_window"][..],
         "startup" => &["shared_byte_window_state_bytes"][..],
@@ -82,6 +96,31 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
         }
     }
     fields(&raw, &roster)?;
+    if retry {
+        require(
+            raw["config_schema"] == READ_RETRY_CONFIG_SCHEMA
+                && raw["s3_read_retry"]
+                    == json!({
+                        "policy":"one_retry_100ms",
+                        "sdk_max_retries":1,
+                        "physical_submission_upper_bound_per_logical_read":2,
+                        "physical_submission_bound_scope":"S3_data_only_excludes_zero_retry_IMDS",
+                        "backoff_ms":100,"backoff_cap_ms":100,"sdk_retry_window_ms":1000,
+                        "sdk_retry_window_is_hard_deadline":false,
+                        "request_timeout_ms":30_000,"connect_timeout_ms":5000,
+                        "data_methods":["GET","HEAD"],"mutations":"refused_before_reqwest",
+                        "credentials":"existing_zero_retry_imds",
+                        "every_206":"exact_attempted_range_and_length_before_body",
+                        "query_get_and_verified_byte_budgets":"unchanged_logical_caps",
+                        "transport_counters":"cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+                    }),
+            "v11 exact config schema and S3 read retry policy",
+        )?;
+        require(
+            phase != "bound_inputs" || raw["backend"]["kind"] == "s3",
+            "v11 read retries require S3 backend",
+        )?;
+    }
     if matches!(phase, "identity" | "bound_inputs" | "startup" | "query") {
         require(
             raw["serving"] == json!({"mode":"baseline"}),
@@ -102,7 +141,10 @@ pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
                 super::validate_byte_window(window, number(&raw["fetch_parallelism"])?)?;
             }
             if phase == "identity" {
-                require(raw["schema"] == RESULT_SCHEMA, "explicit v10 result schema")?;
+                require(
+                    raw["schema"].as_str().is_some_and(is_result_schema),
+                    "explicit v10/v11 result schema",
+                )?;
                 for key in ["sq8_range_source_sha256", "returned_source_sha256"] {
                     require(
                         raw[key].as_str().is_some_and(super::valid_sha),
@@ -178,7 +220,11 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
     }
     let i = &c.expected_identity;
     let b = &c.expected_bound_inputs;
-    super::validate_native_identity(&serde_json::from_value(i.clone())?, i, RESULT_SCHEMA)?;
+    super::validate_native_identity(
+        &serde_json::from_value(i.clone())?,
+        i,
+        i["schema"].as_str().ok_or("current result schema")?,
+    )?;
     super::validate_current_scale_inputs(&serde_json::from_value(b.clone())?, b)?;
     for key in [
         "fetch_parallelism",
@@ -189,6 +235,8 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "shared_byte_window",
         "execution",
         "serving",
+        "config_schema",
+        "s3_read_retry",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }

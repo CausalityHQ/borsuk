@@ -636,9 +636,10 @@ struct ShortlistConfig {
     max_payload_bytes: usize,
 }
 
-fn plan_value(
+pub(super) fn plan_value(
     plan: &borsuk::budgeted_page_rank::BudgetedPagePlan,
     dimensions: usize,
+    result_schema: &str,
 ) -> serde_json::Value {
     let page_bytes = (dimensions + 12) * plan.page_rows;
     let covered: usize = plan
@@ -646,11 +647,15 @@ fn plan_value(
         .iter()
         .map(|r| r.len().div_ceil(page_bytes))
         .sum();
-    serde_json::json!({"page_rows":plan.page_rows,"selected_pages":plan.selected_pages,
+    let mut value = serde_json::json!({"page_rows":plan.page_rows,"selected_pages":plan.selected_pages,
         "ranges":plan.ranges.iter().map(|r|[r.start,r.end]).collect::<Vec<_>>(),
         "planned_bytes":plan.planned_bytes,"target_pages":plan.target_pages,
         "target_shortfall":plan.target_shortfall,"primary_pages_retained":plan.primary_pages_retained,
-        "covered_pages":covered,"bridge_pages":covered.saturating_sub(plan.selected_pages.len())})
+        "covered_pages":covered,"bridge_pages":covered.saturating_sub(plan.selected_pages.len())});
+    if super::current_v10::is_result_schema(result_schema) {
+        value["logical_range_count"] = serde_json::json!(plan.ranges.len());
+    }
+    value
 }
 
 fn rank_local_cover(
@@ -847,7 +852,31 @@ fn reduce_shortlist_engine(
         "shortlist schema",
     )?;
     let i: super::Inputs = serde_json::from_value(c.completed.expected_bound_inputs.clone())?;
-    super::validate_scale_inputs(&i, &c.completed.expected_bound_inputs)?;
+    let result_schema = c.completed.expected_identity["schema"]
+        .as_str()
+        .ok_or("shortlist result schema")?;
+    let current_baseline = result_schema == "borsuk-cohere-native-baseline-result-v9"
+        || super::current_v10::is_result_schema(result_schema);
+    super::validate_scale_input_values(
+        &i,
+        &c.completed.expected_bound_inputs,
+        current_baseline,
+        super::current_v10::is_result_schema(result_schema),
+    )?;
+    let baseline_bytes = if current_baseline {
+        require(
+            get_mode
+                && c.completed.expected_bound_inputs["execution"] == json!({"mode":"full"})
+                && c.completed.expected_bound_inputs["sq8_get_budget"] == BASELINE_SQ8_GETS
+                && c.completed.expected_bound_inputs["sq8_byte_budget"] == 32 * 1024 * 1024
+                && c.completed.expected_bound_inputs["sq8_range_split"].is_null(),
+            "GET current full baseline32/32MiB without transport split",
+        )?;
+        32 * 1024 * 1024
+    } else {
+        require(!get_mode, "GET v2 requires a current baseline")?;
+        16_773_120
+    };
     require(
         i.rows == 1_000_000
             && i.dimensions == 1024
@@ -1050,7 +1079,7 @@ fn reduce_shortlist_engine(
     let limits = TwoBitGenerationLimits {
         max_memory_bytes: c.max_payload_bytes as u64,
         max_active_queries: 1,
-        max_query_bytes: 16_773_120,
+        max_query_bytes: baseline_bytes,
         max_query_gets: BASELINE_SQ8_GETS,
         max_parallel_gets: 64,
         max_source_bytes: 64 * 1024 * 1024,
@@ -1136,6 +1165,8 @@ fn reduce_shortlist_engine(
     let mut placement_proofs = Vec::with_capacity(if virtual_mode { 1000 } else { 0 });
     let mut count_evidence = Vec::with_capacity(if curve_mode { 1000 } else { 0 });
     let mut get_selection = Vec::with_capacity(if get_mode { 1000 } else { 0 });
+    let mut get_baseline_selection = Vec::with_capacity(if get_mode { 1000 } else { 0 });
+    let mut historical_rank_parity = true;
 
     for slot in 0..(if smoke_only { 1 } else { originals.len() }) {
         let query = request_body[slot * i.dimensions * 4..(slot + 1) * i.dimensions * 4]
@@ -1153,6 +1184,7 @@ fn reduce_shortlist_engine(
             <[u8; 32]>::from(Sha256::digest(serde_json::to_vec(&plan_value(
                 &plan,
                 i.dimensions,
+                result_schema,
             ))?))
                 == sample.physical_plan_sha256
                 && <[u8; 32]>::from(Sha256::digest(serde_json::to_vec(&serde_json::to_value(
@@ -1172,6 +1204,9 @@ fn reduce_shortlist_engine(
                 && plan.planned_bytes as u64 == sample.charges.sq8.verified_bytes,
             "shortlist full charge parity",
         )?;
+        if get_mode {
+            get_baseline_selection.push(plan.selected_pages.clone());
+        }
         let normalized = borsuk::two_bit_generation::normalize_two_bit_diagnostic_query(&query)?;
         let baseline = rank_local_cover(
             &mut sq8_snapshot,
@@ -1182,7 +1217,7 @@ fn reduce_shortlist_engine(
             &normalized,
             &low,
             &step,
-            16_773_120,
+            baseline_bytes,
         )?;
         require(
             baseline.len() == sample.returned.len()
@@ -1218,7 +1253,7 @@ fn reduce_shortlist_engine(
             cap,
             32 * cap + 4096,
             BASELINE_SQ8_GETS,
-            16_773_120,
+            baseline_bytes,
         )?;
         require(
             capture_plan == plan
@@ -1237,7 +1272,7 @@ fn reduce_shortlist_engine(
             &witnesses,
             SelectedSq8Limits {
                 max_gets: BASELINE_SQ8_GETS,
-                max_bytes: 16_773_120,
+                max_bytes: baseline_bytes,
                 max_planner_bytes: 4 * 1024 * 1024 + 4096,
             },
         )
@@ -1255,7 +1290,7 @@ fn reduce_shortlist_engine(
             &normalized,
             &low,
             &step,
-            16_773_120,
+            baseline_bytes,
         )?;
         require(
             control_ranked.len() == baseline.len()
@@ -1318,7 +1353,7 @@ fn reduce_shortlist_engine(
             }
             let evidence = count_curve::returned_evidence(&arms)?;
             if let Some(control) = get_control.as_ref() {
-                control.verify_ranking(slot, &evidence, &get_budgets)?;
+                historical_rank_parity &= control.verify_ranking(slot, &evidence, &get_budgets)?;
             }
             count_evidence.push(evidence);
             if get_mode {
@@ -1428,7 +1463,13 @@ fn reduce_shortlist_engine(
                 "cold_latency_claim":false,"qps_claim":false,"vendor_win_claim":false});
             if get_mode {
                 smoke["get_budgets"] = json!(get_budgets);
-                smoke["g30_historical_returned_rank_prefix_parity"] = json!(true);
+                smoke["g30_historical_returned_rank_prefix_parity"] = json!(historical_rank_parity);
+                smoke["historical_prefix_queries_compared"] = json!(1);
+                smoke["historical_rank_mismatched_prefix_queries"] =
+                    json!(usize::from(!historical_rank_parity));
+                smoke["historical_prefix_scope"] =
+                    json!("QUERY0_CURRENT_G30_VS_PINNED_HISTORICAL_COUNT_ARM0");
+                smoke["historical_comparison_is_descriptive"] = json!(true);
             }
             return Ok(smoke);
         }
@@ -1549,6 +1590,12 @@ fn reduce_shortlist_engine(
         }
         let mut query_report = json!({"ordinal":slot,"baseline_hits10":hits,"arms":reports});
         if get_mode {
+            query_report["baseline_sq8_selected_blocks"] = json!(
+                get_baseline_selection
+                    .get(slot)
+                    .ok_or("GET baseline selection ordinal")?
+            );
+            query_report["baseline_sq8_charges"] = serde_json::to_value(base.charges.sq8)?;
             for (a, &budget) in query_report["arms"]
                 .as_array_mut()
                 .ok_or("GET arms")?
@@ -1574,13 +1621,17 @@ fn reduce_shortlist_engine(
             q["returned_evidence"] = evidence;
         }
     }
-    let mut historical_ranks = false;
+    let mut historical_comparison = Value::Null;
     if let Some(control) = get_control.as_ref() {
         require(get_selection.len() == 1000, "GET full selection evidence")?;
         for (q, evidence) in queries.iter_mut().zip(get_selection) {
             q["selection_evidence"] = evidence;
         }
-        historical_ranks = control.verify(&queries, &get_budgets)?;
+        historical_comparison = control.verify(&queries, &get_budgets)?;
+        require(
+            historical_comparison["ordered_rank_parity"] == historical_rank_parity,
+            "GET before/after-truth historical comparison agreement",
+        )?;
     }
     if let Some(layout) = virtual_layout.as_mut() {
         layout.verify_control(&queries)?;
@@ -1679,7 +1730,8 @@ fn reduce_shortlist_engine(
         result["historical_control"] = serde_json::to_value(&control.pin)?;
         result["historical_returned_ranks_checked_before_truth"] = json!(true);
         result["historical_count_curve_older_block_control_rank_parity"] = json!(false);
-        get_curve::finalize_report(&mut result, historical_ranks)?;
+        result["baseline_completed"] = serde_json::to_value(&c.completed)?;
+        get_curve::finalize_report(&mut result, historical_comparison)?;
     }
     Ok(result)
 }

@@ -3,12 +3,12 @@ use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{
-        InFlightBytes, NativeTransportStats, OneAttemptS3, Sq8RangeSplit, Sq8RangeTrace,
-        Sq8ReadStats,
+        BoundedReadS3, InFlightBytes, NativeTransportStats, OneAttemptS3, S3ReadRetryPolicy,
+        Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats,
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
-        TwoBitGeneration, TwoBitGenerationLimits, TwoBitPlanTrace,
+        TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, TwoBitPlanTrace,
     },
     two_bit_source::SourcePlaneReceipt,
 };
@@ -46,6 +46,8 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v10";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
+const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
+const READ_RETRY_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v11";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -160,6 +162,7 @@ enum Backend {
 enum Reader {
     Local(ChunkedStore),
     S3(OneAttemptS3),
+    S3ReadRetry(BoundedReadS3),
     #[cfg(test)]
     Stub {
         store: Arc<dyn ObjectStore>,
@@ -167,7 +170,7 @@ enum Reader {
     },
 }
 impl Reader {
-    fn new(backend: &Backend) -> Result<Self> {
+    fn new(backend: &Backend, read_retry: Option<S3ReadRetryPolicy>) -> Result<Self> {
         Ok(match backend {
             Backend::Local { store_root } => Self::Local(ChunkedStore::new(
                 Arc::new(LocalFileSystem::new_with_prefix(store_root)?),
@@ -178,20 +181,32 @@ impl Reader {
                 region,
                 physical_prefix,
                 ..
-            } => Self::S3(
-                OneAttemptS3::new_with_prefix(
-                    bucket,
-                    region,
-                    ObjectPath::from(physical_prefix.as_str()),
-                )
-                .map_err(|e| format!("S3 reader: {e:?}"))?,
-            ),
+            } => match read_retry {
+                Some(policy) => Self::S3ReadRetry(
+                    BoundedReadS3::new_with_prefix(
+                        bucket,
+                        region,
+                        ObjectPath::from(physical_prefix.as_str()),
+                        policy,
+                    )
+                    .map_err(|e| format!("S3 read-retry reader: {e:?}"))?,
+                ),
+                None => Self::S3(
+                    OneAttemptS3::new_with_prefix(
+                        bucket,
+                        region,
+                        ObjectPath::from(physical_prefix.as_str()),
+                    )
+                    .map_err(|e| format!("S3 reader: {e:?}"))?,
+                ),
+            },
         })
     }
     fn store(&self) -> &dyn ObjectStore {
         match self {
             Self::Local(store) => store,
             Self::S3(reader) => reader.store(),
+            Self::S3ReadRetry(reader) => reader.store(),
             #[cfg(test)]
             Self::Stub { store, .. } => store.as_ref(),
         }
@@ -200,6 +215,7 @@ impl Reader {
         match self {
             Self::Local(_) => None,
             Self::S3(reader) => Some(reader.transport_stats()),
+            Self::S3ReadRetry(reader) => Some(reader.transport_stats()),
             #[cfg(test)]
             Self::Stub { stats, .. } => Some(stats.lock().unwrap().clone()),
         }
@@ -292,6 +308,8 @@ struct Config {
     k: usize,
     profile: SemanticProfile,
     backend: Backend,
+    #[serde(default)]
+    s3_read_retry: Option<S3ReadRetryPolicy>,
     generation_prefix: String,
     generation_root_sha256: String,
     scratch_parent: PathBuf,
@@ -769,8 +787,14 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         )?;
     }
     require(
-        c.schema == CONFIG_SCHEMA,
+        c.schema == CONFIG_SCHEMA
+            || (c.schema == READ_RETRY_CONFIG_SCHEMA && c.s3_read_retry.is_some()),
         "config format marker must be borsuk-cohere-native-baseline-config-v10; older formats refuse",
+    )?;
+    require(
+        c.s3_read_retry.is_none()
+            || (c.schema == READ_RETRY_CONFIG_SCHEMA && matches!(&c.backend, Backend::S3 { .. })),
+        "S3 read retries require explicit v11 policy and S3 backend",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -790,7 +814,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         )?;
     }
     require(
-        c.schema == CONFIG_SCHEMA
+        (c.schema == CONFIG_SCHEMA || c.schema == READ_RETRY_CONFIG_SCHEMA)
             && c.dataset == DATASET
             && c.revision == REVISION
             && c.metric == "cosine"
@@ -2032,7 +2056,10 @@ async fn query_and_seal(
     out: &mut Output,
     p: &mut Progress,
 ) -> Result<Seal> {
-    query_and_seal_with(c, shape, out, p, || Reader::new(&c.backend)).await
+    query_and_seal_with(c, shape, out, p, || {
+        Reader::new(&c.backend, c.s3_read_retry)
+    })
+    .await
 }
 async fn query_and_seal_with(
     c: &Config,
@@ -2250,11 +2277,11 @@ async fn query_and_seal_with(
                 let (source, sq8) = e.read_stats();
                 p.charges.add(e.router_stats(), source, sq8)?;
                 let rejection = e.direct_resource_rejection();
-                // A panel bounds the error text it publishes; full execution keeps the whole text.
+                let error_text = query_error_text(&e);
                 let error_text = if c.execution.panel() {
-                    bounded_text(&e.to_string())
+                    bounded_text(&error_text)
                 } else {
-                    e.to_string()
+                    error_text
                 };
                 let failure = json!({"phase":"query_failure","ordinal":ordinal,"error":error_text,
                     "resource_rejection":rejection,
@@ -2266,7 +2293,7 @@ async fn query_and_seal_with(
                     .map(|diag| serde_json::to_value(diag.query(&anchors)))
                     .transpose()?;
                 emit_failure(out, failure, diagnostic)?;
-                let message = format!("native query {ordinal}: {e}");
+                let message = format!("native query {ordinal}: {error_text}");
                 return Err(match rejection {
                     Some(reason) => ResourceReject { reason, message }.into(),
                     None => message.into(),
@@ -2621,6 +2648,23 @@ fn execute_paths_with(
     execute_paths_status(config_path, config_sha, output_path, shape, query)
         .map(|status| status == Status::Measured)
 }
+fn read_retry_identity(policy: S3ReadRetryPolicy) -> Value {
+    json!({
+        "policy":policy,
+        "sdk_max_retries":1,
+        "physical_submission_upper_bound_per_logical_read":2,
+        "physical_submission_bound_scope":"S3_data_only_excludes_zero_retry_IMDS",
+        "backoff_ms":100,"backoff_cap_ms":100,"sdk_retry_window_ms":1000,
+        "sdk_retry_window_is_hard_deadline":false,
+        "request_timeout_ms":30_000,"connect_timeout_ms":5000,
+        "data_methods":["GET","HEAD"],"mutations":"refused_before_reqwest",
+        "credentials":"existing_zero_retry_imds",
+        "every_206":"exact_attempted_range_and_length_before_body",
+        "query_get_and_verified_byte_budgets":"unchanged_logical_caps",
+        "transport_counters":"cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+    })
+}
+
 fn execute_paths_status(
     config_path: &Path,
     config_sha: &str,
@@ -2640,7 +2684,17 @@ fn execute_paths_status(
     let cpu = cpu_ns();
     let result = (|| -> Result<Value> {
         let configured = config(config_path, config_sha, shape);
-        let mut identity = json!({"schema":RESULT_SCHEMA,"phase":"identity","config_sha256":config_sha,
+        let result_schema = if configured
+            .as_ref()
+            .ok()
+            .and_then(|c| c.s3_read_retry)
+            .is_some()
+        {
+            READ_RETRY_RESULT_SCHEMA
+        } else {
+            RESULT_SCHEMA
+        };
+        let mut identity = json!({"schema":result_schema,"phase":"identity","config_sha256":config_sha,
             "fetch_parallelism":configured.as_ref().ok().map(|c| c.fetch_parallelism),
             "source_get_budget":configured.as_ref().ok().map(|c| c.source_get_budget),
             "sq8_get_budget":configured.as_ref().ok().map(|c| c.sq8_get_budget),
@@ -2665,6 +2719,10 @@ fn execute_paths_status(
         identity["returned_source_sha256"] = json!(hash(include_bytes!("../returned_sq8.rs")));
         if let Some(window) = configured.as_ref().ok().and_then(|c| c.shared_byte_window) {
             identity["shared_byte_window"] = json!(window);
+        }
+        if let Some(policy) = configured.as_ref().ok().and_then(|c| c.s3_read_retry) {
+            identity["s3_read_retry"] = read_retry_identity(policy);
+            identity["config_schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
         }
         out.emit(&identity)?;
         let c = configured?;
@@ -2697,6 +2755,10 @@ fn execute_paths_status(
         bound["selected_count"] = json!(selected_len(&c));
         if let Some(window) = c.shared_byte_window {
             bound["shared_byte_window"] = json!(window);
+        }
+        if let Some(policy) = c.s3_read_retry {
+            bound["s3_read_retry"] = read_retry_identity(policy);
+            bound["config_schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
         }
         out.emit(&bound)?;
         let seal = query(&c, shape, &mut out, &mut p)?;
@@ -2751,6 +2813,67 @@ fn resource_reject_summary(p: &Progress, reject: &ResourceReject) -> Value {
         "host_oom_or_deadline_inferred":false,
         "physical_s3_measured":false,"external_gate_required":true})
 }
+// Put the terminal cause before URI-heavy wrappers; native S3 drops HTTP error bodies.
+fn query_error_text(mut error: &TwoBitGenerationError) -> String {
+    use borsuk::sq8_s3_range::RangeFetchError;
+    let mut phase = "query";
+    for _ in 0..32 {
+        let range = match error {
+            TwoBitGenerationError::Query { error: inner, .. }
+            | TwoBitGenerationError::RouterCharged { error: inner, .. } => {
+                error = inner;
+                continue;
+            }
+            TwoBitGenerationError::SourcePlanning { error: inner, .. } => {
+                phase = "source_planning";
+                error = inner;
+                continue;
+            }
+            TwoBitGenerationError::SourceRead(failure) => ("source", &failure.error),
+            TwoBitGenerationError::Read(failure)
+            | TwoBitGenerationError::PagedRead { sq8: failure, .. } => ("sq8", &failure.error),
+            other => {
+                return format!("phase={phase} cause={other}")
+                    .chars()
+                    .take(512)
+                    .collect();
+            }
+        };
+        let (phase, range) = range;
+        let RangeFetchError::Store(store) = range else {
+            return format!("phase={phase} cause={range:?}")
+                .chars()
+                .take(512)
+                .collect();
+        };
+        let category = match store {
+            object_store::Error::Generic { .. } => "Generic",
+            object_store::Error::NotFound { .. } => "NotFound",
+            object_store::Error::InvalidPath { .. } => "InvalidPath",
+            object_store::Error::JoinError { .. } => "JoinError",
+            object_store::Error::NotSupported { .. } => "NotSupported",
+            object_store::Error::AlreadyExists { .. } => "AlreadyExists",
+            object_store::Error::Precondition { .. } => "Precondition",
+            object_store::Error::NotModified { .. } => "NotModified",
+            object_store::Error::NotImplemented { .. } => "NotImplemented",
+            object_store::Error::PermissionDenied { .. } => "PermissionDenied",
+            object_store::Error::Unauthenticated { .. } => "Unauthenticated",
+            object_store::Error::UnknownConfigurationKey { .. } => "UnknownConfigurationKey",
+            _ => "Other",
+        };
+        let prefix = format!("phase={phase} store={category} cause=");
+        let mut leaf: &dyn Error = store;
+        for _ in 0..32 {
+            match leaf.source() {
+                Some(source) => leaf = source,
+                None => return format!("{prefix}{leaf}").chars().take(512).collect(),
+            }
+        }
+        return format!("{prefix}[source chain limit]");
+    }
+    "phase=query cause=[wrapper limit]".into()
+}
+
 fn invalid_summary(p: &Progress, error: &str) -> Value {
     json!({"status":"INVALID","complete":false,"stage":p.stage,
         "error":error.chars().take(512).collect::<String>(),"completed_queries":p.completed,
@@ -2816,6 +2939,35 @@ pub(crate) fn scale_reducer_native_fixture(
         "real native scale fixture must finish and seal",
     )?;
     Ok((dir, result))
+}
+
+// Header-only producer interoperability fixture: the injected query never opens S3.
+#[cfg(test)]
+pub(crate) fn scale_reducer_retry_header_fixture(dir: &Path) -> Result<PathBuf> {
+    let mut value: Value = serde_json::from_slice(&std::fs::read(dir.join("config.json"))?)?;
+    let shape = Shape {
+        rows: value["rows"].as_u64().ok_or("fixture rows")? as usize,
+        count: value["count"].as_u64().ok_or("fixture count")? as usize,
+        returned_limit: K,
+    };
+    value["schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
+    value["s3_read_retry"] = json!("one_retry_100ms");
+    value["backend"] = json!({
+        "kind":"s3","bucket":"fixture-bucket","region":"eu-central-1",
+        "physical_prefix":"physical/ns",
+        "sq8_object_key":format!("semantic/index/objects/{}", value["native_source"]["sq8_sha256"].as_str().ok_or("fixture SQ8 SHA")?),
+        "sq8_etag":"\"frozen\""
+    });
+    let (config, sha) = tests::write_config(dir, &value);
+    let result = dir.join("scale-native-retry-headers.jsonl");
+    let status = execute_paths_status(&config, &sha, &result, shape, |_, _, _, _| {
+        Err("header-only retry fixture".into())
+    })?;
+    require(
+        matches!(status, Status::Invalid),
+        "header-only fixture must stop before queries",
+    )?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -3213,6 +3365,74 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn s3_read_retry_requires_v11_and_binds_identity_without_widening_logical_caps() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let original: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&original, shape).unwrap();
+        assert_eq!(original.s3_read_retry, None);
+        value["schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
+        value["s3_read_retry"] = json!("one_retry_100ms");
+        let local: Config = serde_json::from_value(value.clone()).unwrap();
+        assert!(validate_config(&local, shape).is_err());
+        value["backend"] = json!({
+            "kind":"s3","bucket":"fixture-bucket","region":"eu-central-1",
+            "physical_prefix":"physical/ns",
+            "sq8_object_key":format!("semantic/index/objects/{}", "e".repeat(64)),
+            "sq8_etag":"\"frozen\""
+        });
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        assert_eq!(c.s3_read_retry, Some(S3ReadRetryPolicy::OneRetry100Ms));
+        let selected = Reader::new(&c.backend, c.s3_read_retry).unwrap();
+        assert!(matches!(selected, Reader::S3ReadRetry(_)));
+        assert_eq!(
+            limits(&c).unwrap().max_query_gets,
+            limits(&original).unwrap().max_query_gets
+        );
+        assert_eq!(
+            limits(&c).unwrap().max_query_bytes,
+            limits(&original).unwrap().max_query_bytes
+        );
+        assert_eq!(
+            limits(&c).unwrap().max_source_gets,
+            limits(&original).unwrap().max_source_gets
+        );
+        let (path, sha) = write_config(dir.path(), &value);
+        let output = dir.path().join("read-retry-identity.jsonl");
+        assert!(
+            !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                Err("identity-only retry fixture".into())
+            })
+            .unwrap()
+        );
+        let output = records(&output);
+        let policy = read_retry_identity(S3ReadRetryPolicy::OneRetry100Ms);
+        assert_eq!(output[0]["schema"], READ_RETRY_RESULT_SCHEMA);
+        assert_eq!(output[0]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
+        assert_eq!(output[1]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
+        assert_eq!(output[0]["s3_read_retry"], policy);
+        assert_eq!(output[1]["s3_read_retry"], policy);
+        assert_eq!(output[0]["config_sha256"], sha);
+        assert_eq!(
+            policy["physical_submission_upper_bound_per_logical_read"],
+            2
+        );
+        assert_eq!(policy["sdk_retry_window_is_hard_deadline"], false);
+        let mut old = value.clone();
+        old["schema"] = json!(CONFIG_SCHEMA);
+        let c: Config = serde_json::from_value(old).unwrap();
+        assert!(validate_config(&c, shape).is_err());
+        let mut absent = value.clone();
+        absent.as_object_mut().unwrap().remove("s3_read_retry");
+        let c: Config = serde_json::from_value(absent).unwrap();
+        assert!(validate_config(&c, shape).is_err());
+        value["s3_read_retry"] = json!("unbounded");
+        assert!(serde_json::from_value::<Config>(value).is_err());
+    }
+
     #[test]
     fn cold_sq8_split_config_version_caps_trace_and_identity() {
         let dir = tempfile::tempdir().unwrap();
@@ -4277,7 +4497,7 @@ mod tests {
         let shape = Shape::tiny(257);
         let (_dir, value) = fixture(shape).await;
         let c: Config = serde_json::from_value(value).unwrap();
-        let reader = Reader::new(&c.backend).unwrap();
+        let reader = Reader::new(&c.backend, c.s3_read_retry).unwrap();
         let prefix = ObjectPath::from(c.generation_prefix.clone());
         let object_bytes = shape.rows * (D + 12);
         let direct = DirectClosureLimits {
@@ -4456,7 +4676,7 @@ mod tests {
             let opened = std::cell::Cell::new(false);
             let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
                 opened.set(true);
-                Reader::new(&c.backend)
+                Reader::new(&c.backend, c.s3_read_retry)
             })
             .await
             .err()
@@ -4601,6 +4821,19 @@ mod tests {
                 let mut stats = self.stats.lock().unwrap();
                 stats.attempts += 1;
                 stats.method_counts[usize::from(head)] += 1;
+            }
+            if fault == "source_http500" && !head && path.as_ref().ends_with("/plane/records.bin") {
+                return Err(object_store::Error::Generic {
+                    store: "fixture",
+                    source: Box::new(object_store::Error::Precondition {
+                        path: "https://user:credential@example.invalid/long-object?secret=query"
+                            .repeat(40),
+                        source: io::Error::other(
+                            "Server returned non-2xx status code: 500 Internal Server Error",
+                        )
+                        .into(),
+                    }),
+                });
             }
             if options.if_match.take().is_some_and(|tag| tag != STUB_ETAG)
                 || (fault == "startup" && path.as_ref().ends_with("/plane/mean.bin"))
@@ -4849,6 +5082,7 @@ mod tests {
             "stream",
             "startup",
             "query",
+            "source_http500",
             "actual_etag",
             "output",
             "query_output",
@@ -5111,6 +5345,49 @@ mod tests {
                 if fault == "seal" {
                     assert_eq!(p.completed, 2);
                     assert!(!out.directory_synced);
+                }
+                if fault == "source_http500" {
+                    let rows = records(&out.path);
+                    let failure = rows.iter().find(|r| r["phase"] == "query_failure").unwrap();
+                    let text = failure["error"].as_str().unwrap();
+                    assert!(text.contains("phase=source store=Generic"), "{text}");
+                    assert!(text.contains("500 Internal Server Error"), "{text}");
+                    assert!(!text.contains("credential") && !text.contains("secret"));
+                    assert!(text.chars().count() <= 512);
+                    assert_eq!(failure["ordinal"], 0);
+                    assert_eq!(
+                        failure["charges_so_far"],
+                        serde_json::to_value(&p.charges).unwrap()
+                    );
+                    assert_eq!(
+                        failure["sum_so_far"],
+                        serde_json::to_value(p.charges.sum()).unwrap()
+                    );
+                    assert_eq!(
+                        failure["transport"],
+                        serde_json::to_value(&p.transport).unwrap()
+                    );
+                    assert_eq!(failure["truth_opened"], false);
+                    assert_eq!(failure["resource_rejection"], Value::Null);
+                    assert!(failure["stages"].is_object());
+                    assert_eq!(failure["query_wall_ns"], json!(p.query_wall_ns));
+                    assert_eq!(failure["query_process_cpu_ns"], json!(p.query_cpu_ns));
+                    assert_eq!((p.completed, p.sealed, p.truth_opened), (0, false, false));
+                    let returned = result.as_ref().err().unwrap().to_string();
+                    let terminal = invalid_summary(&p, &returned);
+                    assert!(
+                        terminal["error"]
+                            .as_str()
+                            .unwrap()
+                            .contains("500 Internal Server Error")
+                    );
+                    assert_eq!(terminal["charges"], failure["charges_so_far"]);
+                    assert_eq!(terminal["sum"], failure["sum_so_far"]);
+                    assert_eq!(
+                        terminal["binding_charge"],
+                        serde_json::to_value(p.binding_charge).unwrap()
+                    );
+                    assert_eq!(terminal["transport_last_boundary"], p.transport.terminal());
                 }
                 let terminal = invalid_summary(&p, "injected failure");
                 assert_eq!(
@@ -6089,7 +6366,7 @@ mod tests {
             let opened = std::cell::Cell::new(false);
             let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
                 opened.set(true);
-                Reader::new(&c.backend)
+                Reader::new(&c.backend, c.s3_read_retry)
             })
             .await
             .err()
@@ -6123,7 +6400,7 @@ mod tests {
             let opened = std::cell::Cell::new(false);
             let error = query_and_seal_with(&c, shape, &mut out, &mut p, || {
                 opened.set(true);
-                Reader::new(&c.backend)
+                Reader::new(&c.backend, c.s3_read_retry)
             })
             .await
             .err()
@@ -6467,6 +6744,157 @@ mod tests {
             assert!(figure(refused, "algorithm_total_bytes") > cap);
         }
         use_proc(None);
+    }
+
+    fn source_query_error(store: object_store::Error) -> TwoBitGenerationError {
+        use borsuk::{
+            sq8_s3_range::{RangeFetchError, RankedSq8Failure},
+            two_bit_generation::{QueryStages, TwoBitGenerationError},
+        };
+        TwoBitGenerationError::Query {
+            stages: QueryStages::default(),
+            error: Box::new(TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                error: RangeFetchError::Store(store),
+                stats: Sq8ReadStats {
+                    submitted_gets: 1,
+                    verified_bytes: 0,
+                    failed_gets: 1,
+                },
+            })),
+        }
+    }
+
+    #[tokio::test]
+    async fn query_error_cause_keeps_real_http500_ahead_of_long_uri() {
+        use object_store::{RetryConfig, aws::AmazonS3Builder};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 16_384);
+            }
+            socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("fixture")
+            .with_region("eu-central-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("fixture")
+            .with_secret_access_key("fixture")
+            .with_retry(RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let key = ObjectPath::from(format!("{}/records.bin", "long-object-name".repeat(80)));
+        let store_error = tokio::time::timeout(std::time::Duration::from_secs(5), store.get(&key))
+            .await
+            .unwrap()
+            .err()
+            .unwrap();
+        server.join().unwrap();
+        let error = source_query_error(store_error);
+        assert!(
+            !error
+                .to_string()
+                .chars()
+                .take(512)
+                .collect::<String>()
+                .contains("status: 500")
+        );
+        let text = query_error_text(&error);
+        assert!(text.contains("phase=source store=Generic"), "{text}");
+        assert!(text.contains("500 Internal Server Error"), "{text}");
+        assert!(!text.contains("long-object-name"));
+        assert!(text.chars().count() <= 512);
+        let p = Progress {
+            stage: "query",
+            completed: 7,
+            query_wall_ns: 123,
+            query_cpu_ns: 45,
+            transport: TransportSpan {
+                stage: "query",
+                ordinal: Some(7),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut expected = invalid_summary(&p, "old error");
+        let terminal = invalid_summary(&p, &format!("native query 7: {text}"));
+        assert!(
+            terminal["error"]
+                .as_str()
+                .unwrap()
+                .contains("500 Internal Server Error")
+        );
+        expected["error"] = terminal["error"].clone();
+        assert_eq!(terminal, expected);
+        assert_eq!(terminal["transport_last_boundary"]["ordinal"], 7);
+        assert_eq!(terminal["completed_queries"], 7);
+        assert_eq!(terminal["truth_opened"], false);
+        assert_eq!(terminal["all_queries_sealed"], false);
+        assert!(serde_json::to_vec(&terminal).unwrap().len() + 512 < TERMINAL_RESERVE as usize);
+    }
+
+    #[test]
+    fn query_error_cause_keeps_transport_and_non_store_failures_identifiable() {
+        let error = source_query_error(object_store::Error::Precondition {
+            path: "https://user:credential@example.invalid/object?secret=query".repeat(40),
+            source: io::Error::new(io::ErrorKind::ConnectionReset, "connection reset by peer")
+                .into(),
+        });
+        let text = query_error_text(&error);
+        assert!(text.contains("phase=source store=Precondition"), "{text}");
+        assert!(text.contains("connection reset by peer"), "{text}");
+        assert!(!text.contains("credential") && !text.contains("secret"));
+        let invalid =
+            borsuk::two_bit_generation::TwoBitGenerationError::Invalid("query validation");
+        assert!(query_error_text(&invalid).contains("query validation"));
+        let long = borsuk::two_bit_generation::TwoBitGenerationError::Router("é".repeat(5000));
+        assert_eq!(query_error_text(&long).chars().count(), 512);
+    }
+
+    #[test]
+    fn query_error_cause_bounds_cyclic_sources_and_wrapper_depth() {
+        #[derive(Debug)]
+        struct Cycle;
+        impl std::fmt::Display for Cycle {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("must not display a nonterminal source")
+            }
+        }
+        impl Error for Cycle {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(self)
+            }
+        }
+        let mut error = source_query_error(object_store::Error::Generic {
+            store: "fixture",
+            source: Box::new(Cycle),
+        });
+        let text = query_error_text(&error);
+        assert!(text.contains("source chain limit"), "{text}");
+        assert!(!text.contains("must not display"));
+        for _ in 0..40 {
+            error = borsuk::two_bit_generation::TwoBitGenerationError::RouterCharged {
+                stats: Sq8ReadStats::default(),
+                error: Box::new(error),
+            };
+        }
+        let text = query_error_text(&error);
+        assert!(text.contains("wrapper limit"), "{text}");
+        assert!(text.chars().count() <= 512);
     }
 
     #[test]

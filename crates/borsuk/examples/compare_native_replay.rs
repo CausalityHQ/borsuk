@@ -1687,7 +1687,9 @@ fn read_run_observed_policy(
     let diagnostic = policy == ReadPolicy::Sq8PanelAttribution;
     let v10 = expected.is_some_and(|c| {
         c.schema == SCALE_CONFIG_SCHEMA
-            && c.expected_identity["schema"] == current_v10::RESULT_SCHEMA
+            && c.expected_identity["schema"]
+                .as_str()
+                .is_some_and(current_v10::is_result_schema)
     });
     if v10 {
         current_v10::validate_completed(expected.ok_or("v10 expected headers")?)?;
@@ -1742,11 +1744,7 @@ fn read_run_observed_policy(
                 "scale result schema",
             )?;
             if v10 {
-                validate_native_identity(
-                    &identity,
-                    &c.expected_identity,
-                    current_v10::RESULT_SCHEMA,
-                )?;
+                validate_native_identity(&identity, &c.expected_identity, &identity.schema)?;
             } else {
                 let mut raw = c.expected_identity.clone();
                 raw["schema"] = json!("borsuk-cohere-native-baseline-result-v2");
@@ -4605,7 +4603,10 @@ fn source_utilization_report(
 
 fn reduce_source_utilization(config_path: &Path, config_sha: &str) -> Result<Value> {
     let (c, config_bytes): (SourceUtilizationConfig, _) = read_config(config_path, config_sha)?;
-    if c.expected_identity["schema"] == current_v10::RESULT_SCHEMA {
+    if c.expected_identity["schema"]
+        .as_str()
+        .is_some_and(current_v10::is_result_schema)
+    {
         return Err(
             "historical 256-row analysis only; v10 requires current-format analysis".into(),
         );
@@ -6185,18 +6186,30 @@ fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
             && q.charges.source.failed_gets == 0,
         "loss SOURCE cover charges",
     )?;
+    // SOURCE closure stays 256 rows; current SQ8 selections name 32-row blocks.
+    let page_rows = match raw["plan"].get("page_rows") {
+        None => 256,
+        Some(value) => usize::try_from(value.as_u64().ok_or("loss SQ8 page rows")?)?,
+    };
+    require(matches!(page_rows, 32 | 256), "loss SQ8 page geometry")?;
     let selected: Vec<usize> = serde_json::from_value(raw["plan"]["selected_pages"].clone())?;
     require(
         !selected.is_empty()
-            && selected.len() <= pages.len()
-            && selected.iter().all(|p| pages.contains(p))
             && selected.iter().copied().collect::<BTreeSet<_>>().len() == selected.len()
-            && selected.contains(&t.primary_page),
-        "loss selected SQ8 pages",
+            && if page_rows == 32 {
+                selected.len() <= 256
+                    && selected.windows(2).all(|p| p[0] < p[1])
+                    && selected.iter().all(|p| scored.contains(p))
+            } else {
+                selected.len() <= pages.len()
+                    && selected.iter().all(|p| pages.contains(p))
+                    && selected.contains(&t.primary_page)
+            },
+        "loss selected SQ8 pages within scored SOURCE closure",
     )?;
     let ranges: Vec<[usize; 2]> = serde_json::from_value(raw["plan"]["ranges"].clone())?;
     let width = i.dimensions.checked_add(12).ok_or("loss SQ8 width")?;
-    let page = width.checked_mul(256).ok_or("loss SQ8 page")?;
+    let page = width.checked_mul(page_rows).ok_or("loss SQ8 page")?;
     let end = width.checked_mul(i.rows).ok_or("loss SQ8 body")?;
     require(
         !ranges.is_empty() && ranges.len() <= 32,
@@ -6227,6 +6240,28 @@ fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
             && q.charges.sq8.failed_gets == 0,
         "loss actual SQ8 cover/charges",
     )?;
+    if page_rows == 32 {
+        let covered = ranges
+            .iter()
+            .map(|r| (r[1] - r[0]).div_ceil(page))
+            .sum::<usize>();
+        let target = raw["plan"]["target_pages"]
+            .as_u64()
+            .ok_or("loss SQ8 target")?;
+        require(
+            bytes <= 32 * 1024 * 1024
+                && target >= selected.len() as u64
+                && target <= 256.min(unit_count) as u64
+                && raw["plan"]["target_shortfall"] == target - selected.len() as u64
+                && raw["plan"]["primary_pages_retained"] == 0
+                && raw["plan"]["covered_pages"] == covered
+                && raw["plan"]["bridge_pages"] == covered - selected.len()
+                && raw["plan"]
+                    .get("logical_range_count")
+                    .is_none_or(|n| n.as_u64() == Some(ranges.len() as u64)),
+            "loss current SQ8 counts/charges",
+        )?;
+    }
     Ok(LossCoverage {
         ordinal: q.ordinal,
         scored_units: scored.into_iter().collect(),
@@ -6354,7 +6389,10 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
             && c.completed.schema == SCALE_CONFIG_SCHEMA,
         "sealed loss config/schema",
     )?;
-    if c.completed.expected_identity["schema"] == current_v10::RESULT_SCHEMA {
+    if c.completed.expected_identity["schema"]
+        .as_str()
+        .is_some_and(current_v10::is_result_schema)
+    {
         return Err(
             "historical 256-row analysis only; v10 requires current-format analysis".into(),
         );
@@ -10265,6 +10303,217 @@ mod tests {
         (i, q)
     }
 
+    #[tokio::test]
+    async fn current_replay_public_builder_runtime_plan_matches_v9_v10_v11_and_loss_coverage() {
+        use borsuk::{
+            two_bit_build::TwoBitGenerationBuilder,
+            two_bit_generation::{DiscoveryMode, TwoBitGeneration, TwoBitGenerationLimits},
+            two_bit_source::TwoBitSource,
+        };
+        use object_store::{ObjectStoreExt, path::Path as ObjectPath};
+        let dir = tempfile::tempdir().unwrap();
+        let rows = 257;
+        let mut source = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            source.extend_from_slice(&1_f32.to_le_bytes());
+            source.extend_from_slice(&0_f32.to_le_bytes());
+            sq8.extend_from_slice(&(row as i64).to_le_bytes());
+            sq8.extend_from_slice(&1_f32.to_le_bytes());
+            sq8.extend_from_slice(&[1, 0]);
+        }
+        let raw_path = dir.path().join("raw");
+        let sq8_path = dir.path().join("sq8");
+        std::fs::write(&raw_path, &source).unwrap();
+        std::fs::write(&sq8_path, &sq8).unwrap();
+        let store = object_store::memory::InMemory::new();
+        let sq8_sha = sha(&sq8);
+        let key = ObjectPath::from(format!("semantic/objects/{sq8_sha}"));
+        store.put(&key, sq8.into()).await.unwrap();
+        let etag = store.head(&key).await.unwrap().e_tag.unwrap();
+        let root = dir.path().join("generation");
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &sha(&source),
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows,
+                dimensions: 2,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &[0., 0.],
+            step: &[1., 1.],
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build_with_discovery(None, DiscoveryMode::Semantic, &root, 128_000_000)
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 128_000_000,
+            max_active_queries: 1,
+            max_query_bytes: 32 * 1024 * 1024,
+            max_query_gets: 32,
+            max_parallel_gets: 4,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 4,
+            max_query_scratch_bytes: 400_000
+                + borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(rows),
+            already_pinned_bytes: 0,
+        };
+        let head = borsuk::two_bit_store::publish_two_bit_generation(
+            &store,
+            &ObjectPath::from("semantic/index"),
+            &root,
+            &root_sha,
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        let generation = TwoBitGeneration::open_remote(
+            &store,
+            &head.metadata_prefix(),
+            &root_sha,
+            limits,
+            dir.path(),
+        )
+        .await
+        .unwrap();
+        let (result, trace) = generation
+            .diagnostic_search_with_store(&store, &[1., 0.], 10)
+            .await
+            .unwrap();
+        let (mut inputs, mut raw) = sealed_loss_fixture();
+        inputs.rows = rows;
+        inputs.dimensions = 2;
+        let plan = &result.plan;
+        // Literal runner-shaped oracle: 256 tied SOURCE nominees occupy eight blocks.
+        let v9 = json!({"page_rows":32,"selected_pages":[0,1,2,3,4,5,6,7],
+            "ranges":[[0,3584]],"planned_bytes":3584,"target_pages":8,
+            "target_shortfall":0,"primary_pages_retained":0,"covered_pages":8,"bridge_pages":0});
+        for schema in [
+            "borsuk-cohere-native-baseline-result-v9",
+            current_v10::RESULT_SCHEMA,
+            current_v10::READ_RETRY_RESULT_SCHEMA,
+        ] {
+            let mut expected = v9.clone();
+            if current_v10::is_result_schema(schema) {
+                expected["logical_range_count"] = json!(1);
+            }
+            let reconstructed = sq8_subpage_shortlist::plan_value(plan, 2, schema);
+            assert_eq!(reconstructed, expected);
+            assert_eq!(
+                sha(&serde_json::to_vec(&reconstructed).unwrap()),
+                sha(&serde_json::to_vec(&expected).unwrap())
+            );
+            raw["plan"] = reconstructed;
+            raw["trace"] = serde_json::to_value(&trace).unwrap();
+            raw["charges"]["source"] = json!({"submitted_gets":result.source_stats.submitted_gets,
+                "verified_bytes":result.source_stats.verified_bytes,"failed_gets":0});
+            raw["charges"]["sq8"] = json!({"submitted_gets":result.ranked.stats.submitted_gets,
+                "verified_bytes":result.ranked.stats.verified_bytes,"failed_gets":0});
+            let query: Query = serde_json::from_value(raw.clone()).unwrap();
+            let coverage =
+                loss_coverage(&serde_json::to_vec(&raw).unwrap(), &query, &inputs).unwrap();
+            assert_eq!(coverage.sq8_rows, vec![[0, 256]]);
+            assert!(plan.selected_pages.iter().any(|p| *p > 1));
+            if current_v10::is_result_schema(schema) {
+                let mut bad = raw.clone();
+                bad["plan"]["logical_range_count"] = json!(2);
+                assert!(
+                    loss_coverage(&serde_json::to_vec(&bad).unwrap(), &query, &inputs).is_err()
+                );
+            }
+        }
+        assert_eq!(
+            result
+                .ranked
+                .candidates
+                .iter()
+                .map(|p| (p.id, p.score.to_bits()))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 0),
+                (1, 0),
+                (2, 0),
+                (3, 0),
+                (4, 0),
+                (5, 0),
+                (6, 0),
+                (7, 0),
+                (8, 0),
+                (9, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn current_loss_coverage_uses_blocks_without_forced_primary_and_clips_tail() {
+        let (mut inputs, mut raw) = sealed_loss_fixture();
+        inputs.rows = 1000;
+        let (source, bytes) = borsuk::two_bit_generation::plan_two_bit_source_cover(
+            &BTreeSet::from([0, 2, 3]),
+            inputs.rows,
+            source_record_bytes(inputs.dimensions).unwrap(),
+            128,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        raw["charges"]["source"] = json!({"submitted_gets":source.len(),
+            "verified_bytes":bytes,"failed_gets":0});
+        let width = inputs.dimensions + 12;
+        raw["charges"]["sq8"] =
+            json!({"submitted_gets":2,"verified_bytes":40*width,"failed_gets":0});
+        raw["plan"] = json!({"page_rows":32,"selected_pages":[16,31],
+            "ranges":[[512*width,544*width],[992*width,1000*width]],
+            "logical_range_count":2,"planned_bytes":40*width,"target_pages":2,
+            "target_shortfall":0,"primary_pages_retained":0,"covered_pages":2,"bridge_pages":0});
+        let check = |raw: &Value| {
+            loss_coverage(
+                &serde_json::to_vec(raw).unwrap(),
+                &serde_json::from_value(raw.clone()).unwrap(),
+                &inputs,
+            )
+        };
+        let coverage = check(&raw).unwrap();
+        assert_eq!(coverage.sq8_rows, vec![[512, 544], [992, 1000]]);
+        assert_eq!(
+            coverage.scored_units,
+            (0..8).chain(16..32).collect::<Vec<_>>()
+        );
+        let mut v9 = raw.clone();
+        v9["plan"]
+            .as_object_mut()
+            .unwrap()
+            .remove("logical_range_count");
+        assert!(check(&v9).is_ok());
+        for (pointer, value) in [
+            ("/plan/page_rows", json!(64)),
+            ("/plan/page_rows", Value::Null),
+            ("/plan/selected_pages", json!([8, 31])),
+            ("/plan/selected_pages", json!([16, 32])),
+            ("/plan/selected_pages", json!([16, 16])),
+            ("/plan/ranges/1/1", json!(1001 * width)),
+            ("/plan/ranges/0/0", json!(512 * width + 1)),
+            ("/plan/primary_pages_retained", json!(1)),
+            ("/plan/covered_pages", json!(3)),
+            ("/plan/bridge_pages", json!(1)),
+            ("/plan/target_shortfall", json!(1)),
+            ("/plan/logical_range_count", json!(1)),
+            ("/charges/sq8/verified_bytes", json!(40 * width - 1)),
+            ("/charges/sq8/submitted_gets", json!(1)),
+            ("/charges/source/verified_bytes", json!(1)),
+            ("/trace/nomination_evaluated_units/23", json!(30)),
+        ] {
+            let mut bad = raw.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(check(&bad).is_err(), "accepted {pointer}");
+        }
+    }
+
     #[test]
     fn source_budget96_cover_uses_declared_budget_and_refuses_other_cover() {
         let (original, mut raw) = sealed_loss_fixture();
@@ -13454,6 +13703,309 @@ mod tests {
     }
 
     #[test]
+    fn actual_v11_headers_bind_exact_retry_policy_and_preserve_v10_completion() {
+        let (dir, result) =
+            scale_native_runner::scale_reducer_native_fixture(false, false).unwrap();
+        let original = assert_current_native(dir.path(), &result);
+        let retry_result =
+            scale_native_runner::scale_reducer_retry_header_fixture(dir.path()).unwrap();
+        let headers: Vec<Value> = std::fs::read_to_string(&retry_result)
+            .unwrap()
+            .lines()
+            .take(2)
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(headers[0]["schema"], current_v10::READ_RETRY_RESULT_SCHEMA);
+        let config_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
+        assert_eq!(headers[0]["config_sha256"], sha(&config_bytes));
+        for key in [
+            "binary_sha256",
+            "runner_source_sha256",
+            "generation_source_sha256",
+            "router_source_sha256",
+            "codec_source_sha256",
+            "source_plane_source_sha256",
+            "sq8_range_source_sha256",
+            "returned_source_sha256",
+        ] {
+            assert_eq!(headers[0][key], original[0][key], "{key}");
+        }
+
+        // Actual producer headers; the sealed body and S3 transport are synthetic.
+        let mut rows = original.clone();
+        rows[..2].clone_from_slice(&headers[..2]);
+        let transport_rows = v2_fixture();
+        for row in &mut rows {
+            if matches!(
+                row["phase"].as_str(),
+                Some("source_binding" | "generation_open" | "query")
+            ) {
+                let transport = transport_rows
+                    .iter()
+                    .find(|r| r["phase"] == row["phase"] && r["ordinal"] == row["ordinal"])
+                    .unwrap();
+                row["transport"] = transport["transport"].clone();
+                if row["phase"] == "source_binding" {
+                    row["charges"] = transport["charges"].clone();
+                }
+            }
+        }
+        let binding = rows
+            .iter()
+            .find(|r| r["phase"] == "source_binding")
+            .unwrap()["charges"]
+            .clone();
+        let last: TransportSpan = serde_json::from_value(
+            rows.iter().rev().find(|r| r["phase"] == "query").unwrap()["transport"].clone(),
+        )
+        .unwrap();
+        let terminal = &mut rows.last_mut().unwrap()["summary"];
+        terminal["binding_charge"] = binding;
+        terminal["transport_last_boundary"] = last.compact();
+        let (result, _) = write_fixture(dir.path(), "synthetic-v11-completion.jsonl", rows.clone());
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
+        current_v10::validate_completed(&pinned).unwrap();
+        let run = read_run_with(&result, &pinned.input.sha256, Some(&pinned)).unwrap();
+        assert_eq!(run.identity.schema, current_v10::READ_RETRY_RESULT_SCHEMA);
+        assert_eq!(run.samples.len(), 2);
+
+        // One failed S3 response followed by a successful 206 adds one physical
+        // submission, not a failed logical GET; process totals also include IMDS.
+        let mut recovered = rows.clone();
+        let mut started = false;
+        for row in &mut recovered {
+            if row["phase"] != "query" {
+                continue;
+            }
+            for boundary in ["before", "after"] {
+                if started || boundary == "after" {
+                    let stats = &mut row["transport"][boundary];
+                    let attempts = stats["attempts"].as_u64().unwrap();
+                    stats["attempts"] = json!(attempts + 1);
+                    stats["method_counts"][0] =
+                        json!(stats["method_counts"][0].as_u64().unwrap() + 1);
+                    stats["status_counts"] = json!([[200, attempts - 1], [206, 1], [500, 1]]);
+                    stats["dropped_error_bodies"] = json!(1);
+                }
+            }
+            started = true;
+        }
+        let last: TransportSpan = serde_json::from_value(
+            recovered
+                .iter()
+                .rev()
+                .find(|r| r["phase"] == "query")
+                .unwrap()["transport"]
+                .clone(),
+        )
+        .unwrap();
+        recovered.last_mut().unwrap()["summary"]["transport_last_boundary"] = last.compact();
+        let (path, _) = write_fixture(dir.path(), "v11-recovered-500.jsonl", recovered.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &recovered);
+        let report = reduce_scale(&config, &pin).unwrap();
+        assert_eq!(report["native_terminal"]["status"], "MEASURED");
+        assert_eq!(report["native_terminal"]["sum"]["failed_gets"], 0);
+        assert_eq!(report["identity"], pinned.expected_identity);
+        assert_eq!(report["inputs"], pinned.expected_bound_inputs);
+        let query = recovered
+            .iter()
+            .position(|r| r["phase"] == "query")
+            .unwrap();
+        assert_eq!(
+            recovered[query]["transport"]["after"]["dropped_error_bodies"],
+            1
+        );
+        assert_eq!(
+            recovered[query]["transport"]["after"]["method_counts"][2],
+            1
+        );
+        assert_eq!(recovered[query]["charges"], rows[query]["charges"]);
+        for (pointer, value) in [
+            ("/transport/after/attempts", json!(999)),
+            ("/transport/after/dropped_error_bodies", json!(0)),
+            ("/transport/after/status_counts/2/1", json!(2)),
+            ("/transport/after/stream_failures", json!(999)),
+        ] {
+            let mut bad = recovered.clone();
+            *bad[query].pointer_mut(pointer).unwrap() = value;
+            let (path, _) =
+                write_fixture(dir.path(), "v11-impossible-transport.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+            assert_eq!(error, "cumulative SDK counter consistency", "{pointer}");
+        }
+
+        // Every policy key/value is strict, even if both frozen headers agree on a bad value.
+        let policy = headers[0]["s3_read_retry"].as_object().unwrap();
+        assert_eq!(policy, headers[1]["s3_read_retry"].as_object().unwrap());
+        for key in policy.keys() {
+            for mutation in ["missing", "wrong"] {
+                for changed_headers in [&[0][..], &[1][..], &[0, 1][..]] {
+                    let mut bad = rows.clone();
+                    for &index in changed_headers {
+                        if mutation == "missing" {
+                            bad[index]["s3_read_retry"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove(key);
+                        } else {
+                            bad[index]["s3_read_retry"][key] = match &policy[key] {
+                                Value::Bool(value) => json!(!*value),
+                                Value::Number(value) => json!(value.as_u64().unwrap() + 1),
+                                Value::String(_) => json!("changed"),
+                                Value::Array(_) => json!(["GET"]),
+                                _ => unreachable!(),
+                            };
+                        }
+                    }
+                    let mut invalid = serde_json::to_value(&pinned).unwrap();
+                    invalid["expected_identity"] = bad[0].clone();
+                    invalid["expected_bound_inputs"] = bad[1].clone();
+                    let invalid: CompletedConfig = serde_json::from_value(invalid).unwrap();
+                    assert!(
+                        current_v10::validate_completed(&invalid).is_err(),
+                        "{key} {mutation} {changed_headers:?}"
+                    );
+                }
+            }
+        }
+        for index in 0..2 {
+            for key in ["config_schema", "s3_read_retry"] {
+                let mut invalid = serde_json::to_value(&pinned).unwrap();
+                let header = if index == 0 {
+                    "expected_identity"
+                } else {
+                    "expected_bound_inputs"
+                };
+                invalid[header].as_object_mut().unwrap().remove(key);
+                assert!(
+                    current_v10::validate_completed(&serde_json::from_value(invalid).unwrap())
+                        .is_err()
+                );
+            }
+            let mut invalid = serde_json::to_value(&pinned).unwrap();
+            let header = if index == 0 {
+                "expected_identity"
+            } else {
+                "expected_bound_inputs"
+            };
+            invalid[header]["s3_read_retry"]["extra"] = json!(true);
+            assert!(
+                current_v10::validate_completed(&serde_json::from_value(invalid).unwrap()).is_err()
+            );
+        }
+        for (pointer, value) in [
+            (
+                "/expected_identity/config_schema",
+                json!("borsuk-cohere-native-baseline-config-v10"),
+            ),
+            (
+                "/expected_bound_inputs/config_schema",
+                json!("borsuk-cohere-native-baseline-config-v10"),
+            ),
+            (
+                "/expected_bound_inputs/backend",
+                original[1]["backend"].clone(),
+            ),
+            (
+                "/expected_identity/schema",
+                json!(current_v10::RESULT_SCHEMA),
+            ),
+        ] {
+            let mut invalid = serde_json::to_value(&pinned).unwrap();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                current_v10::validate_completed(&serde_json::from_value(invalid).unwrap()).is_err(),
+                "{pointer}"
+            );
+        }
+        // Valid v10 rows still refuse either unexpected policy field, including null.
+        for index in 0..2 {
+            for key in ["config_schema", "s3_read_retry"] {
+                let mut bad = original.clone();
+                for value in [rows[index][key].clone(), Value::Null] {
+                    bad[index][key] = value;
+                    let mut invalid = serde_json::to_value(&pinned).unwrap();
+                    invalid["expected_identity"] = bad[0].clone();
+                    invalid["expected_bound_inputs"] = bad[1].clone();
+                    assert!(
+                        current_v10::validate_completed(&serde_json::from_value(invalid).unwrap())
+                            .is_err()
+                    );
+                }
+            }
+        }
+
+        // Re-sealing a changed result never changes independently pinned header authority.
+        for (index, key) in [
+            (0, "config_sha256"),
+            (0, "binary_sha256"),
+            (0, "runner_source_sha256"),
+            (0, "generation_source_sha256"),
+            (0, "router_source_sha256"),
+            (0, "codec_source_sha256"),
+            (0, "source_plane_source_sha256"),
+            (0, "sq8_range_source_sha256"),
+            (0, "returned_source_sha256"),
+            (1, "native_source_sha256"),
+            (1, "native_sq8_sha256"),
+            (1, "native_order_sha256"),
+        ] {
+            let mut bad = rows.clone();
+            bad[index][key] = json!("0".repeat(64));
+            let (path, _) = write_fixture(dir.path(), "v11-changed-identity.jsonl", bad);
+            let body = std::fs::read(&path).unwrap();
+            let mut independent = serde_json::to_value(&pinned).unwrap();
+            independent["input"] = json!({"path":path,"bytes":body.len(),"sha256":sha(&body)});
+            let independent: CompletedConfig = serde_json::from_value(independent).unwrap();
+            let error = read_run_with(&path, &independent.input.sha256, Some(&independent))
+                .err()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                error,
+                if index == 0 {
+                    "expected v2 identity pins"
+                } else {
+                    "expected v2 input/root/backend pins"
+                },
+                "{key}"
+            );
+        }
+        let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        for schema in [
+            current_v10::RESULT_SCHEMA,
+            current_v10::READ_RETRY_RESULT_SCHEMA,
+        ] {
+            let mut bad = rows.clone();
+            if schema == current_v10::RESULT_SCHEMA {
+                bad[0]["schema"] = json!(schema);
+                for header in &mut bad[..2] {
+                    header.as_object_mut().unwrap().remove("config_schema");
+                    header.as_object_mut().unwrap().remove("s3_read_retry");
+                }
+            }
+            let (path, _) = write_fixture(dir.path(), "v10-v11-plan-parity.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let (valid, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
+            let valid = read_run_with(&path, &valid.input.sha256, Some(&valid)).unwrap();
+            assert_eq!(
+                valid.samples[0].physical_plan_sha256,
+                run.samples[0].physical_plan_sha256
+            );
+            assert!(valid.samples[0].charges == run.samples[0].charges);
+            assert!(valid.samples[0].returned == run.samples[0].returned);
+            bad[query]["plan"]["logical_range_count"] = json!(2);
+            let (path, _) =
+                write_fixture(dir.path(), "v10-v11-wrong-logical-count.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+            assert_eq!(error, "v10 logical range count", "{schema}");
+        }
+    }
+
+    #[test]
     fn actual_native_scale_runner_reducer_seal_count_mismatches() {
         for (prefix, panel) in [(false, false), (false, true), (true, false), (true, true)] {
             let (dir, result) =
@@ -14218,7 +14770,7 @@ mod tests {
         rows
     }
 
-    fn paired_scale_config(dir: &Path, mut rows: [Vec<Value>; 2]) -> (PathBuf, String) {
+    pub(super) fn paired_scale_config(dir: &Path, mut rows: [Vec<Value>; 2]) -> (PathBuf, String) {
         for r in &mut rows {
             authenticate(r);
         }

@@ -4,10 +4,10 @@ use borsuk::sq8_page_authority::{PageAuthority, SelectedSq8Limits, plan_selected
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 type Result<T> = crate::Result<T>;
-pub(super) const CONFIG_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-config-v1";
-pub(super) const SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-v1";
-pub(super) const ADMISSION_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-admission-v1";
-pub(super) const SMOKE_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-smoke-v1";
+pub(super) const CONFIG_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-config-v2";
+pub(super) const SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-v2";
+pub(super) const ADMISSION_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-admission-v2";
+pub(super) const SMOKE_SCHEMA: &str = "borsuk-sq8-shortlist-get-curve-smoke-v2";
 pub(super) const EXTRA_PAYLOAD: usize = 256 * 1024 * 1024;
 const HISTORICAL_CONTROL_SHA: &str =
     "31dfa30cbf176254e7bec7cc8eb5288071f85cfbb9bb98455b61b3c87f5ec786";
@@ -31,7 +31,7 @@ pub(super) fn read_config(path: &std::path::Path, sha: &str) -> Result<(Config, 
     crate::require(
         c.schema == CONFIG_SCHEMA
             && c.shortlist.shortlist_sizes == [256; 4]
-            && c.get_budgets.contains(&30)
+            && c.get_budgets == [30, 38, 46, 64]
             && c.selector_control.sha256 == HISTORICAL_CONTROL_SHA,
         "GET curve schema/fixed256/G30 control",
     )?;
@@ -103,26 +103,27 @@ impl Control {
         slot: usize,
         evidence: &Value,
         budgets: &[usize; 4],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.recheck()?;
         let g30 = budgets
             .iter()
             .position(|&g| g == 30)
             .ok_or("GET curve G30 ranking control")?;
-        crate::require(
-            self.rankings.get(slot) == Some(&evidence[g30]),
-            "G30 exact historical ordered IDs/target-row/score-bits before truth",
-        )
+        let old = self
+            .rankings
+            .get(slot)
+            .ok_or("GET historical query ordinal")?;
+        validate_returned(&evidence[g30])?;
+        Ok(old == &evidence[g30])
     }
-    pub(super) fn verify(&self, queries: &[Value], budgets: &[usize; 4]) -> Result<bool> {
+    pub(super) fn verify(&self, queries: &[Value], budgets: &[usize; 4]) -> Result<Value> {
         self.recheck()?;
         let (body, snapshot) = crate::loss_binary(&self.pin, self.pin.bytes)?;
         let old: Value = serde_json::from_slice(&body)?;
-        historical_totals(&old)?;
-        let rank_parity = verify_control_queries(&old, queries, budgets)?;
+        let comparison = verify_control_queries(&old, queries, budgets)?;
         snapshot.recheck()?;
         self.recheck()?;
-        Ok(rank_parity)
+        Ok(comparison)
     }
 }
 fn historical_totals(old: &Value) -> Result<()> {
@@ -144,7 +145,8 @@ fn historical_totals(old: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn verify_control_queries(old: &Value, queries: &[Value], budgets: &[usize; 4]) -> Result<bool> {
+fn verify_control_queries(old: &Value, queries: &[Value], budgets: &[usize; 4]) -> Result<Value> {
+    historical_totals(old)?;
     let g30 = budgets
         .iter()
         .position(|&g| g == 30)
@@ -154,35 +156,82 @@ fn verify_control_queries(old: &Value, queries: &[Value], budgets: &[usize; 4]) 
         queries.len() == 1000 && before.len() == 1000,
         "GET historical query population",
     )?;
+    let (mut rank_queries, mut rank_positions, mut ids, mut rows, mut scores) = (0, 0, 0, 0, 0);
+    let (mut invariant_queries, mut relative_queries) = (0, 0);
+    let mut evidence = Vec::new();
     for (ordinal, (now, old)) in queries.iter().zip(before).enumerate() {
-        let mut arm = now["arms"][g30].clone();
-        arm.as_object_mut()
-            .ok_or("GET control arm")?
+        crate::require(
+            now["ordinal"] == ordinal && old["ordinal"] == ordinal,
+            "GET historical query order",
+        )?;
+        validate_returned(&now["returned_evidence"][g30])?;
+        let current_rank = now["returned_evidence"][g30]
+            .as_array()
+            .ok_or("GET current ranks")?;
+        let old_rank = old["returned_evidence"][0]
+            .as_array()
+            .ok_or("GET historical ranks")?;
+        let mut rank_differences = Vec::new();
+        for (position, (now, old)) in current_rank.iter().zip(old_rank).enumerate() {
+            ids += usize::from(now["id"] != old["id"]);
+            rows += usize::from(now["target_row"] != old["target_row"]);
+            scores += usize::from(now["score_bits"] != old["score_bits"]);
+            if now != old {
+                rank_positions += 1;
+                rank_differences.push(json!({"position":position,"current":now,"historical":old}));
+            }
+        }
+        rank_queries += usize::from(!rank_differences.is_empty());
+        let mut current_arm = now["arms"][g30].clone();
+        current_arm
+            .as_object_mut()
+            .ok_or("GET current arm")?
             .remove("get_budget");
-        crate::require(
-            now["ordinal"] == ordinal
-                && now["ordinal"] == old["ordinal"]
-                && now["baseline_hits10"] == old["baseline_hits10"]
-                && arm == old["arms"][0],
-            "G30 exact per-query256 geometry and quality summary parity",
-        )?;
-        crate::require(
-            old["returned_evidence"]
-                .as_array()
-                .is_some_and(|p| p.len() == 4)
-                && old["returned_evidence"][0]
-                    .as_array()
-                    .is_some_and(|p| p.len() == 10)
-                && now["returned_evidence"][g30] == old["returned_evidence"][0],
-            "G30 historical ordered returned ID/target-row/score-bit parity",
-        )?;
+        let old_arm = &old["arms"][0];
+        let relative = |q: &Value, arm: &Value| {
+            json!({
+            "baseline_hits10":q["baseline_hits10"],"gained":arm["quality"]["gained"],
+            "lost":arm["quality"]["lost"]})
+        };
+        let relative_same = relative(now, &current_arm) == relative(old, old_arm);
+        let invariant = |arm: &Value| -> Result<Value> {
+            let mut arm = arm.clone();
+            let quality = arm["quality"].as_object_mut().ok_or("GET arm quality")?;
+            quality.remove("gained");
+            quality.remove("lost");
+            Ok(arm)
+        };
+        let invariant_same = invariant(&current_arm)? == invariant(old_arm)?;
+        invariant_queries += usize::from(!invariant_same);
+        relative_queries += usize::from(!relative_same);
+        if (!rank_differences.is_empty() || !invariant_same || !relative_same) && evidence.len() < 8
+        {
+            evidence.push(
+                json!({"ordinal":ordinal,"rank_differences":rank_differences,
+                "current_arm":current_arm,"historical_arm":old_arm,
+                "current_baseline_hits10":now["baseline_hits10"],
+                "historical_baseline_hits10":old["baseline_hits10"]}),
+            );
+        }
     }
-    Ok(true)
+    Ok(json!({
+        "scope":"CURRENT_G30_VS_PINNED_HISTORICAL_COUNT_ARM0_DESCRIPTIVE",
+        "query_count":1000,"rank_scope":"ORDERED_ID_TARGET_ROW_SCORE_BITS",
+        "ordered_rank_parity":rank_queries==0,"rank_mismatched_queries":rank_queries,
+        "rank_mismatched_positions":rank_positions,"id_mismatched_positions":ids,
+        "target_row_mismatched_positions":rows,"score_bits_mismatched_positions":scores,
+        "arm_invariant_scope":"GEOMETRY_AND_QUALITY_EXCLUDING_GAIN_LOSS",
+        "arm_invariant_parity":invariant_queries==0,"arm_invariant_mismatched_queries":invariant_queries,
+        "baseline_relative_scope":"BASELINE_HITS_AND_ARM_GAIN_LOSS",
+        "baseline_relative_parity":relative_queries==0,"baseline_relative_mismatched_queries":relative_queries,
+        "evidence_limit":8,"mismatch_evidence":evidence
+    }))
 }
+
 fn budgets(report: &Value) -> Result<[usize; 4]> {
     let budgets = serde_json::from_value(report["get_budgets"].clone())?;
     validate_budgets(&budgets)?;
-    crate::require(budgets.contains(&30), "GET report G30 control")?;
+    crate::require(budgets == [30, 38, 46, 64], "GET report frozen budgets")?;
     Ok(budgets)
 }
 // Geometry validation uses the real planner with the frozen shape; payload is never read.
@@ -212,10 +261,38 @@ fn aggregate(report: &Value) -> Result<Value> {
     ] {
         totals[name] = json!([0, 0, 0, 0]);
     }
+    let authority = geometry_authority()?;
+    let mut baseline = crate::Charge::default();
     for q in report["queries"].as_array().ok_or("GET queries")? {
         validate_shared_evidence(q)?;
+        let blocks: Vec<usize> = serde_json::from_value(q["baseline_sq8_selected_blocks"].clone())?;
+        crate::require(
+            !blocks.is_empty()
+                && blocks.len() <= 256
+                && blocks.windows(2).all(|p| p[0] < p[1])
+                && blocks.last().is_some_and(|b| *b < 1_000_000 / 32),
+            "GET baseline selected block evidence",
+        )?;
+        let selected = blocks.iter().map(|b| b * 32).collect::<Vec<_>>();
+        let plan = plan_selected_sq8_rows(
+            &authority,
+            &selected,
+            SelectedSq8Limits {
+                max_gets: 32,
+                max_bytes: 32 * 1024 * 1024,
+                max_planner_bytes: 4 * 1024 * 1024 + 4096,
+            },
+        )
+        .map_err(|e| format!("GET baseline exact planner {e:?}"))?;
+        let charges: crate::Charge = serde_json::from_value(q["baseline_sq8_charges"].clone())?;
+        crate::require(
+            charges.submitted_gets == plan.ranges.len() as u64
+                && charges.verified_bytes == plan.planned_bytes as u64
+                && charges.failed_gets == 0,
+            "GET baseline charges bound to production selection geometry",
+        )?;
+        baseline.add(charges)?;
     }
-    let authority = geometry_authority()?;
     let mut statistics = Vec::with_capacity(4);
     for (index, &budget) in budgets.iter().enumerate() {
         let mut gets = Vec::with_capacity(1000);
@@ -294,7 +371,8 @@ fn aggregate(report: &Value) -> Result<Value> {
         };
         statistics.push(json!({"get_budget":budget,"gets":stats(gets),"bytes":stats(bytes)}));
     }
-    Ok(json!({"totals":totals,"statistics":statistics}))
+    Ok(json!({"totals":totals,"statistics":statistics,
+        "baseline_sq8_gets":baseline.submitted_gets,"baseline_sq8_bytes":baseline.verified_bytes}))
 }
 fn validate_shared_evidence(q: &Value) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet};
@@ -358,6 +436,7 @@ fn validate_returned(evidence: &Value) -> Result<std::collections::BTreeSet<(u64
     let mut positions = BTreeSet::new();
     let mut old_score = None;
     for p in returned {
+        crate::fields(p, "id target_row score_bits")?;
         let row = usize::try_from(p["target_row"].as_u64().ok_or("GET returned row")?)?;
         let id = p["id"].as_u64().ok_or("GET returned id")?;
         let bits = u32::try_from(p["score_bits"].as_u64().ok_or("GET score bits")?)?;
@@ -456,12 +535,13 @@ fn validate_quality(
         "GET recomputed actual returned quality evidence",
     )
 }
-pub(super) fn finalize_report(report: &mut Value, historical_ranks: bool) -> Result<()> {
-    finalize_report_with_control_sha(report, historical_ranks, HISTORICAL_CONTROL_SHA)
+pub(super) fn finalize_report(report: &mut Value, comparison: Value) -> Result<()> {
+    validate_completed_baseline_costs(report)?;
+    finalize_report_with_control_sha(report, comparison, HISTORICAL_CONTROL_SHA)
 }
 fn finalize_report_with_control_sha(
     report: &mut Value,
-    historical_ranks: bool,
+    comparison: Value,
     expected_control_sha: &str,
 ) -> Result<()> {
     report["schema"] = json!(SCHEMA);
@@ -472,12 +552,15 @@ fn finalize_report_with_control_sha(
             .position(|&g| g == 30)
             .ok_or("GET G30 index")?
     );
-    report["closed_selector_control_parity"] = json!(true);
+    report["closed_selector_control_parity"] = comparison["arm_invariant_parity"].clone();
     report["closed_selector_control_parity_scope"] =
-        json!("PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES");
-    crate::require(historical_ranks, "GET historical256 rank proof required")?;
-    report["historical_returned_rank_parity"] = json!(historical_ranks);
+        json!("GEOMETRY_AND_QUALITY_EXCLUDING_GAIN_LOSS");
+    report["historical_returned_rank_parity"] = comparison["ordered_rank_parity"].clone();
     report["historical_returned_rank_parity_scope"] = json!("GET_G30_VS_COUNT_CURVE_ARM0");
+    report["historical_comparison"] = comparison;
+    report["historical_comparison_is_descriptive"] = json!(true);
+    report["causal_get_comparison_scope"] = json!("FOUR_CURRENT_ARMS_SHARING_SOURCE");
+    report["reference_and_floor_are_descriptive"] = json!(true);
     report["original_physical_layout"] = json!(true);
     report["source_capture_routing_scoring_unchanged"] = json!(true);
     report["source_to_shortlist_cover_loss_includes_budgeted_block_drops"] = json!(true);
@@ -503,7 +586,45 @@ fn finalize_report_with_control_sha(
         .remove("physical_bytes_totals");
     validate_report_with_control_sha(report, expected_control_sha)
 }
+// Baseline report geometry is not provenance. Reauthenticate the pinned native
+// file through the shared full-cohort reader, then compare every query charge.
+fn validate_completed_baseline_costs(report: &Value) -> Result<()> {
+    let completed: crate::CompletedConfig =
+        serde_json::from_value(report["baseline_completed"].clone())?;
+    crate::require(
+        completed.schema == crate::SCALE_CONFIG_SCHEMA,
+        "GET baseline completed config schema",
+    )?;
+    let queries = report["queries"].as_array().ok_or("GET baseline queries")?;
+    crate::require(queries.len() == 1000, "GET baseline full query roster")?;
+    let mut total = crate::Charge::default();
+    let run = crate::read_run_observed(
+        &completed.input.path,
+        &completed.input.sha256,
+        Some(&completed),
+        |line, query, _| {
+            let native: Value = serde_json::from_slice(line)?;
+            let recorded = queries.get(query.ordinal).ok_or("GET baseline ordinal")?;
+            let charge: crate::Charge =
+                serde_json::from_value(recorded["baseline_sq8_charges"].clone())?;
+            crate::require(
+                recorded["ordinal"].as_u64() == Some(query.ordinal as u64)
+                    && charge == query.charges.sq8
+                    && recorded["baseline_sq8_selected_blocks"] == native["plan"]["selected_pages"],
+                "GET baseline charges disagree with authenticated native query",
+            )?;
+            total.add(charge)
+        },
+    )?;
+    crate::require(
+        run.samples.len() == 1000
+            && report["baseline_sq8_gets_total"].as_u64() == Some(total.submitted_gets)
+            && report["baseline_sq8_bytes_total"].as_u64() == Some(total.verified_bytes),
+        "GET baseline authenticated totals",
+    )
+}
 pub(super) fn validate_report(report: &Value) -> Result<()> {
+    validate_completed_baseline_costs(report)?;
     validate_report_with_control_sha(report, HISTORICAL_CONTROL_SHA)
 }
 fn validate_report_with_control_sha(report: &Value, expected_control_sha: &str) -> Result<()> {
@@ -529,17 +650,17 @@ fn validate_report_with_control_sha(report: &Value, expected_control_sha: &str) 
                     .iter()
                     .position(|&g| g == 30)
                     .ok_or("GET G30 index")?
-            && report["closed_selector_control_parity"] == true
             && report["closed_selector_control_parity_scope"]
-                == "PER_QUERY_GEOMETRY_AND_QUALITY_SUMMARIES"
-            && report["historical_returned_rank_parity"] == true
+                == "GEOMETRY_AND_QUALITY_EXCLUDING_GAIN_LOSS"
+            && report["historical_comparison_is_descriptive"] == true
+            && report["causal_get_comparison_scope"] == "FOUR_CURRENT_ARMS_SHARING_SOURCE"
+            && report["reference_and_floor_are_descriptive"] == true
             && report["historical_returned_rank_parity_scope"] == "GET_G30_VS_COUNT_CURVE_ARM0"
             && report["historical_returned_ranks_checked_before_truth"] == true
             && report["historical_count_curve_older_block_control_rank_parity"] == false
             && report["original_physical_layout"] == true
             && report["source_capture_routing_scoring_unchanged"] == true
             && report["single_causal_get_change"] == true
-            && report["baseline_hits10"] == 9780
             && report["nonratcheting_reference_hits10"] == 9780
             && report["recall_floor_hits10"] == 9760
             && report["baseline_sq8_get_budget"] == 32
@@ -566,7 +687,14 @@ fn validate_report_with_control_sha(report: &Value, expected_control_sha: &str) 
         "GET exact retained control source pin",
     )?;
     let control = Control::admit(pin)?;
-    control.verify(report["queries"].as_array().ok_or("GET queries")?, &budgets)?;
+    let comparison =
+        control.verify(report["queries"].as_array().ok_or("GET queries")?, &budgets)?;
+    crate::require(
+        report["historical_comparison"] == comparison
+            && report["historical_returned_rank_parity"] == comparison["ordered_rank_parity"]
+            && report["closed_selector_control_parity"] == comparison["arm_invariant_parity"],
+        "GET recomputed descriptive historical comparison",
+    )?;
     let aggregate = aggregate(report)?;
     control.recheck()?;
     let totals = &aggregate["totals"];
@@ -574,7 +702,10 @@ fn validate_report_with_control_sha(report: &Value, expected_control_sha: &str) 
         .map(|a| totals["hits"][a].as_u64().is_some_and(|h| h >= 9760))
         .collect::<Vec<_>>();
     crate::require(
-        report["measured_hit_subtotals"] == totals["hits"]
+        report["baseline_sq8_gets_total"].as_u64() == aggregate["baseline_sq8_gets"].as_u64()
+            && report["baseline_sq8_bytes_total"].as_u64()
+                == aggregate["baseline_sq8_bytes"].as_u64()
+            && report["measured_hit_subtotals"] == totals["hits"]
             && report["planned_target_gets_totals"] == totals["gets"]
             && report["planned_target_bytes_totals"] == totals["bytes"]
             && report["native_quality_io_totals"] == *totals
@@ -619,6 +750,7 @@ mod tests {
         }
         for (pointer, value) in [
             ("/schema", json!(super::super::COUNT_CURVE_SCHEMA)),
+            ("/schema", json!("borsuk-sq8-shortlist-get-curve-config-v1")),
             ("/shortlist/shortlist_sizes", json!([256, 512, 768, 1024])),
             ("/selector_control/bytes", json!(0)),
             ("/selector_control/sha256", json!("0".repeat(64))),
@@ -631,7 +763,7 @@ mod tests {
         let mut explicit = base.clone();
         explicit["get_budgets"] = json!([1, 2, 30, 256]);
         let (path, sha) = super::super::driver_tests::write_config(&root, &explicit);
-        assert!(read_config(&path, &sha).is_ok());
+        assert!(read_config(&path, &sha).is_err());
         let mut unknown = base.clone();
         unknown["unexpected"] = json!(true);
         let (path, sha) = super::super::driver_tests::write_config(&root, &unknown);
@@ -803,12 +935,15 @@ mod tests {
                 "bridge_bytes":0,"quality":quality})).collect::<Vec<_>>();
             let returned=(0..9).chain(10..11).map(|row|json!({"id":row,"target_row":row,"score_bits":1_f32.to_bits()})).collect::<Vec<_>>();
             json!({"ordinal":ordinal,"baseline_hits10":if ordinal<220{9}else{10},"arms":arms,
+                "baseline_sq8_selected_blocks":[0],
+                "baseline_sq8_charges":{"submitted_gets":1,"verified_bytes":33152,"failed_gets":0},
                 "returned_evidence":[returned,returned,returned,returned],
                 "selection_evidence":[{"selected":[0],"ranges":[[0,33152]]},{"selected":[0],"ranges":[[0,33152]]},{"selected":[0],"ranges":[[0,33152]]},{"selected":[0],"ranges":[[0,33152]]}],
                 "quality_evidence":{"baseline_ids":baseline,"truth":(0..10).map(|row|json!({"id":row,"target_row":row,"source_scored":true})).collect::<Vec<_>>()}})
         }).collect::<Vec<_>>();
         json!({"status":"MEASURED","complete":true,"query_count":1000,"queries":queries,
             "get_budgets":budgets,"shortlist_sizes":[256,256,256,256],"baseline_hits10":9780,
+            "baseline_sq8_gets_total":1000,"baseline_sq8_bytes_total":33152000,
             "measured_hit_subtotals":[9000,9000,9000,9000],"admissible_queries":[1000,1000,1000,1000],
             "quality_floor_met":[false,false,false,false],"nonratcheting_reference_hits10":9780,"recall_floor_hits10":9760,
             "historical_control":{"path":"/unopened/control.json","bytes":384810,"sha256":HISTORICAL_CONTROL_SHA},
@@ -822,7 +957,17 @@ mod tests {
         let mut old = report_fixture();
         old["shortlist_sizes"] = json!([256, 512, 768, 1024]);
         old["candidate_sq8_get_budget"] = json!(30);
+        old.as_object_mut()
+            .unwrap()
+            .remove("baseline_sq8_gets_total");
+        old.as_object_mut()
+            .unwrap()
+            .remove("baseline_sq8_bytes_total");
         for q in old["queries"].as_array_mut().unwrap() {
+            q.as_object_mut()
+                .unwrap()
+                .remove("baseline_sq8_selected_blocks");
+            q.as_object_mut().unwrap().remove("baseline_sq8_charges");
             for (a, size) in q["arms"]
                 .as_array_mut()
                 .unwrap()
@@ -845,12 +990,17 @@ mod tests {
             json!({"path":path,"bytes":body.len(),"sha256":format!("{:x}",Sha256::digest(&body))});
         report
     }
-    fn finalize_fixture(report: &mut Value, historical_ranks: bool) -> Result<()> {
+    fn finalize_fixture(report: &mut Value) -> Result<()> {
         let sha = report["historical_control"]["sha256"]
             .as_str()
             .ok_or("fixture control SHA")?
             .to_owned();
-        finalize_report_with_control_sha(report, historical_ranks, &sha)
+        let pin = serde_json::from_value(report["historical_control"].clone())?;
+        let comparison = Control::admit(pin)?.verify(
+            report["queries"].as_array().ok_or("fixture queries")?,
+            &budgets(report)?,
+        )?;
+        finalize_report_with_control_sha(report, comparison, &sha)
     }
     fn validate_fixture(report: &Value) -> Result<()> {
         let sha = report["historical_control"]["sha256"]
@@ -858,6 +1008,178 @@ mod tests {
             .ok_or("fixture control SHA")?;
         validate_report_with_control_sha(report, sha)
     }
+    #[test]
+    fn baseline_costs_reauthenticate_full_native_file_and_reject_coherent_tampering() {
+        let root = super::super::driver_tests::directory();
+        let rows = crate::tests::paired_scale_fixture(16);
+        let (config_path, _) = crate::tests::paired_scale_config(&root, [rows.clone(), rows]);
+        let config: Value = serde_json::from_slice(&std::fs::read(config_path).unwrap()).unwrap();
+        let completed: crate::CompletedConfig =
+            serde_json::from_value(config["arms"][0].clone()).unwrap();
+        let native = crate::read_run_with(
+            &completed.input.path,
+            &completed.input.sha256,
+            Some(&completed),
+        )
+        .unwrap();
+        let mut total = crate::Charge::default();
+        let queries = native
+            .samples
+            .iter()
+            .enumerate()
+            .map(|(ordinal, query)| {
+                total.add(query.charges.sq8).unwrap();
+                json!({"ordinal":ordinal,"baseline_sq8_charges":query.charges.sq8,"baseline_sq8_selected_blocks":[0]})
+            })
+            .collect::<Vec<_>>();
+        let report = json!({"baseline_completed":completed,"queries":queries,
+            "baseline_sq8_gets_total":total.submitted_gets,
+            "baseline_sq8_bytes_total":total.verified_bytes});
+        assert!(validate_completed_baseline_costs(&report).is_ok());
+        for (field, sum) in [
+            ("submitted_gets", "baseline_sq8_gets_total"),
+            ("verified_bytes", "baseline_sq8_bytes_total"),
+        ] {
+            let mut bad = report.clone();
+            bad["queries"][999]["baseline_sq8_charges"][field] = json!(
+                bad["queries"][999]["baseline_sq8_charges"][field]
+                    .as_u64()
+                    .unwrap()
+                    + 1
+            );
+            bad[sum] = json!(bad[sum].as_u64().unwrap() + 1);
+            bad["queries"][999]["baseline_sq8_selected_blocks"] = json!([0, 1024]);
+            assert!(validate_completed_baseline_costs(&bad).is_err());
+        }
+        let mut wrong_selection = report.clone();
+        wrong_selection["queries"][999]["baseline_sq8_selected_blocks"] = json!([1024]);
+        assert!(validate_completed_baseline_costs(&wrong_selection).is_err());
+        let mut wrong_header = report.clone();
+        wrong_header["baseline_completed"]["expected_identity"]["config_sha256"] =
+            json!("0".repeat(64));
+        assert!(validate_completed_baseline_costs(&wrong_header).is_err());
+        let mut wrong_pin = report.clone();
+        wrong_pin["baseline_completed"]["input"]["sha256"] = json!("0".repeat(64));
+        assert!(validate_completed_baseline_costs(&wrong_pin).is_err());
+        let path = std::path::PathBuf::from(
+            report["baseline_completed"]["input"]["path"]
+                .as_str()
+                .unwrap(),
+        );
+        let mut body = std::fs::read(&path).unwrap();
+        body.push(b'\n');
+        std::fs::write(&path, body).unwrap();
+        assert!(validate_completed_baseline_costs(&report).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn baseline_cost_totals_are_recomputed_and_bound_to_plan() {
+        let root = super::super::driver_tests::directory();
+        let mut report = bound_report_fixture(&root);
+        finalize_fixture(&mut report).unwrap();
+        assert!(validate_fixture(&report).is_ok());
+        for (total, charge) in [
+            ("baseline_sq8_gets_total", "submitted_gets"),
+            ("baseline_sq8_bytes_total", "verified_bytes"),
+        ] {
+            let mut bad = report.clone();
+            bad[total] = json!(report[total].as_u64().unwrap() + 1);
+            assert!(validate_fixture(&bad).is_err(), "accepted changed {total}");
+            let mut bad = report.clone();
+            bad["queries"][999]["baseline_sq8_charges"][charge] = json!(
+                report["queries"][999]["baseline_sq8_charges"][charge]
+                    .as_u64()
+                    .unwrap()
+                    + 1
+            );
+            assert!(
+                validate_fixture(&bad).is_err(),
+                "accepted query999 {charge}"
+            );
+            bad[total] = json!(report[total].as_u64().unwrap() + 1);
+            assert!(
+                validate_fixture(&bad).is_err(),
+                "accepted coherent query999 {charge}/{total}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn baseline_cost_evidence_requires_strict_shapes_and_unsigned_charges() {
+        let root = super::super::driver_tests::directory();
+        let mut report = bound_report_fixture(&root);
+        finalize_fixture(&mut report).unwrap();
+        for (pointer, value) in [
+            ("/baseline_sq8_gets_total", Value::Null),
+            ("/baseline_sq8_gets_total", json!(-1)),
+            ("/baseline_sq8_gets_total", json!(1000.0)),
+            ("/baseline_sq8_bytes_total", json!("33152000")),
+            ("/baseline_sq8_bytes_total", json!(u64::MAX)),
+            ("/queries/999/baseline_sq8_charges", Value::Null),
+            (
+                "/queries/999/baseline_sq8_charges",
+                json!({"submitted_gets":1,"verified_bytes":33152}),
+            ),
+            (
+                "/queries/999/baseline_sq8_charges",
+                json!({"submitted_gets":1,"verified_bytes":33152,"failed_gets":0,"extra":0}),
+            ),
+            (
+                "/queries/999/baseline_sq8_charges/submitted_gets",
+                json!(-1),
+            ),
+            (
+                "/queries/999/baseline_sq8_charges/submitted_gets",
+                json!(1.0),
+            ),
+            (
+                "/queries/999/baseline_sq8_charges/verified_bytes",
+                json!("33152"),
+            ),
+            (
+                "/queries/999/baseline_sq8_charges/verified_bytes",
+                json!(u64::MAX),
+            ),
+            ("/queries/999/baseline_sq8_charges/failed_gets", json!(1)),
+            ("/queries/999/baseline_sq8_selected_blocks", Value::Null),
+            ("/queries/999/baseline_sq8_selected_blocks", json!({})),
+            ("/queries/999/baseline_sq8_selected_blocks", json!([])),
+            ("/queries/999/baseline_sq8_selected_blocks", json!([0, 0])),
+            ("/queries/999/baseline_sq8_selected_blocks", json!([2, 0])),
+            ("/queries/999/baseline_sq8_selected_blocks", json!([31250])),
+            ("/queries/999/baseline_sq8_selected_blocks", json!([-1])),
+            (
+                "/queries/999/baseline_sq8_selected_blocks",
+                json!([u64::MAX]),
+            ),
+            (
+                "/queries/999/baseline_sq8_selected_blocks",
+                json!((0..257).collect::<Vec<_>>()),
+            ),
+        ] {
+            let mut bad = report.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_fixture(&bad).is_err(), "accepted {pointer}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn baseline_cost_totals_accept_independently_derived_query999_cover() {
+        let root = super::super::driver_tests::directory();
+        let mut report = bound_report_fixture(&root);
+        report["queries"][999]["baseline_sq8_selected_blocks"] = json!([0, 2]);
+        report["queries"][999]["baseline_sq8_charges"]["submitted_gets"] = json!(2);
+        report["queries"][999]["baseline_sq8_charges"]["verified_bytes"] = json!(66304);
+        report["baseline_sq8_gets_total"] = json!(1001);
+        report["baseline_sq8_bytes_total"] = json!(33185152);
+        finalize_fixture(&mut report).unwrap();
+        assert!(validate_fixture(&report).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn malformed_rankings(returned: &Value) -> Vec<(&'static str, Value)> {
         let mut cases = vec![
             ("null", Value::Null),
@@ -902,13 +1224,16 @@ mod tests {
         let mut absent = returned.clone();
         absent[9].as_object_mut().unwrap().remove("score_bits");
         cases.push(("missing score bits", absent));
+        let mut unknown = returned.clone();
+        unknown[9]["extra"] = json!(true);
+        cases.push(("unknown rank field", unknown));
         cases
     }
     #[test]
     fn quality_rejects_malformed_tail_ranks_and_resealed_reports() {
         let root = super::super::driver_tests::directory();
         let mut report = bound_report_fixture(&root);
-        finalize_fixture(&mut report, true).unwrap();
+        finalize_fixture(&mut report).unwrap();
         assert!(validate_quality(&report["queries"][999], 1, &[0], &[0..33152]).is_ok());
         for (label, returned) in malformed_rankings(&report["queries"][999]["returned_evidence"][1])
         {
@@ -919,7 +1244,7 @@ mod tests {
                 "accepted quality {label}"
             );
             assert!(
-                finalize_fixture(&mut bad, true).is_err(),
+                finalize_fixture(&mut bad).is_err(),
                 "accepted resealed {label}"
             );
         }
@@ -932,7 +1257,7 @@ mod tests {
     fn report_preserves_below_floor_and_rejects_resealed_budget_charge_quality_errors() {
         let root = super::super::driver_tests::directory();
         let mut report = bound_report_fixture(&root);
-        finalize_fixture(&mut report, true).unwrap();
+        finalize_fixture(&mut report).unwrap();
         assert!(validate_fixture(&report).is_ok());
         assert_eq!(report["status"], "MEASURED");
         assert_eq!(report["historical_returned_rank_parity"], true);
@@ -947,7 +1272,7 @@ mod tests {
             json!([8000, 8000, 8000, 8000])
         );
         let mut missing_proof = report_fixture();
-        assert!(finalize_fixture(&mut missing_proof, false).is_err());
+        assert!(finalize_fixture(&mut missing_proof).is_err());
         assert_eq!(
             report["native_quality_io_totals"]["lost"],
             json!([780, 780, 780, 780])
@@ -978,7 +1303,7 @@ mod tests {
             let mut bad = report.clone();
             *bad.pointer_mut(pointer).unwrap() = value;
             assert!(
-                finalize_fixture(&mut bad, true).is_err(),
+                finalize_fixture(&mut bad).is_err(),
                 "accepted resealed {pointer}"
             );
         }
@@ -994,7 +1319,7 @@ mod tests {
     fn report_requires_authenticated_g30_ranks_and_shared_experiment_evidence() {
         let root = super::super::driver_tests::directory();
         let mut report = bound_report_fixture(&root);
-        finalize_fixture(&mut report, true).unwrap();
+        finalize_fixture(&mut report).unwrap();
         assert!(validate_fixture(&report).is_ok());
         assert!(
             validate_report(&report).is_err(),
@@ -1010,9 +1335,38 @@ mod tests {
                 json!(2_f32.to_bits());
         }
         assert!(validate_fixture(&changed_g30).is_err());
-        assert!(
-            finalize_fixture(&mut changed_g30, true).is_err(),
-            "finite ordered G30 mutation"
+        finalize_fixture(&mut changed_g30).unwrap();
+        assert!(validate_fixture(&changed_g30).is_ok());
+        assert_eq!(changed_g30["historical_returned_rank_parity"], false);
+        assert_eq!(
+            changed_g30["historical_comparison"]["rank_mismatched_queries"],
+            1
+        );
+        assert_eq!(
+            changed_g30["historical_comparison"]["score_bits_mismatched_positions"],
+            1
+        );
+        assert_eq!(
+            changed_g30["historical_comparison"]["mismatch_evidence"][0]["ordinal"],
+            999
+        );
+        for arm in 0..4 {
+            changed_g30["queries"][999]["returned_evidence"][arm][9]["id"] = json!(11);
+            changed_g30["queries"][999]["returned_evidence"][arm][9]["target_row"] = json!(11);
+        }
+        finalize_fixture(&mut changed_g30).unwrap();
+        assert!(validate_fixture(&changed_g30).is_ok());
+        assert_eq!(
+            changed_g30["historical_comparison"]["id_mismatched_positions"],
+            1
+        );
+        assert_eq!(
+            changed_g30["historical_comparison"]["target_row_mismatched_positions"],
+            1
+        );
+        assert_eq!(
+            changed_g30["historical_comparison"]["rank_mismatched_positions"],
+            1
         );
         for (pointer, value) in [
             ("/queries/999/selection_evidence/1/selected", json!([1])),
@@ -1026,7 +1380,7 @@ mod tests {
             let mut bad = report.clone();
             *bad.pointer_mut(pointer).unwrap() = value;
             assert!(
-                finalize_fixture(&mut bad, true).is_err(),
+                finalize_fixture(&mut bad).is_err(),
                 "accepted shared contradiction {pointer}"
             );
         }
@@ -1034,7 +1388,7 @@ mod tests {
         bad["queries"][999]["returned_evidence"][1][9] =
             json!({"id":11,"target_row":11,"score_bits":1_f32.to_bits()});
         assert!(
-            finalize_fixture(&mut bad, true).is_err(),
+            finalize_fixture(&mut bad).is_err(),
             "equal covers require equal rankings"
         );
         // Different covers still share the physical mapping and score for a returned ID.
@@ -1072,37 +1426,106 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn g30_historical_binding_requires_rank_proof_and_checks_every_query() {
+    fn g30_history_distinguishes_equality_difference_and_corrupt_control() {
         let now = report_fixture();
+        let old = historical_fixture();
         let queries = now["queries"].as_array().unwrap();
-        let mut old = now.clone();
-        for q in old["queries"].as_array_mut().unwrap() {
-            q.as_object_mut().unwrap().remove("returned_evidence");
-            for (arm, size) in q["arms"]
-                .as_array_mut()
-                .unwrap()
-                .iter_mut()
-                .zip([256, 512, 768, 1024])
-            {
-                arm["size"] = json!(size);
-                arm.as_object_mut().unwrap().remove("get_budget");
-            }
+        let same = verify_control_queries(&old, queries, &[30, 38, 46, 64]).unwrap();
+        assert_eq!(same["ordered_rank_parity"], true);
+        assert_eq!(same["arm_invariant_parity"], true);
+        assert_eq!(same["baseline_relative_parity"], true);
+        let mut changed = queries.clone();
+        for q in &mut changed[990..] {
+            q["returned_evidence"][0][9]["score_bits"] = json!(2_f32.to_bits());
         }
-        assert!(verify_control_queries(&old, queries, &[30, 38, 46, 64]).is_err());
-        let mut bad = old.clone();
-        bad["queries"][999]["arms"][0]["selected_rows"] = json!(2);
-        assert!(verify_control_queries(&bad, queries, &[30, 38, 46, 64]).is_err());
-        for q in old["queries"].as_array_mut().unwrap() {
-            let ordinal = q["ordinal"].as_u64().unwrap() as usize;
-            q["returned_evidence"] = queries[ordinal]["returned_evidence"].clone();
-        }
-        assert!(verify_control_queries(&old, queries, &[30, 38, 46, 64]).unwrap());
-        let mut bad = old.clone();
-        bad["queries"][999]["arms"][0]["selected_rows"] = json!(2);
-        assert!(verify_control_queries(&bad, queries, &[30, 38, 46, 64]).is_err());
-        old["queries"][999]["returned_evidence"][0][0]["score_bits"] = json!(0);
-        assert!(verify_control_queries(&old, queries, &[30, 38, 46, 64]).is_err());
+        let different = verify_control_queries(&old, &changed, &[30, 38, 46, 64]).unwrap();
+        assert_eq!(different["ordered_rank_parity"], false);
+        assert_eq!(different["rank_mismatched_queries"], 10);
+        assert_eq!(different["rank_mismatched_positions"], 10);
+        assert_eq!(different["mismatch_evidence"].as_array().unwrap().len(), 8);
+        assert_eq!(different["arm_invariant_parity"], true);
+        let mut corrupt = old.clone();
+        corrupt["queries"][999]["arms"][0]["quality"]["hits10"] = json!(10);
+        assert!(verify_control_queries(&corrupt, queries, &[30, 38, 46, 64]).is_err());
+        let mut corrupt = old;
+        corrupt["queries"][999]
+            .as_object_mut()
+            .unwrap()
+            .remove("returned_evidence");
+        assert!(verify_control_queries(&corrupt, queries, &[30, 38, 46, 64]).is_err());
     }
+
+    #[test]
+    fn changed_geometry_is_descriptive_and_report_comparison_cannot_be_resealed() {
+        let root = super::super::driver_tests::directory();
+        let mut report = bound_report_fixture(&root);
+        for a in 0..4 {
+            let q = &mut report["queries"][999];
+            q["selection_evidence"][a] = json!({"selected":[0,32],"ranges":[[0,66304]]});
+            q["arms"][a]["selected_rows"] = json!(2);
+            q["arms"][a]["selected_blocks"] = json!(2);
+            q["arms"][a]["physical_bytes"] = json!(66304);
+        }
+        finalize_fixture(&mut report).unwrap();
+        assert!(validate_fixture(&report).is_ok());
+        assert_eq!(report["closed_selector_control_parity"], false);
+        assert_eq!(
+            report["historical_comparison"]["arm_invariant_mismatched_queries"],
+            1
+        );
+        assert_eq!(report["historical_returned_rank_parity"], true);
+        for (pointer, value) in [
+            ("/closed_selector_control_parity", json!(true)),
+            (
+                "/historical_comparison/arm_invariant_mismatched_queries",
+                json!(0),
+            ),
+            ("/historical_comparison/mismatch_evidence", json!([])),
+            ("/historical_comparison/rank_scope", json!("SUMMARY_ONLY")),
+            ("/historical_comparison_is_descriptive", json!(false)),
+        ] {
+            let mut bad = report.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_fixture(&bad).is_err(), "accepted {pointer}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn current_baseline_is_recomputed_and_gain_loss_is_conserved() {
+        let root = super::super::driver_tests::directory();
+        let mut report = bound_report_fixture(&root);
+        report["queries"][999]["quality_evidence"]["baseline_ids"] =
+            json!((0..9).chain(11..12).collect::<Vec<_>>());
+        report["queries"][999]["baseline_hits10"] = json!(9);
+        report["baseline_hits10"] = json!(9779);
+        for arm in report["queries"][999]["arms"].as_array_mut().unwrap() {
+            arm["quality"]["lost"] = json!(0);
+        }
+        finalize_fixture(&mut report).unwrap();
+        assert!(validate_fixture(&report).is_ok());
+        assert_eq!(
+            report["native_quality_io_totals"]["lost"],
+            json!([779, 779, 779, 779])
+        );
+        assert_eq!(report["historical_comparison"]["ordered_rank_parity"], true);
+        assert_eq!(
+            report["historical_comparison"]["arm_invariant_parity"],
+            true
+        );
+        assert_eq!(
+            report["historical_comparison"]["baseline_relative_parity"],
+            false
+        );
+        assert_eq!(
+            report["historical_comparison"]["baseline_relative_mismatched_queries"],
+            1
+        );
+        report["queries"][999]["arms"][0]["quality"]["lost"] = json!(1);
+        assert!(finalize_fixture(&mut report).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn retained_control_authenticates_complete_ranks_before_truth_and_rechecks_snapshot() {
         let root = super::super::driver_tests::directory();
@@ -1127,6 +1550,8 @@ mod tests {
             .unwrap();
         let mut bad = evidence.clone();
         bad[0][0]["score_bits"] = json!(0);
+        assert!(!control.verify_ranking(0, &bad, &[30, 38, 46, 64]).unwrap());
+        bad[0][0]["score_bits"] = json!(f32::NAN.to_bits());
         assert!(control.verify_ranking(0, &bad, &[30, 38, 46, 64]).is_err());
         for missing in [Value::Null, json!([]), json!({})] {
             let mut bad = old.clone();
@@ -1168,7 +1593,14 @@ mod tests {
             "get_budgets":[30,38,46,64],"shortlist_sizes":[256,256,256,256],"candidate_queries_executed":1,
             "arms_executed":4,"quality_evaluated":false,"truth_file_opened":false,
             "baseline_prefix_exact_plan_trace_ids_scorebits":true,"source_capture_routing_scoring_unchanged":true,
-            "closed_control_bytes_admitted":true,"original_physical_layout":true,"g30_historical_returned_rank_prefix_parity":true});
+            "closed_control_bytes_admitted":true,"original_physical_layout":true,"g30_historical_returned_rank_prefix_parity":true,
+            "historical_prefix_queries_compared":1,"historical_rank_mismatched_prefix_queries":0,
+            "historical_prefix_scope":"QUERY0_CURRENT_G30_VS_PINNED_HISTORICAL_COUNT_ARM0",
+            "historical_comparison_is_descriptive":true});
+        assert!(validate_gate(&smoke, SMOKE_SCHEMA).is_ok());
+        smoke["g30_historical_returned_rank_prefix_parity"] = json!(false);
+        assert!(validate_gate(&smoke, SMOKE_SCHEMA).is_err());
+        smoke["historical_rank_mismatched_prefix_queries"] = json!(1);
         assert!(validate_gate(&smoke, SMOKE_SCHEMA).is_ok());
         assert!(validate_gate(&smoke, ADMISSION_SCHEMA).is_err());
         smoke["quality_evaluated"] = json!(true);
@@ -1191,7 +1623,7 @@ mod tests {
         let root = super::super::driver_tests::directory();
         let path = root.join("get.json");
         let mut report = bound_report_fixture(&root);
-        finalize_fixture(&mut report, true).unwrap();
+        finalize_fixture(&mut report).unwrap();
         assert_eq!(crate::report_cap(SCHEMA), 32 * 1024 * 1024);
         assert!(
             !crate::execute_report(&path, SCHEMA, || Ok(report)).unwrap(),
@@ -1270,7 +1702,13 @@ pub(super) fn validate_gate(report: &Value, schema: &str) -> Result<()> {
                 && report["arms_executed"] == 4
                 && report["quality_evaluated"] == false
                 && report["truth_file_opened"] == false
-                && report["g30_historical_returned_rank_prefix_parity"] == true
+                && report["g30_historical_returned_rank_prefix_parity"].is_boolean()
+                && report["historical_prefix_queries_compared"] == 1
+                && report["historical_rank_mismatched_prefix_queries"]
+                    == usize::from(report["g30_historical_returned_rank_prefix_parity"] == false)
+                && report["historical_prefix_scope"]
+                    == "QUERY0_CURRENT_G30_VS_PINNED_HISTORICAL_COUNT_ARM0"
+                && report["historical_comparison_is_descriptive"] == true
                 && report["original_physical_layout"] == true
                 && report["baseline_prefix_exact_plan_trace_ids_scorebits"] == true
                 && report["source_capture_routing_scoring_unchanged"] == true,
