@@ -1,6 +1,6 @@
 //! Once-only S3 Vectors reference. Backend cache state is unobservable.
 //!
-//! CLI: check_s3_vectors_baseline <admit|publish|measure|reduce|cleanup> CONFIG SHA256
+//! CLI: check_s3_vectors_baseline <admit|prepare-scale-canary|publish|measure|reduce|cleanup> CONFIG SHA256
 //! Receipts are create-only; calls.jsonl is append-only under CONFIG.state_dir.
 //! Cleanup has at most eight numbered attempts; measurement never resumes.
 //! Keep this directory across processes: it is the no-resume/ownership ledger.
@@ -65,7 +65,9 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 const CORPUS_SHA: &str = "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c";
 const QUERY_SHA: &str = "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e";
 const TRUTH_SHA: &str = "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c";
-const SCALE_CORPUS_SHA: &str = "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c";
+const SCALE_CONFIG_SCHEMA: &str = "borsuk-s3-vectors-scale-raw-config-v2";
+// Raw f32LE rows have implicit logical IDs 0..999999; no normalization or ID headers.
+const SCALE_CORPUS_SHA: &str = "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38";
 const SCALE_TRUTH_SHA: &str = "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -106,7 +108,7 @@ struct Context {
     sha: String,
 }
 impl Config {
-    fn canonical(&self) -> bool {
+    fn scale(&self) -> bool {
         self.mode == "scale-measurement" || self.mode == "scale-canary"
     }
     fn call_cap(&self) -> usize {
@@ -139,13 +141,6 @@ impl Config {
             128 * 1024 * 1024
         } else {
             OUTPUT_CAP
-        }
-    }
-    fn scan_corpus(&self) -> Result<Identity> {
-        if self.canonical() {
-            Ok(CanonicalCorpus::open(&self.corpus, self.rows)?.bound)
-        } else {
-            scan(&self.corpus, false, self.rows)
         }
     }
 }
@@ -289,8 +284,8 @@ fn validate_config(c: &Config) -> Result<()> {
     )?;
     require(
         c.schema
-            == if c.canonical() {
-                "borsuk-s3-vectors-scale-config-v1"
+            == if c.scale() {
+                SCALE_CONFIG_SCHEMA
             } else {
                 CONFIG_SCHEMA
             }
@@ -357,10 +352,7 @@ fn validate_config(c: &Config) -> Result<()> {
         "distinct artifact paths",
     )?;
     for (a, n) in [
-        (
-            &c.corpus,
-            c.rows * (D * 4 + if c.canonical() { 8 } else { 0 }),
-        ),
+        (&c.corpus, c.rows * D * 4),
         (&c.queries, c.count * D * 4),
         (&c.truth, c.count * K * 8),
     ] {
@@ -372,14 +364,14 @@ fn validate_config(c: &Config) -> Result<()> {
     if full {
         require(
             c.corpus.sha256
-                == if c.canonical() {
+                == if c.scale() {
                     SCALE_CORPUS_SHA
                 } else {
                     CORPUS_SHA
                 }
                 && c.queries.sha256 == QUERY_SHA
                 && c.truth.sha256
-                    == if c.canonical() {
+                    == if c.scale() {
                         SCALE_TRUTH_SHA
                     } else {
                         TRUTH_SHA
@@ -421,78 +413,12 @@ fn read_vector(f: &mut File) -> Result<Vec<f32>> {
     f.read_exact(&mut bytes)?;
     vector(&bytes)
 }
-// Canonical records retain logical IDs even when physical rows are permuted.
-// This map costs four bytes per ID; no corpus vector hydration is required.
-struct CanonicalCorpus {
-    file: File,
-    bound: Identity,
-    physical_rows: Vec<u32>,
-}
-impl CanonicalCorpus {
-    fn open(a: &Artifact, rows: usize) -> Result<Self> {
-        require(rows > 0 && rows <= 1_000_000, "canonical row domain")?;
-        let width = 8 + D * 4;
-        require(
-            a.bytes == (rows * width) as u64 && valid_sha(&a.sha256),
-            "canonical exact record length/SHA",
-        )?;
-        let mut file = open_artifact(a)?;
-        let bound = identity(&file)?;
-        let mut physical_rows = vec![u32::MAX; rows];
-        let mut digest = Sha256::new();
-        let mut record = [0u8; 8 + D * 4];
-        for physical in 0..rows {
-            file.read_exact(&mut record)?;
-            digest.update(record);
-            let signed = i64::from_le_bytes(record[..8].try_into().unwrap());
-            let id = usize::try_from(signed).map_err(|_| "negative canonical ID")?;
-            require(id < rows, "canonical ID range")?;
-            require(physical_rows[id] == u32::MAX, "duplicate canonical ID")?;
-            vector(&record[8..])?;
-            physical_rows[id] = u32::try_from(physical)?;
-        }
-        require(
-            file.read(&mut [0])? == 0
-                && identity(&file)? == bound
-                && format!("{:x}", digest.finalize()) == a.sha256,
-            "canonical SHA/EOF/identity",
-        )?;
-        require(
-            physical_rows.iter().all(|&p| p != u32::MAX),
-            "canonical complete logical ID domain",
-        )?;
-        file.seek(SeekFrom::Start(0))?;
-        Ok(Self {
-            file,
-            bound,
-            physical_rows,
-        })
-    }
-    fn vector(&mut self, id: usize) -> Result<Vec<f32>> {
-        let physical = *self.physical_rows.get(id).ok_or("canonical lookup ID")?;
-        require(
-            identity(&self.file)? == self.bound,
-            "canonical changed before readback",
-        )?;
-        self.file
-            .seek(SeekFrom::Start(u64::from(physical) * (8 + D * 4) as u64))?;
-        let mut bytes = [0u8; 8];
-        self.file.read_exact(&mut bytes)?;
-        require(
-            i64::from_le_bytes(bytes) == id as i64,
-            "canonical mapped ID changed",
-        )?;
-        let values = read_vector(&mut self.file)?;
-        require(
-            identity(&self.file)? == self.bound,
-            "canonical changed during readback",
-        )?;
-        Ok(values)
-    }
-}
 fn scan(a: &Artifact, truth: bool, rows: usize) -> Result<Identity> {
     let mut f = open_artifact(a)?;
-    let before = identity(&f)?;
+    scan_descriptor(a, &mut f, truth, rows)
+}
+fn scan_descriptor(a: &Artifact, f: &mut File, truth: bool, rows: usize) -> Result<Identity> {
+    let before = identity(f)?;
     let width = if truth { K * 8 } else { D * 4 };
     let mut row = vec![0; width];
     let mut digest = Sha256::new();
@@ -508,7 +434,7 @@ fn scan(a: &Artifact, truth: bool, rows: usize) -> Result<Identity> {
     }
     require(
         f.read(&mut [0])? == 0
-            && identity(&f)? == before
+            && identity(f)? == before
             && format!("{:x}", digest.finalize()) == a.sha256,
         "artifact SHA/EOF/identity",
     )?;
@@ -527,7 +453,7 @@ fn truth_row(bytes: &[u8], rows: usize) -> Result<Vec<u64>> {
     Ok(ids)
 }
 fn input_identities(c: &Config, include_truth: bool) -> Result<Value> {
-    let corpus = c.scan_corpus()?;
+    let corpus = scan(&c.corpus, false, c.rows)?;
     let queries = scan(&c.queries, false, c.rows)?;
     require(
         (corpus.dev, corpus.ino) != (queries.dev, queries.ino),
@@ -559,16 +485,8 @@ fn prepare_scale_canary(ctx: &Context) -> Result<()> {
     admitted(ctx, true)?;
     let root = ctx.path("scale-canary");
     std::fs::create_dir(&root)?;
-    let mut corpus = CanonicalCorpus::open(&ctx.c.corpus, ctx.c.rows)?;
-    let mut records = Vec::with_capacity(257 * (8 + D * 4));
-    // Keep original logical IDs and values; reversed physical order exercises mapping.
-    for id in (0..257).rev() {
-        records.extend_from_slice(&(id as i64).to_le_bytes());
-        for value in corpus.vector(id)? {
-            records.extend_from_slice(&value.to_le_bytes());
-        }
-    }
-    let selected_queries = authenticated_query_prefix(&ctx.c.queries, 2)?;
+    let records = authenticated_raw_prefix(&ctx.c.corpus, 257, 1_000_000)?;
+    let selected_queries = authenticated_raw_prefix(&ctx.c.queries, 2, 1000)?;
     // This is an ID-validation fixture, never an exact-GT or quality measurement.
     let truth: Vec<u8> = (0..2)
         .flat_map(|_| (0..K as u64).flat_map(u64::to_le_bytes))
@@ -594,7 +512,7 @@ fn prepare_scale_canary(ctx: &Context) -> Result<()> {
     c.rows = 257;
     c.count = 2;
     c.idle_seconds = 0;
-    c.corpus = write("canonical.bin", &records)?;
+    c.corpus = write("corpus.f32", &records)?;
     c.queries = write("queries.f32", &selected_queries)?;
     c.truth = write("validation-truth.u64", &truth)?;
     c.state_dir = root.join("state");
@@ -622,28 +540,38 @@ fn prepare_scale_canary(ctx: &Context) -> Result<()> {
         }),
     )
 }
-fn authenticated_query_prefix(a: &Artifact, count: usize) -> Result<Vec<u8>> {
+fn authenticated_raw_prefix(a: &Artifact, count: usize, max_rows: usize) -> Result<Vec<u8>> {
     require(
-        a.bytes <= (1000 * D * 4) as u64
+        max_rows <= 1_000_000
+            && a.bytes <= (max_rows * D * 4) as u64
             && a.bytes % (D * 4) as u64 == 0
             && count > 0
-            && count <= 1000
+            && count <= 257
             && (count * D * 4) as u64 <= a.bytes
             && valid_sha(&a.sha256),
-        "bounded canary query geometry/SHA",
+        "bounded canary raw geometry/SHA",
     )?;
-    // Authenticate the complete buffer read from this descriptor, then select.
-    // Independent path scans cannot authenticate bytes copied from another inode.
-    let mut bytes = read_small(&a.path, a.bytes)?;
-    require(
-        bytes.len() as u64 == a.bytes && hash(&bytes) == a.sha256,
-        "canary query full SHA/length",
-    )?;
-    for row in bytes.chunks_exact(D * 4) {
-        vector(row)?;
+    // Authenticate this descriptor's entire stream, including the unselected tail.
+    let mut file = open_artifact(a)?;
+    let before = identity(&file)?;
+    let mut digest = Sha256::new();
+    let mut prefix = Vec::with_capacity(count * D * 4);
+    let mut row = [0; D * 4];
+    for id in 0..a.bytes / (D * 4) as u64 {
+        file.read_exact(&mut row)?;
+        digest.update(row);
+        vector(&row)?;
+        if id < count as u64 {
+            prefix.extend_from_slice(&row);
+        }
     }
-    bytes.truncate(count * D * 4);
-    Ok(bytes)
+    require(
+        file.read(&mut [0])? == 0
+            && identity(&file)? == before
+            && format!("{:x}", digest.finalize()) == a.sha256,
+        "canary raw SHA/EOF/identity",
+    )?;
+    Ok(prefix)
 }
 fn admitted(ctx: &Context, truth: bool) -> Result<()> {
     validate_config(&ctx.c)?;
@@ -1179,35 +1107,15 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     check_index(c, &index)?;
     ctx.save("index-identity.json", index)?;
     let mut corpus = open_artifact(&c.corpus)?;
-    let bound = identity(&corpus)?;
-    let mut canonical = if c.canonical() {
-        Some(CanonicalCorpus::open(&c.corpus, c.rows)?)
-    } else {
-        None
-    };
+    // Authenticate the exact upload descriptor before publishing any payload.
+    let bound = scan_descriptor(&c.corpus, &mut corpus, false, c.rows)?;
+    corpus.rewind()?;
     let mut last_put: Option<Instant> = None;
     let mut put_calls = 0;
     for first in (0..c.rows).step_by(500) {
         let end = (first + 500).min(c.rows);
         let mut batch = Vec::with_capacity(end - first);
-        for physical in first..end {
-            let id = if c.canonical() {
-                let mut bytes = [0u8; 8];
-                corpus.read_exact(&mut bytes)?;
-                let id = usize::try_from(i64::from_le_bytes(bytes))?;
-                require(id < c.rows, "canonical upload ID range")?;
-                require(
-                    canonical
-                        .as_ref()
-                        .ok_or("canonical map absent")?
-                        .physical_rows[id] as usize
-                        == physical,
-                    "canonical upload ID/map disagreement",
-                )?;
-                id
-            } else {
-                physical
-            };
+        for id in first..end {
             batch.push(
                 PutInputVector::builder()
                     .key(key(id))
@@ -1307,12 +1215,8 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
             )?;
             let values: Vec<f32> = serde_json::from_value(v["data"]["float32"].clone())?;
             require(values.len() == D, "readback dimension")?;
-            let original = if let Some(canonical) = canonical.as_mut() {
-                canonical.vector(id)?
-            } else {
-                corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
-                read_vector(&mut corpus)?
-            };
+            corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
+            let original = read_vector(&mut corpus)?;
             require(
                 values
                     .iter()
@@ -1323,7 +1227,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
         }
     }
     require(
-        identity(&corpus)? == bound && c.scan_corpus()? == bound,
+        identity(&corpus)? == bound && scan(&c.corpus, false, c.rows)? == bound,
         "post-readback corpus binding",
     )?;
     require(
@@ -1973,71 +1877,104 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn canonical_fixture(root: &Path, ids: &[i64]) -> Artifact {
-        let mut bytes = Vec::new();
-        for &id in ids {
-            bytes.extend_from_slice(&id.to_le_bytes());
-            for dimension in 0..D {
-                let value = if dimension == 0 { id as f32 + 1.0 } else { 0.0 };
-                bytes.extend_from_slice(&value.to_le_bytes());
+    #[test]
+    fn scale_raw_prefix_preserves_ordinal_ids_and_f32_bits_through_row_256() {
+        let (_dir, ctx) = scale_fixture();
+        let mut a = ctx.c.corpus.clone();
+        let mut raw = std::fs::read(&a.path).unwrap();
+        let prefix = raw.clone();
+        // The unselected row must still be authenticated.
+        raw.extend_from_slice(&prefix[..D * 4]);
+        std::fs::write(&a.path, &raw).unwrap();
+        a.bytes = raw.len() as u64;
+        a.sha256 = hash(&raw);
+        let copied = authenticated_raw_prefix(&a, 257, 1_000_000).unwrap();
+        assert_eq!(copied, prefix);
+        assert_eq!(copied.len(), 257 * D * 4);
+        for id in [0, 255, 256] {
+            let row = vector(&copied[id * D * 4..(id + 1) * D * 4]).unwrap();
+            assert_eq!(row[id].to_bits(), (1.0 + id as f32 / 1024.0).to_bits());
+            assert_eq!(row[D - 1].to_bits(), 0x80000000);
+            assert_eq!(row[D - 2].to_bits(), 1);
+            assert_eq!(row[D - 3].to_bits(), 0x80000001);
+            assert_eq!(ordinal(&key(id), 257).unwrap(), id);
+        }
+        assert_eq!(key(256), "000256");
+        raw[257 * D * 4] ^= 1;
+        std::fs::write(&a.path, &raw).unwrap();
+        assert!(authenticated_raw_prefix(&a, 257, 1_000_000).is_err());
+    }
+    #[test]
+    fn scale_raw_prefix_refuses_sha_length_geometry_and_nonfinite_vectors() {
+        let (_dir, ctx) = scale_fixture();
+        let original = std::fs::read(&ctx.c.corpus.path).unwrap();
+        for fault in [
+            "sha",
+            "truncated",
+            "header",
+            "nan",
+            "zero",
+            "tail_nan",
+            "tail_zero",
+        ] {
+            let mut a = ctx.c.corpus.clone();
+            let mut bytes = original.clone();
+            match fault {
+                "sha" => a.sha256 = "0".repeat(64),
+                "truncated" => {
+                    bytes.pop();
+                }
+                "header" => {
+                    bytes.splice(..0, 0i64.to_le_bytes());
+                }
+                "nan" => bytes[..4].copy_from_slice(&f32::NAN.to_le_bytes()),
+                "zero" => bytes[..D * 4].fill(0),
+                "tail_nan" | "tail_zero" => {
+                    let mut row = [0; D * 4];
+                    if fault == "tail_nan" {
+                        row[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+                    }
+                    bytes.extend_from_slice(&row);
+                    a.bytes = bytes.len() as u64;
+                }
+                _ => unreachable!(),
             }
+            if matches!(fault, "nan" | "zero" | "tail_nan" | "tail_zero") {
+                a.sha256 = hash(&bytes);
+            }
+            std::fs::write(&a.path, &bytes).unwrap();
+            assert!(
+                authenticated_raw_prefix(&a, 257, 1_000_000).is_err(),
+                "{fault}"
+            );
         }
-        let path = root.join("canonical.bin");
-        std::fs::write(&path, &bytes).unwrap();
-        Artifact {
-            path,
-            bytes: bytes.len() as u64,
-            sha256: hash(&bytes),
+        std::fs::write(&ctx.c.corpus.path, &original).unwrap();
+        for (count, cap) in [(0, 1_000_000), (258, 1_000_000), (257, 256)] {
+            assert!(authenticated_raw_prefix(&ctx.c.corpus, count, cap).is_err());
         }
-    }
-    #[test]
-    fn canonical_permuted_records_preserve_logical_ids_and_score_bits() {
-        let dir = tempfile::tempdir().unwrap();
-        let a = canonical_fixture(dir.path(), &[2, 0, 1]);
-        let mut corpus = CanonicalCorpus::open(&a, 3).unwrap();
-        assert_eq!(corpus.physical_rows, [1, 2, 0]);
-        for id in [0, 2, 1] {
-            let values = corpus.vector(id).unwrap();
-            assert_eq!(values[0].to_bits(), (id as f32 + 1.0).to_bits());
-            assert!(values[1..].iter().all(|v| v.to_bits() == 0));
-        }
-        assert!(corpus.vector(3).is_err());
-    }
-    #[test]
-    fn canonical_records_refuse_wrong_ids_sha_length_and_nonfinite_vectors() {
-        let dir = tempfile::tempdir().unwrap();
-        for ids in [[0, 0, 2], [-1, 0, 2], [0, 1, 3]] {
-            let a = canonical_fixture(dir.path(), &ids);
-            assert!(CanonicalCorpus::open(&a, 3).is_err());
-        }
-        let mut a = canonical_fixture(dir.path(), &[2, 0, 1]);
-        a.sha256 = "0".repeat(64);
-        assert!(CanonicalCorpus::open(&a, 3).is_err());
-        a = canonical_fixture(dir.path(), &[2, 0, 1]);
+        let mut a = ctx.c.corpus.clone();
         a.bytes -= 1;
-        assert!(CanonicalCorpus::open(&a, 3).is_err());
-        a = canonical_fixture(dir.path(), &[2, 0, 1]);
-        let mut bytes = std::fs::read(&a.path).unwrap();
-        bytes[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
-        std::fs::write(&a.path, &bytes).unwrap();
-        a.sha256 = hash(&bytes);
-        assert!(CanonicalCorpus::open(&a, 3).is_err());
+        assert!(authenticated_raw_prefix(&a, 1, 1_000_000).is_err());
+        a = ctx.c.corpus.clone();
+        a.sha256 = "invalid".into();
+        assert!(authenticated_raw_prefix(&a, 1, 1_000_000).is_err());
     }
     #[test]
-    fn scale_config_binds_exact_canonical_workload_and_operation_envelope() {
+    fn scale_config_binds_exact_original_raw_workload_and_operation_envelope() {
         let dir = tempfile::tempdir().unwrap();
         let mut c = fixture_config(dir.path());
         c.mode = "scale-measurement".into();
-        c.schema = "borsuk-s3-vectors-scale-config-v1".into();
+        c.schema = "borsuk-s3-vectors-scale-raw-config-v2".into();
         c.rows = 1_000_000;
         c.count = 1000;
         c.idle_seconds = 3600;
-        c.corpus.bytes = (1_000_000 * (8 + D * 4)) as u64;
-        c.corpus.sha256 = SCALE_CORPUS_SHA.into();
-        c.queries.bytes = (1000 * D * 4) as u64;
-        c.queries.sha256 = QUERY_SHA.into();
-        c.truth.bytes = (1000 * K * 8) as u64;
-        c.truth.sha256 = SCALE_TRUTH_SHA.into();
+        c.corpus.bytes = 4_096_000_000;
+        c.corpus.sha256 = "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38".into();
+        c.queries.bytes = 4_096_000;
+        c.queries.sha256 =
+            "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e".into();
+        c.truth.bytes = 80_000;
+        c.truth.sha256 = "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f".into();
         std::fs::create_dir(&c.state_dir).unwrap();
         validate_config(&c).unwrap();
         assert_eq!(c.call_cap(), 22_000);
@@ -2048,14 +1985,44 @@ mod tests {
             c.call_cap()
                 >= c.rows.div_ceil(500) + c.list_page_cap() + c.rows.div_ceil(100) + c.count + 32
         );
-        c.schema = CONFIG_SCHEMA.into();
-        assert!(validate_config(&c).is_err());
-        c.schema = "borsuk-s3-vectors-scale-config-v1".into();
-        c.corpus.bytes = (c.rows * D * 4) as u64;
-        assert!(validate_config(&c).is_err());
-        c.corpus.bytes += (c.rows * 8) as u64;
-        c.truth.sha256 = TRUTH_SHA.into();
-        assert!(validate_config(&c).is_err());
+        for marker in [CONFIG_SCHEMA, "borsuk-s3-vectors-scale-config-v1"] {
+            let mut bad = c.clone();
+            bad.schema = marker.into();
+            assert!(validate_config(&bad).is_err(), "{marker}");
+        }
+        for sha in [
+            CORPUS_SHA,
+            "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+            "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        ] {
+            let mut bad = c.clone();
+            bad.corpus.sha256 = sha.into();
+            assert!(validate_config(&bad).is_err(), "{sha}");
+        }
+        let mutations: [fn(&mut Config); 13] = [
+            |c| c.corpus.bytes = 4_104_000_000,
+            |c| c.corpus.bytes -= 1,
+            |c| c.rows = 100_000,
+            |c| c.count = 2,
+            |c| c.dimensions -= 1,
+            |c| c.k -= 1,
+            |c| c.metric = "euclidean".into(),
+            |c| c.idle_seconds = 0,
+            |c| c.query_interval_ms = 1,
+            |c| c.queries.sha256 = "0".repeat(64),
+            |c| c.queries.bytes -= 1,
+            |c| c.truth.sha256 = TRUTH_SHA.into(),
+            |c| c.truth.bytes -= 1,
+        ];
+        for (id, mutate) in mutations.iter().enumerate() {
+            let mut bad = c.clone();
+            mutate(&mut bad);
+            assert!(validate_config(&bad).is_err(), "mutation {id}");
+        }
+        let (_dir, mut canary) = scale_fixture();
+        validate_config(&canary.c).unwrap();
+        canary.c.schema = "borsuk-s3-vectors-scale-config-v1".into();
+        assert!(validate_config(&canary.c).is_err());
         let historical = fixture_config(dir.path());
         assert_eq!(historical.call_cap(), CALL_CAP);
         assert_eq!(historical.list_page_cap(), LIST_PAGE_CAP);
@@ -2072,6 +2039,10 @@ mod tests {
     struct Mock {
         calls: AtomicUsize,
         queries: AtomicUsize,
+        query_bytes: Vec<u8>,
+        put_calls: AtomicUsize,
+        get_calls: AtomicUsize,
+        replace_corpus: Mutex<Option<(PathBuf, PathBuf)>>,
         corpus: Mutex<BTreeMap<String, Vec<f32>>>,
         underfill: bool,
         fail_query: bool,
@@ -2164,12 +2135,17 @@ mod tests {
                 s.create_calls.fetch_add(1, Ordering::SeqCst);
                 json!({"indexArn":index_arn(&fixture_config(Path::new("/tmp")))})
             }
-            "/GetIndex" => json!({"index":{
-                "indexName":fixture_config(Path::new("/tmp")).index,
-                "indexArn":index_arn(&fixture_config(Path::new("/tmp"))),
-                "vectorBucketName":fixture_config(Path::new("/tmp")).bucket,
-                "creationTime":if s.replace_index.load(Ordering::SeqCst) {1700000101.0} else {1700000001.0},
-                "dataType":"float32","dimension":D,"distanceMetric":"cosine"}}),
+            "/GetIndex" => {
+                if let Some((replacement, target)) = s.replace_corpus.lock().unwrap().take() {
+                    std::fs::rename(replacement, target).unwrap();
+                }
+                json!({"index":{
+                    "indexName":fixture_config(Path::new("/tmp")).index,
+                    "indexArn":index_arn(&fixture_config(Path::new("/tmp"))),
+                    "vectorBucketName":fixture_config(Path::new("/tmp")).bucket,
+                    "creationTime":if s.replace_index.load(Ordering::SeqCst) {1700000101.0} else {1700000001.0},
+                    "dataType":"float32","dimension":D,"distanceMetric":"cosine"}})
+            }
             "/ListIndexes" => {
                 let mut indexes = if s.index_deleted.load(Ordering::SeqCst) {
                     vec![]
@@ -2194,6 +2170,7 @@ mod tests {
                 json!({})
             }
             "/PutVectors" => {
+                s.put_calls.fetch_add(1, Ordering::SeqCst);
                 let mut rows = s.corpus.lock().unwrap();
                 for v in body["vectors"].as_array().unwrap() {
                     let values: Vec<f32> =
@@ -2249,6 +2226,7 @@ mod tests {
                 response
             }
             "/GetVectors" => {
+                s.get_calls.fetch_add(1, Ordering::SeqCst);
                 let rows = s.corpus.lock().unwrap();
                 json!({"vectors":body["keys"].as_array().unwrap().iter().map(|k| {
                     let mut values = rows[k.as_str().unwrap()].clone();
@@ -2262,14 +2240,22 @@ mod tests {
                 assert_eq!(body["returnDistance"], true);
                 assert_eq!(body["returnMetadata"], false);
                 assert!(body.get("filter").is_none());
+                let query: Vec<f32> =
+                    serde_json::from_value(body["queryVector"]["float32"].clone()).unwrap();
+                assert_eq!(query.len(), D);
+                let expected = &s.query_bytes[ordinal * D * 4..(ordinal + 1) * D * 4];
+                for (value, bytes) in query.iter().zip(expected.chunks_exact(4)) {
+                    assert_eq!(
+                        value.to_bits(),
+                        u32::from_le_bytes(bytes.try_into().unwrap())
+                    );
+                }
                 if s.oversized_response {
                     json!({"vectors":[],"padding":"x".repeat(RESPONSE_CAP+1)})
                 } else if s.fail_query && ordinal == 1 {
                     status = StatusCode::SERVICE_UNAVAILABLE;
                     json!({"__type":"ServiceUnavailableException","message":"single attempt fixture"})
                 } else {
-                    let query: Vec<f32> =
-                        serde_json::from_value(body["queryVector"]["float32"].clone()).unwrap();
                     let mut scores: Vec<_> = s
                         .corpus
                         .lock()
@@ -2368,13 +2354,22 @@ mod tests {
                     1.0 + id as f32 / 1024.0
                 } else if dim == D - 1 {
                     -0.0
+                } else if dim == D - 2 {
+                    f32::from_bits(1)
+                } else if dim == D - 3 {
+                    f32::from_bits(0x80000001)
                 } else {
                     0.0
                 };
                 corpus.extend_from_slice(&value.to_le_bytes());
             }
         }
-        let queries = [&corpus[..D * 4], &corpus[256 * D * 4..257 * D * 4]].concat();
+        // Exact positive scaling preserves the rank oracle while detecting query normalization.
+        let queries: Vec<u8> = [&corpus[..D * 4], &corpus[256 * D * 4..257 * D * 4]]
+            .concat()
+            .chunks_exact(4)
+            .flat_map(|bytes| (2.0 * f32::from_le_bytes(bytes.try_into().unwrap())).to_le_bytes())
+            .collect();
         let truth: Vec<u8> = [
             vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
             vec![256, 0, 1, 2, 3, 4, 5, 6, 7, 8],
@@ -2396,6 +2391,27 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, &bytes).unwrap();
         let ctx = load(&path, &hash(&bytes)).unwrap();
+        (dir, ctx)
+    }
+    fn scale_fixture() -> (tempfile::TempDir, Context) {
+        let (dir, mut ctx) = fixture();
+        let raw = std::fs::read(&ctx.c.corpus.path).unwrap();
+        let queries = std::fs::read(&ctx.c.queries.path).unwrap();
+        let truth: Vec<u8> = (0..2)
+            .flat_map(|_| (0..K as u64).flat_map(u64::to_le_bytes))
+            .collect();
+        for (a, bytes) in [
+            (&mut ctx.c.corpus, raw),
+            (&mut ctx.c.queries, queries),
+            (&mut ctx.c.truth, truth),
+        ] {
+            a.bytes = bytes.len() as u64;
+            a.sha256 = hash(&bytes);
+            std::fs::write(&a.path, &bytes).unwrap();
+        }
+        ctx.c.mode = "scale-canary".into();
+        ctx.c.schema = "borsuk-s3-vectors-scale-raw-config-v2".into();
+        ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
         (dir, ctx)
     }
     fn watch_truth(ctx: &Context) {
@@ -2428,19 +2444,19 @@ mod tests {
         let (_dir, ctx) = fixture();
         let original = std::fs::read(&ctx.c.queries.path).unwrap();
         assert_eq!(
-            authenticated_query_prefix(&ctx.c.queries, 1).unwrap(),
+            authenticated_raw_prefix(&ctx.c.queries, 1, 1000).unwrap(),
             original[..D * 4]
         );
         let mut replacement = original.clone();
         let last = replacement.len() - 1;
         replacement[last] ^= 0x80;
         std::fs::write(&ctx.c.queries.path, &replacement).unwrap();
-        let failure = authenticated_query_prefix(&ctx.c.queries, 1).unwrap_err();
-        assert!(failure.to_string().contains("canary query full SHA/length"));
+        let failure = authenticated_raw_prefix(&ctx.c.queries, 1, 1000).unwrap_err();
+        assert!(failure.to_string().contains("canary raw SHA/EOF/identity"));
         std::fs::write(&ctx.c.queries.path, &original).unwrap();
         scan(&ctx.c.queries, false, ctx.c.rows).unwrap();
         assert_eq!(
-            authenticated_query_prefix(&ctx.c.queries, 2).unwrap(),
+            authenticated_raw_prefix(&ctx.c.queries, 2, 1000).unwrap(),
             original
         );
     }
@@ -2467,26 +2483,13 @@ mod tests {
         output.sync().unwrap();
     }
     #[tokio::test]
-    async fn canonical_sdk_publication_readback_measurement_and_cleanup() {
-        let (_dir, mut ctx) = fixture();
+    async fn scale_raw_sdk_publication_readback_measurement_and_cleanup() {
+        let (_dir, ctx) = scale_fixture();
         let raw = std::fs::read(&ctx.c.corpus.path).unwrap();
-        let mut records = Vec::new();
-        for id in (0..ctx.c.rows).rev() {
-            records.extend_from_slice(&(id as i64).to_le_bytes());
-            records.extend_from_slice(&raw[id * D * 4..(id + 1) * D * 4]);
-        }
-        std::fs::write(&ctx.c.corpus.path, &records).unwrap();
-        ctx.c.corpus.bytes = records.len() as u64;
-        ctx.c.corpus.sha256 = hash(&records);
-        ctx.c.mode = "scale-canary".into();
-        ctx.c.schema = "borsuk-s3-vectors-scale-config-v1".into();
-        let validation_truth: Vec<u8> = (0..2)
-            .flat_map(|_| (0..K as u64).flat_map(u64::to_le_bytes))
-            .collect();
-        std::fs::write(&ctx.c.truth.path, &validation_truth).unwrap();
-        ctx.c.truth.sha256 = hash(&validation_truth);
-        ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
-        let mock = Arc::new(Mock::default());
+        let mock = Arc::new(Mock {
+            query_bytes: std::fs::read(&ctx.c.queries.path).unwrap(),
+            ..Mock::default()
+        });
         let (service, server) = mock_service(mock.clone()).await;
         admit(&ctx).unwrap();
         publish(&ctx, &service).await.unwrap();
@@ -2516,6 +2519,19 @@ mod tests {
         let header = line(&mut response_reader).unwrap().unwrap();
         assert_eq!(header["claims_quality"], false);
         assert_eq!(header["claims_performance"], false);
+        for expected in [
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            vec![256, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        ] {
+            let response = line(&mut response_reader).unwrap().unwrap();
+            let hits: Vec<Hit> = serde_json::from_value(response["hits"].clone()).unwrap();
+            assert_eq!(
+                hits.iter().map(|hit| hit.key.clone()).collect::<Vec<_>>(),
+                expected.into_iter().map(key).collect::<Vec<_>>()
+            );
+            assert_eq!(hits[0].distance_bits, 0.0f32.to_bits());
+        }
+        assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
         let seal_receipt: Value = serde_json::from_slice(
             &read_small(&ctx.path("response-seal.json"), CONFIG_CAP).unwrap(),
         )
@@ -2542,10 +2558,98 @@ mod tests {
         server.abort();
     }
     #[tokio::test]
+    async fn scale_raw_sdk_replaced_corpus_refused_before_put_and_readback() {
+        let (_dir, ctx) = scale_fixture();
+        admit(&ctx).unwrap();
+        let original = std::fs::read(&ctx.c.corpus.path).unwrap();
+        let mut replacement = original.clone();
+        replacement[..4].copy_from_slice(&2.0f32.to_le_bytes());
+        assert_eq!(replacement.len(), original.len());
+        assert_ne!(hash(&replacement), ctx.c.corpus.sha256);
+        for row in replacement.chunks_exact(D * 4) {
+            vector(row).unwrap();
+        }
+        let replacement_path = ctx.c.corpus.path.with_extension("replacement");
+        std::fs::write(&replacement_path, &replacement).unwrap();
+        let mock = Arc::new(Mock {
+            replace_corpus: Mutex::new(Some((replacement_path, ctx.c.corpus.path.clone()))),
+            ..Mock::default()
+        });
+        let (service, server) = mock_service(mock.clone()).await;
+        let error = publish(&ctx, &service).await.unwrap_err();
+        assert!(error.to_string().contains("artifact SHA/EOF/identity"));
+        assert!(mock.replace_corpus.lock().unwrap().is_none());
+        assert_eq!(mock.create_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(mock.put_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(mock.list_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(mock.get_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(mock.queries.load(Ordering::SeqCst), 0);
+        assert!(mock.corpus.lock().unwrap().is_empty());
+        assert!(!ctx.path("published.json").exists());
+        assert_eq!(ctx.c.corpus.sha256, hash(&original));
+        assert_eq!(
+            ctx.receipt("admission.json").unwrap()["corpus_sha256"],
+            ctx.c.corpus.sha256
+        );
+        let log = std::fs::read_to_string(ctx.path("publish.jsonl")).unwrap();
+        let terminal: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(terminal["status"], "INVALID");
+        cleanup(&ctx, &service).await.unwrap();
+        assert_eq!(mock.delete_calls.load(Ordering::SeqCst), 2);
+        assert!(mock.index_deleted.load(Ordering::SeqCst));
+        assert!(mock.bucket_deleted.load(Ordering::SeqCst));
+        assert_eq!(
+            ctx.receipt("cleanup.json").unwrap()["calls"]["unconfirmed_reservations"],
+            0
+        );
+        let calls = mock.calls.load(Ordering::SeqCst);
+        cleanup(&ctx, &service).await.unwrap();
+        assert_eq!(mock.calls.load(Ordering::SeqCst), calls);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn scale_raw_invalid_inputs_make_zero_api_calls() {
+        let mock = Arc::new(Mock::default());
+        let (service, server) = mock_service(mock.clone()).await;
+        for admitted_first in [false, true] {
+            for fault in ["sha", "truncated", "header", "nan", "zero"] {
+                let (_dir, mut ctx) = scale_fixture();
+                if admitted_first {
+                    admit(&ctx).unwrap();
+                }
+                let a = &mut ctx.c.corpus;
+                let mut bytes = std::fs::read(&a.path).unwrap();
+                match fault {
+                    "sha" => bytes[0] ^= 1,
+                    "truncated" => {
+                        bytes.pop();
+                    }
+                    "header" => {
+                        bytes.splice(..0, 0i64.to_le_bytes());
+                    }
+                    "nan" => bytes[..4].copy_from_slice(&f32::NAN.to_le_bytes()),
+                    "zero" => bytes[..D * 4].fill(0),
+                    _ => unreachable!(),
+                }
+                if matches!(fault, "nan" | "zero") && !admitted_first {
+                    a.sha256 = hash(&bytes);
+                }
+                std::fs::write(&a.path, &bytes).unwrap();
+                if !admitted_first {
+                    assert!(admit(&ctx).is_err(), "{fault}");
+                }
+                assert!(publish(&ctx, &service).await.is_err(), "{fault}");
+                assert_eq!(mock.calls.load(Ordering::SeqCst), 0, "{fault}");
+            }
+        }
+        server.abort();
+    }
+    #[tokio::test]
     async fn sdk_fixture_identity_recall_and_underfill() {
         for (underfill, expected) in [(false, 20), (true, 17)] {
             let (_dir, ctx) = fixture();
             let mock = Arc::new(Mock {
+                query_bytes: std::fs::read(&ctx.c.queries.path).unwrap(),
                 underfill,
                 ..Mock::default()
             });
@@ -2651,6 +2755,7 @@ mod tests {
     async fn sdk_503_is_one_attempt_and_truth_stays_unopened() {
         let (_dir, ctx) = fixture();
         let mock = Arc::new(Mock {
+            query_bytes: std::fs::read(&ctx.c.queries.path).unwrap(),
             fail_query: true,
             ..Mock::default()
         });
@@ -2679,6 +2784,7 @@ mod tests {
         server.abort();
         let (_dir, ctx) = fixture();
         let mock = Arc::new(Mock {
+            query_bytes: std::fs::read(&ctx.c.queries.path).unwrap(),
             oversized_response: true,
             ..Mock::default()
         });
@@ -2731,7 +2837,10 @@ mod tests {
     async fn seal_sync_tamper_and_partial_refused() {
         for fault in ["sync", "directory_sync", "missing", "tamper", "partial"] {
             let (_dir, ctx) = fixture();
-            let mock = Arc::new(Mock::default());
+            let mock = Arc::new(Mock {
+                query_bytes: std::fs::read(&ctx.c.queries.path).unwrap(),
+                ..Mock::default()
+            });
             let (service, server) = mock_service(mock.clone()).await;
             admit(&ctx).unwrap();
             publish(&ctx, &service).await.unwrap();

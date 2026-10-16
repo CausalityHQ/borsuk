@@ -1,0 +1,197 @@
+{
+  "schema": "borsuk-s3vectors-raw-delivery-verification-v1",
+  "status": "SOURCE_AND_AUTHENTICATION_QUALIFIED",
+  "verified_utc": "2026-10-16T16:48:51Z",
+  "canonical_destination": "docs/research/performance-architecture-20260930/s3vectors-original-raw-input-20261016/",
+  "execution": {
+    "instance_id": "i-04933959e7bb82dfc",
+    "region": "eu-central-1",
+    "controller_profile": "causality",
+    "access": "SSM only"
+  },
+  "source": {
+    "checkout": "/mnt/borsuk-workspace/release-next-source",
+    "head": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+    "base": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+    "clean": true,
+    "changed_files": [
+      "crates/borsuk/src/bin/check_s3_vectors_baseline.rs"
+    ],
+    "sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c"
+  },
+  "release_binary": {
+    "path": "/mnt/borsuk-workspace/artifacts/s3vectors-original-raw-release-a0003/check_s3_vectors_baseline",
+    "format": "ELF x86-64",
+    "sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da",
+    "note": "The publication packet includes its hash receipt, not the ELF itself."
+  },
+  "protocol": {
+    "scale_schema": "borsuk-s3-vectors-scale-raw-config-v2",
+    "layout": "Original unnormalized f32LE rows, no ID headers; implicit zero-based corpus ordinals.",
+    "rows": 1000000,
+    "dimensions": 1024,
+    "queries": 1000,
+    "k": 10,
+    "metric": "cosine",
+    "corpus_sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+    "queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+    "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "existing_100k_behavior": "unchanged",
+    "pin_verification": "Source constants inspected; dataset payloads and exhaustive truth were not reread or recomputed."
+  },
+  "native_qualification": {
+    "ssm_command_id": "c49e7aba-af35-4a47-9ab9-43922ccd4f75",
+    "ssm_status": "Success",
+    "response_code": 0,
+    "unit": "borsuk-raw-sdk-gates-a0003.service",
+    "evidence_dir": "/mnt/borsuk-workspace/evidence/s3vectors-original-raw-gates-a0003",
+    "terminal_status": "RAW_SDK_NATIVE_GATES_CLOSED_0",
+    "stages": [
+      {
+        "stage": "debug-tests",
+        "exit_code": 0,
+        "passed": 16,
+        "failed": 0
+      },
+      {
+        "stage": "release-tests",
+        "exit_code": 0,
+        "passed": 16,
+        "failed": 0
+      },
+      {
+        "stage": "release",
+        "exit_code": 0
+      },
+      {
+        "stage": "clippy",
+        "exit_code": 0
+      },
+      {
+        "stage": "testbuild",
+        "exit_code": 0
+      }
+    ],
+    "commands_record": "run.sh; each stage has a .log and .exit file; terminal.json binds source and test counts.",
+    "clippy_scope": "--locked --workspace --all-targets --features borsuk/s3-vectors-bench -- -D clippy::correctness -D clippy::suspicious; other warnings remain.",
+    "testbuild_command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=4 CARGO_BUILD_JOBS=4 bash scripts/check_rust_test_build.sh",
+    "verification_method": "Read retained script, stage exits, test summaries, terminal receipt and original SSM result; no rerun."
+  },
+  "review_and_repair": {
+    "reviewed_candidate": "b813378f3303b201d750f28f3c0d7d6093d8e96a",
+    "full_review_path": "/mnt/borsuk-workspace/evidence/s3vectors-raw-descriptor-repair-reviews/full-reviews.json",
+    "full_review_sha256": "c4706b20fab5f57f9ff16aa1be55b9aa45ad9c84c8d192590f0daf28c14dde05",
+    "must_fix": "Authenticate and rewind the exact upload descriptor before the first PutVectors; retain identity/EOF and post-readback binding.",
+    "targeted_checks": [
+      {
+        "test": "scale_raw_sdk_replaced_corpus_refused_before_put_and_readback",
+        "assertion": "Same-length finite corpus replaced at GetIndex; zero PutVectors/ListVectors/GetVectors/QueryVectors, no published receipt; cleanup succeeds."
+      },
+      {
+        "test": "scale_raw_prefix_refuses_sha_length_geometry_and_nonfinite_vectors",
+        "assertion": "Unselected NaN and zero rows are appended and rehashed before rejection."
+      },
+      {
+        "test": "scale_raw_sdk_publication_readback_measurement_and_cleanup",
+        "assertion": "Loopback SDK endpoint checks every decoded query f32 bit against nonunit inputs including signed zero and positive/negative subnormals."
+      }
+    ],
+    "qualification_limit": "The full independent review concerns b813378, before repair. This delivery inspected repaired source and retained passing native gates; it did not commission another review.",
+    "repaired_functions": [
+      "scan_descriptor",
+      "publish"
+    ]
+  },
+  "retained_history": [
+    {
+      "ssm_command_id": "4523feb8-7193-4878-a72b-2ca0c38fa344",
+      "response_code": 101,
+      "classification": "ENVIRONMENT_INVALID",
+      "evidence_dir": "/mnt/borsuk-workspace/evidence/s3vectors-original-raw-gates-a0001",
+      "reason": "Sparse checkout lacked crates/borsuk-fma/Cargo.toml; no algorithm rejection."
+    },
+    {
+      "source": "b813378f3303b201d750f28f3c0d7d6093d8e96a",
+      "evidence_dir": "/mnt/borsuk-workspace/evidence/s3vectors-original-raw-gates-a0002",
+      "stage_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "debug_passed": 15,
+      "release_passed": 15,
+      "disposition": "Passing native gates did not resolve the subsequent review finding; superseded by repaired ab9243b qualification."
+    }
+  ],
+  "publication_packet": {
+    "ssm_command_id": "ae3fd624-b9d9-4739-b3a3-27f6c6610fe3",
+    "ssm_status": "Success",
+    "response_code": 0,
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "prefix": "research/semantic-router/20261016/persistent-rust-workspace-a0001/s3vectors-raw-qualified-a0001/",
+    "local_dir": "/mnt/borsuk-workspace/evidence/s3vectors-raw-qualified-a0001",
+    "create_only": "Original command used PutObject --if-none-match '*' for all six objects.",
+    "checks": "Local SHA256SUMS verified; S3 HEAD sizes and single-part AES256 ETags match local bytes/MD5 for all six objects.",
+    "artifacts": [
+      {
+        "file": "change.patch",
+        "bytes": 38968,
+        "sha256": "2658d309928b591fe5eea89d387f1e3dd651ae336a0eefd326a6d4050333396d"
+      },
+      {
+        "file": "source.sha256",
+        "bytes": 117,
+        "sha256": "0f8f67c968f3a23c0ae7244bec9d25e907ca41b115eb899abf9edcc9fc23211a"
+      },
+      {
+        "file": "binary.sha256",
+        "bytes": 161,
+        "sha256": "c37b4dac62d05e695bddf02303a0ba9a49f6f7b51c4660eec2c5f68c01b9ce2f"
+      },
+      {
+        "file": "qualification.tar.gz",
+        "bytes": 153973,
+        "sha256": "4943ae09f890050050bfa7c4f8a4e3ef0e62e5b7757e32a06d862df3886da69f"
+      },
+      {
+        "file": "source.tar.gz",
+        "bytes": 29182,
+        "sha256": "73d9f641f57fa35dc1d586bff7c114fcd34d2affe5dbb22d4af183466cd6fb71"
+      },
+      {
+        "file": "SHA256SUMS",
+        "bytes": 406
+      }
+    ],
+    "source_archive_scope": "Only crates/borsuk/src/bin/check_s3_vectors_baseline.rs."
+  },
+  "verification_ssm_receipts": [
+    "de57984b-3497-440a-8ae6-f97144fd1226",
+    "6243c1ae-70b6-4a10-b073-370c35cf5573",
+    "25ceaa14-819a-43b4-accd-a3600b9e1d8f",
+    "8feed0e6-677f-44ba-a441-9bfe6a73d60d",
+    "0068ffd2-f95d-4bb3-be65-57ca813863af"
+  ],
+  "claims": {
+    "source_and_authentication_qualification": true,
+    "real_s3vectors_canary": false,
+    "real_s3vectors_import": false,
+    "quality": false,
+    "performance": false,
+    "competitor_win": false
+  },
+  "outstanding": [
+    "Actual original-raw 1M admission",
+    "Separate real S3 Vectors service canary and bit-exact readback",
+    "Authorized full import, frozen measurement and cleanup",
+    "Matched quality, latency, throughput and total-cost evidence"
+  ],
+  "handoff": {
+    "integration_owner": "borsuk/prod-ready-v9",
+    "worker_commit": null,
+    "reason": "Documentation-only evidence outside Git; root alone integrates and pushes.",
+    "ebs_deadline_utc": "2026-10-16T17:32:00Z"
+  }
+}
