@@ -132,3 +132,20 @@ perspectives; do not add ceremonial panels to trivial tasks.
 Retain valid quality gains as Pareto improvements even when memory or runtime
 targets miss, then optimize efficiency while preserving quality. Operational
 hard ceilings, measurement validity and spending authorization still apply.
+
+## Routine execution and research acceptance
+
+Execute routine reversible commands needed for authorized work autonomously.
+Existing authorization persists; do not ask the operator to select normal
+reads, checks, builds or continuation commands. Escalate concrete destructive,
+credential, shared-job ownership or new-spend blockers. Report provider
+permission UI problems to Devbox/main with exact evidence; do not bypass guards.
+
+Keep the incumbent and reproducible quality, latency, memory and lifecycle-cost
+Pareto candidates. A quality gain is research progress even if a prior efficiency
+target misses; optimize efficiency next while preserving quality. Research
+acceptance does not establish production readiness. Use one causal intervention
+and the cheapest valid paired check per iteration. Hard operational safety and
+spend ceilings still apply. Preserve incomplete, OOM and corrupt attempts as
+execution INVALID, and prospectively qualify feasible envelopes; never revise
+historical outcomes or scientific thresholds after seeing results.
