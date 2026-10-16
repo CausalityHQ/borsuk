@@ -32,8 +32,75 @@ snapshot bound to the head. Pass that snapshot to `TwoBitIndex::search` to
 include pending updates and suppress replaced or deleted base IDs before top-k.
 
 `two_bit_compaction::compact_two_bit_index` merges canonical source and pending
-mutations into a replacement generation. `two_bit_gc::collect_two_bit_garbage`
-performs bounded cleanup under lifecycle coordination and a durable write fence.
+mutations into a replacement generation. GC uses an owned, non-cloneable session:
+
+```rust,ignore
+let mut session =
+    two_bit_gc::TwoBitGcSession::new(store, &prefix, &maintenance_directory)?;
+let report = two_bit_gc::collect_two_bit_garbage(&mut session, limits).await?;
+```
+
+The constructor is fallible and binds the store, prefix and directory for the
+session's lifetime. Reuse that session across capped calls. It retains the SDK's
+unordered LIST stream until EOF, with at most one candidate key (up to 1024 bytes)
+and its listed size. There is no lexical cursor, seen-set or collected listing.
+Every call acquires the lifecycle lock and authenticated write fence and rebuilds
+the current keep-set before inspecting entries, including a pending candidate.
+Successful caps release the fence and lock so coordinated readers can reopen.
+
+Scan caps count unknown, retained and pending candidates. The delete cap is
+checked before consuming the next entry. A candidate that exceeds the remaining
+byte budget is retained for another call; `pending_object_bytes` reports its size.
+If it exceeds the whole per-call byte cap, `required_deleted_object_bytes` reports
+the minimum larger budget needed. Repeating the same insufficient budget cannot
+advance past it. Budget stops return successful capped reports and reopen writes;
+an insufficient byte cap alone does not leave a durable fence. Reaching a cap
+does not establish completion: `scan_complete` requires an actual EOF observation, possibly on the following call. After EOF,
+the next call starts a new sweep; late uploads may need that sweep.
+
+Admission, lock and keep-set failures do not advance traversal. A LIST error
+discards the stream and reports `restart_required`; the next admitted call
+restarts from the prefix. DELETE `NotFound` clears the pending candidate and
+continues scanning; it counts as a `delete_attempts` operation but adds neither
+`objects_deleted` nor `deleted_object_bytes`. An earlier ambiguous delete or
+another cooperating session may already have removed that object. Other DELETE
+errors retain the candidate and durable fence, set `delete_outcome_unknown`, and
+exclude that operation from acknowledged delete counters.
+
+A fence-release write error is reconciled as success if rereading the authenticated
+head confirms the intended released state. If rereading fails or does not confirm
+that state, the call fails even if all deletions finished. The actual fence may
+still be held or may already be released; traversal is retained either way.
+Retry with the same session and directory to reacquire fresh authority and
+continue. Neither successful retries nor byte counters prove physical reclamation
+in a versioned bucket.
+
+One owned thread and a persistent current-thread Tokio runtime execute accepted
+work, with a capacity-one request channel and busy rejection while work is active.
+Dropping the awaiting future or its runtime does not cancel accepted work or
+release its lock/fence. Dropping the session closes dispatch without joining;
+accepted work finishes, then the worker destroys LIST inside its runtime and
+shuts down. A dropped waiter loses its report. Store deadlines/retries remain
+the caller's responsibility, and a hung operation can keep the worker alive.
+Recreating a session or process starts a new traversal safely; progress is not
+crash-durable.
+
+The per-call payload admission reserves mutation memory plus 524288 bytes for
+metadata, plus the private traversal structure and 1024 bytes for its candidate.
+This is not a process memory bound. Separately charge immutable session bindings,
+SDK LIST pages/transport buffers, runtime/allocator overhead, and up to three
+threads with 2 MiB stacks each (one worker, at most two blocking helpers), including
+while idle. The second helper slot permits fresh metadata I/O alongside blocking
+LIST work. The pinned `object_store` 0.14.1 filesystem LIST uses blocking reads in
+chunks of up to 1024 entries; that SDK buffer is outside the continuation payload.
+Its raw `LocalFileSystem` does not support conditional head UPDATE, so filesystem
+progress fixtures use real filesystem data/LIST with an in-memory CAS head;
+they do not establish production filesystem CAS support.
+
+ALL readers and maintenance must share the trusted lifecycle directory on one
+host. Uncoordinated APIs and other hosts are outside this boundary. Lockfiles
+must not be replaced, and other actors must not independently release the
+worker's fence. GC retains current data, not historical rollback generations.
 See [consistency and maintenance](consistency.md) for the coordination boundary.
 
 ## Resource admission

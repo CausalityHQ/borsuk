@@ -6096,9 +6096,8 @@ mod source_walk_tests {
         drop(lazy);
         drop(eager);
         let report = crate::two_bit_gc::collect_two_bit_garbage(
-            store.clone(),
-            &index,
-            &maintenance,
+            &mut crate::two_bit_gc::TwoBitGcSession::new(store.clone(), &index, &maintenance)
+                .unwrap(),
             crate::two_bit_gc::TwoBitGcLimits {
                 max_memory_bytes: 4_000_000,
                 mutations: mutation_limits,
