@@ -24,9 +24,14 @@
 //! Query-free construction: --partition-reconstruction CONFIG CONFIG_SHA APPROVAL
 //! APPROVAL_SHA. Independent approval pins original metadata; optional historical
 //! radial parity requires actual regeneration and two literal root exceptions.
+//! Transport split screen: --sq8-split-panel CONFIG CONFIG_SHA NEW_REPORT.
+//! Strict v10 six-run fixed32 inputs; native provenance remains an external gate.
 //! SOURCE-preserving v9 fixture: --prepare-v9-fixture CONFIG CONFIG_SHA NEW_DIR
 //! NEW_REPORT. Rebinds proof metadata; no canonical publication or serving claim.
 #![recursion_limit = "256"]
+
+#[path = "compare_native_replay/sq8_split_panel.rs"]
+mod sq8_split_panel;
 
 #[path = "compare_native_replay/sq8_panel_attribution.rs"]
 mod sq8_panel_attribution;
@@ -419,8 +424,12 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
 }
 
 fn validate_v2_identity(i: &Identity, raw: &Value) -> Result<()> {
+    validate_native_identity(i, raw, "borsuk-cohere-native-baseline-result-v2")
+}
+
+fn validate_native_identity(i: &Identity, raw: &Value, schema: &str) -> Result<()> {
     require(
-        i.schema == "borsuk-cohere-native-baseline-result-v2"
+        i.schema == schema
             && i.scope == "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS"
             && i.io_measurement
                 == "logical_GET_charges_separate_from_cumulative_process_native_transport"
@@ -1481,6 +1490,7 @@ fn open_input(path: &Path) -> Result<File> {
 enum ReadPolicy {
     Existing,
     Sq8PanelAttribution,
+    Sq8SplitPanel,
 }
 
 struct Rows {
@@ -1543,7 +1553,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
-        if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
+        if self.policy == ReadPolicy::Sq8SplitPanel {
+            sq8_split_panel::validate_row(&self.line, phase)?;
+        } else if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
             sq8_panel_attribution::validate_v8_row(&self.line, phase)?;
         } else if self.current {
             v9_panel::validate_row(&self.line, phase)?;
@@ -1638,7 +1650,11 @@ fn read_run_observed_policy(
     mut query: impl FnMut(&[u8], &Query, &Inputs) -> Result<()>,
 ) -> Result<Run> {
     require(valid_sha(sha), "result lowercase SHA256")?;
+    let split_panel = policy == ReadPolicy::Sq8SplitPanel;
     let diagnostic = policy == ReadPolicy::Sq8PanelAttribution;
+    if split_panel {
+        sq8_split_panel::validate_completed(expected.ok_or("split expected headers")?)?;
+    }
     if diagnostic {
         sq8_panel_attribution::validate_completed(expected.ok_or("diagnostic expected headers")?)?;
     }
@@ -1653,10 +1669,11 @@ fn read_run_observed_policy(
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
-    let current = scale
-        && expected.is_some_and(|c| {
-            c.expected_identity["schema"] == "borsuk-cohere-native-baseline-result-v9"
-        });
+    let current = split_panel
+        || (scale
+            && expected.is_some_and(|c| {
+                c.expected_identity["schema"] == "borsuk-cohere-native-baseline-result-v9"
+            }));
     rows.current = current;
     if (current || diagnostic)
         && expected
@@ -1682,10 +1699,18 @@ fn read_run_observed_policy(
                 ) || current,
                 "scale result schema",
             )?;
-            let mut raw = c.expected_identity.clone();
-            raw["schema"] = json!("borsuk-cohere-native-baseline-result-v2");
-            let identity: Identity = serde_json::from_value(raw.clone())?;
-            validate_v2_identity(&identity, &raw)?;
+            if split_panel {
+                validate_native_identity(
+                    &identity,
+                    &c.expected_identity,
+                    sq8_split_panel::RESULT_SCHEMA,
+                )?;
+            } else {
+                let mut raw = c.expected_identity.clone();
+                raw["schema"] = json!("borsuk-cohere-native-baseline-result-v2");
+                let identity: Identity = serde_json::from_value(raw.clone())?;
+                validate_v2_identity(&identity, &raw)?;
+            }
         } else {
             validate_v2_identity(&identity, &c.expected_identity)?;
         }
@@ -1717,6 +1742,7 @@ fn read_run_observed_policy(
     let panel = scale
         && expected
             .is_some_and(|c| c.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel");
+    let mut split_caller_pinned = None;
     let mut completed = if let Some(c) = expected {
         require(
             serde_json::from_slice::<Value>(&rows.line)? == c.expected_bound_inputs,
@@ -1747,7 +1773,10 @@ fn read_run_observed_policy(
         if panel {
             // The native untraced panel emits admission before any source or generation open.
             let admission: Value = rows.row("diagnostic_admission")?;
-            if diagnostic {
+            if split_panel {
+                sq8_split_panel::validate_admission(&admission, &c.expected_bound_inputs)?;
+                split_caller_pinned = Some(admission["caller_pinned_bytes"].clone());
+            } else if diagnostic {
                 sq8_panel_attribution::validate_admission(
                     &admission,
                     &c.expected_bound_inputs,
@@ -1830,6 +1859,12 @@ fn read_run_observed_policy(
     }
     if let Some(e) = &mut completed {
         e.startup = serde_json::from_slice(&rows.line)?;
+        if let Some(pinned) = split_caller_pinned {
+            require(
+                e.startup["caller_pinned_bytes"] == pinned,
+                "split admission/startup caller charge",
+            )?;
+        }
     }
     let mut samples = Vec::with_capacity(count);
     let mut charges = Charges::default();
@@ -1867,7 +1902,11 @@ fn read_run_observed_policy(
                 q.charges.source.submitted_gets <= inputs.source_get_budget.unwrap_or(128) as u64
                     && q.charges.source.verified_bytes <= 64 * 1024 * 1024
                     && q.charges.sq8.submitted_gets
-                        <= if current {
+                        <= if split_panel {
+                            sq8_split_panel::physical_cap(
+                                &expected.ok_or("split config")?.expected_bound_inputs,
+                            )
+                        } else if current {
                             expected.ok_or("current config")?.expected_bound_inputs["sq8_get_budget"].as_u64().ok_or("current GET budget")?
                         } else {
                             32
@@ -1894,21 +1933,25 @@ fn read_run_observed_policy(
                     q.returned.len() == K && q.charges.sum()?.failed_gets == 0,
                     "current complete query and zero failures",
                 )?;
-                v9_panel::validate_geometry(
-                    &raw,
-                    inputs.rows,
-                    inputs.dimensions,
-                    usize::try_from(
-                        c.expected_bound_inputs["sq8_get_budget"]
-                            .as_u64()
-                            .ok_or("current GET budget")?,
-                    )?,
-                    usize::try_from(
-                        c.expected_bound_inputs["sq8_byte_budget"]
-                            .as_u64()
-                            .ok_or("current byte budget")?,
-                    )?,
-                )?;
+                if split_panel {
+                    sq8_split_panel::validate_geometry(&raw, &c.expected_bound_inputs)?;
+                } else {
+                    v9_panel::validate_geometry(
+                        &raw,
+                        inputs.rows,
+                        inputs.dimensions,
+                        usize::try_from(
+                            c.expected_bound_inputs["sq8_get_budget"]
+                                .as_u64()
+                                .ok_or("current GET budget")?,
+                        )?,
+                        usize::try_from(
+                            c.expected_bound_inputs["sq8_byte_budget"]
+                                .as_u64()
+                                .ok_or("current byte budget")?,
+                        )?,
+                    )?;
+                }
                 require(
                     raw.get("diagnostic").is_some()
                         == (panel && c.expected_bound_inputs["execution"]["trace"] == true),
@@ -5779,7 +5822,9 @@ fn compare(paths: &[(PathBuf, String); 4]) -> Result<Value> {
 }
 
 fn report_cap(schema: &str) -> u64 {
-    if schema == sq8_panel_attribution::REPORT_SCHEMA {
+    if schema == sq8_split_panel::REPORT_SCHEMA {
+        16 * 1024 * 1024
+    } else if schema == sq8_panel_attribution::REPORT_SCHEMA {
         512 * 1024
     } else if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
         || schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA
@@ -5819,6 +5864,15 @@ fn execute_report(
     schema: &str,
     reduce: impl FnOnce() -> Result<Value>,
 ) -> Result<bool> {
+    execute_report_with_sync(output, schema, reduce, |file, _| file.sync_all())
+}
+
+fn execute_report_with_sync(
+    output: &Path,
+    schema: &str,
+    reduce: impl FnOnce() -> Result<Value>,
+    mut sync: impl FnMut(&File, bool) -> io::Result<()>,
+) -> Result<bool> {
     let dir = parent(output)?;
     let file = File::from(openat(
         &dir,
@@ -5849,7 +5903,7 @@ fn execute_report(
     };
     serde_json::to_writer(&mut out, &report)?;
     out.write_all(b"\n")?;
-    out.file.sync_all()?;
+    sync(&out.file, false)?;
     if schema == SCALE_CONFIG_SCHEMA {
         require(
             out.file.metadata()?.nlink() == 1,
@@ -5864,7 +5918,13 @@ fn execute_report(
             && (bound_dir.dev(), bound_dir.ino()) == (current_dir.dev(), current_dir.ino()),
         "output/parent identity changed",
     )?;
-    dir.sync_all()?;
+    sync(&dir, true)?;
+    if schema == sq8_split_panel::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["status"] == "VALIDATED_FIXED_PANEL"
+            && report["complete"] == true
+            && report["population_percentiles_valid"] == false);
+    }
     if schema == sq8_panel_attribution::REPORT_SCHEMA {
         return Ok(report["schema"] == schema
             && report["complete"] == true
@@ -9360,6 +9420,32 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--sq8-split-panel") {
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "panel config SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(Path::new(&args[4]), sq8_split_panel::REPORT_SCHEMA, || {
+                        sq8_split_panel::reduce(Path::new(&args[2]), sha)
+                    })
+                })
+        } else {
+            Err(
+                "usage: compare_native_replay --sq8-split-panel CONFIG CONFIG_SHA NEW_REPORT"
+                    .into(),
+            )
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--sq8-panel-attribution") {
         let result = if args.len() == 5 {
             args[3]
