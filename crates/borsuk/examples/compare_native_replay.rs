@@ -30,6 +30,9 @@
 //! NEW_REPORT. Rebinds proof metadata; no canonical publication or serving claim.
 #![recursion_limit = "256"]
 
+#[path = "compare_native_replay/current_v10.rs"]
+mod current_v10;
+
 #[path = "compare_native_replay/sq8_split_panel.rs"]
 mod sq8_split_panel;
 
@@ -282,9 +285,8 @@ fn fields(v: &Value, names: &str) -> Result<()> {
     )
 }
 
-fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
-    let UniqueJson(v) = serde_json::from_slice(line)?;
-    let names = match phase {
+fn v2_row_fields(phase: &str) -> Result<&'static str> {
+    Ok(match phase {
         "identity" => {
             "phase schema config_sha256 binary_sha256 runner_source_sha256 generation_source_sha256 router_source_sha256 codec_source_sha256 source_plane_source_sha256 scope physical_s3_measured io_measurement s3_credential_source native_transport_includes wire_bytes unread_bytes billed_bytes billed_requests external_gate_required truth_opened"
         }
@@ -305,7 +307,16 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
         "recall" => "phase ordinal hits10 recall10 returned_count underfill",
         "terminal" => "phase summary",
         _ => return Err("unknown v2 phase".into()),
-    };
+    })
+}
+
+fn terminal_fields() -> &'static str {
+    "status complete queries k total_hits10 recall_numerator recall_denominator mean_recall10 underfilled_queries all_queries_sealed prefix_bytes prefix_sha256 sealed_bytes sealed_sha256 requests_sha256 truth_sha256 generation_root_sha256 charges sum query_wall_ns query_process_cpu_ns physical_s3_measured external_gate_required process_wall_ns process_cpu_ns observed_process_peak_bytes binding_charge transport_last_boundary"
+}
+
+fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
+    let UniqueJson(v) = serde_json::from_slice(line)?;
+    let names = v2_row_fields(phase)?;
     if matches!(phase, "identity" | "bound_inputs") && v.get("fetch_parallelism").is_some() {
         require(
             matches!(v["fetch_parallelism"].as_u64(), Some(16 | 32 | 64 | 128)),
@@ -320,6 +331,15 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
     } else {
         fields(&v, names)?;
     }
+    if phase == "terminal" {
+        fields(&v["summary"], terminal_fields())?;
+    }
+    validate_native_row_values(&v, phase)
+}
+
+// Version-neutral nested transport, startup, stage and trace checks. Each caller
+// checks its complete row roster first; no current envelope is rewritten.
+fn validate_native_row_values(v: &Value, phase: &str) -> Result<()> {
     if matches!(phase, "source_binding" | "generation_open" | "query") {
         fields(&v["transport"], "stage ordinal before after")?;
     }
@@ -414,10 +434,6 @@ fn validate_v2_row(line: &[u8], phase: &str) -> Result<()> {
                 }
             }
         }
-        "terminal" => fields(
-            &v["summary"],
-            "status complete queries k total_hits10 recall_numerator recall_denominator mean_recall10 underfilled_queries all_queries_sealed prefix_bytes prefix_sha256 sealed_bytes sealed_sha256 requests_sha256 truth_sha256 generation_root_sha256 charges sum query_wall_ns query_process_cpu_ns physical_s3_measured external_gate_required process_wall_ns process_cpu_ns observed_process_peak_bytes binding_charge transport_last_boundary",
-        )?,
         _ => (),
     }
     Ok(())
@@ -561,6 +577,14 @@ fn validate_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
 }
 
 fn validate_scale_inputs_for_version(i: &Inputs, raw: &Value, current: bool) -> Result<()> {
+    validate_scale_input_values(i, raw, current, false)
+}
+
+fn validate_current_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
+    validate_scale_input_values(i, raw, true, true)
+}
+
+fn validate_scale_input_values(i: &Inputs, raw: &Value, current: bool, v10: bool) -> Result<()> {
     require(
         i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
             && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
@@ -568,12 +592,16 @@ fn validate_scale_inputs_for_version(i: &Inputs, raw: &Value, current: bool) -> 
             && i.tie_rule == "corpus_ordinal_ascending"
             && !i.truth_opened
             && (K..=1_000_000).contains(&i.rows)
-            && i.dimensions == 1024
+            && (if v10 {
+                (1..=1024).contains(&i.dimensions)
+            } else {
+                i.dimensions == 1024
+            })
             && i.k == K
             && (1..=1000).contains(&i.count)
             && matches!(i.profile.as_str(), "native100k" | "scale1m")
             && (i.profile != "native100k" || i.rows <= 100_000)
-            && i.requests_bytes == i.count as u64 * 1024 * 4
+            && i.requests_bytes == i.count as u64 * i.dimensions as u64 * 4
             && i.truth_bytes == i.count as u64 * K as u64 * 8
             && raw["serving"] == json!({"mode":"baseline"})
             && raw["source_cache"] == "off"
@@ -603,6 +631,7 @@ fn validate_scale_inputs_for_version(i: &Inputs, raw: &Value, current: bool) -> 
     require(
         valid_sha(reserved_sha)
             && (cfg!(test)
+                || v10
                 || reserved_sha
                     == "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"),
         "full reserved query digest",
@@ -638,7 +667,7 @@ fn validate_scale_inputs_for_version(i: &Inputs, raw: &Value, current: bool) -> 
         count == i.rows as u64 && i.corpus_source_first == 0,
         "exact corpus count",
     )?;
-    if !cfg!(test) {
+    if !cfg!(test) && !v10 {
         let expected = if i.rows == 100_000 {
             json!([{"start":0,"end":100_000}])
         } else {
@@ -1502,6 +1531,7 @@ struct Rows {
     v2: bool,
     scale: bool,
     current: bool,
+    v10: bool,
     policy: ReadPolicy,
     line_cap: usize,
 }
@@ -1523,6 +1553,7 @@ impl Rows {
             v2: false,
             scale: false,
             current: false,
+            v10: false,
             policy: ReadPolicy::Existing,
             line_cap: LINE_CAP,
         })
@@ -1555,6 +1586,8 @@ impl Rows {
         )?;
         if self.policy == ReadPolicy::Sq8SplitPanel {
             sq8_split_panel::validate_row(&self.line, phase)?;
+        } else if self.v10 {
+            current_v10::validate_row(&self.line, phase)?;
         } else if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
             sq8_panel_attribution::validate_v8_row(&self.line, phase)?;
         } else if self.current {
@@ -1652,6 +1685,13 @@ fn read_run_observed_policy(
     require(valid_sha(sha), "result lowercase SHA256")?;
     let split_panel = policy == ReadPolicy::Sq8SplitPanel;
     let diagnostic = policy == ReadPolicy::Sq8PanelAttribution;
+    let v10 = expected.is_some_and(|c| {
+        c.schema == SCALE_CONFIG_SCHEMA
+            && c.expected_identity["schema"] == current_v10::RESULT_SCHEMA
+    });
+    if v10 {
+        current_v10::validate_completed(expected.ok_or("v10 expected headers")?)?;
+    }
     if split_panel {
         sq8_split_panel::validate_completed(expected.ok_or("split expected headers")?)?;
     }
@@ -1666,10 +1706,12 @@ fn read_run_observed_policy(
         )?;
     }
     rows.policy = policy;
+    rows.v10 = v10;
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
-    let current = split_panel
+    let current = v10
+        || split_panel
         || (scale
             && expected.is_some_and(|c| {
                 c.expected_identity["schema"] == "borsuk-cohere-native-baseline-result-v9"
@@ -1699,11 +1741,11 @@ fn read_run_observed_policy(
                 ) || current,
                 "scale result schema",
             )?;
-            if split_panel {
+            if v10 {
                 validate_native_identity(
                     &identity,
                     &c.expected_identity,
-                    sq8_split_panel::RESULT_SCHEMA,
+                    current_v10::RESULT_SCHEMA,
                 )?;
             } else {
                 let mut raw = c.expected_identity.clone();
@@ -1749,12 +1791,16 @@ fn read_run_observed_policy(
             "expected v2 input/root/backend pins",
         )?;
         if scale {
-            validate_scale_inputs_for_version(
-                &inputs,
-                &c.expected_bound_inputs,
-                current || diagnostic,
-            )?;
-            if current {
+            if v10 {
+                validate_current_scale_inputs(&inputs, &c.expected_bound_inputs)?;
+            } else {
+                validate_scale_inputs_for_version(
+                    &inputs,
+                    &c.expected_bound_inputs,
+                    current || diagnostic,
+                )?;
+            }
+            if current && !v10 {
                 v9_panel::budgets(&c.expected_identity, &c.expected_bound_inputs)?;
             }
             require(
@@ -1773,8 +1819,8 @@ fn read_run_observed_policy(
         if panel {
             // The native untraced panel emits admission before any source or generation open.
             let admission: Value = rows.row("diagnostic_admission")?;
-            if split_panel {
-                sq8_split_panel::validate_admission(&admission, &c.expected_bound_inputs)?;
+            if v10 {
+                current_v10::validate_admission(&admission, &c.expected_bound_inputs)?;
                 split_caller_pinned = Some(admission["caller_pinned_bytes"].clone());
             } else if diagnostic {
                 sq8_panel_attribution::validate_admission(
@@ -1864,7 +1910,9 @@ fn read_run_observed_policy(
                 e.startup["caller_pinned_bytes"] == pinned,
                 "split admission/startup caller charge",
             )?;
-            sq8_split_panel::validate_startup(
+        }
+        if v10 {
+            current_v10::validate_startup(
                 &e.startup,
                 &expected
                     .ok_or("split startup config")?
@@ -1908,10 +1956,10 @@ fn read_run_observed_policy(
                 q.charges.source.submitted_gets <= inputs.source_get_budget.unwrap_or(128) as u64
                     && q.charges.source.verified_bytes <= 64 * 1024 * 1024
                     && q.charges.sq8.submitted_gets
-                        <= if split_panel {
-                            sq8_split_panel::physical_cap(
+                        <= if v10 {
+                            current_v10::physical_cap(
                                 &expected.ok_or("split config")?.expected_bound_inputs,
-                            )
+                            )?
                         } else if current {
                             expected.ok_or("current config")?.expected_bound_inputs["sq8_get_budget"].as_u64().ok_or("current GET budget")?
                         } else {
@@ -1939,8 +1987,11 @@ fn read_run_observed_policy(
                     q.returned.len() == K && q.charges.sum()?.failed_gets == 0,
                     "current complete query and zero failures",
                 )?;
-                if split_panel {
-                    sq8_split_panel::validate_geometry(&raw, &c.expected_bound_inputs)?;
+                if v10 {
+                    current_v10::validate_geometry(&raw, &c.expected_bound_inputs)?;
+                    if raw.get("diagnostic").is_some() {
+                        sq8_split_panel::validate_diagnostic(&raw, &c.expected_bound_inputs)?;
+                    }
                 } else {
                     v9_panel::validate_geometry(
                         &raw,
@@ -4554,6 +4605,11 @@ fn source_utilization_report(
 
 fn reduce_source_utilization(config_path: &Path, config_sha: &str) -> Result<Value> {
     let (c, config_bytes): (SourceUtilizationConfig, _) = read_config(config_path, config_sha)?;
+    if c.expected_identity["schema"] == current_v10::RESULT_SCHEMA {
+        return Err(
+            "historical 256-row analysis only; v10 requires current-format analysis".into(),
+        );
+    }
     require(
         c.expected_identity["schema"] != "borsuk-cohere-native-baseline-result-v9",
         "historical 256-row analysis only; v9 requires current-format analysis",
@@ -6288,6 +6344,11 @@ fn reduce_loss(config_path: &Path, config_sha: &str) -> Result<Value> {
             && c.completed.schema == SCALE_CONFIG_SCHEMA,
         "sealed loss config/schema",
     )?;
+    if c.completed.expected_identity["schema"] == current_v10::RESULT_SCHEMA {
+        return Err(
+            "historical 256-row analysis only; v10 requires current-format analysis".into(),
+        );
+    }
     require(
         c.completed.expected_identity["schema"] != "borsuk-cohere-native-baseline-result-v9",
         "historical 256-row analysis only; v9 requires current-format analysis",
@@ -11109,20 +11170,9 @@ mod tests {
         // the larger metadata/trace geometry. This is a boundary fixture, not ANN evidence.
         let (native_dir, result) =
             scale_native_runner::scale_reducer_native_fixture(true, true).unwrap();
-        let mut records = std::fs::read_to_string(&result)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
-        // The boundary fixture below synthesizes the historical v8 generation
-        // and 256-row SQ8 cover. Do not mislabel that synthetic envelope as the
-        // current producer's v9/32-row protocol. Direct current-runner tests
-        // elsewhere retain the unmodified v9 output and exact serving oracles.
-        records[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
-        for header in &mut records[..2] {
-            header.as_object_mut().unwrap().remove("sq8_get_budget");
-            header.as_object_mut().unwrap().remove("sq8_byte_budget");
-        }
+        let current = assert_current_native(native_dir.path(), &result);
+        let mut records =
+            synthetic_historical_rows(&current, "borsuk-cohere-native-baseline-result-v8");
         let requests = std::fs::read(native_dir.path().join("requests.f32")).unwrap();
         let truth = std::fs::read(native_dir.path().join("truth.u64")).unwrap();
         let put = |name: &str, body: &[u8]| {
@@ -11917,11 +11967,8 @@ mod tests {
     #[test]
     fn sealed_loss_actual_native_panel_reconciles_recall_and_refuses_before_truth() {
         let (dir, result) = scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
-        let current_body = std::fs::read_to_string(&result).unwrap();
-        let mut rows = current_body
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
+        let current_rows = assert_current_native(dir.path(), &result);
+        let mut rows = current_rows.clone();
         let (current_path, current_sha) = scale_config(dir.path(), &result, &rows);
         let (current, _): (CompletedConfig, _) = read_config(&current_path, &current_sha).unwrap();
         let refused = json!({"schema":"borsuk-sealed-scale-loss-config-v2",
@@ -11929,26 +11976,17 @@ mod tests {
             "truth":{"path":dir.path().join("unopened-truth"),"bytes":1,"sha256":"0".repeat(64)},
             "max_payload_bytes":67108864});
         let refused_bytes = serde_json::to_vec(&refused).unwrap();
-        let refused_path = dir.path().join("v9-loss-refusal.json");
+        let refused_path = dir.path().join("current-loss-refusal.json");
         std::fs::write(&refused_path, &refused_bytes).unwrap();
         assert_eq!(
             reduce_loss(&refused_path, &sha(&refused_bytes))
                 .unwrap_err()
                 .to_string(),
-            "historical 256-row analysis only; v9 requires current-format analysis"
+            "historical 256-row analysis only; v10 requires current-format analysis"
         );
-        // Explicit historical envelope: this 32-row partial tail has identical
-        // byte ranges under 32/256 geometry. It does not qualify v9 loss analysis.
-        rows[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v8");
-        for header in &mut rows[..2] {
-            header.as_object_mut().unwrap().remove("sq8_get_budget");
-            header.as_object_mut().unwrap().remove("sq8_byte_budget");
-        }
-        for row in &mut rows {
-            if row["phase"] == "query" {
-                row["plan"].as_object_mut().unwrap().remove("page_rows");
-            }
-        }
+        // SYNTHETIC legacy boundary: the tiny partial tail has the same payload
+        // span at 32/256 rows. This cannot establish historical producer parity.
+        rows = synthetic_historical_rows(&current_rows, "borsuk-cohere-native-baseline-result-v8");
         authenticate(&mut rows);
         let body = String::from_utf8(encode(&rows)).unwrap();
         std::fs::write(&result, &body).unwrap();
@@ -12963,6 +13001,166 @@ mod tests {
         (path, sha(&body))
     }
 
+    pub(super) fn assert_current_native(dir: &Path, result: &Path) -> Vec<Value> {
+        static BINARY_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let binary_sha = BINARY_SHA.get_or_init(|| {
+            let mut file = File::open(std::env::current_exe().unwrap()).unwrap();
+            let mut digest = Sha256::new();
+            let mut block = [0; 8192];
+            loop {
+                let n = file.read(&mut block).unwrap();
+                if n == 0 {
+                    break;
+                }
+                digest.update(&block[..n]);
+            }
+            format!("{:x}", digest.finalize())
+        });
+        let config_bytes = std::fs::read(dir.join("config.json")).unwrap();
+        let config: Value = serde_json::from_slice(&config_bytes).unwrap();
+        let result_bytes = std::fs::read(result).unwrap();
+        let rows = std::str::from_utf8(&result_bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let mut identity = json!({"phase":"identity","schema":current_v10::RESULT_SCHEMA,
+            "config_sha256":sha(&config_bytes),"binary_sha256":binary_sha,
+            "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
+            "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
+            "s3_credential_source":"imds_instance_role_only","native_transport_includes":"S3_and_IMDS_credential_requests_including_PUT",
+            "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
+            "external_gate_required":true,"truth_opened":false});
+        for (key, bytes) in [
+            (
+                "runner_source_sha256",
+                include_bytes!("../src/bin/check_cohere_native_baseline.rs").as_slice(),
+            ),
+            (
+                "generation_source_sha256",
+                include_bytes!("../src/two_bit_generation.rs").as_slice(),
+            ),
+            (
+                "router_source_sha256",
+                include_bytes!("../src/semantic_unit_router.rs").as_slice(),
+            ),
+            (
+                "codec_source_sha256",
+                include_bytes!("../src/rotated_two_bit.rs").as_slice(),
+            ),
+            (
+                "source_plane_source_sha256",
+                include_bytes!("../src/two_bit_source.rs").as_slice(),
+            ),
+            (
+                "sq8_range_source_sha256",
+                include_bytes!("../src/sq8_s3_range.rs").as_slice(),
+            ),
+            (
+                "returned_source_sha256",
+                include_bytes!("../src/returned_sq8.rs").as_slice(),
+            ),
+        ] {
+            identity[key] = json!(sha(bytes));
+        }
+        let mut bound = json!({"phase":"bound_inputs","truth_opened":false,"source_cache":"off","credential_source":null});
+        for key in "dataset revision metric tie_rule rows dimensions count k corpus_source_first query_source_first profile backend generation_prefix generation_root_sha256 corpus_intervals reserved_query_interval producer_authority max_memory_bytes".split_whitespace() {
+            bound[key] = config[key].clone();
+        }
+        for key in [
+            "sq8_get_budget",
+            "sq8_byte_budget",
+            "sq8_range_split",
+            "serving",
+            "execution",
+        ] {
+            identity[key] = config[key].clone();
+            bound[key] = config[key].clone();
+        }
+        for (key, default) in [("fetch_parallelism", 16), ("source_get_budget", 128)] {
+            let value = config.get(key).cloned().unwrap_or(json!(default));
+            identity[key] = value.clone();
+            bound[key] = value;
+        }
+        for key in ["requests", "truth"] {
+            for field in ["bytes", "sha256"] {
+                bound[format!("{key}_{field}")] = config[key][field].clone();
+            }
+        }
+        for (key, field) in [
+            ("native_source_sha256", "source_sha256"),
+            ("native_sq8_sha256", "sq8_sha256"),
+            ("native_order_sha256", "source_order_sha256"),
+        ] {
+            bound[key] = config["native_source"][field].clone();
+        }
+        for key in ["cohort_receipt", "derivation_receipt"] {
+            bound[format!("{key}_sha256")] = config[key]["sha256"].clone();
+        }
+        let cohort: Value = serde_json::from_slice(
+            &std::fs::read(config["cohort_receipt"]["path"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        bound["reserved_queries_sha256"] = cohort["reserved_queries_sha256"].clone();
+        bound["selected_count"] = json!(
+            v9_panel::ordinals(&bound, config["count"].as_u64().unwrap() as usize)
+                .unwrap()
+                .len()
+        );
+        let completed = CompletedConfig {
+            schema: SCALE_CONFIG_SCHEMA.into(),
+            input: CompletedInput {
+                path: result.into(),
+                bytes: result_bytes.len() as u64,
+                sha256: sha(&result_bytes),
+            },
+            expected_identity: identity,
+            expected_bound_inputs: bound,
+        };
+        assert_eq!(rows[0], completed.expected_identity);
+        assert_eq!(rows[1], completed.expected_bound_inputs);
+        read_run_with(result, &completed.input.sha256, Some(&completed)).unwrap();
+        rows
+    }
+
+    // SYNTHETIC historical boundary evidence, never producer interoperability.
+    // Construct literal legacy rosters and retain actual native ID/score/payload
+    // bytes. Current acceptance is checked separately on the untouched file.
+    pub(super) fn synthetic_historical_rows(current: &[Value], schema: &str) -> Vec<Value> {
+        assert!(matches!(
+            schema,
+            "borsuk-cohere-native-baseline-result-v7" | "borsuk-cohere-native-baseline-result-v8"
+        ));
+        current.iter().map(|row| {
+            let phase = row["phase"].as_str().unwrap();
+            let extras = match phase {
+                "identity" => "fetch_parallelism serving execution sq8_range_source_sha256 returned_source_sha256",
+                "bound_inputs" => "fetch_parallelism source_cache serving execution selected_count corpus_intervals reserved_query_interval reserved_queries_sha256 cohort_receipt_sha256 derivation_receipt_sha256 producer_authority max_memory_bytes",
+                "startup" => "serving",
+                "query" => "serving source_nomination_skipped planning_scope plan selected_slot",
+                "all_queries_sealed" => "selected_count population_count reserved_query_count",
+                "diagnostic_admission" => return row.clone(),
+                _ => "",
+            };
+            let mut names = format!("{} {extras}", v2_row_fields(phase).unwrap());
+            if schema.ends_with("v8") && matches!(phase, "identity" | "bound_inputs") {
+                names.push_str(" source_get_budget");
+            }
+            let mut legacy = Value::Object(names.split_whitespace().map(|key| {
+                (key.to_owned(), row.get(key).expect("native fixture field").clone())
+            }).collect());
+            if phase == "identity" {
+                legacy["schema"] = json!(schema);
+            }
+            if phase == "query" {
+                legacy["plan"] = Value::Object("selected_pages ranges planned_bytes target_pages target_shortfall primary_pages_retained covered_pages bridge_pages".split_whitespace().map(|key| {
+                    (key.to_owned(), row["plan"][key].clone())
+                }).collect());
+            }
+            legacy
+        }).collect()
+    }
+
     #[test]
     fn obsolete_scale_reduction_config_reports_exact_v4_requirement() {
         let dir = tempfile::tempdir().unwrap();
@@ -13214,15 +13412,15 @@ mod tests {
 
     #[test]
     fn actual_native_scale_runner_reducer_seal_count_mismatches() {
-        for (prefix, panel) in [(false, false), (false, true), (true, false)] {
+        for (prefix, panel) in [(false, false), (false, true), (true, false), (true, true)] {
             let (dir, result) =
                 scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
-            let body = std::fs::read_to_string(&result).unwrap();
-            let rows = body
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                .collect::<Vec<_>>();
+            let rows = assert_current_native(dir.path(), &result);
+            // Pin expected headers before any falsifier changes producer output.
+            assert_eq!(rows[0]["schema"], current_v10::RESULT_SCHEMA);
+            assert_eq!(rows[0]["sq8_range_split"], Value::Null);
             let (config, pin) = scale_config(dir.path(), &result, &rows);
+            let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();
             let report = reduce_scale(&config, &pin).unwrap();
             assert_eq!(report["diagnostic_only"], true);
             assert_eq!(report["population_percentiles_valid"], false);
@@ -13255,6 +13453,11 @@ mod tests {
                 "reserved",
                 "reserved-count",
                 "diagnostic-prefix",
+                "physical-ordinal",
+                "logical-count",
+                "split",
+                "unknown",
+                "missing",
             ] {
                 let mut bad = rows.clone();
                 match case {
@@ -13274,6 +13477,19 @@ mod tests {
                     "diagnostic-prefix" => {
                         let terminal = bad.iter_mut().find(|v| v["phase"] == "terminal").unwrap();
                         terminal["summary"]["diagnostic_prefix"] = json!(!prefix);
+                    }
+                    "physical-ordinal" => bad[query]["returned_physical_ordinals"][0] = json!(32),
+                    "logical-count" => bad[query]["plan"]["logical_range_count"] = json!(2),
+                    "split" => {
+                        bad[1]["sq8_range_split"] =
+                            json!({"max_physical_range_bytes":0,"max_physical_gets":1})
+                    }
+                    "unknown" => bad[query]["unknown_current_field"] = json!(0),
+                    "missing" => {
+                        bad[query]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("returned_physical_ordinals");
                     }
                     "old" => {
                         bad[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v5");
@@ -13300,6 +13516,10 @@ mod tests {
                     "reserved" => "selected prefix within full reserved interval",
                     "diagnostic-prefix" => "reserved population and diagnostic prefix scope",
                     "old" => "scale result v7/v8 required",
+                    "physical-ordinal" => "v10 unique bounded physical ordinal",
+                    "logical-count" => "v10 logical range count",
+                    "split" => "v10 split caps",
+                    "unknown" | "missing" => "unknown/missing v2 field",
                     _ => unreachable!(),
                 };
                 let path = dir.path().join(case);
@@ -13309,6 +13529,43 @@ mod tests {
                 assert_eq!(
                     error, expected_error,
                     "{case} prefix={prefix} panel={panel}"
+                );
+            }
+            // A valid resealed envelope cannot replace the independently pinned headers.
+            for (header, key, error) in [
+                (0, "binary_sha256", "expected v2 identity pins"),
+                (
+                    1,
+                    "native_sq8_sha256",
+                    "expected v2 input/root/backend pins",
+                ),
+            ] {
+                let mut bad = rows.clone();
+                bad[header][key] = json!("0".repeat(64));
+                authenticate(&mut bad);
+                let bytes = encode(&bad);
+                let path = dir.path().join(format!("independent-header-{header}"));
+                std::fs::write(&path, &bytes).unwrap();
+                let independent = CompletedConfig {
+                    schema: pinned.schema.clone(),
+                    input: CompletedInput {
+                        path,
+                        bytes: bytes.len() as u64,
+                        sha256: sha(&bytes),
+                    },
+                    expected_identity: pinned.expected_identity.clone(),
+                    expected_bound_inputs: pinned.expected_bound_inputs.clone(),
+                };
+                assert_eq!(
+                    read_run_with(
+                        &independent.input.path,
+                        &independent.input.sha256,
+                        Some(&independent)
+                    )
+                    .err()
+                    .unwrap()
+                    .to_string(),
+                    error
                 );
             }
         }

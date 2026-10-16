@@ -4232,15 +4232,15 @@ mod tests {
         CoverageScope,
         tempfile::TempDir,
     ) {
-        // Real tiny native envelope/IDs/scores; expand only diagnostic geometry/control metadata.
-        // Public-builder prototypes/FP16 publications remain untouched; this is not ANN qualification.
+        // SYNTHETIC historical boundary envelope with actual current IDs/scores/SQ8.
+        // Public-builder prototypes/FP16 publications remain untouched; no producer parity claim.
         let (native_dir, native_result) =
             scale_native_runner::scale_reducer_native_fixture(true, true).unwrap();
-        let mut rows = std::fs::read_to_string(native_result)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .collect::<Vec<_>>();
+        let current = super::super::tests::assert_current_native(native_dir.path(), &native_result);
+        let mut rows = super::super::tests::synthetic_historical_rows(
+            &current,
+            "borsuk-cohere-native-baseline-result-v7",
+        );
         let native_sq8 = std::fs::read(native_dir.path().join("sq8")).unwrap();
         assert_eq!(native_sq8.len(), 32 * 1036);
         let assets = tempfile::tempdir().unwrap();

@@ -4,14 +4,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub(super) const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v10";
+pub(super) const RESULT_SCHEMA: &str = super::current_v10::RESULT_SCHEMA;
 pub(super) const REPORT_SCHEMA: &str = "borsuk-sq8-split-panel-v2";
 const CONFIG_SCHEMA: &str = "borsuk-sq8-split-panel-config-v2";
 const LABELS: [&str; 6] = ["B0", "C0", "B1", "C1", "C2", "B2"];
 const CONFIG_CAP: u64 = 262144;
 const RETAINED_CAP: u64 = 12 * 1024 * 1024;
 const SPLIT_BYTES: u64 = 2121728;
+#[cfg(test)]
 const BLOCK_BYTES: u64 = 32 * 1036;
+#[cfg(test)]
 const SCOPE_NOTE: &str = "diagnostic selected original ordinals or prefix; not population p99, population recall or full-cohort qualification";
 
 const ORDINALS: [usize; 32] = [
@@ -143,12 +145,6 @@ fn split_value(enabled: bool) -> Value {
         json!({"max_physical_range_bytes":33554432,"max_physical_gets":46})
     }
 }
-pub(super) fn physical_cap(_inputs: &Value) -> u64 {
-    46
-}
-fn small_pieces(inputs: &Value) -> bool {
-    inputs["sq8_range_split"]["max_physical_range_bytes"] == SPLIT_BYTES
-}
 fn split_option(header: &Value) -> Result<()> {
     let split = header
         .get("sq8_range_split")
@@ -159,138 +155,36 @@ fn split_option(header: &Value) -> Result<()> {
     )
 }
 
-// Header schema stays v10. Only explicitly checked extension fields are removed
-// before the version-neutral exact field roster; legacy header validators stay strict.
 pub(super) fn validate_row(line: &[u8], phase: &str) -> Result<()> {
+    super::current_v10::validate_row(line, phase)?;
+    let super::UniqueJson(raw) = serde_json::from_slice(line)?;
     if phase == "query" {
-        let super::UniqueJson(mut raw) = serde_json::from_slice(line)?;
         returned_ordinals(&raw)?;
-        logical_count(&raw)?;
+    }
+    if matches!(phase, "identity" | "bound_inputs") {
+        split_option(&raw)?;
         require(
-            raw["serving"] == json!({"mode":"baseline"})
-                && raw["source_nomination_skipped"] == false
-                && raw["planning_scope"] == "source_nomination_and_cover"
-                && raw["plan"]["page_rows"] == 32,
-            "v10 baseline query semantics",
+            raw["source_get_budget"] == 128
+                && raw["sq8_get_budget"] == 30
+                && raw["sq8_byte_budget"] == 33554432
+                && raw["fetch_parallelism"] == 64,
+            "v10 operating point",
         )?;
-        fields(
-            &raw["plan"],
-            "page_rows selected_pages ranges logical_range_count planned_bytes target_pages target_shortfall primary_pages_retained covered_pages bridge_pages",
-        )?;
-        if let Some(diag) = raw.get("diagnostic") {
-            diagnostic_shape(diag)?;
-            require(
-                diag["sq8_range_trace"].is_object() && diag["host"].is_object(),
-                "v10 diagnostic objects",
-            )?;
-        }
-        let object = raw.as_object_mut().ok_or("v10 query object")?;
-        for key in [
-            "serving",
-            "source_nomination_skipped",
-            "planning_scope",
-            "plan",
-            "diagnostic",
-            "returned_physical_ordinals",
-        ] {
-            object.remove(key);
-        }
         require(
-            object
-                .remove("selected_slot")
-                .is_some_and(|v| v.as_u64().is_some()),
-            "v10 selected slot",
+            super::v9_panel::ordinals(&raw, 1000)? == ORDINALS,
+            "v10 fixed32 roster",
         )?;
-        // Query fields are version-neutral; no result or diagnostic schema is relabelled.
-        return super::validate_v2_row(&serde_json::to_vec(&raw)?, phase);
-    }
-    if !matches!(phase, "identity" | "bound_inputs") {
-        if phase == "terminal" {
-            let super::UniqueJson(raw) = serde_json::from_slice(line)?;
-            require(
-                raw["summary"]["scope_note"] == SCOPE_NOTE,
-                "v10 terminal scope note",
-            )?;
+        if phase == "identity" {
+            for (key, pin) in COMPONENTS.iter().zip(SOURCE_PINS) {
+                require(raw[*key] == pin, "v10 source-bound component pin")?;
+            }
         }
-        return super::v9_panel::validate_row(line, phase);
     }
-    let super::UniqueJson(mut raw) = serde_json::from_slice(line)?;
-    split_option(&raw)?;
-    require(
-        raw["source_get_budget"] == 128
-            && raw["sq8_get_budget"] == 30
-            && raw["sq8_byte_budget"] == 33554432
-            && raw["fetch_parallelism"] == 64
-            && raw["serving"] == json!({"mode":"baseline"}),
-        "v10 operating point",
-    )?;
-    require(
-        super::v9_panel::ordinals(&raw, 1000)? == ORDINALS,
-        "v10 fixed32 roster",
-    )?;
-    if let Some(window) = raw.get("shared_byte_window") {
-        super::validate_byte_window(window, 64)?;
-    }
-    let extras = if phase == "identity" {
-        require(raw["schema"] == RESULT_SCHEMA, "explicit v10 result schema")?;
-        for (key, pin) in COMPONENTS.iter().zip(SOURCE_PINS) {
-            require(raw[*key] == pin, "v10 source-bound component pin")?;
-        }
-        "source_get_budget sq8_get_budget sq8_byte_budget sq8_range_split serving execution sq8_range_source_sha256 returned_source_sha256"
-    } else {
-        "source_get_budget sq8_get_budget sq8_byte_budget sq8_range_split serving execution selected_count corpus_intervals reserved_query_interval reserved_queries_sha256 cohort_receipt_sha256 derivation_receipt_sha256 producer_authority max_memory_bytes"
-    };
-    let obj = raw.as_object_mut().ok_or("v10 header object")?;
-    for key in extras.split_whitespace() {
-        require(obj.remove(key).is_some(), "v10 required extension field")?;
-    }
-    obj.remove("shared_byte_window");
-    super::validate_v2_row(&serde_json::to_vec(&raw)?, phase)
+    Ok(())
 }
 
 fn returned_ordinals(raw: &Value) -> Result<Vec<u64>> {
-    let ordinals = raw["returned_physical_ordinals"]
-        .as_array()
-        .ok_or("v10 returned physical ordinals required")?;
-    let returned = raw["returned"].as_array().ok_or("v10 returned hits")?;
-    require(
-        ordinals.len() == returned.len()
-            && raw["returned_count"] == returned.len()
-            && ordinals.len() <= 10,
-        "v10 returned ordinal count",
-    )?;
-    let mut result = Vec::with_capacity(ordinals.len());
-    for ordinal in ordinals {
-        let ordinal = number(ordinal)?;
-        require(
-            ordinal < 1_000_000 && !result.contains(&ordinal),
-            "v10 unique bounded physical ordinal",
-        )?;
-        let start = ordinal * 1036;
-        require(
-            raw["plan"]["ranges"]
-                .as_array()
-                .ok_or("v10 logical ranges")?
-                .iter()
-                .any(|range| {
-                    range[0].as_u64().is_some_and(|first| first <= start)
-                        && range[1].as_u64().is_some_and(|last| last >= start + 1036)
-                }),
-            "v10 returned ordinal outside logical coverage",
-        )?;
-        result.push(ordinal);
-    }
-    Ok(result)
-}
-
-fn logical_count(raw: &Value) -> Result<()> {
-    let ranges = raw["plan"]["ranges"]
-        .as_array()
-        .ok_or("v10 logical ranges")?;
-    require(
-        raw["plan"]["logical_range_count"].as_u64() == Some(ranges.len() as u64),
-        "v10 logical range count",
-    )
+    super::current_v10::returned_ordinals(raw, 1_000_000, 1036)
 }
 
 pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
@@ -466,156 +360,26 @@ fn runtime_config(d: &Descriptor) -> Result<(Value, super::HeaderSnapshot)> {
     Ok((raw, snapshot))
 }
 
-pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
-    use borsuk::sq8_s3_range::Sq8RangeTrace;
-    let traced = inputs["execution"]["trace"] == true;
-    let ranges = physical_cap(inputs) as usize;
-    let peak = if traced {
-        Sq8RangeTrace::modeled_bytes(ranges, 64)
-    } else {
-        0
-    };
-    let both = Sq8RangeTrace::pending_futures_bytes(128, 64);
-    let pinned = both
-        .checked_sub(if traced {
-            Sq8RangeTrace::pending_futures_bytes(ranges, 64)
-        } else {
-            0
-        })
-        .ok_or("split pinned subtraction")?;
-    require(
-        cfg!(target_pointer_width = "64")
-            && std::mem::size_of::<Option<u64>>() == 16
-            && std::mem::size_of::<std::path::PathBuf>() == 24
-            && std::mem::size_of::<Vec<u8>>() == 24,
-        "split producer sampler ABI",
-    )?;
-    let diagnostic = if traced {
-        2 * 65536 + 2 * 49 * 16 + 24 + 24 + 131072 + 1 + 8192 + 262144
-    } else {
-        2 * 65536
-    };
-    require(
-        raw["trace"] == traced
-            && raw["trace_ranges"] == ranges
-            && raw["panel_line_cap_bytes"] == 65536
-            && raw["diagnostic_pinned_bytes"] == diagnostic
-            && raw["diagnostic_bytes_per_active_query"] == diagnostic + peak
-            && diagnostic + peak <= 1048576
-            && raw["diagnostic_cap_bytes"] == 1048576
-            && raw["host_read_cap_bytes"] == 131072
-            && raw["range_state_both_paths_bytes"] == both
-            && raw["range_state_pinned_by_runner_bytes"] == pinned
-            && raw["trace_peak_charged_by_library_at_traced_admission"] == traced
-            && number(&raw["caller_pinned_bytes"])? >= (diagnostic + pinned) as u64
-            && number(&raw["caller_pinned_bytes"])? <= number(&inputs["max_memory_bytes"])?,
-        "split trace admission conservation",
-    )?;
-    require(
-        if traced {
-            raw["trace_retained_bytes"] == Sq8RangeTrace::retained_bytes(ranges)
-                && raw["trace_peak_bytes"] == peak
-        } else {
-            raw["trace_retained_bytes"].is_null() && raw["trace_peak_bytes"].is_null()
-        },
-        "split trace reservation",
-    )?;
-    require(
-        raw["semantics"]
-            == json!({
-                "headers_interval":"get_opts_client_queue_connect_tls_server_combined",
-                "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
-                "ranges":"overlap_in_time_never_sum_intervals",
-                "host_counters":"host_wide_not_per_flow_null_means_unavailable",
-                "unset":"a boundary never reached is null, never a fabricated timestamp"
-            }),
-        "split diagnostic semantics",
-    )
+fn fixed_inputs(inputs: &Value) -> Value {
+    json!({"rows":1000000,"dimensions":1024,"sq8_get_budget":30,
+        "sq8_byte_budget":33554432,"fetch_parallelism":64,
+        "sq8_range_split":inputs["sq8_range_split"]})
 }
 
-pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
-    let cap = number(&inputs["max_memory_bytes"])?;
-    let trace = borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(1_000_000) as u64;
-    let query = plus(532_480, trace)?;
-    require(
-        cap == 512 * 1024 * 1024
-            && raw["library_cap_bytes"] == cap
-            && raw["codec_scratch_bytes"] == 532_480
-            && raw["trace_scratch_bytes"] == trace
-            && raw["query_scratch_bytes"] == query
-            && plus(number(&raw["caller_pinned_bytes"])?, query)? <= cap,
-        "split startup memory/config conservation",
-    )
-}
-
+#[cfg(test)]
 fn physical_ranges(raw: &Value, split: bool) -> Result<Vec<Value>> {
-    let plan = raw["plan"]["ranges"].as_array().ok_or("logical ranges")?;
-    let mut physical = Vec::new();
-    for r in plan {
-        let (mut start, end) = (number(&r[0])?, number(&r[1])?);
-        while start < end {
-            let next = if split {
-                end.min(plus(start, (SPLIT_BYTES / BLOCK_BYTES) * BLOCK_BYTES)?)
-            } else {
-                end
-            };
-            require(physical.len() < 46, "physical GET cap")?;
-            physical.push(json!([start, next]));
-            start = next;
-        }
-    }
-    Ok(physical)
+    super::current_v10::physical_ranges(
+        raw,
+        &fixed_inputs(&json!({"sq8_range_split":split_value(split)})),
+    )
 }
 
 pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
-    logical_count(raw)?;
-    // The old canonical logical oracle checks its own exact logical charge.
-    // Raw v10 physical charges are checked separately, never passed as logical charges.
-    let mut logical = raw.clone();
-    logical["plan"]
-        .as_object_mut()
-        .ok_or("v10 logical plan")?
-        .remove("logical_range_count");
-    let count = raw["plan"]["ranges"]
-        .as_array()
-        .ok_or("logical range roster")?
-        .len();
-    logical["charges"]["sq8"]["submitted_gets"] = json!(count);
-    super::v9_panel::validate_geometry(&logical, 1000000, 1024, 30, 33554432)?;
-    let physical = physical_ranges(raw, small_pieces(inputs))?;
-    require(
-        raw["charges"]["sq8"]
-            == json!({"submitted_gets":physical.len(),
-        "verified_bytes":raw["plan"]["planned_bytes"],"failed_gets":0}),
-        "split exact physical charges",
-    )?;
-    if let Some(diag) = raw.get("diagnostic") {
-        let ranges = diag["sq8_range_trace"]["ranges"]
-            .as_array()
-            .ok_or("split trace ranges")?;
-        require(
-            ranges.len() == physical.len(),
-            "split trace full drain roster",
-        )?;
-        for (r, expected) in ranges.iter().zip(&physical) {
-            require(
-                r[3] == expected[0] && r[4] == expected[1],
-                "split exact physical coverage",
-            )?;
-        }
-    }
-    Ok(())
+    super::current_v10::validate_geometry(raw, &fixed_inputs(inputs))
 }
 
 fn diagnostic_shape(diag: &Value) -> Result<()> {
-    fields(
-        diag,
-        "schema query_monotonic_start_ns query_monotonic_end_ns process_cpu_start_ns process_cpu_end_ns sq8_range_trace host",
-    )?;
-    require(
-        diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v3",
-        "panel diagnostic schema",
-    )
+    super::current_v10::diagnostic_shape(diag)
 }
 
 fn nullable(v: &Value) -> Result<Option<u64>> {
@@ -694,7 +458,17 @@ struct Decomposition {
 
 fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     validate_geometry(raw, inputs)?;
-    let physical = physical_ranges(raw, small_pieces(inputs))?;
+    decompose_current(raw, &fixed_inputs(inputs))
+}
+
+pub(super) fn validate_diagnostic(raw: &Value, inputs: &Value) -> Result<()> {
+    decompose_current(raw, inputs).map(|_| ())
+}
+
+fn decompose_current(raw: &Value, inputs: &Value) -> Result<Decomposition> {
+    let physical = super::current_v10::physical_ranges(raw, inputs)?;
+    let width = plus(number(&inputs["dimensions"])?, 12)?;
+    let parallelism = number(&inputs["fetch_parallelism"])?;
     let diag = &raw["diagnostic"];
     diagnostic_shape(diag)?;
     if let (Some(start), Some(end)) = (
@@ -722,10 +496,10 @@ fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     let plan = &physical;
     require(
         !ranges.is_empty()
-            && ranges.len() <= 128
+            && ranges.len() as u64 <= super::current_v10::physical_cap(inputs)?
             && ranges.len() == plan.len()
             && trace["planned_ranges"] == ranges.len()
-            && trace["max_parallel"] == ranges.len().min(64)
+            && trace["max_parallel"] == (ranges.len() as u64).min(parallelism)
             && trace["planned_bytes"] == raw["plan"]["planned_bytes"],
         "panel trace plan totals",
     )?;
@@ -762,8 +536,8 @@ fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
             n(0)? == index as u64
                 && row[21] == "ok"
                 && plan[index] == json!([start, end])
-                && n(1)? == start / (page_rows * 1036)
-                && n(2)? == end.checked_sub(1).ok_or("empty range")? / (page_rows * 1036)
+                && n(1)? == start / (page_rows * width)
+                && n(2)? == end.checked_sub(1).ok_or("empty range")? / (page_rows * width)
                 && n(16)? == duration(start, end)?
                 && (1..=u64::from(u32::MAX)).contains(&n(15)?)
                 && n(20)? == n(15)?,
@@ -859,8 +633,8 @@ fn decompose(raw: &Value, inputs: &Value) -> Result<Decomposition> {
                 .as_array()
                 .ok_or("logical rank ranges")?
                 .len()
-            && rank["rows"] == bytes / 1036
-            && bytes % 1036 == 0,
+            && rank["rows"] == bytes / width
+            && bytes % width == 0,
         "panel rank rows/ranges",
     )?;
     let phases = ["score_ns", "roster_ns", "sort_ns", "finish_ns"]
@@ -1266,6 +1040,13 @@ mod tests {
                     [1,2,2,2*bytes,3*bytes,121,131,141,151,161,180,190,200,240,250,2,bytes,19,180,10,2,"ok"]
                 ]}}});
         raw["query_wall_ns"] = json!(600);
+        raw["returned"] = json!(
+            (0..10)
+                .map(|id| json!({"id":id,"score_bits":0}))
+                .collect::<Vec<_>>()
+        );
+        raw["returned_count"] = json!(10);
+        raw["returned_physical_ordinals"] = json!((0..10).collect::<Vec<_>>());
         raw["plan"] = json!({"page_rows":32,"selected_pages":(0..130).collect::<Vec<_>>(),
             "ranges":[[0,130*bytes]],"planned_bytes":130*bytes,"target_pages":130,"target_shortfall":0,
             "primary_pages_retained":0,"covered_pages":130,"bridge_pages":0});
@@ -1723,16 +1504,15 @@ mod tests {
         ] {
             assert_eq!(screen(values), "INCONCLUSIVE");
         }
-        // Historical readers cannot silently accept this opt-in protocol.
+        // Ordinary completed reads accept current v10; historical panel modes
+        // keep their frozen admission rules.
         let d = descriptor(dir.path(), 3, fixture(3));
-        assert!(
-            super::super::read_run_with(
-                &d.completed.input.path,
-                &d.completed.input.sha256,
-                Some(&d.completed)
-            )
-            .is_err()
-        );
+        super::super::read_run_with(
+            &d.completed.input.path,
+            &d.completed.input.sha256,
+            Some(&d.completed),
+        )
+        .unwrap();
         assert!(super::super::sq8_panel_attribution::validate_completed(&d.completed).is_err());
     }
 
