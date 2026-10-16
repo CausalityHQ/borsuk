@@ -1,0 +1,35 @@
+{
+   "bytes" : {
+      "QUALIFICATION_ADMITTED" : 41,
+      "admission-inputs.sha256" : 838,
+      "native-source.json" : 50968,
+      "qualify-sq8-split.sh" : 16309,
+      "required-exact-tests.txt" : 1681,
+      "source-files.sha256" : 53131,
+      "source.tar.gz" : 4866840,
+      "supervise-sq8-split.sh" : 19051
+   },
+   "groups" : {
+      "bin" : 3,
+      "example" : 9,
+      "lib" : 6,
+      "repair" : 4
+   },
+   "launch_authorized" : false,
+   "native_files" : 447,
+   "native_qualified" : false,
+   "required_exact_tests" : 22,
+   "schema" : "borsuk-split-input-freeze-v1",
+   "sha256" : {
+      "QUALIFICATION_ADMITTED" : "f09c70f03eadb43a6ca3704d6480635d47ec09582090da4501253a044f4e07ae",
+      "admission-inputs.sha256" : "921879ecd6d36bb04a7548ef7ba98038e8f4a4eb2a1904a30d2063ae8ca3ccd5",
+      "native-source.json" : "26a2e525120824fc41fe53d898db5fd3cd213a84a1c0478f774a8aa752c7d065",
+      "qualify-sq8-split.sh" : "fe29a4c6b1c3ce622724dd82efed0dce02d0ac8039ee45ab897cff5c7cd05721",
+      "required-exact-tests.txt" : "fb97313ff6ff37d3bc8916bb25c449759aa4cae70403563950edbb65fcdda898",
+      "source-files.sha256" : "e8c7c66d19150c6662efcd30975186f5c4e9052f1b5137dd4d1e3a7fecf8802f",
+      "source.tar.gz" : "c3e66dc397d4d694700e87699a03dc6c44d01a15984a5609bdfea3dbe9757955",
+      "supervise-sq8-split.sh" : "efa676b136c1388fa2778e92bfef90344a325f80c4090c445fb26797c70dbc33"
+   },
+   "source_commit" : "8e7076951936b0434b7947afd5b23e192c98fe70",
+   "source_files" : 480
+}

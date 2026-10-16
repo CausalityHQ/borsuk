@@ -1,0 +1,5 @@
+jq: error: syntax error, unexpected '/', expecting end of file at <top-level>, line 1, column 1:
+    /data/target/borsuk-sq8-panel-attribution.pending/launch-split-gates-a0003/verifier-expected/input-pin-summary.json
+    ^
+jq: 1 compile error
+Compiler qualification verification FAILED (exit 3)
