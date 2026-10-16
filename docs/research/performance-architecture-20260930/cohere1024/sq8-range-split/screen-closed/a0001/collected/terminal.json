@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-sq8-split-local-completion-v1",
+  "scope": "LOCAL_ONLY",
+  "status": "LOCAL_EXECUTION_COMPLETE",
+  "input_manifest_sha256": "21a824b3ed20ef266d7834c4f3e200ccdbc05fe61f34ffbc83fa8c9d2b57e1a8",
+  "final_stage": "local-only-complete",
+  "original_exit": 0,
+  "exit": 0,
+  "completed_cells": 6,
+  "full_qualification": false,
+  "cloud_publication": false,
+  "compute_closed": false,
+  "scientific_performance_claim": false,
+  "root_external_gates_required": true,
+  "original_native_results_preserved": true
+}

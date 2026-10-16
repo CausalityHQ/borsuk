@@ -1,0 +1,3 @@
+#!/bin/bash
+set -eu
+systemd-run --unit=borsuk-sq8-split-prerequisites-shutdown --on-boot=3600s /usr/sbin/shutdown -h now

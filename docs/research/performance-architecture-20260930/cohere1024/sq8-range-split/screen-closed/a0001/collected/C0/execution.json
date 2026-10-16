@@ -1,0 +1,17 @@
+{
+  "schema": "borsuk-sq8-split-cell-execution-v1",
+  "scope": "LOCAL_ONLY",
+  "label": "C0",
+  "owner": "borsuk-sq8-panel-3a2d7ece-c1be-421c-a5a5-18fb5f683de1-C0.service:21a824b3ed20ef266d7834c4f3e200ccdbc05fe61f34ffbc83fa8c9d2b57e1a8",
+  "invocation_id": "0a90e123b00648edb460ec4d436160e5",
+  "cgroup": "/system.slice/borsuk-sq8-panel-3a2d7ece-c1be-421c-a5a5-18fb5f683de1-C0.service",
+  "native_exit": 0,
+  "timeout_exit": 0,
+  "time_exit": 0,
+  "systemd_run_exit": 0,
+  "valid": true,
+  "owned": true,
+  "drained": true,
+  "forced_cleanup": false,
+  "resources_verified": true
+}

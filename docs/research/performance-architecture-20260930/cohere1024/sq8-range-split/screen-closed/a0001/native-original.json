@@ -1,0 +1,22 @@
+{
+    "CommandId": "98e42169-f7ba-4b61-b10e-e613d7df6b46",
+    "InstanceId": "i-09055af56258dcb86",
+    "Comment": "borsuk-sq8-split-screen-a0001",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-16T07:53:18.275Z",
+    "ExecutionElapsedTime": "PT58.424S",
+    "ExecutionEndDateTime": "2026-10-16T07:54:16.275Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "/mnt/borsuk-sq8-split-panel/master.json: OK\n/mnt/borsuk-sq8-split-panel/support/publish-sq8-split-panel.sh: OK\n/mnt/borsuk-sq8-split-panel/master.json: OK\n/mnt/borsuk-sq8-split-panel/support/run-sq8-split-panel.sh: OK\noriginal_exit=0\npublication_exit=0\nshutdown_request_exit=0\nwrapper_exit=0\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "Shutdown scheduled for Fri 2026-10-16 07:55:16 UTC, use 'shutdown -c' to cancel.\n",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+        "CloudWatchLogGroupName": "",
+        "CloudWatchOutputEnabled": false
+    }
+}

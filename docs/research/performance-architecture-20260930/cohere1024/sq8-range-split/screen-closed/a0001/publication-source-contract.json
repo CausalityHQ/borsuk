@@ -1,0 +1,145 @@
+{
+  "schema": "borsuk-split-panel-publication-contract-v1",
+  "status": "UNVERIFIED_SOURCE_ONLY",
+  "original_brief": "/data/orchestration/borsuk%split-panel-publication-envelope.brief.json",
+  "worker": "borsuk/split-panel-publication-envelope",
+  "instance": "86d436c4-d467-4c23-bc8e-659a055e425f",
+  "base_commit": "54391e202e8ca8129723683d145785a57933911b",
+  "commit": "7684d273840a2f9fc0c26a4608973cfef1b00b09",
+  "branch": "devbox/split-panel-publication-envelope-source-54391e20",
+  "worktree": "/home/rb/worktrees/borsuk-split-panel-publication-envelope",
+  "source": {
+    "path": "docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/publish-sq8-split-panel.sh",
+    "bytes": 5639,
+    "sha256": "39a9b9f5785944d7294986d5d6b2f85715d6b1af54a0baae1b2b2e0eb9297ebd",
+    "mode": "100644"
+  },
+  "api": {
+    "usage": "bash publish-sq8-split-panel.sh ROOT MASTER MASTER_SHA DRIVER_SHA",
+    "root": "/mnt/borsuk-sq8-split-panel",
+    "master": "Absolute canonical regular file, <=65536 bytes, externally SHA-256 pinned; the existing driver owns full input admission.",
+    "master_sha": "64 lowercase hexadecimal characters; must match MASTER.",
+    "driver_sha": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644",
+    "driver_path": "/mnt/borsuk-sq8-split-panel/support/run-sq8-split-panel.sh",
+    "driver_bytes": 21270,
+    "campaign_dir": "/mnt/borsuk-sq8-split-panel/measurement",
+    "freshness": "ROOT must exist canonically; ROOT/publication and ROOT/measurement must not exist, including dangling symlinks; MASTER.campaign_dir must equal ROOT/measurement.",
+    "driver_invocation": "timeout -k 5 \"$left\" /bin/bash \"$driver\" \"$campaign\" \"$master\" \"$master_sha\"",
+    "creates_admission_inputs": false
+  },
+  "publication": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "prefix": "research/semantic-router/20261016/sq8-split-screen-a0001/terminal",
+    "region": "eu-central-1",
+    "archive": "evidence.tar.gz",
+    "archive_members": "Entire measurement directory beneath ROOT; no exclusions, truncation, or parsing of result JSONL.",
+    "max_compressed_bytes": 67108864,
+    "checksum": "evidence.sha256; SHA-256 followed by two spaces and evidence.tar.gz",
+    "create_only": true,
+    "upload_order": [
+      "evidence.tar.gz",
+      "evidence.sha256",
+      "terminal.json"
+    ],
+    "terminal_schema": "borsuk-sq8-split-panel-publication-v1",
+    "scope": "SCIENTIFIC_DIAGNOSTIC_PANEL",
+    "terminal_meaning": "Transport publication complete only. Failure evidence may be published with a nonzero original_exit. No scientific acceptance follows from any process exit or publication marker.",
+    "terminal_claims": {
+      "publication_complete": true,
+      "compute_closed": false,
+      "root_independent_verification_required": true,
+      "scientific_result_verified": false,
+      "performance_claim": false,
+      "quality_claim": false,
+      "vendor_win": false
+    },
+    "failure_behavior": "Tar failure, archive >64 MiB, hash failure, or any PUT failure sets publication_exit=95 and prevents a terminal PUT; existing objects are never overwritten."
+  },
+  "deadlines": {
+    "original_start": "MASTER.machine_started_epoch",
+    "shared": "MASTER.shared_deadline_epoch",
+    "clamp": "min(machine_started_epoch + 3600, shared_deadline_epoch - 120)",
+    "admission": "start <= now < shared <= start + 3720",
+    "driver_publication_reserve_seconds": 125,
+    "driver_kill_grace_seconds": 5,
+    "publication_command_kill_grace_seconds": 2,
+    "publication_caps_seconds": {
+      "tar": 20,
+      "sha256sum": 15,
+      "archive_put": 45,
+      "checksum_put": 20,
+      "jq_terminal": 5,
+      "terminal_put": 20
+    },
+    "required_active_timer": "borsuk-sq8-split-prerequisites-shutdown.timer",
+    "host_hardstop_seconds": 3600,
+    "external_seconds": 3720,
+    "authority": "Root provisions and independently verifies the original timer, external deadline, budget, resource limits and compute closure; this wrapper never starts or renews them."
+  },
+  "exits": {
+    "ssm_fields": [
+      "original_exit",
+      "publication_exit",
+      "shutdown_request_exit",
+      "wrapper_exit"
+    ],
+    "precedence": "Preserve any nonzero original driver/setup exit; otherwise publication failure yields 95; otherwise shutdown failure yields 97; otherwise 0.",
+    "shutdown": "Every installed EXIT/INT/TERM/HUP trap path requests timeout -k 2 5 shutdown -h +1, even before publication setup. Shutdown output goes directly to SSM so a failed file redirection cannot suppress the request. Uncatchable process/host loss remains covered by root-owned hard stops.",
+    "traps": "Installed before argument validation; finalization ignores repeated INT/TERM/HUP while bounded publication and shutdown complete."
+  },
+  "static_receipt": {
+    "scope": "LOCAL_ONLY_STATIC; no wrapper, function, driver, mock, native, Cargo, rustc, data, network, AWS or scientific execution",
+    "resource_envelope": {
+      "cpu_quota": "100%",
+      "allowed_cpus": "0",
+      "memory_max": "256M",
+      "memory_swap_max": 0,
+      "tasks_max": 128,
+      "runtime_max_seconds": 120
+    },
+    "command_prefix": "rtk proxy systemd-run --user --quiet --wait --pipe --working-directory=/home/rb/worktrees/borsuk-split-panel-publication-envelope -p CPUQuota=100% -p AllowedCPUs=0 -p MemoryMax=256M -p MemorySwapMax=0 -p TasksMax=128 -p RuntimeMaxSec=120",
+    "checks": [
+      {
+        "command": "/bin/bash -n docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/publish-sq8-split-panel.sh",
+        "exit": 0,
+        "tool_receipt": "a6e864"
+      },
+      {
+        "command": "shellcheck docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/publish-sq8-split-panel.sh",
+        "exit": 0,
+        "tool_receipt": "a33cb3"
+      },
+      {
+        "command": "jq -n --arg original '' --arg sha '' --arg master '' --arg driver '' --arg campaign '' 'empty | (.machine_started_epoch|select(type==\"number\" and floor==. and .>=1000000000 and .<=9999999999)), (.shared_deadline_epoch|select(type==\"number\" and floor==. and .>=1000000000 and .<=9999999999)), (length==1 and .[0].campaign_dir==$campaign), {schema:\"borsuk-sq8-split-panel-publication-v1\",scope:\"SCIENTIFIC_DIAGNOSTIC_PANEL\",original_exit:$original,archive_sha256:$sha,master_sha256:$master,driver_sha256:$driver,publication_complete:true,compute_closed:false,root_independent_verification_required:true,scientific_result_verified:false,performance_claim:false,quality_claim:false,vendor_win:false}'",
+        "exit": 0,
+        "tool_receipt": "217e6c"
+      },
+      {
+        "command": "sha256sum docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/publish-sq8-split-panel.sh",
+        "exit": 0,
+        "tool_receipt": "98351d"
+      },
+      {
+        "command": "wc -c docs/research/performance-architecture-20260930/cohere1024/sq8-range-split/panel-support.pending/publish-sq8-split-panel.sh",
+        "exit": 0,
+        "tool_receipt": "058c5a"
+      },
+      {
+        "command": "git show -s --format='%H%n%P%n%an <%ae>%n%B' HEAD && git status --porcelain=v1 && git diff HEAD^ HEAD --check && git diff-tree --no-commit-id --name-only -r HEAD",
+        "exit": 0,
+        "tool_receipt": "63cecb"
+      }
+    ],
+    "unchanged_driver_sha256": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644",
+    "unchanged_driver_bytes": 21270,
+    "original_envelope_sha256": "5ae834475087462f5ec219dcd8b637ce23bce644faa0aac18403b524b19ea71a",
+    "git_hooks": "Disabled for this commit only to honor the prohibition on script execution.",
+    "runtime_verified": false,
+    "no_merge_or_push": true
+  },
+  "root_handoff": {
+    "inspect": "Authenticate all publication objects and archive members; inspect the driver's LOCAL_ONLY terminal, native reducer decision, full native evidence and owned-unit closure; independently establish compute/volume/timer closure and budget reconciliation.",
+    "not_checked": "Runtime wrapper behavior, faults, actual uploads, shutdown, native execution, science, or the repository assurance gate. Explicit source-only assignment forbids those executions.",
+    "change_scope": "One new Bash file only; driver, worker, native code, protocol, assets, resource limits, scientific gates and root worktree unchanged."
+  }
+}

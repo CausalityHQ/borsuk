@@ -1,0 +1,3 @@
+Opaque raw archive: s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261016/sq8-split-screen-a0001/terminal/evidence.tar.gz
+SHA256 3e5554cdc844702824c5013faa84513fd26935c1278c9be9bb82056edb61b4cb
+Scientific raw JSONL/full native report intentionally excluded; summary fields are precomputed by the qualified remote reducer.

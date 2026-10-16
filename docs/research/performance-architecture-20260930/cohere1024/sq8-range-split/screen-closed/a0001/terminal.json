@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-sq8-split-panel-publication-v1",
+  "scope": "SCIENTIFIC_DIAGNOSTIC_PANEL",
+  "original_exit": 0,
+  "archive_sha256": "3e5554cdc844702824c5013faa84513fd26935c1278c9be9bb82056edb61b4cb",
+  "master_sha256": "21a824b3ed20ef266d7834c4f3e200ccdbc05fe61f34ffbc83fa8c9d2b57e1a8",
+  "driver_sha256": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644",
+  "publication_complete": true,
+  "compute_closed": false,
+  "root_independent_verification_required": true,
+  "scientific_result_verified": false,
+  "performance_claim": false,
+  "quality_claim": false,
+  "vendor_win": false
+}

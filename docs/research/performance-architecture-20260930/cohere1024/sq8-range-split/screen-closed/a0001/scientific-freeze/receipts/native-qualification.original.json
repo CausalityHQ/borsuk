@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-root-split-qualification-v1",
+  "verdict": "VALID_FOR_COMPILER_CORRECTNESS_ONLY",
+  "source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "command_id": "e77d03c6-a011-4bec-9e23-1af966a780a8",
+  "instance_id": "i-09f86aa4caf0d7e83",
+  "terminal_prefix": "research/semantic-router/20261016/sq8-split-correctness-a0003/terminal/",
+  "evidence_archive_sha256": "74d55e823b88430bdb96c66def556e501bf1b77083553c474c261b92342bd44e",
+  "input_map_sha256": "921879ecd6d36bb04a7548ef7ba98038e8f4a4eb2a1904a30d2063ae8ca3ccd5",
+  "inner_sha256": "fe29a4c6b1c3ce622724dd82efed0dce02d0ac8039ee45ab897cff5c7cd05721",
+  "supervisor_sha256": "efa676b136c1388fa2778e92bfef90344a325f80c4090c445fb26797c70dbc33",
+  "required_exact_tests_sha256": "fb97313ff6ff37d3bc8916bb25c449759aa4cae70403563950edbb65fcdda898",
+  "required_exact_tests": 22,
+  "profiles": [
+    "debug",
+    "release"
+  ],
+  "native_stages": 184,
+  "manager_stages": 17,
+  "binaries": [
+    {
+      "name": "check_cohere_native_baseline",
+      "key": "research/semantic-router/20261016/sq8-split-correctness-a0003/terminal/binaries/check_cohere_native_baseline",
+      "size_bytes": 17629808,
+      "sha256": "65ad16cd5aecc22731a9752ca7233226b11611d21c3a1468be30cc384c14ea33",
+      "upload_exit": 0,
+      "upload_receipt": "evidence/sq8-split-manager/check_cohere_native_baseline.put.json",
+      "verified": true
+    },
+    {
+      "name": "compare_native_replay",
+      "key": "research/semantic-router/20261016/sq8-split-correctness-a0003/terminal/binaries/compare_native_replay",
+      "size_bytes": 13384312,
+      "sha256": "4efc0af9855e1320a915053dcbbd7e242bc7f03a541460be3d73290ce66dc25f",
+      "upload_exit": 0,
+      "upload_receipt": "evidence/sq8-split-manager/compare_native_replay.put.json",
+      "verified": true
+    }
+  ],
+  "full_qualification": false,
+  "scientific_performance_claim": false,
+  "builder_removal_mutation_falsifier": "EXTERNAL NOT_RUN",
+  "compute_closure_pending": true,
+  "late_archive_publication_evidence": "Original SSM Success/code0 and identical published terminal; late stages are outside their own archive"
+}

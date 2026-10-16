@@ -1,0 +1,161 @@
+{
+  "schema": "borsuk-sq8-split-execution-input-v1",
+  "campaign_dir": "/mnt/borsuk-sq8-split-panel/measurement",
+  "source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "machine_started_epoch": 1792137079,
+  "shared_deadline_epoch": 1792140799,
+  "admission_marker": {
+    "path": "/mnt/borsuk-sq8-split-panel/receipts/ADMITTED_SOURCE",
+    "bytes": 41,
+    "sha256": "f09c70f03eadb43a6ca3704d6480635d47ec09582090da4501253a044f4e07ae"
+  },
+  "driver": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/run-sq8-split-panel.sh",
+    "bytes": 21270,
+    "sha256": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644"
+  },
+  "worker": {
+    "path": "/mnt/borsuk-sq8-split-panel/support/panel-stage.sh",
+    "bytes": 3821,
+    "sha256": "b046c34d6276c055ddac939ecc5dcb18cf5bc8d3ca71fff42daae5cb3ebab433"
+  },
+  "producer": {
+    "path": "/mnt/borsuk-sq8-split-panel/bin/check_cohere_native_baseline",
+    "bytes": 17629808,
+    "sha256": "65ad16cd5aecc22731a9752ca7233226b11611d21c3a1468be30cc384c14ea33"
+  },
+  "reducer": {
+    "path": "/mnt/borsuk-sq8-split-panel/bin/compare_native_replay",
+    "bytes": 13384312,
+    "sha256": "4efc0af9855e1320a915053dcbbd7e242bc7f03a541460be3d73290ce66dc25f"
+  },
+  "authority": {
+    "source": {
+      "path": "/mnt/borsuk-sq8-split-panel/authority/native-source.json",
+      "bytes": 50968,
+      "sha256": "26a2e525120824fc41fe53d898db5fd3cd213a84a1c0478f774a8aa752c7d065"
+    },
+    "protocol": {
+      "path": "/mnt/borsuk-sq8-split-panel/authority/protocol.md",
+      "bytes": 10855,
+      "sha256": "68c7601ee7680e318443dcda268cf4c4a0c613159f016a24040a720cafc7f975"
+    },
+    "cohort": {
+      "path": "/mnt/borsuk-sq8-split-panel/inputs/prepared-parent_cohort_complete.json",
+      "bytes": 6238,
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    }
+  },
+  "receipts": {
+    "native_qualification": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/native-qualification.json",
+      "bytes": 819,
+      "sha256": "2774b77616dfcb11ba7625f1613d1b2ee1c50ba58a52293f2a0f758e3ef94e45"
+    },
+    "real_input_admission": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/real-input-admission.json",
+      "bytes": 792,
+      "sha256": "b5bbcfd7d9d6301f056585143adb1ce49dc0ec3a5c428411096f65625f0dc5cd"
+    },
+    "smoke": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/smoke.json",
+      "bytes": 996,
+      "sha256": "621d0461ccacd769ce0417051f572f1cc81de40cec21023f0513ad4dc6f87d58"
+    },
+    "disabled_historical_parity": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/disabled-historical-parity.json",
+      "bytes": 13755,
+      "sha256": "1bf87d07fdd843ea528dd6ea9d56862f29bb0beff2c06ee21603af69e5192524"
+    },
+    "builder_removal_mutation": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/builder-removal-mutation.json",
+      "bytes": 1088,
+      "sha256": "ad9aa140fc6149c0392ac33ed6b95d31a6ac631fbce1dc6b34ade4c03533e3a6"
+    },
+    "scientific_freeze": {
+      "path": "/mnt/borsuk-sq8-split-panel/receipts/scientific-freeze.json",
+      "bytes": 4609,
+      "sha256": "f08f369f69260a0b6405d8689a98201dbcf55dadde73459c6033e3ecfe01ee73"
+    }
+  },
+  "cells": [
+    {
+      "label": "B0",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B0.runtime.json",
+        "bytes": 3602,
+        "sha256": "b8ab5a78d1f70058f840a2983202e7795f21f15b6bf3490b64a94fa9c12527dd"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B0.expected.json",
+        "bytes": 5847,
+        "sha256": "b4bad6eef3ab7dac9b5e50b5b894c6db7eab31ecc9ad611a34a5ae4a37c7a378"
+      }
+    },
+    {
+      "label": "C0",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C0.runtime.json",
+        "bytes": 3601,
+        "sha256": "eff496ec4d634e3f36bb90f913c01628d8194863efbe789b4e14c5cdc5f6fb1e"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C0.expected.json",
+        "bytes": 5845,
+        "sha256": "48bf7069907f1caed15bfc8df7e888e1e72f5d20b8605b40a85634ccd756d521"
+      }
+    },
+    {
+      "label": "B1",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B1.runtime.json",
+        "bytes": 3601,
+        "sha256": "604ca94535c800d38a1c6eb13953fd974b33673813f717d761e0702e9da675d7"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B1.expected.json",
+        "bytes": 5845,
+        "sha256": "f31952b3d08f87f0b8640e5912acd05b057c1dd54b828e744ef1930c659d4379"
+      }
+    },
+    {
+      "label": "C1",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C1.runtime.json",
+        "bytes": 3600,
+        "sha256": "cd99577674e67825eb756ecd8a80ba38dee51743130e44b1488a76ea430a5994"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C1.expected.json",
+        "bytes": 5843,
+        "sha256": "d1bb14698e275142fe0e349ac6d136578effe1b0f5246819f959abc5a2f6d556"
+      }
+    },
+    {
+      "label": "C2",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C2.runtime.json",
+        "bytes": 3600,
+        "sha256": "cd99577674e67825eb756ecd8a80ba38dee51743130e44b1488a76ea430a5994"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/C2.expected.json",
+        "bytes": 5843,
+        "sha256": "d1bb14698e275142fe0e349ac6d136578effe1b0f5246819f959abc5a2f6d556"
+      }
+    },
+    {
+      "label": "B2",
+      "runtime_config": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B2.runtime.json",
+        "bytes": 3601,
+        "sha256": "604ca94535c800d38a1c6eb13953fd974b33673813f717d761e0702e9da675d7"
+      },
+      "expected_headers": {
+        "path": "/mnt/borsuk-sq8-split-panel/runtime/B2.expected.json",
+        "bytes": 5845,
+        "sha256": "f31952b3d08f87f0b8640e5912acd05b057c1dd54b828e744ef1930c659d4379"
+      }
+    }
+  ]
+}

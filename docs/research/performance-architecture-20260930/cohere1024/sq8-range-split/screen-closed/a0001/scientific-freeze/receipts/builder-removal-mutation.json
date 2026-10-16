@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-root-builder-mutation-qualification-v1",
+  "verdict": "MUTATION_GATE_PASSED",
+  "source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "wrapper_source_commit": "576ce2b1a282990336eeac0ed65d8149191ca1b4",
+  "wrapper_sha256": "8ee3aab70d6a2b13bf87da7698641c03cfb1009d5b856fabf4d70e22958b55b6",
+  "probe_sha256": "83df03d1fc9b4ddae33a937846b70b911ab09406e1783528ca2d6ff6589f9059",
+  "command_id": "32289c66-2396-43d1-9347-b5499a545f91",
+  "instance_id": "i-0fa657acfbd424555",
+  "evidence_archive_sha256": "2556f6cd0cb30c9808deaf9443eb8119854721576c60d984994434ea7084b207",
+  "baseline_exit": 0,
+  "mutant_exit": 101,
+  "restored_exit": 0,
+  "exact_failure": "check_cohere_native_baseline.rs:4228:25 left1/right5",
+  "whole_source_restored": true,
+  "ownership_and_subtree_drain_verified": true,
+  "original_ssm_and_publication_exit_zero": true,
+  "resources_verified": true,
+  "compute_terminated_volume_absent_timer_inactive": true,
+  "historical_a0001": "INVALID95 preserved",
+  "scientific_performance_claim": false,
+  "full_product_qualification": false
+}

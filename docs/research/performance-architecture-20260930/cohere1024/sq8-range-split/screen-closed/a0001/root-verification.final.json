@@ -1,0 +1,87 @@
+{
+  "schema": "borsuk-sq8-split-root-verification-v1",
+  "status": "VALID_EXECUTION_INCONCLUSIVE_SCREEN",
+  "source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "integrated_main": "a5269de6a54ed61afdd51b61d9fb973d3607fecc",
+  "original_command_id": "98e42169-f7ba-4b61-b10e-e613d7df6b46",
+  "instance_id": "i-09055af56258dcb86",
+  "archive_sha256": "3e5554cdc844702824c5013faa84513fd26935c1278c9be9bb82056edb61b4cb",
+  "master_sha256": "21a824b3ed20ef266d7834c4f3e200ccdbc05fe61f34ffbc83fa8c9d2b57e1a8",
+  "original_native_exit": 0,
+  "publication_exit": 0,
+  "shutdown_request_exit": 0,
+  "wrapper_exit": 0,
+  "completed_scientific_cells": 6,
+  "validated_owned_stages": 7,
+  "all_stages_drained": true,
+  "all_stages_oom": 0,
+  "all_stages_swap_peak": 0,
+  "instance_terminated": true,
+  "volume_absent": true,
+  "external_timer_inactive": true,
+  "default_changed": false,
+  "screen": "INCONCLUSIVE",
+  "native_summary": {
+    "schema": "borsuk-sq8-split-panel-v2",
+    "status": "VALIDATED_FIXED_PANEL",
+    "complete": true,
+    "screen": "INCONCLUSIVE",
+    "screen_scope": "STRONG_REQUIRES_FETCH_NET_AND_SPLIT_CRITICAL_RANGE_SMALL_EFFECT_IS_FETCH_ONLY_TARGETED",
+    "fetch_only_screen": "INCONCLUSIVE",
+    "primary_fetch_improvements_ns": [
+      [
+        -18054145,
+        -1414203
+      ],
+      [
+        4748826,
+        7812614
+      ]
+    ],
+    "primary_net_fetch_to_rank_improvements_ns": [
+      [
+        -17262858,
+        -2771184
+      ],
+      [
+        4360587,
+        10455283
+      ]
+    ],
+    "primary_candidate_critical_logical_range_was_split": [
+      [
+        true,
+        true
+      ],
+      [
+        true,
+        true
+      ]
+    ],
+    "net_performance_screen": "INCONCLUSIVE",
+    "reduction_config_sha256": "c1e56ad0379b74743ad8b134037d26e8cea9f3a21ec0208b13771b3e89021054",
+    "reduction_config_bytes": 45005,
+    "diagnostic_only": true,
+    "selected_count": 32,
+    "population_percentiles_valid": false,
+    "population_p95_claim": false,
+    "qps_claim": false,
+    "causal_claim": false,
+    "vendor_or_scientific_win_claim": false,
+    "recorded_ordered_returned_physical_ordinal_parity": true,
+    "recorded_logical_coverage_parity": true,
+    "recorded_ordered_id_scorebit_parity": true,
+    "valid_tradeoffs_retained_independent_of_screen": true,
+    "proof_gaps": [
+      "No stored complete scored-row roster; returned ordinal equality and logical coverage do not prove every scored row. Root native parity falsifier required.",
+      "No reassembly-only timer: barrier_to_rank includes reassembly and bookkeeping. Per-range copy_ns measures incoming body copies only. Net screen includes this gap but does not establish population performance.",
+      "Root must verify executable/source provenance, original native exit/resource/cache/cost/order receipts and disabled-path historical B compatibility."
+    ],
+    "semantics": "Targeted previously accessed selected panel, noncausal. S3 server cache uncontrolled. Timings overlap; only boundary chain reconciles stage time. Headers combine client queue/connect/TLS/server. No population p95/QPS or vendor claim; retain every valid gain and its GET/CPU/RSS costs even if the screen fails."
+  },
+  "quality_scope": "Exact recorded returned IDs/score bits/physical ordinals and logical coverage parity. No independently stored full scored-row roster; native qualification/parity falsifiers retained separately.",
+  "disposition": "Retain valid tradeoffs and immutable result; no stable split benefit demonstrated, do not promote default or repeat unchanged screen automatically",
+  "population_performance_claim": false,
+  "vendor_win": false,
+  "product_ready": false
+}

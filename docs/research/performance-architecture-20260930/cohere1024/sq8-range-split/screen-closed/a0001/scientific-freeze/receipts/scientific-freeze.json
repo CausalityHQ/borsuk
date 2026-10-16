@@ -1,0 +1,148 @@
+{
+  "schema": "borsuk-sq8-split-scientific-freeze-v1",
+  "scope": "SIX_CELL_DIAGNOSTIC_ONLY",
+  "status": "SCIENTIFIC_CHOICES_FROZEN",
+  "native_source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "integrated_main": "54391e202e8ca8129723683d145785a57933911b",
+  "publication_source_commit": "7684d273840a2f9fc0c26a4608973cfef1b00b09",
+  "order": [
+    "B0",
+    "C0",
+    "B1",
+    "C1",
+    "C2",
+    "B2"
+  ],
+  "queries_per_cell": 32,
+  "trace_off": [
+    "B0",
+    "C0"
+  ],
+  "trace_on": [
+    "B1",
+    "C1",
+    "C2",
+    "B2"
+  ],
+  "download_parallelism": 64,
+  "compute_threads": 1,
+  "baseline_physical_byte_cap": 33554432,
+  "candidate_physical_byte_cap": 2121728,
+  "physical_get_cap": 46,
+  "primary_ordinals": [
+    483,
+    773
+  ],
+  "required_fetch_and_net_improvement_ms": [
+    12.1,
+    15.5
+  ],
+  "small_effect_fetch_threshold_ms": [
+    6,
+    7.7
+  ],
+  "prerequisite_archive_sha256": "3e147a76b75c8a82ea9ce772fd8c954854f3029196581371411c3c2c8a267fc9",
+  "budget": {
+    "campaign_cap_usd": 0.30,
+    "prior_compute_upper_usd": 0.00895,
+    "remaining_compute_upper_usd": 0.064,
+    "ancillary_reserve_usd": 0.15,
+    "total_upper_usd": 0.22295
+  },
+  "prior_access_disclosed": true,
+  "s3_cache_controlled": false,
+  "performance_result": false,
+  "vendor_win": false,
+  "launch_admitted": false,
+  "remaining_infrastructure_admission": "Fresh Spot quote, exact launch/config hashes and same-host setup observation required before original measurement submit",
+  "file_pins": [
+    {
+      "sha256": "26a2e525120824fc41fe53d898db5fd3cd213a84a1c0478f774a8aa752c7d065",
+      "path": "authority/native-source.json"
+    },
+    {
+      "sha256": "68c7601ee7680e318443dcda268cf4c4a0c613159f016a24040a720cafc7f975",
+      "path": "authority/protocol.md"
+    },
+    {
+      "sha256": "ad9aa140fc6149c0392ac33ed6b95d31a6ac631fbce1dc6b34ade4c03533e3a6",
+      "path": "receipts/builder-removal-mutation.json"
+    },
+    {
+      "sha256": "1bf87d07fdd843ea528dd6ea9d56862f29bb0beff2c06ee21603af69e5192524",
+      "path": "receipts/disabled-historical-parity.json"
+    },
+    {
+      "sha256": "2774b77616dfcb11ba7625f1613d1b2ee1c50ba58a52293f2a0f758e3ef94e45",
+      "path": "receipts/native-qualification.json"
+    },
+    {
+      "sha256": "b5bbcfd7d9d6301f056585143adb1ce49dc0ec3a5c428411096f65625f0dc5cd",
+      "path": "receipts/real-input-admission.json"
+    },
+    {
+      "sha256": "621d0461ccacd769ce0417051f572f1cc81de40cec21023f0513ad4dc6f87d58",
+      "path": "receipts/smoke.json"
+    },
+    {
+      "sha256": "b4bad6eef3ab7dac9b5e50b5b894c6db7eab31ecc9ad611a34a5ae4a37c7a378",
+      "path": "runtime/B0.expected.json"
+    },
+    {
+      "sha256": "b8ab5a78d1f70058f840a2983202e7795f21f15b6bf3490b64a94fa9c12527dd",
+      "path": "runtime/B0.runtime.json"
+    },
+    {
+      "sha256": "f31952b3d08f87f0b8640e5912acd05b057c1dd54b828e744ef1930c659d4379",
+      "path": "runtime/B1.expected.json"
+    },
+    {
+      "sha256": "604ca94535c800d38a1c6eb13953fd974b33673813f717d761e0702e9da675d7",
+      "path": "runtime/B1.runtime.json"
+    },
+    {
+      "sha256": "f31952b3d08f87f0b8640e5912acd05b057c1dd54b828e744ef1930c659d4379",
+      "path": "runtime/B2.expected.json"
+    },
+    {
+      "sha256": "604ca94535c800d38a1c6eb13953fd974b33673813f717d761e0702e9da675d7",
+      "path": "runtime/B2.runtime.json"
+    },
+    {
+      "sha256": "48bf7069907f1caed15bfc8df7e888e1e72f5d20b8605b40a85634ccd756d521",
+      "path": "runtime/C0.expected.json"
+    },
+    {
+      "sha256": "eff496ec4d634e3f36bb90f913c01628d8194863efbe789b4e14c5cdc5f6fb1e",
+      "path": "runtime/C0.runtime.json"
+    },
+    {
+      "sha256": "d1bb14698e275142fe0e349ac6d136578effe1b0f5246819f959abc5a2f6d556",
+      "path": "runtime/C1.expected.json"
+    },
+    {
+      "sha256": "cd99577674e67825eb756ecd8a80ba38dee51743130e44b1488a76ea430a5994",
+      "path": "runtime/C1.runtime.json"
+    },
+    {
+      "sha256": "d1bb14698e275142fe0e349ac6d136578effe1b0f5246819f959abc5a2f6d556",
+      "path": "runtime/C2.expected.json"
+    },
+    {
+      "sha256": "cd99577674e67825eb756ecd8a80ba38dee51743130e44b1488a76ea430a5994",
+      "path": "runtime/C2.runtime.json"
+    },
+    {
+      "sha256": "b046c34d6276c055ddac939ecc5dcb18cf5bc8d3ca71fff42daae5cb3ebab433",
+      "path": "support/panel-stage.sh"
+    },
+    {
+      "sha256": "39a9b9f5785944d7294986d5d6b2f85715d6b1af54a0baae1b2b2e0eb9297ebd",
+      "path": "support/publish-sq8-split-panel.sh"
+    },
+    {
+      "sha256": "a65283d5291f660b99c8c96773054b373c0cbeb9a0dd227b3e95b13904f5f644",
+      "path": "support/run-sq8-split-panel.sh"
+    }
+  ]
+}

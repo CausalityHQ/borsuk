@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-split-prerequisites-setup-observation-v1",
+  "remote_machine_id": "ec2634cd38fc78e89174cfafa4d107d9",
+  "sys_vendor": "Amazon EC2",
+  "shell": {
+    "path": "/usr/bin/bash",
+    "bytes": 1446024,
+    "sha256": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1"
+  },
+  "bash_package_verify_exit": 0,
+  "native_executed": false
+}

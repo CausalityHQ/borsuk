@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-split-scientific-prerequisite-gate-v1",
+  "gate": "real_input_admission",
+  "status": "PASS_FOR_THIS_FROZEN_INPUT_AND_SOURCE",
+  "native_build_source_commit": "8e7076951936b0434b7947afd5b23e192c98fe70",
+  "runner_commit": "6c05d7f764bcbb4bfdd6801b67e5144ec8eb7b22",
+  "master_sha256": "e75ebcf5149ff51b359137352b2eaad7874b5cf3fbc8878f18b27a05c415a51b",
+  "archive_sha256": "3e147a76b75c8a82ea9ce772fd8c954854f3029196581371411c3c2c8a267fc9",
+  "original_native_command_id": "b2184862-5483-4914-934a-942c199b0fde",
+  "candidate_real_input_queries": 32,
+  "both_full_sealed_native_validations": true,
+  "setup_exit": 0,
+  "native_exit": 0,
+  "instance_terminated": true,
+  "volume_absent": true,
+  "external_timer_inactive": true,
+  "scientific_performance_claim": false
+}

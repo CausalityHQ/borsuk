@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-sq8-split-screen-native-admission-v1",
+  "native_authorized": true,
+  "scientific_admission": true,
+  "setup_verified": true,
+  "scope": "FROZEN_SIX_CELL_DIAGNOSTIC",
+  "master_sha256": "21a824b3ed20ef266d7834c4f3e200ccdbc05fe61f34ffbc83fa8c9d2b57e1a8",
+  "campaign_cap_usd": 0.30,
+  "prospective_upper_usd": 0.22295,
+  "setup_command_id": "7f2d9951-fea3-4301-99cc-64672539d2c3",
+  "instance_id": "i-09055af56258dcb86",
+  "original_machine_epoch": 1792137079,
+  "interruption_policy": "INVALID; preserve artifacts; no automatic replacement",
+  "scientific_result": false,
+  "vendor_win": false
+}
