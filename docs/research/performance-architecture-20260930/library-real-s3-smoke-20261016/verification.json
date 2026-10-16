@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "status": "REAL_S3_FUNCTIONAL_SMOKE_PASS",
+  "date_utc": "2026-10-16",
+  "scope": "Retrospective documentation of one retained tiny functional smoke on ordinary AWS S3.",
+  "source": {
+    "checkout": "/mnt/borsuk-workspace/release-next-source",
+    "commit": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+    "canonical_code_equivalent_commit_reported_by_root": "37a23e8a2",
+    "compared_to": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+    "only_changed_path": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+    "test_and_library_sources_unchanged": true,
+    "test": "crates/borsuk/tests/two_bit_application_ids.rs::native_s3_conditional_fence_and_gc_smoke"
+  },
+  "original_execution": {
+    "instance": "i-08b026bb97664d583",
+    "region": "eu-central-1",
+    "unit": "borsuk-library-real-s3-smoke-a0002",
+    "invocation_id": "b93f43a89c5a46a9afede98072079056",
+    "dispatch_ssm": "230455d4-f21b-4115-91dd-c91362b76dcf",
+    "terminal_result_ssm": "7440b6e1-c60d-44e2-a112-6c7f33b3416f",
+    "terminal_status": "Success",
+    "terminal_response_code": 0,
+    "limits": {
+      "memory_max_bytes": 8589934592,
+      "memory_swap_max_bytes": 0,
+      "allowed_cpus": [
+        8
+      ],
+      "cpu_quota_percent": 100,
+      "tasks_max": 256,
+      "outer_runtime_seconds": 180,
+      "native_timeout_seconds": 120,
+      "native_kill_grace_seconds": 5
+    }
+  },
+  "artifact": {
+    "reused_qualified_test_driver": true,
+    "fresh_compile_for_successful_attempt": false,
+    "qualified_executable": "/mnt/borsuk-workspace/target/debug/deps/two_bit_application_ids-9edd18c87a3ea383",
+    "qualification_log": "/mnt/borsuk-workspace/evidence/s3vectors-original-raw-gates-a0003/testbuild.log:6575",
+    "qualification": "Original successful unshimmed test-build artifact; reused without recompiling.",
+    "frozen_executable": "/mnt/borsuk-workspace/artifacts/library-real-s3-smoke-a0002/two_bit_application_ids",
+    "sha256": "380a9cc82990e0b9e75764b5a17b2d76f9cb81909d7803573f48fadd93d6e317"
+  },
+  "native_result": {
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "filtered_out": 13,
+    "elapsed_seconds": 4.05,
+    "max_rss_kib": 22608,
+    "swaps": 0
+  },
+  "functional_observations": {
+    "vector_dimensions": 2,
+    "initial_insert_ids": [
+      1,
+      2
+    ],
+    "compacted_generation": 2,
+    "pending_insert_id": 99,
+    "fence_epoch_increment": 2,
+    "stale_conditional_head_write": "Rejected with object_store::Error::Precondition",
+    "gc_objects_deleted": 4,
+    "known_orphan_absent_after_gc": true,
+    "coordinated_open_query_ids_sorted": [
+      1,
+      2,
+      99
+    ],
+    "reopen_scope": "Same process; not a process restart or crash-recovery test.",
+    "maintenance": "Exported callable in-process compact_two_bit_index and collect_two_bit_garbage."
+  },
+  "namespace": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "prefix": "research/native-library-check/gc/20261016-70383e2bf02e7b5acf095cda01c82981",
+    "cli_key_count_before": 0,
+    "cli_key_count_after_test_cleanup": 0,
+    "cli_after_is_truncated": false,
+    "cleanup_scope": "Test teardown deleted only its owned namespace after the successful query; GC itself retained live data."
+  },
+  "prior_attempt": {
+    "evidence": "library-real-s3-smoke-a0001",
+    "classification": "ENVIRONMENT_INVALID_BEFORE_NATIVE",
+    "compile_exit": 101,
+    "cause": "linker `cc` not found",
+    "initial_package_install_exit": 100,
+    "initial_package_install_cause": "Stale linux-libc-dev package URL returned HTTP 404.",
+    "refreshed_install_plan": "1 upgrade; refused before installation.",
+    "recorded_runtime_library_hashes_rechecked_unchanged": true,
+    "source_bug_inferred": false
+  },
+  "decision": {
+    "tiny_real_s3_functional_path": "PASS",
+    "callable_maintenance_api_requirement": "SATISFIED: goal allows automatic OR callable in-process maintenance.",
+    "automatic_daemon_required": false,
+    "performance_or_vendor_win_claimed": false,
+    "unproven": [
+      "Full logical update/delete CRUD",
+      "Process crash/restart recovery",
+      "ANN quality or recall",
+      "Latency or throughput at scale",
+      "Total-dollar comparison against S3 Vectors or Turbopuffer"
+    ]
+  },
+  "retained_evidence": {
+    "directory": "/mnt/borsuk-workspace/evidence/library-real-s3-smoke-a0002",
+    "files": [
+      "run.sh",
+      "native.stdout",
+      "native.stderr",
+      "native.time",
+      "native.exit",
+      "inventory.txt",
+      "prefix-before.json",
+      "prefix-after.json",
+      "terminal.json",
+      "qualification-artifact.txt",
+      "source-delta.txt",
+      "binary.sha256",
+      "caller.json"
+    ],
+    "closure_ssm": "76db18b3-d756-4e57-ad57-c43deab90b5a",
+    "closure_terminal_response_code": 0,
+    "closure_uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261016/persistent-rust-workspace-a0001/library-real-s3-closure-a0001/",
+    "archive": "evidence.tar.gz",
+    "archive_sha256": "7b7116aa90a7445765e14239468a83625027574e2b772aeec144743bb129fbcb",
+    "additional_closure_files": [
+      "source.sha256",
+      "binary.sha256",
+      "terminal.json",
+      "two_bit_application_ids",
+      "root-reconciliation.txt"
+    ]
+  },
+  "documentation_only": {
+    "tests_rerun": false,
+    "builds_started": false,
+    "source_modified": false,
+    "native_or_benchmark_work_started": false
+  }
+}
