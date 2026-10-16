@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-sq8-stage-publication-fault-canary-v1",
+  "status": "STAGE_PUBLICATION_CANARY_PASS",
+  "native_exit17_verified": true,
+  "native_timeout124_verified": true,
+  "client_timeout124_verified": true,
+  "publication_failures_preserve_exits": true,
+  "partial_receipts_unchanged_on_duplicate": true,
+  "native_actors_executed": false,
+  "scientific_bodies_opened": false,
+  "aws_mocked": true,
+  "real_systemd": true,
+  "production_actor_authentication_claimed": false,
+  "performance_claim": false
+}

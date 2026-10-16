@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-sq8-panel-diagnostic-root-verification-v1",
+  "verifier_exit": 0,
+  "source_commit": "898b3fcf82f75085d8b01cd2e462652db34dcd41",
+  "stages": 22,
+  "stage_rows": 44,
+  "all_stage_exits_zero": true,
+  "all_owned_units_drained_unforced": true,
+  "pids_peak": 62,
+  "oom_and_swap_zero": true,
+  "payload_hashes_verified": true,
+  "within_actor_trace_off_parity": true,
+  "native_report_status": "MEASURED",
+  "reproduced_ordinals": 2,
+  "predominantly_pre_barrier_falsified_ordinals": [],
+  "compute_closed": true,
+  "scope": "CLOSED_FIXED32_TRACED_DIAGNOSTIC_NOT_POPULATION_OR_VENDOR_PERFORMANCE",
+  "product_complete": false
+}

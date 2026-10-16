@@ -1,0 +1,616 @@
+{
+  "schema": "borsuk-sq8-panel-attribution-v1",
+  "status": "MEASURED",
+  "selected_count": 32,
+  "reproduced_ordinals": 2,
+  "within_actor_trace_off_parity": true,
+  "population_percentiles_valid": false,
+  "semantics": "Ranges overlap; only the boundary chain reconciles stage time. Headers include client queue/connect/TLS/server. Body gaps include polling/scheduling. Authentication overlap is a union, not a causal attribution. score_ns combines ordinal preparation and SQ8 scoring. Host evidence brackets whole queries, not individual flows. Trace timing perturbation is descriptive.",
+  "range_fields": [
+    "index",
+    "first_page",
+    "last_page",
+    "start_byte",
+    "end_byte",
+    "first_poll_ns",
+    "request_ns",
+    "headers_ns",
+    "metadata_ns",
+    "first_chunk_ns",
+    "last_chunk_ns",
+    "eof_ns",
+    "auth_start_ns",
+    "auth_end_ns",
+    "complete_ns",
+    "chunks",
+    "body_bytes",
+    "max_body_gap_ns",
+    "max_body_gap_end_ns",
+    "copy_ns",
+    "copy_count",
+    "outcome"
+  ],
+  "interval_fields": [
+    "pre_fetch",
+    "fetch_to_latest_complete",
+    "latest_complete_to_barrier",
+    "barrier_to_rank",
+    "rank",
+    "release",
+    "stage_tail"
+  ],
+  "positive_queries": [
+    {
+      "ordinal": 483,
+      "evidence": "UNRESOLVED",
+      "predominantly_pre_barrier_falsified": false,
+      "B1_minus_A1": {
+        "at_least_20ms": true,
+        "interval_excess_ns": [
+          -170,
+          24118335,
+          649,
+          1490,
+          5001803,
+          432418,
+          10
+        ],
+        "post_barrier_at_least_80_percent": false,
+        "post_barrier_excess_ns": 5435721,
+        "sq8_excess_ns": 29554535
+      },
+      "B2_minus_A2": {
+        "at_least_20ms": true,
+        "interval_excess_ns": [
+          799,
+          24611150,
+          1590,
+          10380,
+          6128411,
+          515490,
+          180
+        ],
+        "post_barrier_at_least_80_percent": false,
+        "post_barrier_excess_ns": 6654461,
+        "sq8_excess_ns": 31268000
+      },
+      "trace_on_off_perturbation_descriptive": [
+        {
+          "off": "A0",
+          "on": "A1",
+          "query_wall_delta_ns": 152508379,
+          "sq8_delta_ns": -995584
+        },
+        {
+          "off": "A0",
+          "on": "A2",
+          "query_wall_delta_ns": -3339880,
+          "sq8_delta_ns": -1221017
+        },
+        {
+          "off": "B0",
+          "on": "B1",
+          "query_wall_delta_ns": 183923,
+          "sq8_delta_ns": -2096078
+        },
+        {
+          "off": "B0",
+          "on": "B2",
+          "query_wall_delta_ns": 13132842,
+          "sq8_delta_ns": -608046
+        }
+      ],
+      "traced": {
+        "A1": {
+          "sq8_ns": 60828458,
+          "intervals_ns": [
+            8940,
+            50662751,
+            2511,
+            11970,
+            10135466,
+            6390,
+            430
+          ],
+          "latest_range": [
+            4,
+            149,
+            156,
+            39517184,
+            41638912,
+            280207185,
+            280207235,
+            306303815,
+            306303995,
+            306305675,
+            329423960,
+            329425550,
+            329425600,
+            330629283,
+            330630812,
+            251,
+            2121728,
+            1082430,
+            329197526,
+            196450,
+            251,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 1203683,
+            "body": 23121555,
+            "copy": 196450,
+            "headers": 26096580
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [],
+            "authentication_overlap_union_ns": 0,
+            "duration_ns": 1358135,
+            "end_ns": 305390468,
+            "range_index": 6,
+            "start_ns": 304032333
+          },
+          "post_barrier_ns": 10154256,
+          "rank_unattributed_ns": 4518
+        },
+        "A2": {
+          "sq8_ns": 60603025,
+          "intervals_ns": [
+            8191,
+            50627612,
+            3330,
+            9010,
+            9948992,
+            5290,
+            600
+          ],
+          "latest_range": [
+            4,
+            149,
+            156,
+            39517184,
+            41638912,
+            124571941,
+            124571991,
+            149102698,
+            149102758,
+            149105538,
+            173764527,
+            173766767,
+            173766837,
+            174969919,
+            174971769,
+            259,
+            2121728,
+            1148841,
+            166787520,
+            302036,
+            259,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 1203082,
+            "body": 24664009,
+            "copy": 302036,
+            "headers": 24530707
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [],
+            "authentication_overlap_union_ns": 0,
+            "duration_ns": 1241892,
+            "end_ns": 155444753,
+            "range_index": 23,
+            "start_ns": 154202861
+          },
+          "post_barrier_ns": 9963892,
+          "rank_unattributed_ns": 4541
+        },
+        "B1": {
+          "sq8_ns": 90382993,
+          "intervals_ns": [
+            8770,
+            74781086,
+            3160,
+            13460,
+            15137269,
+            438808,
+            440
+          ],
+          "latest_range": [
+            2,
+            1087,
+            1291,
+            36036224,
+            42832384,
+            126842753,
+            126842824,
+            157316354,
+            157316564,
+            157357015,
+            197550464,
+            197557194,
+            197557264,
+            201451886,
+            201456706,
+            809,
+            6796160,
+            2211221,
+            183023407,
+            4008067,
+            809,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 3894622,
+            "body": 40240630,
+            "copy": 4008067,
+            "headers": 30473530
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                18,
+                2165930
+              ]
+            ],
+            "authentication_overlap_union_ns": 2165930,
+            "duration_ns": 2211221,
+            "end_ns": 183023407,
+            "range_index": 2,
+            "start_ns": 180812186
+          },
+          "post_barrier_ns": 15589977,
+          "rank_unattributed_ns": 4751
+        },
+        "B2": {
+          "sq8_ns": 91871025,
+          "intervals_ns": [
+            8990,
+            75238762,
+            4920,
+            19390,
+            16077403,
+            520780,
+            780
+          ],
+          "latest_range": [
+            2,
+            1087,
+            1291,
+            36036224,
+            42832384,
+            138303340,
+            138303491,
+            166202759,
+            166202909,
+            166255660,
+            209472377,
+            209478568,
+            209478758,
+            213371359,
+            213375679,
+            829,
+            6796160,
+            2202800,
+            200937812,
+            4027331,
+            829,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 3892601,
+            "body": 43275659,
+            "copy": 4027331,
+            "headers": 27899268
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                18,
+                2167210
+              ]
+            ],
+            "authentication_overlap_union_ns": 2167210,
+            "duration_ns": 2202800,
+            "end_ns": 200937812,
+            "range_index": 2,
+            "start_ns": 198735012
+          },
+          "post_barrier_ns": 16618353,
+          "rank_unattributed_ns": 6121
+        }
+      }
+    },
+    {
+      "ordinal": 773,
+      "evidence": "UNRESOLVED",
+      "predominantly_pre_barrier_falsified": false,
+      "B1_minus_A1": {
+        "at_least_20ms": true,
+        "interval_excess_ns": [
+          -810,
+          30911655,
+          300,
+          2260,
+          10024041,
+          939967,
+          -60
+        ],
+        "post_barrier_at_least_80_percent": false,
+        "post_barrier_excess_ns": 10966208,
+        "sq8_excess_ns": 41877353
+      },
+      "B2_minus_A2": {
+        "at_least_20ms": true,
+        "interval_excess_ns": [
+          750,
+          36899013,
+          170,
+          4710,
+          10134184,
+          976539,
+          -200
+        ],
+        "post_barrier_at_least_80_percent": false,
+        "post_barrier_excess_ns": 11115233,
+        "sq8_excess_ns": 48015166
+      },
+      "trace_on_off_perturbation_descriptive": [
+        {
+          "off": "A0",
+          "on": "A1",
+          "query_wall_delta_ns": -5671238,
+          "sq8_delta_ns": -4252063
+        },
+        {
+          "off": "A0",
+          "on": "A2",
+          "query_wall_delta_ns": -1485840,
+          "sq8_delta_ns": -1895571
+        },
+        {
+          "off": "B0",
+          "on": "B1",
+          "query_wall_delta_ns": 951564,
+          "sq8_delta_ns": 1552181
+        },
+        {
+          "off": "B0",
+          "on": "B2",
+          "query_wall_delta_ns": 180303093,
+          "sq8_delta_ns": 10046486
+        }
+      ],
+      "traced": {
+        "A1": {
+          "sq8_ns": 59910742,
+          "intervals_ns": [
+            9480,
+            49976329,
+            2770,
+            10060,
+            9905373,
+            6020,
+            710
+          ],
+          "latest_range": [
+            1,
+            104,
+            110,
+            27582464,
+            29438976,
+            102042437,
+            102042497,
+            131993608,
+            131993778,
+            131995748,
+            150836265,
+            150837065,
+            150837135,
+            151892494,
+            151894054,
+            217,
+            1856512,
+            1364405,
+            150704422,
+            156661,
+            217,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 1055359,
+            "body": 18843287,
+            "copy": 156661,
+            "headers": 29951111
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                11,
+                1355665
+              ]
+            ],
+            "authentication_overlap_union_ns": 1355665,
+            "duration_ns": 1364405,
+            "end_ns": 150704422,
+            "range_index": 1,
+            "start_ns": 149340017
+          },
+          "post_barrier_ns": 9922163,
+          "rank_unattributed_ns": 4593
+        },
+        "A2": {
+          "sq8_ns": 62267234,
+          "intervals_ns": [
+            8660,
+            51917846,
+            3430,
+            11810,
+            10318178,
+            6460,
+            850
+          ],
+          "latest_range": [
+            11,
+            2104,
+            2112,
+            558014464,
+            560401408,
+            104199649,
+            104199709,
+            136087340,
+            136087490,
+            136090300,
+            154286882,
+            154289102,
+            154289192,
+            155661097,
+            155663447,
+            281,
+            2386944,
+            1072020,
+            152700443,
+            199731,
+            281,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 1371905,
+            "body": 18201612,
+            "copy": 199731,
+            "headers": 31887631
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                25,
+                511619
+              ]
+            ],
+            "authentication_overlap_union_ns": 511619,
+            "duration_ns": 1703181,
+            "end_ns": 132760049,
+            "range_index": 9,
+            "start_ns": 131056868
+          },
+          "post_barrier_ns": 10337298,
+          "rank_unattributed_ns": 6254
+        },
+        "B1": {
+          "sq8_ns": 101788095,
+          "intervals_ns": [
+            8670,
+            80887984,
+            3070,
+            12320,
+            19929414,
+            945987,
+            650
+          ],
+          "latest_range": [
+            21,
+            26785,
+            26971,
+            887976320,
+            894175744,
+            100726106,
+            100726196,
+            118767715,
+            118767885,
+            118782105,
+            177340823,
+            177344363,
+            177344403,
+            180888667,
+            180890667,
+            749,
+            6199424,
+            2598798,
+            176306514,
+            712737,
+            749,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 3544264,
+            "body": 58576478,
+            "copy": 712737,
+            "headers": 18041519
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                9,
+                2567027
+              ]
+            ],
+            "authentication_overlap_union_ns": 2567027,
+            "duration_ns": 2598798,
+            "end_ns": 176306514,
+            "range_index": 21,
+            "start_ns": 173707716
+          },
+          "post_barrier_ns": 20888371,
+          "rank_unattributed_ns": 5438
+        },
+        "B2": {
+          "sq8_ns": 110282400,
+          "intervals_ns": [
+            9410,
+            88816859,
+            3600,
+            16520,
+            20452362,
+            982999,
+            650
+          ],
+          "latest_range": [
+            21,
+            26785,
+            26971,
+            887976320,
+            894175744,
+            271614201,
+            271614321,
+            301884742,
+            301884882,
+            301918723,
+            356124041,
+            356128471,
+            356128521,
+            359674946,
+            359677966,
+            722,
+            6199424,
+            2616577,
+            353618945,
+            3966433,
+            722,
+            "ok"
+          ],
+          "latest_range_intervals_ns": {
+            "authentication": 3546425,
+            "body": 54243589,
+            "copy": 3966433,
+            "headers": 30270421
+          },
+          "largest_body_gap": {
+            "authentication_overlap_by_range_ns": [
+              [
+                9,
+                2585236
+              ]
+            ],
+            "authentication_overlap_union_ns": 2585236,
+            "duration_ns": 2616577,
+            "end_ns": 353618945,
+            "range_index": 21,
+            "start_ns": 351002368
+          },
+          "post_barrier_ns": 21452531,
+          "rank_unattributed_ns": 6841
+        }
+      }
+    }
+  ]
+}

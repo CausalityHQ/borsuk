@@ -1,0 +1,3 @@
+stored_remaining_seconds=3476
+timer_remaining_seconds=3473
+delta_seconds=3

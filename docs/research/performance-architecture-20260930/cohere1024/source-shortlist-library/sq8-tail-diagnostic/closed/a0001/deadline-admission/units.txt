@@ -1,0 +1,17 @@
+# /run/systemd/transient/borsuk-v9-runtime-shutdown.timer
+# This is a transient unit file, created programmatically via the systemd API. Do not edit.
+[Unit]
+Description=/usr/sbin/shutdown -h now
+
+[Timer]
+OnActiveSec=59min 45s
+RemainAfterElapse=no
+
+# /run/systemd/transient/borsuk-v9-runtime-shutdown.service
+# This is a transient unit file, created programmatically via the systemd API. Do not edit.
+[Unit]
+Description=/usr/sbin/shutdown -h now
+
+[Service]
+ExecStart=
+ExecStart="/usr/sbin/shutdown" "-h" "now"

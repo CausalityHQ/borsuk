@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-sq8-panel-runtime-source-review-v1",
+  "source_commit": "c590b2ceecaf9ff157d109fcd0800b38c718d759",
+  "root_disposition": "GO_TO_DISPOSABLE_CANARY_AFTER_PREREQUISITES",
+  "runtime_verified": false,
+  "launch_authorized": false,
+  "engineering": {"id": "24d9a2b2a7c94cfe", "status": "completed", "exit": 0, "full_result_read": true},
+  "original_research": {"id": "4666f118d05249d7", "status": "partial", "exit": 1, "substantive_review": false, "reason": "quota banner only; configured fallback never attempted"},
+  "manual_research_fallback": {"id": "89b2b406e58d40fd", "status": "completed", "exit": 0, "full_result_read": true, "distinct_job_not_same_id_resume": true},
+  "dual_group_pass_claim": false,
+  "requirements_before_execution": [
+    "Freeze exact full-source identity, support archive and runtime-code manifest; fill setup template pins",
+    "Retain actual instance binding, effective shutdown timer/service deadline/action and external watchdog receipt",
+    "Pass source-bound native-stage and partial-publication failure canaries with exact ownership/drain/status evidence",
+    "Pass actual-input admission and separate staging canary before formal fixed-panel execution",
+    "Root must authorize the complete canary-plus-formal sequence explicitly; canary-only review is not that authorization",
+    "Record interruption, terminal publication, instance termination and volume absence"
+  ],
+  "new_source_delta_pending": "standalone native-stage/publication fault falsifier and its pre-input integration",
+  "interpretation": "Only frozen traced fixed32 observations under disclosed repeated access; not a population estimate, causal S3 attribution, untraced historical falsification, service QPS, vendor win or default adoption",
+  "scientific_thresholds_changed": false,
+  "historical_results_changed": false
+}

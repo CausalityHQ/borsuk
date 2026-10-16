@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-sq8-panel-diagnostic-terminal-publication-v1",
+  "packet_base_commit": "3e581cf69ba6ac099280d070fdd22729e3dc1be1",
+  "support_archive_sha256": "2eec6389c96198d1acfeef273777073a2217f73d9f344f79961eec987b044313",
+  "archive_sha256": "8794d773c99ccf3323cda692fead6377609e521196f355e653ce2290f2ae93fe",
+  "archive_bytes": 7230615,
+  "original_exit": 0,
+  "last_phase": "complete",
+  "execution_closed": true,
+  "diagnostic_only": true,
+  "population_percentiles_valid": false,
+  "cold_performance_claim": false,
+  "vendor_win_claim": false,
+  "compute_closure_pending": true
+}

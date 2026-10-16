@@ -1,0 +1,1 @@
+{ path=/usr/sbin/shutdown ; argv[]=/usr/sbin/shutdown -h now ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }

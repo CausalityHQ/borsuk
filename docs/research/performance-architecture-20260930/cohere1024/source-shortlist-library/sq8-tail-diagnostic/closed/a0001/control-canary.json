@@ -1,0 +1,12 @@
+{
+  "schema": "borsuk-v9-control-canary-v1",
+  "status": "CONTROL_CANARY_PASS",
+  "real_systemd": true,
+  "original_prep_exit": 17,
+  "client_timeout_exit": 124,
+  "duplicate_evidence_unchanged": true,
+  "absence_predicate_inputs_mocked": true,
+  "ann_executed": false,
+  "scientific_bodies_opened": false,
+  "performance_claim": false
+}

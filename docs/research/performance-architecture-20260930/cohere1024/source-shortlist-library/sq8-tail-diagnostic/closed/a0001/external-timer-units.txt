@@ -1,0 +1,24 @@
+# /run/systemd/transient/borsuk-sq8-panel-diagnostic-a0001-external.timer
+# This is a transient unit file, created programmatically via the systemd API. Do not edit.
+[Unit]
+Description=[systemd-run] /usr/bin/timeout -k2 25 /usr/local/bin/aws --profile causality --region eu-central-1 ec2 terminate-instances --instance-ids i-02d2118e1a18e2675
+
+[Timer]
+OnActiveSec=1h 1min 57s
+RemainAfterElapse=no
+
+# /run/systemd/transient/borsuk-sq8-panel-diagnostic-a0001-external.service
+# This is a transient unit file, created programmatically via the systemd API. Do not edit.
+[Unit]
+Description=[systemd-run] /usr/bin/timeout -k2 25 /usr/local/bin/aws --profile causality --region eu-central-1 ec2 terminate-instances --instance-ids i-02d2118e1a18e2675
+
+[Service]
+User=rb
+CPUQuota=100.00%
+AllowedCPUs=
+AllowedCPUs=0
+MemoryMax=268435456
+MemorySwapMax=0
+TasksMax=128
+ExecStart=
+ExecStart="/usr/bin/timeout" "-k2" "25" "/usr/local/bin/aws" "--profile" "causality" "--region" "eu-central-1" "ec2" "terminate-instances" "--instance-ids" "i-02d2118e1a18e2675"
