@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-source-capsule-core-evidence-reference-v1",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261016/persistent-rust-workspace-a0001/source-capsule-core-qualification-a0001/",
+  "artifacts": {
+    "qualification-evidence.tar.gz": "3f4d7182ef11d582d41fe2eec1e10be254133519ee114bccd011f1fdc86c9924",
+    "verification.json": "c72c881d0ca0fdde10f8d33a105312eb43e8f3b648179a336ca87a0637751e56",
+    "source.patch": "335a4a372953d6b7235c1c1228a35fd2346a7c3e737eba076855cfd0595af62d",
+    "native-tree.txt": "b5f36c5ed183513fbf894882428c563314a30c28a6d8d8020806a2ec75200e09",
+    "decision.md": "8175981f30d8a201cde4d0ec6735280b85185c3b3dcbafb2bc8ce8630e062467"
+  },
+  "integration_base": "37a45e8ae8c7506042197cdc7669fdf12f7ee802",
+  "code_candidate_tree": "7ecdcefbb0dbdb28091d5a5bec4d2cde71d9dce0",
+  "qualified_tree_entries_matched": 443,
+  "extra_canonical_historical_scripts_outside_snapshot": 1467,
+  "extra_native_files": 0,
+  "source_hash_or_mode_mismatches": 0,
+  "local_native_execution": false,
+  "qualification_scope": "core codec only; no serving, recall, latency, query RSS or vendor win"
+}

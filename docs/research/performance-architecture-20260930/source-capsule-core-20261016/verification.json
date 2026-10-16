@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-source-capsule-core-qualification-v1",
+  "status": "NATIVE_CORE_QUALIFIED",
+  "source_commit": "98b2afdd14ed3a873612c6652c98424722989e92",
+  "codec_commit": "94755d4073e7ab6f9a725c2c329a5aa0a7178979",
+  "source_base": "39c8c570e4706f9482da7a6636baeff5dc161eb5",
+  "instance_id": "i-066ea3c7f390e7095",
+  "ssm_launch": "0a8a807c-5474-444e-b03f-d25a08d8a70d",
+  "invocation_id": "f7c49aa1a62d4b1bb39c474e3b9e978e",
+  "terminal_journal_verified": true,
+  "terminal_unit_gc_lost_invocation": true,
+  "journal_sha256": "12736f83b4f1755d8cbe0df730751a3c4f3c571d2431b3dbb339491c19902461",
+  "memory_peak": 8589934592,
+  "swap_peak": 0,
+  "stages": {
+    "affected-tests": 0,
+    "release": 0,
+    "clippy": 0,
+    "test-build": 0,
+    "runner": 0
+  },
+  "test_names": [
+    "source_capsule::tests::capsule_magic_leaf_plane_page_order_tail_truncation_and_trailing_rejected",
+    "source_capsule::tests::closure_513_skips_middle_page_and_retains_original_ids_once",
+    "source_capsule::tests::corrupt_duplicate_rejected_even_with_healthy_copy_and_matching_capsule_hash",
+    "source_capsule::tests::dimensions_tails_overlap_stable_copies_and_exact_records",
+    "source_capsule::tests::distinct_full_page_substitution_rejected_after_rehashing_capsule_and_directory",
+    "source_capsule::tests::malformed_directory_geometry_hash_offsets_overflow_and_lengths_rejected",
+    "source_capsule::tests::modeled_minus_one_refuses_before_io_and_actual_capacity_is_charged",
+    "source_capsule::tests::one_response_adjacent_capsules_borrowed_once_stable_rows_and_capacities",
+    "source_capsule::tests::original_flat_length_sha_and_unit_digest_fail_before_output",
+    "source_capsule::tests::response_spans_reject_overlap_gap_unselected_partial_trailing_and_overflow",
+    "source_capsule::tests::streaming_is_page_bounded_and_reauthenticates_copied_duplicates",
+    "source_capsule::tests::wrong_original_plane_unit_digest_and_fetch_set_rejected"
+  ],
+  "source_sha256": {
+    "crates/borsuk/src/source_capsule.rs": "5dce17f1f63fed920a3a1eac1386e38716a04a5d1cb8756bd04c8efa715d8b2d",
+    "crates/borsuk/src/lib.rs": "caff31a26b890b31c67b06e2ef28682f983dbc4da005bb76bea5b04c8167e47c"
+  },
+  "patch_sha256": "335a4a372953d6b7235c1c1228a35fd2346a7c3e737eba076855cfd0595af62d",
+  "limits": {
+    "cpus": "4-7",
+    "cpu_percent": 400,
+    "memory_bytes": 8589934592,
+    "swap_bytes": 0,
+    "tasks": 512,
+    "seconds": 1800,
+    "compiler_jobs": 4
+  },
+  "test_build_shim_unset": true,
+  "serving_integrated": false,
+  "performance_measured": false,
+  "quality_measured": false
+}

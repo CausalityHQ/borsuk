@@ -112,6 +112,7 @@ mod segment_cache;
 pub mod semantic_unit_router;
 pub mod serving_generation;
 mod simd_control;
+pub mod source_capsule;
 pub mod source_order;
 pub mod sparse;
 pub mod sparse_index;
