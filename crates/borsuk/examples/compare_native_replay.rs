@@ -1562,6 +1562,7 @@ struct Rows {
     v10: bool,
     library_scheduler: bool,
     source_layout: bool,
+    cpu_profile: bool,
     policy: ReadPolicy,
     line_cap: usize,
 }
@@ -1586,6 +1587,7 @@ impl Rows {
             v10: false,
             library_scheduler: false,
             source_layout: false,
+            cpu_profile: false,
             policy: ReadPolicy::Existing,
             line_cap: LINE_CAP,
         })
@@ -1628,6 +1630,7 @@ impl Rows {
                 phase,
                 self.library_scheduler,
                 self.source_layout,
+                self.cpu_profile,
             )?;
         } else if self.policy == ReadPolicy::Sq8PanelAttribution && !self.current {
             sq8_panel_attribution::validate_v8_row(&self.line, phase)?;
@@ -1756,6 +1759,8 @@ fn read_run_observed_policy(
         || expected.is_some_and(|c| {
             c.expected_identity["schema"] == current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
         });
+    rows.cpu_profile = expected
+        .is_some_and(|c| c.expected_identity["schema"] == current_v10::CPU_PROFILE_RESULT_SCHEMA);
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
@@ -13451,7 +13456,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut identity = json!({"phase":"identity","schema":current_v10::PAGE_RANGE_RESULT_SCHEMA,
+        let mut identity = json!({"phase":"identity","schema":current_v10::CPU_PROFILE_RESULT_SCHEMA,
             "config_sha256":sha(&config_bytes),"binary_sha256":binary_sha,
             "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
             "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
@@ -13494,7 +13499,7 @@ mod tests {
         ] {
             identity[key] = json!(sha(bytes));
         }
-        identity["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
+        identity["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
         identity["range_scheduler_owner"] = json!("library");
         identity["source_capsule_verification_policy"] =
             json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
@@ -13540,7 +13545,7 @@ mod tests {
             &std::fs::read(config["cohort_receipt"]["path"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        bound["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
+        bound["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
         bound["source_capsule_verification_policy"] =
             json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
         bound["reserved_queries_sha256"] = cohort["reserved_queries_sha256"].clone();
@@ -13565,6 +13570,225 @@ mod tests {
         rows
     }
 
+    // Synthetic historical records have their own explicit roster and accounting.
+    // Never use this conversion on the current producer interoperability path.
+    fn author_historical_diagnostics(rows: &mut [Value]) {
+        use borsuk::sq8_s3_range::Sq8RangeTrace;
+        let width = rows[1]["fetch_parallelism"].as_u64().unwrap() as usize;
+        for row in rows {
+            if row["phase"] == "diagnostic_admission" {
+                let traced = row["trace"] == true;
+                let ranges = row["trace_ranges"].as_u64().unwrap() as usize;
+                let retained = current_v10::historical_trace_retained(ranges);
+                let peak = if traced {
+                    current_v10::historical_trace_peak(ranges, width)
+                } else {
+                    0
+                };
+                let library = row["range_scheduler_owner"] == "library";
+                let scheduler = if library {
+                    "range_scheduler_owner range_state_charged_by_library_bytes trace_additional_bytes_charged_by_library"
+                } else {
+                    "range_state_pinned_by_runner_bytes trace_peak_charged_by_library_at_traced_admission"
+                };
+                let names = format!(
+                    "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes range_state_both_paths_bytes {scheduler}"
+                );
+                let mut old = Value::Object(
+                    names
+                        .split_whitespace()
+                        .map(|key| {
+                            (
+                                key.to_owned(),
+                                row.get(key).expect("historical observation").clone(),
+                            )
+                        })
+                        .collect(),
+                );
+                old["semantics"] = current_v10::historical_semantics();
+                old["trace_retained_bytes"] = if traced { json!(retained) } else { Value::Null };
+                old["trace_peak_bytes"] = if traced { json!(peak) } else { Value::Null };
+                old["diagnostic_bytes_per_active_query"] =
+                    json!(old["diagnostic_pinned_bytes"].as_u64().unwrap() + peak as u64);
+                if library {
+                    old["trace_additional_bytes_charged_by_library"] = json!(if traced {
+                        peak - Sq8RangeTrace::pending_futures_bytes(ranges, width)
+                    } else {
+                        0
+                    });
+                }
+                *row = old;
+            } else if row["phase"] == "query" && row.get("diagnostic").is_some() {
+                let diag = &row["diagnostic"];
+                let mut old = Value::Object("query_monotonic_start_ns query_monotonic_end_ns process_cpu_start_ns process_cpu_end_ns host"
+                    .split_whitespace().map(|key| (key.to_owned(), diag[key].clone())).collect());
+                old["schema"] = json!("borsuk-sq8-range-attribution-diagnostic-v3");
+                old["sq8_range_trace"] = Value::Object(
+                    current_v10::LEGACY_TRACE_FIELDS
+                        .split_whitespace()
+                        .map(|key| (key.to_owned(), diag["sq8_range_trace"][key].clone()))
+                        .collect(),
+                );
+                row["diagnostic"] = old;
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_profile_current_producer_reader_and_resealed_refusals() {
+        for traced in [false, true] {
+            let (dir, paths) = scale_native_runner::source_layout_reducer_profile_fixture(
+                32, 2, true, false, traced,
+            )
+            .unwrap();
+            for (path, config_name) in paths.iter().zip(["config.json", "capsule-config.json"]) {
+                // Read the untouched producer file with independently authored header pins.
+                let rows = assert_current_native_config(&dir.path().join(config_name), path);
+                assert_eq!(rows[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
+                let admission = rows
+                    .iter()
+                    .position(|r| r["phase"] == "diagnostic_admission")
+                    .unwrap();
+                let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+                let check = |name: &str, records: &[Value]| {
+                    let (path, _) = write_fixture(dir.path(), name, records.to_vec());
+                    let (config, pin) = scale_config(dir.path(), &path, records);
+                    reduce_scale(&config, &pin)
+                };
+                for mutation in [
+                    "missing",
+                    "unknown",
+                    "capacity",
+                    "charge",
+                    "retained",
+                    "peak",
+                    "semantics",
+                ] {
+                    let mut bad = rows.clone();
+                    match mutation {
+                        "missing" => {
+                            bad[admission]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("source_trace_ranges");
+                        }
+                        "unknown" => bad[admission]["unknown_profile_field"] = json!(0),
+                        "capacity" => bad[admission]["source_trace_ranges"] = json!(129),
+                        "charge" => {
+                            let charge =
+                                bad[admission]["trace_additional_bytes_charged_by_library"]
+                                    .as_u64()
+                                    .unwrap();
+                            bad[admission]["trace_additional_bytes_charged_by_library"] =
+                                json!(charge + 1);
+                        }
+                        "retained" => bad[admission]["trace_retained_bytes"] = json!(0),
+                        "peak" => bad[admission]["trace_peak_bytes"] = json!(0),
+                        "semantics" => {
+                            bad[admission]["semantics"] = current_v10::historical_semantics()
+                        }
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        check(mutation, &bad).is_err(),
+                        "{mutation}, traced={traced}"
+                    );
+                }
+                if traced {
+                    assert_eq!(
+                        rows[query]["diagnostic"]["schema"],
+                        "borsuk-sq8-range-attribution-diagnostic-v4"
+                    );
+                    for mutation in [
+                        "schema",
+                        "source_range_trace",
+                        "cpu_profile",
+                        "cpu_unknown",
+                        "poll_cpu",
+                    ] {
+                        let mut bad = rows.clone();
+                        let diag = &mut bad[query]["diagnostic"];
+                        match mutation {
+                            "schema" => {
+                                diag["schema"] = json!("borsuk-sq8-range-attribution-diagnostic-v3")
+                            }
+                            "source_range_trace" | "cpu_profile" => {
+                                diag.as_object_mut().unwrap().remove(mutation);
+                            }
+                            "cpu_unknown" => diag["cpu_profile"]["unknown"] = json!(0),
+                            "poll_cpu" => {
+                                diag["cpu_profile"]["acquisition_poll_cpu"] = json!("measured")
+                            }
+                            _ => unreachable!(),
+                        }
+                        assert!(check(mutation, &bad).is_err(), "{mutation}");
+                    }
+                }
+                // Independently constructed old envelope/model remains accepted.
+                let mut historical = rows.clone();
+                historical[0]["schema"] = json!(current_v10::PAGE_RANGE_RESULT_SCHEMA);
+                for header in &mut historical[..2] {
+                    header["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
+                }
+                author_historical_diagnostics(&mut historical);
+                check("historical-v15", &historical).unwrap();
+                let mut bad = historical.clone();
+                bad[admission]["source_trace_ranges"] =
+                    rows[admission]["source_trace_ranges"].clone();
+                assert!(check("old-current-capacity", &bad).is_err());
+                if traced {
+                    for field in ["source_range_trace", "cpu_profile"] {
+                        let mut bad = historical.clone();
+                        bad[query]["diagnostic"][field] = rows[query]["diagnostic"][field].clone();
+                        assert!(check(field, &bad).is_err(), "old envelope accepted {field}");
+                    }
+                    let mut bad = historical.clone();
+                    bad[query]["diagnostic"]["sq8_range_trace"]["cpu"] =
+                        rows[query]["diagnostic"]["sq8_range_trace"]["cpu"].clone();
+                    assert!(check("old-current-sq8-cpu", &bad).is_err());
+                }
+
+                // Reseal the exact duplicate-key bytes, including both prefix and terminal seals.
+                let mut records = rows.clone();
+                let seal = records
+                    .iter()
+                    .position(|r| r["phase"] == "all_queries_sealed")
+                    .unwrap();
+                let mut lines = records
+                    .iter()
+                    .map(|r| encode(std::slice::from_ref(r)))
+                    .collect::<Vec<_>>();
+                let line = &mut lines[admission];
+                line.truncate(line.len() - 2);
+                line.extend_from_slice(
+                    format!(
+                        ",\"source_trace_ranges\":{}}}\n",
+                        rows[admission]["source_trace_ranges"]
+                    )
+                    .as_bytes(),
+                );
+                let prefix = lines[..seal].concat();
+                records[seal]["prefix_bytes"] = json!(prefix.len());
+                records[seal]["prefix_sha256"] = json!(sha(&prefix));
+                lines[seal] = encode(&records[seal..seal + 1]);
+                let sealed = lines[..seal + 1].concat();
+                let terminal = records.len() - 1;
+                let summary = &mut records[terminal]["summary"];
+                summary["prefix_bytes"] = json!(prefix.len());
+                summary["prefix_sha256"] = json!(sha(&prefix));
+                summary["sealed_bytes"] = json!(sealed.len());
+                summary["sealed_sha256"] = json!(sha(&sealed));
+                lines[terminal] = encode(&records[terminal..]);
+                let body = lines.concat();
+                let duplicate = dir.path().join("duplicate-profile.jsonl");
+                std::fs::write(&duplicate, &body).unwrap();
+                let (config, pin) = scale_config(dir.path(), &duplicate, &records);
+                let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+                assert!(error.contains("duplicate"), "{error}");
+            }
+        }
+    }
+
     // Synthetic historical evidence: author the old wire/model from invariant
     // observations. No v2 root, directory, payload or ELF is claimed as old output.
     pub(super) fn historical_source_layout_rows(
@@ -13572,6 +13796,7 @@ mod tests {
         onepass: bool,
     ) -> Vec<Value> {
         let mut rows = observations.to_vec();
+        author_historical_diagnostics(&mut rows);
         let inputs = rows[1].clone();
         let capsule = inputs["source_layout"]["layout"] != "flat_records";
         let n = inputs["rows"].as_u64().unwrap();
@@ -14240,10 +14465,10 @@ mod tests {
         let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture().unwrap();
         let current =
             assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
-        assert_eq!(current[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
+        assert_eq!(current[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
         assert_eq!(
             current[1]["config_schema"],
-            current_v10::PAGE_RANGE_CONFIG_SCHEMA
+            current_v10::CPU_PROFILE_CONFIG_SCHEMA
         );
         assert_eq!(current[1]["source_layout"]["layout"], "leaf_capsules_v2");
         for mutation in [
@@ -14530,6 +14755,7 @@ mod tests {
 
     fn synthetic_v12_rows(current: &[Value]) -> Vec<Value> {
         let mut rows = current.to_vec();
+        author_historical_diagnostics(&mut rows);
         rows[0]["schema"] = json!(current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA);
         for (index, keys) in [
             (
@@ -14576,7 +14802,9 @@ mod tests {
             schema,
             "borsuk-cohere-native-baseline-result-v7" | "borsuk-cohere-native-baseline-result-v8"
         ));
-        current.iter().map(|row| {
+        let mut observations = current.to_vec();
+        author_historical_diagnostics(&mut observations);
+        observations.iter().map(|row| {
             let phase = row["phase"].as_str().unwrap();
             let extras = match phase {
                 "identity" => "fetch_parallelism serving execution sq8_range_source_sha256 returned_source_sha256",
@@ -14888,7 +15116,7 @@ mod tests {
             .take(2)
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(headers[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
+        assert_eq!(headers[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
         let config_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
         assert_eq!(headers[0]["config_sha256"], sha(&config_bytes));
         for key in [
@@ -15349,7 +15577,7 @@ mod tests {
                 scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
             let rows = assert_current_native(dir.path(), &result);
             // Pin expected headers before any falsifier changes producer output.
-            assert_eq!(rows[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
+            assert_eq!(rows[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
             assert_eq!(rows[0]["sq8_range_split"], Value::Null);
             let (config, pin) = scale_config(dir.path(), &result, &rows);
             let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();

@@ -45,9 +45,9 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-// The compiled page-range policy has its own config/result protocol.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v14";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v15";
+// CPU-profile admission and diagnostics have their own config/result protocol.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
 const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v4";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
@@ -822,7 +822,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v14; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v15; older formats refuse",
     )?;
     require(
         c.s3_read_retry.is_none() || matches!(&c.backend, Backend::S3 { .. }),
@@ -3057,6 +3057,17 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
     panel: bool,
     padded_authority: bool,
 ) -> Result<(tempfile::TempDir, [PathBuf; 2])> {
+    source_layout_reducer_profile_fixture(rows, count, panel, padded_authority, false)
+}
+
+#[cfg(test)]
+pub(crate) fn source_layout_reducer_profile_fixture(
+    rows: usize,
+    count: usize,
+    panel: bool,
+    padded_authority: bool,
+    traced: bool,
+) -> Result<(tempfile::TempDir, [PathBuf; 2])> {
     use borsuk::two_bit_build::repackage_source_layout;
     use borsuk::two_bit_generation::SourceLayoutMode;
     let shape = Shape {
@@ -3068,7 +3079,7 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":rows,"end":rows + shape.count});
     if panel {
-        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":(1..count).collect::<Vec<_>>(),"trace":false});
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":(1..count).collect::<Vec<_>>(),"trace":traced});
     }
     if padded_authority {
         value["source_byte_budget"] = json!(67_108_865);
@@ -4263,8 +4274,8 @@ mod tests {
             "blob_sha256":"d".repeat(64),"directory_bytes":100,"directory_sha256":"e".repeat(64)});
         let c: Config = serde_json::from_value(good.clone()).unwrap();
         validate_config(&c, shape).unwrap();
-        assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v14");
-        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v15");
+        assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v15");
+        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v16");
         assert_eq!(
             SOURCE_CAPSULE_VERIFICATION_POLICY,
             "directory_page_ranges_original_units_v2"
@@ -6335,6 +6346,7 @@ mod tests {
             );
         }
         for old in [
+            "borsuk-cohere-native-baseline-config-v14",
             "borsuk-cohere-native-baseline-config-v3",
             "borsuk-cohere-native-baseline-config-v2",
         ] {

@@ -12,6 +12,27 @@ pub(super) const ONEPASS_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-co
 pub(super) const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "capsule_sha256_original_units_once_v1";
 pub(super) const PAGE_RANGE_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v15";
 pub(super) const PAGE_RANGE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v14";
+pub(super) const CPU_PROFILE_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
+pub(super) const CPU_PROFILE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
+
+fn cpu_profile_config(inputs: &Value) -> bool {
+    inputs["config_schema"] == CPU_PROFILE_CONFIG_SCHEMA
+}
+
+fn page_range_config(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA)
+    )
+}
+
+fn page_range_result(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(PAGE_RANGE_RESULT_SCHEMA | CPU_PROFILE_RESULT_SCHEMA)
+    )
+}
+
 pub(super) const PAGE_RANGE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
 
 fn layout_result_schema(config: &Value) -> Result<&'static str> {
@@ -19,6 +40,7 @@ fn layout_result_schema(config: &Value) -> Result<&'static str> {
         Some(SOURCE_LAYOUT_CONFIG_SCHEMA) => Ok(SOURCE_LAYOUT_RESULT_SCHEMA),
         Some(ONEPASS_CONFIG_SCHEMA) => Ok(ONEPASS_RESULT_SCHEMA),
         Some(PAGE_RANGE_CONFIG_SCHEMA) => Ok(PAGE_RANGE_RESULT_SCHEMA),
+        Some(CPU_PROFILE_CONFIG_SCHEMA) => Ok(CPU_PROFILE_RESULT_SCHEMA),
         _ => Err("exact SOURCE layout config schema".into()),
     }
 }
@@ -39,20 +61,31 @@ pub(super) fn is_result_schema(schema: &str) -> bool {
             | SOURCE_LAYOUT_RESULT_SCHEMA
             | ONEPASS_RESULT_SCHEMA
             | PAGE_RANGE_RESULT_SCHEMA
+            | CPU_PROFILE_RESULT_SCHEMA
     )
 }
 
 pub(super) fn is_source_layout_schema(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(SOURCE_LAYOUT_RESULT_SCHEMA | ONEPASS_RESULT_SCHEMA | PAGE_RANGE_RESULT_SCHEMA)
+        Some(
+            SOURCE_LAYOUT_RESULT_SCHEMA
+                | ONEPASS_RESULT_SCHEMA
+                | PAGE_RANGE_RESULT_SCHEMA
+                | CPU_PROFILE_RESULT_SCHEMA
+        )
     )
 }
 
 pub(super) fn is_source_layout_config(header: &Value) -> bool {
     matches!(
         header["config_schema"].as_str(),
-        Some(SOURCE_LAYOUT_CONFIG_SCHEMA | ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA)
+        Some(
+            SOURCE_LAYOUT_CONFIG_SCHEMA
+                | ONEPASS_CONFIG_SCHEMA
+                | PAGE_RANGE_CONFIG_SCHEMA
+                | CPU_PROFILE_CONFIG_SCHEMA
+        )
     )
 }
 
@@ -99,7 +132,7 @@ pub(super) fn physical_cap(inputs: &Value) -> Result<u64> {
 }
 
 pub(super) fn validate_row(line: &[u8], phase: &str, library_scheduler: bool) -> Result<()> {
-    validate_row_envelope(line, phase, library_scheduler, false)
+    validate_row_envelope(line, phase, library_scheduler, false, false)
 }
 
 pub(super) fn validate_row_envelope(
@@ -107,6 +140,7 @@ pub(super) fn validate_row_envelope(
     phase: &str,
     library_scheduler: bool,
     source_layout: bool,
+    cpu_profile: bool,
 ) -> Result<()> {
     let super::UniqueJson(raw) = serde_json::from_slice(line)?;
     require(raw["phase"] == phase, "v10 row phase")?;
@@ -128,10 +162,15 @@ pub(super) fn validate_row_envelope(
             } else {
                 "range_state_pinned_by_runner_bytes trace_peak_charged_by_library_at_traced_admission"
             };
+            let profile_fields = if cpu_profile {
+                "source_trace_ranges"
+            } else {
+                ""
+            };
             fields(
                 &raw,
                 &format!(
-                    "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes range_state_both_paths_bytes {scheduler_fields}"
+                    "phase execution selected_count population_count trace diagnostic_bytes_per_active_query diagnostic_cap_bytes max_active_queries charged_in_caller_pinned_bytes caller_pinned_bytes panel_line_cap_bytes host_read_cap_bytes trace_ranges population_percentiles_valid full_cohort_qualification semantics truth_opened trace_retained_bytes trace_peak_bytes diagnostic_pinned_bytes range_state_both_paths_bytes {scheduler_fields} {profile_fields}"
                 ),
             )?;
             require(
@@ -163,7 +202,7 @@ pub(super) fn validate_row_envelope(
     if source_layout
         && matches!(
             raw["config_schema"].as_str(),
-            Some(ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA)
+            Some(ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA)
         )
         && matches!(phase, "identity" | "bound_inputs")
     {
@@ -215,6 +254,7 @@ pub(super) fn validate_row_envelope(
                 == if source_layout {
                     match raw["config_schema"].as_str() {
                         Some(PAGE_RANGE_CONFIG_SCHEMA) => PAGE_RANGE_CONFIG_SCHEMA,
+                        Some(CPU_PROFILE_CONFIG_SCHEMA) => CPU_PROFILE_CONFIG_SCHEMA,
                         Some(ONEPASS_CONFIG_SCHEMA) => ONEPASS_CONFIG_SCHEMA,
                         _ => SOURCE_LAYOUT_CONFIG_SCHEMA,
                     }
@@ -340,7 +380,7 @@ pub(super) fn validate_row_envelope(
                 require(slot.as_u64().is_some(), "v10 selected slot")?;
             }
             if let Some(diag) = raw.get("diagnostic") {
-                diagnostic_shape(diag)?;
+                diagnostic_shape(diag, cpu_profile)?;
             }
         }
         "terminal" => {
@@ -383,6 +423,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
             phase,
             layout || c.expected_identity["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA,
             layout,
+            c.expected_identity["schema"] == CPU_PROFILE_RESULT_SCHEMA,
         )?;
     }
     let i = &c.expected_identity;
@@ -550,7 +591,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
         "split exact physical charges",
     )?;
     if let Some(diag) = raw.get("diagnostic") {
-        diagnostic_shape(diag)?;
+        diagnostic_shape(diag, cpu_profile_config(inputs))?;
         let trace = &diag["sq8_range_trace"];
         let ranges = trace["ranges"].as_array().ok_or("v10 trace ranges")?;
         require(
@@ -608,17 +649,152 @@ pub(super) fn physical_ranges(raw: &Value, inputs: &Value) -> Result<Vec<Value>>
     Ok(physical)
 }
 
-pub(super) fn diagnostic_shape(diag: &Value) -> Result<()> {
+pub(super) const LEGACY_TRACE_FIELDS: &str = "range_fields outcome planned_ranges planned_bytes max_parallel dropped_ranges fetch_start_ns all_ranges_complete_ns rank_start_ns rank_end_ns release_end_ns rank ranges";
+const PROFILE_TRACE_FIELDS: &str = "cpu regroup regroup_copied_bytes rank_thread_cpu_ns rank_clock_reads retained_payload_bytes phase_process_cpu_ns unattributed_process_cpu_ns phase_clock_reads";
+
+// Frozen 6cf56cd x86_64 ABI: span=264, trace=240, probe=280, allocator=32.
+// Current CPU aggregates change trace/probe sizes; never reinterpret old evidence with them.
+pub(super) fn historical_trace_retained(ranges: usize) -> usize {
+    240usize.saturating_add(264usize.saturating_mul(ranges))
+}
+
+pub(super) fn historical_trace_peak(ranges: usize, width: usize) -> usize {
+    historical_trace_retained(ranges)
+        .saturating_add(ranges.saturating_mul(280 + 32))
+        .saturating_add(borsuk::sq8_s3_range::Sq8RangeTrace::pending_futures_bytes(
+            ranges, width,
+        ))
+}
+
+pub(super) fn historical_semantics() -> Value {
+    json!({"headers_interval":"get_opts_client_queue_connect_tls_server_combined",
+        "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
+        "ranges":"overlap_in_time_never_sum_intervals",
+        "host_counters":"host_wide_not_per_flow_null_means_unavailable",
+        "unset":"a boundary never reached is null, never a fabricated timestamp"})
+}
+
+fn cpu_wall(value: &Value) -> Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    fields(value, "thread_cpu_ns wall_ns clock_reads")?;
+    number(&value["thread_cpu_ns"])?;
+    number(&value["wall_ns"])?;
+    require(
+        number(&value["clock_reads"])? > 0 && number(&value["clock_reads"])?.is_multiple_of(4),
+        "synchronous CPU scope clock accounting",
+    )
+}
+
+fn range_cpu(value: &Value) -> Result<()> {
+    fields(
+        value,
+        "collector_allocation collector_copy owned_allocation owned_copy authentication collector_copied_bytes owned_copied_bytes",
+    )?;
+    for key in [
+        "collector_allocation",
+        "collector_copy",
+        "owned_allocation",
+        "owned_copy",
+        "authentication",
+    ] {
+        cpu_wall(&value[key])?;
+    }
+    number(&value["collector_copied_bytes"])?;
+    number(&value["owned_copied_bytes"])?;
+    Ok(())
+}
+
+fn profile_shape(diag: &Value) -> Result<()> {
+    let profile = &diag["cpu_profile"];
+    fields(profile, "discovery cover planning acquisition_poll_cpu")?;
+    for key in ["discovery", "cover", "planning"] {
+        cpu_wall(&profile[key])?;
+    }
+    require(
+        profile["acquisition_poll_cpu"] == "unresolved_not_instrumented",
+        "unresolved acquisition poll CPU",
+    )?;
+    let source = &diag["source_range_trace"];
+    fields(
+        source,
+        "outcome planned_ranges planned_bytes max_parallel fetch_start_ns all_ranges_complete_ns release_end_ns retained_payload_bytes cpu phase_process_cpu_ns unattributed_process_cpu_ns phase_clock_reads last_completing_range",
+    )?;
+    let sq8 = &diag["sq8_range_trace"];
+    fields(
+        sq8,
+        &format!("{LEGACY_TRACE_FIELDS} {PROFILE_TRACE_FIELDS}"),
+    )?;
+    for trace in [source, sq8] {
+        require(trace["outcome"].is_string(), "profile range outcome")?;
+        for key in [
+            "planned_ranges",
+            "planned_bytes",
+            "max_parallel",
+            "phase_clock_reads",
+        ] {
+            number(&trace[key])?;
+        }
+        for key in [
+            "fetch_start_ns",
+            "all_ranges_complete_ns",
+            "release_end_ns",
+            "retained_payload_bytes",
+            "phase_process_cpu_ns",
+            "unattributed_process_cpu_ns",
+        ] {
+            require(
+                trace[key].is_null() || trace[key].as_u64().is_some(),
+                "nullable profile counter",
+            )?;
+        }
+        range_cpu(&trace["cpu"])?;
+    }
+    let last = &source["last_completing_range"];
+    require(
+        last.is_null() || last.as_array().is_some_and(|r| r.len() == 22),
+        "SOURCE last range width",
+    )?;
+    cpu_wall(&sq8["regroup"])?;
+    number(&sq8["regroup_copied_bytes"])?;
+    number(&sq8["rank_clock_reads"])?;
+    require(
+        sq8["rank_thread_cpu_ns"].is_null() || sq8["rank_thread_cpu_ns"].as_u64().is_some(),
+        "nullable SQ8 rank CPU",
+    )
+}
+
+pub(super) fn diagnostic_shape(diag: &Value, cpu_profile: bool) -> Result<()> {
     fields(
         diag,
-        "schema query_monotonic_start_ns query_monotonic_end_ns process_cpu_start_ns process_cpu_end_ns sq8_range_trace host",
+        &format!(
+            "schema query_monotonic_start_ns query_monotonic_end_ns process_cpu_start_ns process_cpu_end_ns sq8_range_trace host {}",
+            if cpu_profile {
+                "source_range_trace cpu_profile"
+            } else {
+                ""
+            }
+        ),
     )?;
     require(
-        diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v3"
+        diag["schema"]
+            == if cpu_profile {
+                "borsuk-sq8-range-attribution-diagnostic-v4"
+            } else {
+                "borsuk-sq8-range-attribution-diagnostic-v3"
+            }
             && diag["sq8_range_trace"].is_object()
             && diag["host"].is_object(),
         "panel diagnostic schema",
-    )
+    )?;
+    if cpu_profile {
+        profile_shape(diag)?;
+    } else {
+        // Historical SQ8-only records never carried CPU-profile fields.
+        fields(&diag["sq8_range_trace"], LEGACY_TRACE_FIELDS)?;
+    }
+    Ok(())
 }
 
 fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
@@ -639,11 +815,23 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
     let traced = inputs["execution"]["trace"] == true;
     let ranges = usize::try_from(physical_cap(inputs)?)?;
     let width = usize::try_from(number(&inputs["fetch_parallelism"])?)?;
-    let peak = if traced {
-        Sq8RangeTrace::modeled_bytes(ranges, width)
-    } else {
+    let profile = cpu_profile_config(inputs);
+    let source = usize::try_from(number(&inputs["source_get_budget"])?)?;
+    let peak = if !traced {
         0
+    } else if profile {
+        borsuk::sq8_s3_range::QueryProfile::modeled_bytes(source, ranges, width, width)
+    } else {
+        historical_trace_peak(ranges, width)
     };
+    require(
+        if profile {
+            raw["source_trace_ranges"] == source
+        } else {
+            raw.get("source_trace_ranges").is_none()
+        },
+        "versioned SOURCE trace capacity",
+    )?;
     let library_scheduler = inputs["range_scheduler_owner"] == "library";
     let both = if library_scheduler {
         library_scheduler_bytes(inputs)?
@@ -694,8 +882,12 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
             && (if library_scheduler {
                 raw["trace_additional_bytes_charged_by_library"]
                     == (if traced {
-                        peak - Sq8RangeTrace::checked_pending_futures_bytes(ranges, width)
-                            .ok_or("v12 trace scheduler overflow")?
+                        if profile {
+                            borsuk::sq8_s3_range::QueryProfile::additional_bytes(source, ranges)
+                        } else {
+                            peak - Sq8RangeTrace::checked_pending_futures_bytes(ranges, width)
+                                .ok_or("v12 trace scheduler overflow")?
+                        }
                     } else {
                         0
                     })
@@ -714,18 +906,26 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
     )?;
     require(
         if traced {
-            raw["trace_retained_bytes"] == Sq8RangeTrace::retained_bytes(ranges)
+            raw["trace_retained_bytes"]
+                == if profile {
+                    borsuk::sq8_s3_range::QueryProfile::retained_bytes(source, ranges)
+                } else {
+                    historical_trace_retained(ranges)
+                }
                 && raw["trace_peak_bytes"] == peak
         } else {
             raw["trace_retained_bytes"].is_null() && raw["trace_peak_bytes"].is_null()
         },
         "split trace reservation",
     )?;
+    let mut semantics = historical_semantics();
+    if profile {
+        semantics["cpu_residual"] = json!("unattributed_process_cpu_not_tls_or_network_cpu");
+        semantics["poll_cpu"] = json!("unresolved_not_instrumented");
+        semantics["capsule_page_bounds"] = json!("u64_max_means_no_single_logical_page_interval");
+    }
     require(
-        raw["semantics"]
-            == json!({"headers_interval":"get_opts_client_queue_connect_tls_server_combined",
-        "body_gaps":"application_observed_poll_gaps_not_packet_arrival","ranges":"overlap_in_time_never_sum_intervals",
-        "host_counters":"host_wide_not_per_flow_null_means_unavailable","unset":"a boundary never reached is null, never a fabricated timestamp"}),
+        raw["semantics"] == semantics,
         "split exact diagnostic semantics",
     )
 }
@@ -788,7 +988,7 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
     )?;
     require(
         match raw["config_schema"].as_str() {
-            Some(PAGE_RANGE_CONFIG_SCHEMA) => {
+            Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA) => {
                 raw["source_capsule_verification_policy"] == PAGE_RANGE_VERIFICATION_POLICY
             }
             Some(ONEPASS_CONFIG_SCHEMA) => {
@@ -810,7 +1010,7 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
         },
     )?;
     if !flat {
-        let v2 = raw["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA;
+        let v2 = page_range_config(&raw["config_schema"]);
         let directory = number(&layout["directory_bytes"])?;
         require(
             layout["layout"]
@@ -875,7 +1075,7 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
                     .as_str()
                     .ok_or("v13 page manifest SHA")?
             && root["schema"]
-                == if inputs["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA {
+                == if page_range_config(&inputs["config_schema"]) {
                     "borsuk-two-bit-generation-v11"
                 } else {
                     "borsuk-two-bit-generation-v10"
@@ -1306,7 +1506,7 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
     {
         number(v)?;
     }
-    if inputs["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA {
+    if page_range_config(&inputs["config_schema"]) {
         return validate_page_range_capsules(raw, inputs, stats);
     }
     let physical = number(&stats["physical_bytes"])?;
@@ -1493,7 +1693,7 @@ pub(super) fn paired_source_layout(config: &std::path::Path, sha: &str) -> Resul
         a.expected_identity["schema"] == b.expected_identity["schema"]
             && a.expected_bound_inputs["source_layout"] == json!({"layout":"flat_records"})
             && b.expected_bound_inputs["source_layout"]["layout"]
-                == if b.expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+                == if page_range_result(&b.expected_identity["schema"]) {
                     "leaf_capsules_v2"
                 } else {
                     "leaf_capsules"
@@ -1627,10 +1827,10 @@ pub(super) fn paired_source_layout(config: &std::path::Path, sha: &str) -> Resul
         "returned_ids_scorebits_physical_ordinals_parity":true,"per_query_hits_parity":true,
         "inputs":c.arms.iter().map(|a| &a.input).collect::<Vec<_>>(),
         "source_bridges":"authenticated_unscored","sq8_bridges":"scored",
-        "source_physical_ranges":if c.arms[1].expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+        "source_physical_ranges":if page_range_result(&c.arms[1].expected_identity["schema"]) {
             "GETs_bounded_by_old_adjacent_groups; exact_trim_and_owners_require_pinned_native_directory"
         } else { "count_from_adjacent_authenticated_leaf_ids; offsets_and_per_leaf_pages_not_in_trace" },
-        "source_payload_validation":if c.arms[1].expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+        "source_payload_validation":if page_range_result(&c.arms[1].expected_identity["schema"]) {
             "fetched_payload_conservation_and_required_union_lower_bound; exact_roster_requires_native_proof"
         } else { "exact_useful_page_union; tail_aware_occurrence_bounds_not_full_physical_roster" },"plan_ranges":"SQ8_only",
         "source_archive_and_binary_authority":"root_owned_external_receipts",
@@ -2351,6 +2551,14 @@ mod tests {
         assert_eq!(report["comparisons"].as_array().unwrap().len(), 2);
     }
     #[test]
+    fn historical_trace_abi_is_independent_of_cpu_profile() {
+        assert_eq!(historical_trace_retained(30), 8160);
+        assert!(
+            borsuk::sq8_s3_range::Sq8RangeTrace::retained_bytes(30) > historical_trace_retained(30)
+        );
+    }
+
+    #[test]
     fn source_layout_explicit_caps_exceed_historical_limits_without_rewriting_them() {
         let mut header = json!({"config_schema":SOURCE_LAYOUT_CONFIG_SCHEMA,
             "max_memory_bytes":MEMORY_CAP+1,"source_byte_budget":67_108_865,
@@ -2645,7 +2853,7 @@ mod tests {
         for traced in [false, true] {
             for (source, ranges, width, split) in [(32, 32, 16, false), (128, 46, 128, true)] {
                 let peak = if traced {
-                    Sq8RangeTrace::modeled_bytes(ranges, width)
+                    historical_trace_peak(ranges, width)
                 } else {
                     0
                 };
@@ -2667,7 +2875,7 @@ mod tests {
                     "diagnostic_bytes_per_active_query":diagnostic+peak,"diagnostic_cap_bytes":1048576,
                     "caller_pinned_bytes":diagnostic+legacy_pinned,"panel_line_cap_bytes":65536,
                     "host_read_cap_bytes":131072,"trace_ranges":ranges,"diagnostic_pinned_bytes":diagnostic,
-                    "trace_retained_bytes":if traced { json!(Sq8RangeTrace::retained_bytes(ranges)) } else { Value::Null },
+                    "trace_retained_bytes":if traced { json!(historical_trace_retained(ranges)) } else { Value::Null },
                     "trace_peak_bytes":if traced { json!(peak) } else { Value::Null },
                     "trace_peak_charged_by_library_at_traced_admission":traced,
                     "range_state_pinned_by_runner_bytes":legacy_pinned,"range_state_both_paths_bytes":both,
