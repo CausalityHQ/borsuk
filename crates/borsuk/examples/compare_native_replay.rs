@@ -13505,6 +13505,10 @@ mod tests {
         ] {
             identity[key] = json!(sha(bytes));
         }
+        identity["source_authentication"] = config
+            .get("source_authentication")
+            .cloned()
+            .unwrap_or(json!("inline"));
         identity["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
         identity["range_scheduler_owner"] = json!("library");
         identity["source_capsule_verification_policy"] =
@@ -13551,6 +13555,10 @@ mod tests {
             &std::fs::read(config["cohort_receipt"]["path"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
+        bound["source_authentication"] = config
+            .get("source_authentication")
+            .cloned()
+            .unwrap_or(json!("inline"));
         bound["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
         bound["source_capsule_verification_policy"] =
             json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
