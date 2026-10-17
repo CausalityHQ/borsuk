@@ -1,0 +1,11 @@
+{
+  "status": "VALID_NO_MEASURED_GAIN",
+  "candidate_integrated": false,
+  "control_source": "a0463ed097296c19539d05529ddad615be760fdd",
+  "candidate_source": "a62dc853941893c8d267daf5d0ff6d8107d69b31",
+  "packet_source": "6c29f86a9801b9ef56ea1584f0f7a7b0f743e69c",
+  "original_run_ssm": "98ab2a2e-211d-4dbe-9fa4-51124f67af2f",
+  "original_collect_ssm": "83a67133-c4d2-4fed-8b6d-888908bfd5b7",
+  "all_cells_readers_checkpoints_zero": true,
+  "competitor_win": false
+}
