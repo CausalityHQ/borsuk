@@ -7039,7 +7039,7 @@ mod tests {
                 assert!(diag["cpu_profile"]["cover"].is_object());
                 if mode == "direct" {
                     assert!(source_ranges.is_empty());
-                    assert_eq!(source["outcome"], "not_started");
+                    assert_eq!(source["outcome"], "started");
                     assert!(diag["source_range_trace"]["phase_process_cpu_ns"].is_null());
                     assert!(diag["cpu_profile"]["planning"].is_null());
                 } else {
