@@ -615,8 +615,9 @@ struct Capture {
     body: Option<String>,
     truncated: bool,
 }
+type PutPace = Arc<Mutex<Option<Instant>>>;
 #[derive(Debug, Default, Clone)]
-struct Tap(Arc<Mutex<Capture>>);
+struct Tap(Arc<Mutex<Capture>>, Option<PutPace>);
 impl Intercept for Tap {
     fn name(&self) -> &'static str {
         "s3-vectors-receipt"
@@ -640,8 +641,23 @@ impl Intercept for Tap {
         )?;
         let mut capture = self.0.lock().map_err(|_| "capture lock poisoned")?;
         require(capture.attempts == 0, "second transmit attempt forbidden")?;
+        let mut admission = match &self.1 {
+            Some(pace) => Some(pace.lock().map_err(|_| "PUT pacing lock poisoned")?),
+            None => None,
+        };
+        if let Some(last) = &admission {
+            if let Some(previous) = **last {
+                // This synchronous post-signing hook admits transport work, not wire arrival.
+                std::thread::sleep(PUT_SPACING.saturating_sub(previous.elapsed()));
+            }
+        }
         capture.attempts += 1;
         capture.request_bytes = bytes.len();
+        #[cfg(test)]
+        tests::record_transmit_admission(context.request());
+        if let Some(last) = &mut admission {
+            **last = Some(Instant::now());
+        }
         Ok(())
     }
     fn read_before_deserialization(
@@ -745,8 +761,8 @@ impl Service {
         );
         Ok(Self { client, sts, tap })
     }
-    fn publication_call(&self) -> Self {
-        let tap = Tap::default();
+    fn publication_call(&self, put_pace: Option<PutPace>) -> Self {
+        let tap = Tap(Arc::default(), put_pace);
         let mut config = self.client.config().to_builder();
         // Replace, rather than append to, the shared serial-command capture.
         config.set_interceptors([aws_sdk_s3vectors::config::SharedInterceptor::new(
@@ -1091,9 +1107,11 @@ async fn upload_corpus(
     let out = RefCell::new(out);
     let stopped = Cell::new(false);
     let pace = tokio::sync::Mutex::new(None::<Instant>);
+    let transmit_pace = PutPace::default();
     let requests = stream::iter((0..c.rows).step_by(500))
         .map(|first| {
             let (corpus, out, stopped, pace, bound) = (&corpus, &out, &stopped, &pace, bound);
+            let transmit_pace = &transmit_pace;
             async move {
                 let result: Result<()> = async {
                     let mut last = pace.lock().await;
@@ -1125,7 +1143,7 @@ async fn upload_corpus(
                             "corpus changed during publish",
                         )?;
                     }
-                    let rpc = s.publication_call();
+                    let rpc = s.publication_call(Some(transmit_pace.clone()));
                     let call_id = out.borrow_mut().begin_call(&rpc, "PutVectors")?;
                     let started_at_ms = now_ms()?;
                     let start = Instant::now();
@@ -1191,7 +1209,7 @@ async fn readback_corpus(
                 }
                 let result: Result<()> = async {
                     let end = (first + 100).min(c.rows);
-                    let rpc = s.publication_call();
+                    let rpc = s.publication_call(None);
                     let call_id = out.borrow_mut().begin_call(&rpc, "GetVectors")?;
                     let started_at_ms = now_ms()?;
                     let start = Instant::now();
@@ -1404,7 +1422,10 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
         "publication_schedule":{"put_rpc_max_in_flight":PUBLICATION_IN_FLIGHT,
             "get_rpc_max_in_flight":PUBLICATION_IN_FLIGHT,"list_rpc_max_in_flight":1,
             "application_compute_lanes":1,"put_start_spacing_ms":PUT_SPACING.as_millis(),
-            "put_start_clock":"application send; monotonic; no catchup","put_batch_rows":500,"get_batch_rows":100},
+            "put_start_clock":"application send; monotonic; no catchup",
+            "put_transmit_admission_spacing_ms":PUT_SPACING.as_millis(),
+            "put_transmit_admission_clock":"SDK read_before_transmit after signing; monotonic; no catchup; excludes wire/server arrival",
+            "put_batch_rows":500,"get_batch_rows":100},
         "put_calls":put_calls,"list_calls":list_calls,"list_page_cap":c.list_page_cap(),"get_calls":get_calls,"calls":out.calls.summary(),
         "enumerated_keys":c.rows,"bit_exact_readback_rows":c.rows,"verified_at_ms":now_ms()?,
         "corpus_sha256":c.corpus.sha256,"queries_sha256":c.queries.sha256,"truth_sha256":c.truth.sha256,
@@ -2223,6 +2244,85 @@ mod tests {
         fn drop(&mut self) {
             COMPUTE.with(|state| state.borrow_mut().0 -= 1);
         }
+    }
+    thread_local! {
+        static PUT_ADMISSIONS: RefCell<Vec<Instant>> = const { RefCell::new(Vec::new()) };
+    }
+    pub(super) fn record_transmit_admission(
+        request: &aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+    ) {
+        if request.uri().ends_with("/PutVectors") {
+            assert!(request.headers().get("authorization").is_some());
+            PUT_ADMISSIONS.with(|times| times.borrow_mut().push(Instant::now()));
+        }
+    }
+    #[derive(Debug)]
+    struct DelayedIdentity {
+        ready: tokio::time::Instant,
+        waiting: Arc<AtomicUsize>,
+    }
+    impl aws_smithy_runtime_api::client::identity::ResolveCachedIdentity for DelayedIdentity {
+        fn resolve_cached_identity<'a>(
+            &'a self,
+            resolver: aws_smithy_runtime_api::client::identity::SharedIdentityResolver,
+            runtime: &'a RuntimeComponents,
+            cfg: &'a ConfigBag,
+        ) -> aws_smithy_runtime_api::client::identity::IdentityFuture<'a> {
+            aws_smithy_runtime_api::client::identity::IdentityFuture::new(async move {
+                self.waiting.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep_until(self.ready).await;
+                aws_smithy_runtime_api::client::identity::ResolveIdentity::resolve_identity(
+                    &resolver, runtime, cfg,
+                )
+                .await
+            })
+        }
+    }
+    #[tokio::test]
+    async fn publication_delayed_authentication_cannot_burst_transmit_admissions() {
+        let (_dir, ctx, _) = pipeline_fixture(4000);
+        let mock = Arc::new(Mock::default());
+        let (mut service, server) = mock_service(mock.clone()).await;
+        let waiting = Arc::new(AtomicUsize::new(0));
+        // All eight application starts precede credential readiness.
+        let ready = tokio::time::Instant::now() + Duration::from_secs(3);
+        service.client = Client::from_conf(
+            service
+                .client
+                .config()
+                .to_builder()
+                .identity_cache(DelayedIdentity {
+                    ready,
+                    waiting: waiting.clone(),
+                })
+                .build(),
+        );
+        let mut out = Output::create(&ctx, "delayed-auth.jsonl").unwrap();
+        let mut corpus = open_artifact(&ctx.c.corpus).unwrap();
+        let bound = identity(&corpus).unwrap();
+        PUT_ADMISSIONS.with(|times| times.borrow_mut().clear());
+        let upload = upload_corpus(&ctx.c, &service, &mut corpus, &bound, &mut out);
+        let prerequisites = async {
+            tokio::time::sleep_until(ready - Duration::from_millis(250)).await;
+            assert_eq!(waiting.load(Ordering::SeqCst), PUBLICATION_IN_FLIGHT);
+            PUT_ADMISSIONS.with(|times| assert!(times.borrow().is_empty()));
+        };
+        let (result, ()) = tokio::join!(upload, prerequisites);
+        assert_eq!(result.unwrap(), PUBLICATION_IN_FLIGHT);
+        assert!(out.calls.pending.is_empty());
+        assert_eq!(mock.put_calls.load(Ordering::SeqCst), PUBLICATION_IN_FLIGHT);
+        PUT_ADMISSIONS.with(|times| {
+            let times = times.borrow();
+            assert_eq!(times.len(), PUBLICATION_IN_FLIGHT);
+            for pair in times.windows(2) {
+                assert!(
+                    pair[1].duration_since(pair[0]) >= PUT_SPACING,
+                    "authenticated transmit admissions burst: {:?}",
+                    pair[1].duration_since(pair[0])
+                );
+            }
+        });
+        server.abort();
     }
     #[derive(Default)]
     struct Mock {
