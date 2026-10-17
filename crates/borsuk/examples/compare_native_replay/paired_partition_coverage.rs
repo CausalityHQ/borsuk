@@ -3132,6 +3132,7 @@ mod tests {
             native_order_sha256: "4".repeat(64),
             truth_opened: false,
             source_get_budget: None,
+            semantic_leaf_limit: None,
         }
     }
     fn query_line(a: &CoverageArm, i: &Inputs) -> (Value, Query) {
@@ -3244,6 +3245,7 @@ mod tests {
             router_source_sha256: String::new(),
             codec_source_sha256: String::new(),
             source_plane_source_sha256: String::new(),
+            semantic_leaf_limit: None,
             scope: String::new(),
             physical_s3_measured: false,
             io_measurement: String::new(),
