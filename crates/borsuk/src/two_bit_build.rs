@@ -6,8 +6,8 @@ use crate::{
     resident_vector_graph::HashingReader,
     sq8_page_authority::SQ8_PAGE_ROWS,
     two_bit_generation::{
-        Discovery, DiscoveryMode, Manifest, SCHEMA, TwoBitGeneration, TwoBitGenerationError,
-        TwoBitGenerationLimits,
+        Discovery, DiscoveryMode, Manifest, SCHEMA, SourceLayout, SourceLayoutMode,
+        TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, capsule_closures,
     },
     two_bit_source::TwoBitSource,
     unit_centroid_graph::UnitCentroidGraph,
@@ -140,20 +140,56 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn finish_root(output: &Path, body: &[u8]) -> Result<String> {
+    finish_root_with_sync(output, body, |_, file| file.sync_all())
+}
+fn finish_root_with_sync(
+    output: &Path,
+    body: &[u8],
+    mut sync: impl FnMut(&Path, &File) -> std::io::Result<()>,
+) -> Result<String> {
     let bad = TwoBitGenerationError::Invalid;
     if body.len() > 65536 {
         return Err(bad("root manifest cap"));
     }
     // Parse the same strict manifest schema without loading the code plane.
-    let _: Manifest = serde_json::from_slice(body).map_err(|_| bad("root schema"))?;
+    let manifest: Manifest = serde_json::from_slice(body).map_err(|_| bad("root schema"))?;
     let root_sha = hash(body);
-    write_new(&output.join("manifest.pending"), body)?;
-    File::open(output)
-        .and_then(|f| f.sync_all())
+    let plane = output.join("plane");
+    sync(
+        &plane,
+        &File::open(&plane).map_err(TwoBitGenerationError::Io)?,
+    )
+    .map_err(TwoBitGenerationError::Io)?;
+    if manifest.discovery.mode() == DiscoveryMode::Semantic {
+        let router = output.join("router");
+        sync(
+            &router,
+            &File::open(&router).map_err(TwoBitGenerationError::Io)?,
+        )
         .map_err(TwoBitGenerationError::Io)?;
-    fs::rename(
-        output.join("manifest.pending"),
-        output.join("manifest.json"),
+    }
+    let pending = output.join("manifest.pending");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&pending)
+        .map_err(TwoBitGenerationError::Io)?;
+    file.write_all(body).map_err(TwoBitGenerationError::Io)?;
+    sync(&pending, &file).map_err(TwoBitGenerationError::Io)?;
+    fs::rename(&pending, output.join("manifest.json")).map_err(TwoBitGenerationError::Io)?;
+    // A sync error after rename leaves an ambiguous root; preserve it for the caller.
+    sync(
+        output,
+        &File::open(output).map_err(TwoBitGenerationError::Io)?,
+    )
+    .map_err(TwoBitGenerationError::Io)?;
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    sync(
+        parent,
+        &File::open(parent).map_err(TwoBitGenerationError::Io)?,
     )
     .map_err(TwoBitGenerationError::Io)?;
     Ok(root_sha)
@@ -355,26 +391,331 @@ pub fn repackage_semantic_router(
             root.canonical.sha256.as_str(),
         ),
     ] {
-        let mut input = HashingReader {
-            inner: File::open(current.join(name)).map_err(TwoBitGenerationError::Io)?,
-            digest: Sha256::new(),
-        };
-        let mut out = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(output.join(name))
-            .map_err(TwoBitGenerationError::Io)?;
-        let copied = std::io::copy(&mut (&mut input).take(length + 1), &mut out)
-            .map_err(TwoBitGenerationError::Io)?;
-        if copied != length || format!("{:x}", input.digest.finalize()) != digest {
-            return Err(bad("repackage copy identity"));
-        }
-        out.sync_all().map_err(TwoBitGenerationError::Io)?;
+        copy_authenticated(current, output, name, length, digest)?;
     }
     root.discovery =
         write_semantic_router(output, import.artifacts, &import.input, &plane, &centroid)?;
     let body = serde_json::to_vec(&root).map_err(|_| bad("repackage root encoding"))?;
     finish_root(output, &body)
+}
+
+fn digest_hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+// Streaming pack owns only one original page buffer; fixed router and codec metadata
+// coexist under the same caller budget. The old flat body disappears before root seal.
+fn pack_source_layout(
+    output: &Path,
+    discovery: &Discovery,
+    plane: &crate::two_bit_source::SourcePlaneReceipt,
+    generation: u64,
+    cap: usize,
+) -> Result<SourceLayout> {
+    use crate::{
+        source_capsule,
+        two_bit_source::{TwoBitPlane, read_authenticated},
+    };
+    let bad = TwoBitGenerationError::Invalid;
+    let Discovery::Semantic {
+        profile,
+        root_sha256,
+        root_bytes,
+        membership_sha256,
+        membership_bytes,
+        ..
+    } = discovery
+    else {
+        return Err(bad("capsules require semantic discovery"));
+    };
+    let cap = cap.min(profile.allocation_cap());
+    let retained = root_bytes
+        .checked_mul(35)
+        .and_then(|n| n.checked_add(membership_bytes.checked_mul(8)?))
+        .and_then(|n| n.checked_add(plane.dimensions.checked_mul(256)?))
+        .and_then(|n| n.checked_add(plane.rows.div_ceil(32).checked_mul(96)?))
+        .and_then(|n| n.checked_add(131072))
+        .ok_or(bad("capsule pack metadata"))?;
+    let available = cap
+        .checked_sub(retained)
+        .ok_or(bad("capsule pack memory"))?;
+    let geometry = source_capsule::Geometry::new(plane.rows, plane.dimensions, *profile)
+        .map_err(TwoBitGenerationError::Plane)?;
+    let input = discovery.input(plane)?;
+    let router = crate::semantic_unit_router::SemanticUnitRouter::open(
+        &read_authenticated(&output.join("router/root.bin"), *root_bytes, root_sha256)
+            .map_err(TwoBitGenerationError::Plane)?,
+        &read_authenticated(
+            &output.join("router/membership.bin"),
+            *membership_bytes,
+            membership_sha256,
+        )
+        .map_err(TwoBitGenerationError::Plane)?,
+        root_sha256,
+        &input,
+        profile.root_cap(),
+    )
+    .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+    let closures = capsule_closures(&router, available)?;
+    let leaves = closures
+        .iter()
+        .enumerate()
+        .map(|(id, pages)| source_capsule::LeafPages {
+            leaf_id: id as u32,
+            pages,
+        })
+        .collect::<Vec<_>>();
+    let extra = closures
+        .capacity()
+        .checked_mul(std::mem::size_of::<Vec<u32>>())
+        .and_then(|n| {
+            n.checked_add(leaves.capacity() * std::mem::size_of::<source_capsule::LeafPages<'_>>())
+        })
+        .and_then(|n| {
+            n.checked_add(
+                closures
+                    .iter()
+                    .map(|p| (p.capacity() - p.len()) * 4)
+                    .sum::<usize>(),
+            )
+        })
+        .ok_or(bad("capsule pack capacities"))?;
+    let available = available
+        .checked_sub(extra)
+        .ok_or(bad("capsule pack memory"))?;
+    let charge =
+        source_capsule::build_charge(geometry, &leaves).map_err(TwoBitGenerationError::Plane)?;
+    if charge.memory_bytes > available {
+        return Err(bad("capsule pack memory"));
+    }
+    let plane_body =
+        fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
+    let (_codec, authority) = TwoBitPlane::open_metadata(
+        &output.join("plane"),
+        &hash(&plane_body),
+        &plane.sq8_sha256,
+        generation,
+        retained,
+    )
+    .map_err(TwoBitGenerationError::Plane)?;
+    let mut records =
+        File::open(output.join("plane/records.bin")).map_err(TwoBitGenerationError::Io)?;
+    let mut blob = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join("plane/capsules.bin"))
+        .map_err(TwoBitGenerationError::Io)?;
+    let mut directory = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join("plane/capsule_directory.bin"))
+        .map_err(TwoBitGenerationError::Io)?;
+    let receipt = source_capsule::pack(
+        geometry,
+        &leaves,
+        &authority,
+        &mut records,
+        &mut blob,
+        &mut directory,
+        available,
+    )
+    .map_err(TwoBitGenerationError::Plane)?;
+    if digest_hex(&receipt.logical_flat_sha256) != plane.records_sha256 {
+        return Err(bad("capsule logical identity"));
+    }
+    blob.sync_all().map_err(TwoBitGenerationError::Io)?;
+    directory.sync_all().map_err(TwoBitGenerationError::Io)?;
+    drop(records);
+    fs::remove_file(output.join("plane/records.bin")).map_err(TwoBitGenerationError::Io)?;
+    File::open(output.join("plane"))
+        .and_then(|f| f.sync_all())
+        .map_err(TwoBitGenerationError::Io)?;
+    Ok(SourceLayout::LeafCapsules {
+        blob_bytes: receipt.charge.physical_bytes as u64,
+        blob_sha256: digest_hex(&receipt.physical_blob_sha256),
+        directory_bytes: receipt.charge.encoded_directory_bytes,
+        directory_sha256: digest_hex(&receipt.directory_sha256),
+    })
+}
+
+fn copy_authenticated(
+    current: &Path,
+    output: &Path,
+    name: &str,
+    bytes: u64,
+    digest: &str,
+) -> Result<()> {
+    let mut input = HashingReader {
+        inner: File::open(current.join(name)).map_err(TwoBitGenerationError::Io)?,
+        digest: Sha256::new(),
+    };
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join(name))
+        .map_err(TwoBitGenerationError::Io)?;
+    let copied = std::io::copy(
+        &mut (&mut input).take(
+            bytes
+                .checked_add(1)
+                .ok_or(TwoBitGenerationError::Invalid("copy length"))?,
+        ),
+        &mut out,
+    )
+    .map_err(TwoBitGenerationError::Io)?;
+    if copied != bytes || format!("{:x}", input.digest.finalize()) != digest {
+        return Err(TwoBitGenerationError::Invalid("repackage copy identity"));
+    }
+    out.sync_all().map_err(TwoBitGenerationError::Io)
+}
+
+/// Repackage a current v10 flat semantic generation without fitting or reordering.
+/// Requires a new generation ID; preserves logical records, unit digests, canonical
+/// identity and router bytes, and reseals the SQ8 page manifest and root last.
+/// Caller pins and all pack/copy metadata are included in the supplied limits.
+pub fn repackage_source_layout(
+    current: &Path,
+    trusted_root_sha256: &str,
+    output: &Path,
+    generation: u64,
+    layout: SourceLayoutMode,
+    limits: TwoBitGenerationLimits,
+) -> Result<String> {
+    use crate::two_bit_source::{SourcePlaneReceipt, read_authenticated};
+    let bad = TwoBitGenerationError::Invalid;
+    let available = limits
+        .max_memory_bytes
+        .checked_sub(limits.already_pinned_bytes)
+        .and_then(|n| n.checked_sub(REPACKAGE_METADATA_BYTES as u64))
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or(bad("layout repackage memory"))?;
+    if output.exists() || available < 131072 {
+        return Err(bad("layout repackage admission"));
+    }
+    let read = |name: &str, digest: &str| -> Result<Vec<u8>> {
+        let length = fs::metadata(current.join(name))
+            .map_err(TwoBitGenerationError::Io)?
+            .len();
+        if length == 0 || length > 65536 {
+            return Err(bad("layout repackage manifest"));
+        }
+        read_authenticated(&current.join(name), length as usize, digest)
+            .map_err(TwoBitGenerationError::Plane)
+    };
+    let body = read("manifest.json", trusted_root_sha256)?;
+    let mut root: Manifest =
+        serde_json::from_slice(&body).map_err(|_| bad("layout repackage root"))?;
+    if root.schema != SCHEMA
+        || root.source_layout.is_capsules()
+        || root.discovery.mode() != DiscoveryMode::Semantic
+        || generation <= root.generation
+    {
+        return Err(bad(
+            "layout repackage requires current flat semantic generation and new ID",
+        ));
+    }
+    TwoBitGeneration::validate_local_publication(
+        current,
+        trusted_root_sha256,
+        TwoBitGenerationLimits {
+            already_pinned_bytes: limits
+                .already_pinned_bytes
+                .checked_add(REPACKAGE_METADATA_BYTES as u64)
+                .ok_or(bad("layout repackage memory"))?,
+            ..limits
+        },
+    )?;
+    let plane_body = read("plane/manifest.json", &root.plane_manifest_sha256)?;
+    let plane: SourcePlaneReceipt =
+        serde_json::from_slice(&plane_body).map_err(|_| bad("plane receipt"))?;
+    let page_body = read("page_manifest.json", &root.page_manifest_sha256)?;
+    let mut page: serde_json::Value =
+        serde_json::from_slice(&page_body).map_err(|_| bad("page receipt"))?;
+    let Discovery::Semantic {
+        root_sha256,
+        root_bytes,
+        membership_sha256,
+        membership_bytes,
+        leaves_sha256,
+        leaves_bytes,
+        centroids_sha256,
+        ..
+    } = &root.discovery
+    else {
+        unreachable!()
+    };
+    fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
+    fs::create_dir(output.join("plane")).map_err(TwoBitGenerationError::Io)?;
+    fs::create_dir(output.join("router")).map_err(TwoBitGenerationError::Io)?;
+    for (name, bytes, digest) in [
+        (
+            "plane/manifest.json",
+            plane_body.len() as u64,
+            root.plane_manifest_sha256.as_str(),
+        ),
+        (
+            "plane/mean.bin",
+            (plane.dimensions * 4) as u64,
+            plane.mean_sha256.as_str(),
+        ),
+        (
+            "plane/records.bin",
+            (plane.rows * plane.record_bytes) as u64,
+            plane.records_sha256.as_str(),
+        ),
+        (
+            "plane/page_digests.bin",
+            (plane.rows.div_ceil(32) * 32) as u64,
+            plane.page_digest_sha256.as_str(),
+        ),
+        (
+            "page_digests.bin",
+            (plane.rows.div_ceil(SQ8_PAGE_ROWS) * 32) as u64,
+            page["page_digest_sha256"]
+                .as_str()
+                .ok_or(bad("page digest"))?,
+        ),
+        ("router/root.bin", *root_bytes as u64, root_sha256.as_str()),
+        (
+            "router/membership.bin",
+            *membership_bytes as u64,
+            membership_sha256.as_str(),
+        ),
+        (
+            "router/leaves.bin",
+            *leaves_bytes as u64,
+            leaves_sha256.as_str(),
+        ),
+        (
+            "canonical.bin",
+            root.canonical.bytes,
+            root.canonical.sha256.as_str(),
+        ),
+        (
+            "centroids.bin",
+            fs::metadata(current.join("centroids.bin"))
+                .map_err(TwoBitGenerationError::Io)?
+                .len(),
+            centroids_sha256.as_str(),
+        ),
+    ] {
+        copy_authenticated(current, output, name, bytes, digest)?;
+    }
+    root.generation = generation;
+    page["generation"] = generation.into();
+    let page_body = serde_json::to_vec(&page).map_err(|_| bad("page encoding"))?;
+    write_new(&output.join("page_manifest.json"), &page_body)?;
+    root.page_manifest_sha256 = hash(&page_body);
+    root.source_layout = match layout {
+        SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
+        SourceLayoutMode::LeafCapsules => {
+            pack_source_layout(output, &root.discovery, &plane, generation, available)?
+        }
+    };
+    finish_root(
+        output,
+        &serde_json::to_vec(&root).map_err(|_| bad("root encoding"))?,
+    )
 }
 
 /// Shared pre-allocation build admission; caller pins/IDs are separate charges.
@@ -484,6 +825,7 @@ impl TwoBitGenerationBuilder<'_> {
             DiscoveryMode::Graph,
             SemanticProfile::Native100k,
             None,
+            SourceLayoutMode::FlatRecords,
             output,
             max_build_payload_bytes,
         )
@@ -502,6 +844,7 @@ impl TwoBitGenerationBuilder<'_> {
             DiscoveryMode::Graph,
             SemanticProfile::Native100k,
             None,
+            SourceLayoutMode::FlatRecords,
             output,
             max_build_payload_bytes,
         )
@@ -520,6 +863,7 @@ impl TwoBitGenerationBuilder<'_> {
             mode,
             SemanticProfile::Native100k,
             None,
+            SourceLayoutMode::FlatRecords,
             output,
             max_build_payload_bytes,
         )
@@ -538,6 +882,7 @@ impl TwoBitGenerationBuilder<'_> {
             DiscoveryMode::Semantic,
             profile,
             None,
+            SourceLayoutMode::FlatRecords,
             output,
             max_build_payload_bytes,
         )
@@ -557,17 +902,46 @@ impl TwoBitGenerationBuilder<'_> {
             DiscoveryMode::Semantic,
             import.input.profile,
             Some(import),
+            SourceLayoutMode::FlatRecords,
             output,
             max_build_payload_bytes,
         )
     }
 
+    /// Explicit layout construction, packing only after the semantic router is fixed.
+    /// An imported router must match the supplied profile; no layout-dependent refit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_source_layout(
+        &self,
+        order: Option<&[u64]>,
+        profile: SemanticProfile,
+        import: Option<&SemanticRouterImport<'_>>,
+        layout: SourceLayoutMode,
+        output: &Path,
+        max_build_payload_bytes: usize,
+    ) -> Result<String> {
+        if import.is_some_and(|import| import.input.profile != profile) {
+            return Err(TwoBitGenerationError::Invalid("source layout profile"));
+        }
+        self.build_inner(
+            order,
+            DiscoveryMode::Semantic,
+            profile,
+            import,
+            layout,
+            output,
+            max_build_payload_bytes,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn build_inner(
         &self,
         order: Option<&[u64]>,
         mode: DiscoveryMode,
         profile: SemanticProfile,
         import: Option<&SemanticRouterImport<'_>>,
+        layout: SourceLayoutMode,
         output: &Path,
         max_build_payload_bytes: usize,
     ) -> Result<String> {
@@ -766,9 +1140,22 @@ impl TwoBitGenerationBuilder<'_> {
         write_new(&output.join("page_manifest.json"), &page_manifest)?;
         let plane_body =
             fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
+        let source_layout = match layout {
+            SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
+            SourceLayoutMode::LeafCapsules => pack_source_layout(
+                output,
+                &discovery,
+                &plane,
+                self.generation,
+                max_build_payload_bytes
+                    .checked_sub(REPACKAGE_METADATA_BYTES)
+                    .and_then(|n| n.checked_sub(order.map_or(0, |order| order.len() * 8)))
+                    .ok_or(bad("capsule build memory"))?,
+            )?,
+        };
         let body=serde_json::to_vec(&serde_json::json!({"schema":SCHEMA,
             "generation":self.generation,"base_epoch":self.base_epoch,"plane_manifest_sha256":hash(&plane_body),
-            "page_manifest_sha256":hash(&page_manifest),"discovery":discovery,"sq8_object_sha256":self.source.sq8_sha256,
+            "page_manifest_sha256":hash(&page_manifest),"discovery":discovery,"source_layout":source_layout,"sq8_object_sha256":self.source.sq8_sha256,
             "sq8_object_key":self.sq8_object_key,"sq8_etag":self.sq8_etag,"low":self.low,"step":self.step,
             "canonical":canonical}))
             .map_err(|_|bad("root encoding"))?;
@@ -779,6 +1166,213 @@ impl TwoBitGenerationBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These tests observe real file I/O and sync failures, not power-loss recovery.
+    fn root_seal_fixture(output: &Path, semantic: bool, capsules: bool) -> Vec<u8> {
+        fs::create_dir(output.join("plane")).unwrap();
+        write_new(&output.join("plane/manifest.json"), b"plane").unwrap();
+        let source_layout = if capsules {
+            write_new(&output.join("plane/capsules.bin"), b"capsules").unwrap();
+            write_new(&output.join("plane/capsule_directory.bin"), b"directory").unwrap();
+            serde_json::json!({"layout":"leaf_capsules", "blob_bytes":8,
+                "blob_sha256":hash(b"capsules"), "directory_bytes":9,
+                "directory_sha256":hash(b"directory")})
+        } else {
+            write_new(&output.join("plane/records.bin"), b"records").unwrap();
+            serde_json::json!({"layout":"flat_records"})
+        };
+        let digest = hash(b"fixture");
+        let discovery = if semantic {
+            fs::create_dir(output.join("router")).unwrap();
+            for name in ["root.bin", "membership.bin", "leaves.bin"] {
+                write_new(&output.join("router").join(name), b"router").unwrap();
+            }
+            serde_json::json!({"mode":"semantic", "profile":"native100k",
+                "root_sha256":hash(b"router"), "root_bytes":6,
+                "membership_sha256":hash(b"router"), "membership_bytes":6,
+                "leaves_sha256":hash(b"router"), "leaves_bytes":6,
+                "input_schema":SCHEMA, "input_root_sha256":digest,
+                "centroids_sha256":digest, "source_sha256":digest,
+                "source_order_sha256":digest, "mean_sha256":digest,
+                "records_sha256":digest, "sq8_sha256":digest})
+        } else {
+            serde_json::json!({"mode":"graph", "centroids_sha256":digest,
+                "graph_sha256":digest, "graph_resident_bytes":1,
+                "diverse_graph_sha256":digest, "diverse_graph_resident_bytes":1})
+        };
+        serde_json::to_vec(&serde_json::json!({"schema":SCHEMA, "generation":1,
+            "base_epoch":0, "plane_manifest_sha256":hash(b"plane"),
+            "page_manifest_sha256":digest, "discovery":discovery,
+            "source_layout":source_layout, "sq8_object_sha256":digest,
+            "sq8_object_key":format!("test/objects/{digest}"), "sq8_etag":"etag",
+            "canonical":{"rows":1, "dimensions":1, "bytes":12,
+                "sha256":digest, "object_key":format!("test/objects/{digest}")},
+            "low":[0.0], "step":[1.0]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn finish_root_syncs_children_pending_root_and_parent_in_order() {
+        for (semantic, capsules) in [(false, false), (true, false), (true, true)] {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("generation");
+            fs::create_dir(&output).unwrap();
+            let body = root_seal_fixture(&output, semantic, capsules);
+            let pending = output.join("manifest.pending");
+            let root = output.join("manifest.json");
+            let mut synced = Vec::new();
+            let root_sha = finish_root_with_sync(&output, &body, |path, file| {
+                if path == output.join("plane") || path == output.join("router") {
+                    assert!(!pending.exists());
+                    assert!(!root.exists());
+                    let child = if path == output.join("router") {
+                        "root.bin"
+                    } else if capsules {
+                        "capsules.bin"
+                    } else {
+                        "records.bin"
+                    };
+                    assert!(!fs::read(path.join(child)).unwrap().is_empty());
+                } else if path == pending {
+                    assert_eq!(fs::read(path).unwrap(), body);
+                    assert!(!root.exists());
+                } else {
+                    assert!(!pending.exists());
+                    assert_eq!(fs::read(&root).unwrap(), body);
+                }
+                file.sync_all()?;
+                synced.push(path.to_path_buf());
+                Ok(())
+            })
+            .unwrap();
+            let mut expected = vec![output.join("plane")];
+            if semantic {
+                expected.push(output.join("router"));
+            }
+            expected.extend([pending, output.clone(), temp.path().to_path_buf()]);
+            assert_eq!(synced, expected);
+            assert_eq!(root_sha, hash(&body));
+            assert_eq!(fs::read(root).unwrap(), body);
+        }
+    }
+
+    #[test]
+    fn finish_root_propagates_every_sync_failure_without_removing_artifacts() {
+        for (semantic, capsules) in [(false, false), (true, false), (true, true)] {
+            for failure in 0..if semantic { 5 } else { 4 } {
+                let temp = tempfile::tempdir().unwrap();
+                let output = temp.path().join("generation");
+                fs::create_dir(&output).unwrap();
+                let body = root_seal_fixture(&output, semantic, capsules);
+                let pending = output.join("manifest.pending");
+                let root = output.join("manifest.json");
+                let mut expected = vec![output.join("plane")];
+                if semantic {
+                    expected.push(output.join("router"));
+                }
+                let children = expected.len();
+                expected.extend([pending.clone(), output.clone(), temp.path().to_path_buf()]);
+                let mut attempted = Vec::new();
+                let result = finish_root_with_sync(&output, &body, |path, file| {
+                    attempted.push(path.to_path_buf());
+                    if path == expected[failure] {
+                        return Err(std::io::Error::other("injected root sync failure"));
+                    }
+                    file.sync_all()
+                });
+                let Err(TwoBitGenerationError::Io(error)) = result else {
+                    panic!("sync failure must prevent a successful root receipt");
+                };
+                assert_eq!(error.kind(), std::io::ErrorKind::Other);
+                assert_eq!(error.to_string(), "injected root sync failure");
+                assert_eq!(attempted, expected[..=failure]);
+                assert_eq!(pending.exists(), failure == children);
+                assert_eq!(root.exists(), failure > children);
+                if root.exists() {
+                    assert_eq!(fs::read(&root).unwrap(), body);
+                }
+                if pending.exists() {
+                    assert_eq!(fs::read(&pending).unwrap(), body);
+                }
+                assert_eq!(
+                    fs::read(output.join("plane/manifest.json")).unwrap(),
+                    b"plane"
+                );
+                if semantic {
+                    assert_eq!(fs::read(output.join("router/root.bin")).unwrap(), b"router");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finish_root_syncs_current_directory_for_single_component_output() {
+        let temp = tempfile::Builder::new()
+            .prefix("borsuk-root-seal-")
+            .tempdir_in(".")
+            .unwrap();
+        let output = Path::new(temp.path().file_name().unwrap());
+        assert!(output.parent().unwrap().as_os_str().is_empty());
+        let body = root_seal_fixture(output, false, false);
+        let mut synced = Vec::new();
+        finish_root_with_sync(output, &body, |path, file| {
+            file.sync_all()?;
+            synced.push(path.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(synced.last().unwrap(), Path::new("."));
+        assert_eq!(fs::read(output.join("manifest.json")).unwrap(), body);
+    }
+
+    #[test]
+    fn finish_root_preserves_pending_ownership_and_rename_errors() {
+        for block_rename in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("generation");
+            fs::create_dir(&output).unwrap();
+            let body = root_seal_fixture(&output, false, false);
+            let pending = output.join("manifest.pending");
+            let root = output.join("manifest.json");
+            if block_rename {
+                fs::create_dir(&root).unwrap();
+            } else {
+                fs::write(&pending, b"unowned pending").unwrap();
+            }
+            let mut synced = Vec::new();
+            let result = finish_root_with_sync(&output, &body, |path, file| {
+                file.sync_all()?;
+                synced.push(path.to_path_buf());
+                Ok(())
+            });
+            assert!(matches!(result, Err(TwoBitGenerationError::Io(_))));
+            if block_rename {
+                assert!(root.is_dir());
+                assert_eq!(fs::read(pending).unwrap(), body);
+                assert_eq!(
+                    synced,
+                    [output.join("plane"), output.join("manifest.pending")]
+                );
+            } else {
+                assert!(!root.exists());
+                assert_eq!(fs::read(pending).unwrap(), b"unowned pending");
+                assert_eq!(synced, [output.join("plane")]);
+            }
+        }
+    }
+
+    #[test]
+    fn finish_root_rejects_invalid_schema_and_size_before_io() {
+        let temp = tempfile::tempdir().unwrap();
+        for body in [b"{}".to_vec(), vec![b' '; 65537]] {
+            let result = finish_root_with_sync(temp.path(), &body, |_, _| {
+                panic!("invalid roots must be rejected before sync");
+            });
+            assert!(matches!(result, Err(TwoBitGenerationError::Invalid(_))));
+            assert!(!temp.path().join("manifest.pending").exists());
+            assert!(!temp.path().join("manifest.json").exists());
+        }
+    }
     #[tokio::test]
     async fn source_shortlist_v9_authenticates_32_row_sq8_blocks() {
         use object_store::{ObjectStoreExt, path::Path as ObjectPath};
@@ -844,7 +1438,7 @@ mod tests {
             manifest["page_rows"], 32,
             "new SQ8 proofs must authenticate 32-row blocks"
         );
-        assert_eq!(root["schema"], "borsuk-two-bit-generation-v9");
+        assert_eq!(root["schema"], "borsuk-two-bit-generation-v10");
         assert_eq!(manifest["object_sha256"], sq8_sha);
         let digests = fs::read(output.join("page_digests.bin")).unwrap();
         assert_eq!(digests.len(), rows.div_ceil(32) * 32);
@@ -1288,7 +1882,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v9",
+            manifest["schema"], "borsuk-two-bit-generation-v10",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();

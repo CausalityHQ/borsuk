@@ -9,8 +9,8 @@ use std::{
 use bytes::Bytes;
 use futures_util::StreamExt;
 use object_store::{
-    path::Path as ObjectPath, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
-    UpdateVersion,
+    GetOptions, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion,
+    path::Path as ObjectPath,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,14 +19,20 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::resident_graph_generation::{
-    parse_authenticated_root, preflight_root, valid_sha256, Artifact, ResidentGraphGeneration,
-    ResidentGraphGenerationError, Root, MAX_ROOT_BYTES,
+    Artifact, MAX_ROOT_BYTES, ResidentGraphGeneration, ResidentGraphGenerationError, Root,
+    parse_authenticated_root, preflight_root, valid_sha256,
 };
 
 const HEAD_SCHEMA: &str = "borsuk-resident-graph-head-v1";
 const MIN_PART_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PART_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const MAX_PARTS: u64 = 9_000;
+const LOCAL_READ_BYTES: usize = 64 * 1024;
+const READBACK_RANGE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_IDENTITY_BYTES: usize = 4096;
+// Three ETag/version pairs (pinned, request, response), plus fixed hashing/stream state.
+// Backend transport, multipart bookkeeping and incoming token allocations remain backend-specific.
+const AUTH_STATE_BYTES: usize = 6 * MAX_IDENTITY_BYTES + 4096;
 
 fn multipart_part_bytes(length: u64) -> Result<usize, ResidentGraphStoreError> {
     let mebibyte = 1024 * 1024;
@@ -36,7 +42,8 @@ fn multipart_part_bytes(length: u64) -> Result<usize, ResidentGraphStoreError> {
             "artifact exceeds multipart limit",
         ));
     }
-    Ok(bytes as usize)
+    usize::try_from(bytes)
+        .map_err(|_| ResidentGraphStoreError::Invalid("multipart part address space"))
 }
 
 #[derive(Debug, Error)]
@@ -295,35 +302,152 @@ async fn upload_artifact(
         usize::MAX,
     )
     .await
+    .map(|_| ())
 }
 
-/// Stream a file to a caller-selected immutable key; complete only after SHA/length validation.
+fn valid_upload_identity(e_tag: Option<&String>, version: Option<&String>) -> bool {
+    let valid_token = |token: &String| {
+        !token.is_empty()
+            && token.len() <= MAX_IDENTITY_BYTES
+            && token.capacity() <= MAX_IDENTITY_BYTES
+            && token.trim() == token
+            && !token.chars().any(char::is_control)
+    };
+    (e_tag.is_some() || version.is_some())
+        && e_tag.is_none_or(|tag| {
+            valid_token(tag) && tag != "*" && !tag.contains(',') && !tag.starts_with("W/")
+        })
+        && version.is_none_or(valid_token)
+}
+
+/// Authenticate a conflict winner through bounded, identity-pinned ranges.
+async fn authenticate_existing(
+    store: &dyn ObjectStore,
+    location: &ObjectPath,
+    artifact: &Artifact,
+    max_buffer_bytes: usize,
+) -> Result<UpdateVersion, ResidentGraphStoreError> {
+    let range_bytes = max_buffer_bytes
+        .checked_sub(AUTH_STATE_BYTES)
+        .map(|bytes| (bytes / 2).min(READBACK_RANGE_BYTES))
+        .filter(|bytes| *bytes > 0)
+        .ok_or(ResidentGraphStoreError::Invalid("upload memory budget"))?
+        as u64;
+    let mut meta = store.head(location).await?;
+    if meta.location != *location
+        || meta.size != artifact.bytes
+        || !valid_upload_identity(meta.e_tag.as_ref(), meta.version.as_ref())
+    {
+        return Err(ResidentGraphStoreError::Invalid(
+            "existing artifact identity",
+        ));
+    }
+    let version = UpdateVersion {
+        e_tag: meta.e_tag.take(),
+        version: meta.version.take(),
+    };
+    drop(meta);
+    let mut digest = Sha256::new();
+    let mut start = 0;
+    loop {
+        let end = start + (artifact.bytes - start).min(range_bytes);
+        // Empty objects cannot use an HTTP byte range; still consume their body through EOF.
+        let result = store
+            .get_opts(
+                location,
+                GetOptions {
+                    if_match: version.e_tag.clone(),
+                    version: version.version.clone(),
+                    range: (artifact.bytes != 0).then(|| (start..end).into()),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        if result.meta.location != *location
+            || result.meta.size != artifact.bytes
+            || !valid_upload_identity(result.meta.e_tag.as_ref(), result.meta.version.as_ref())
+            || result.meta.e_tag != version.e_tag
+            || result.meta.version != version.version
+            || result.range != (start..end)
+        {
+            return Err(ResidentGraphStoreError::Invalid(
+                "existing artifact range identity",
+            ));
+        }
+        let mut received = 0_u64;
+        let mut stream = result.into_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            received = received.checked_add(chunk.len() as u64).ok_or(
+                ResidentGraphStoreError::Invalid("existing artifact length overflow"),
+            )?;
+            if received > end - start {
+                return Err(ResidentGraphStoreError::Invalid(
+                    "existing artifact range length",
+                ));
+            }
+            digest.update(&chunk);
+        }
+        if received != end - start {
+            return Err(ResidentGraphStoreError::Invalid(
+                "existing artifact range length",
+            ));
+        }
+        start = end;
+        if start == artifact.bytes {
+            break;
+        }
+    }
+    if format!("{:x}", digest.finalize()) != artifact.sha256 {
+        return Err(ResidentGraphStoreError::Invalid(
+            "existing artifact SHA-256",
+        ));
+    }
+    Ok(version)
+}
+
+/// Atomically create a file after local SHA/length/EOF validation, or authenticate a conflict winner.
+/// Other completion errors remain unknown commits; callers must not publish dependent roots.
 pub(crate) async fn upload_authenticated_file(
     store: &dyn ObjectStore,
     location: &ObjectPath,
     path: &Path,
     artifact: &Artifact,
     max_buffer_bytes: usize,
-) -> Result<(), ResidentGraphStoreError> {
+) -> Result<UpdateVersion, ResidentGraphStoreError> {
+    if !valid_sha256(&artifact.sha256) {
+        return Err(ResidentGraphStoreError::Invalid("artifact SHA-256"));
+    }
+    let part_bytes = multipart_part_bytes(artifact.bytes)?;
+    let buffer_bytes = part_bytes
+        .min(usize::try_from(artifact.bytes).unwrap_or(usize::MAX))
+        .max(1);
+    // Charge the source read buffer, payload copy and bounded authentication identities before init.
+    if buffer_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(LOCAL_READ_BYTES + AUTH_STATE_BYTES))
+        .is_none_or(|bytes| bytes > max_buffer_bytes)
+    {
+        return Err(ResidentGraphStoreError::Invalid("upload memory budget"));
+    }
     let mut file = tokio::fs::File::open(path).await?;
     if file.metadata().await?.len() != artifact.bytes {
         return Err(ResidentGraphStoreError::Invalid("artifact length"));
     }
-    let part_bytes = multipart_part_bytes(artifact.bytes)?;
-    let mut upload = store.put_multipart(location).await?;
-    let mut digest = Sha256::new();
-    let mut received = 0_u64;
-    // S3 allows at most 10,000 parts; leave room for a short final part.
-    let buffer_bytes = part_bytes.min(usize::try_from(artifact.bytes).unwrap_or(usize::MAX));
-    if buffer_bytes
-        .checked_mul(2)
-        .is_none_or(|n| n > max_buffer_bytes)
-    {
-        let _ = upload.abort().await;
-        return Err(ResidentGraphStoreError::Invalid("upload memory budget"));
-    }
+    file.set_max_buf_size(LOCAL_READ_BYTES.min(buffer_bytes));
     let mut buffer = vec![0_u8; buffer_bytes];
+    let (mut upload, conflict) = match store
+        .put_multipart_create(location, Default::default())
+        .await
+    {
+        Ok(upload) => (Some(upload), None),
+        Err(error @ object_store::Error::AlreadyExists { .. }) => (None, Some(error)),
+        Err(error) => return Err(error.into()),
+    };
+    let mut source_authenticated = false;
     let result = async {
+        let mut digest = Sha256::new();
+        let mut received = 0_u64;
         loop {
             let mut filled = 0;
             while filled < buffer.len() {
@@ -343,23 +467,57 @@ pub(crate) async fn upload_authenticated_file(
                 return Err(ResidentGraphStoreError::Invalid("artifact length"));
             }
             digest.update(&buffer[..filled]);
-            upload
-                .put_part(PutPayload::from(Bytes::copy_from_slice(&buffer[..filled])))
-                .await?;
+            if let Some(upload) = upload.as_mut() {
+                upload
+                    .put_part(PutPayload::from(Bytes::copy_from_slice(&buffer[..filled])))
+                    .await?;
+            }
         }
         if received != artifact.bytes || format!("{:x}", digest.finalize()) != artifact.sha256 {
             return Err(ResidentGraphStoreError::Invalid(
                 "artifact SHA-256 or length",
             ));
         }
-        upload.complete().await?;
-        Ok(())
+        source_authenticated = true;
+        if let Some(error) = conflict {
+            return Err(error.into());
+        }
+        let upload = upload.as_mut().expect("successful multipart initiation");
+        if received == 0 {
+            upload.put_part(PutPayload::default()).await?;
+        }
+        let version = UpdateVersion::from(upload.complete().await?);
+        if !valid_upload_identity(version.e_tag.as_ref(), version.version.as_ref()) {
+            return Err(ResidentGraphStoreError::Invalid(
+                "artifact completion identity",
+            ));
+        }
+        Ok(version)
     }
     .await;
-    if result.is_err() {
+    drop(buffer);
+    drop(file);
+    if result.is_err()
+        && let Some(upload) = upload.as_mut()
+    {
+        // Abort only our multipart handle; failure must not mask the primary error.
         let _ = upload.abort().await;
     }
-    result
+    drop(upload);
+    // A part can fail before local EOF; such a conflict cannot authenticate reuse.
+    if source_authenticated
+        && matches!(
+            result,
+            Err(ResidentGraphStoreError::Store(
+                object_store::Error::AlreadyExists { .. }
+            ))
+        )
+    {
+        drop(result);
+        authenticate_existing(store, location, artifact, max_buffer_bytes).await
+    } else {
+        result
+    }
 }
 
 /// Stage all five authenticated blobs and their immutable root without
@@ -382,12 +540,34 @@ pub async fn stage_graph_generation(
     ] {
         upload_artifact(store, prefix, directory, name, artifact).await?;
     }
-    store
-        .put(
-            &root_path(prefix, &root_sha256),
+    let location = root_path(prefix, &root_sha256);
+    match store
+        .put_opts(
+            &location,
             PutPayload::from(root_bytes.to_vec()),
+            PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            },
         )
-        .await?;
+        .await
+    {
+        Ok(_) => {}
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            authenticate_existing(
+                store,
+                &location,
+                &Artifact {
+                    bytes: root_bytes.len() as u64,
+                    sha256: root_sha256.clone(),
+                },
+                // Preserve the root caller's budget independently of the maximum range.
+                AUTH_STATE_BYTES + 2 * 64 * 1024,
+            )
+            .await?;
+        }
+        Err(error) => return Err(error.into()),
+    }
     Ok(root_sha256)
 }
 
@@ -452,7 +632,7 @@ mod tests {
     use super::*;
     use object_store::memory::InMemory;
 
-    fn fixture(directory: &Path, generation: u64) -> Vec<u8> {
+    pub(super) fn fixture(directory: &Path, generation: u64) -> Vec<u8> {
         let artifact = |name: &str| {
             let bytes = format!("{generation}:{name}").into_bytes();
             std::fs::write(directory.join(name), &bytes).unwrap();
@@ -559,3 +739,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "resident_graph_store_upload_tests.rs"]
+mod upload_tests;

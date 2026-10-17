@@ -1439,18 +1439,20 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
     });
     // The indexed future has a named type-producing function so the layout test measures
     // the actual scheduler element, including its plan index.
-    let mut outcomes = stream::iter(ranges.iter().copied().enumerate().map(
-        |(index, (first, last))| {
-            fetch_verified_pages_admitted_indexed(
-                store, location, authority, first, last, etag, max_bytes, index, origin, budget,
-            )
-        },
-    ))
-    .buffer_unordered(max_parallel.min(ranges.len()))
-    .collect::<Vec<_>>()
+    let outcomes = drain_ordered(
+        ranges
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, (first, last))| {
+                fetch_verified_pages_admitted_indexed(
+                    store, location, authority, first, last, etag, max_bytes, index, origin, budget,
+                )
+            }),
+        max_parallel.min(ranges.len()),
+        |(index, _, _)| *index,
+    )
     .await;
-    // Refill slots on completion; restore plan order for results, traces and errors.
-    outcomes.sort_unstable_by_key(|(index, _, _)| *index);
     if let Some(trace) = trace.as_deref_mut() {
         trace.all_ranges_complete_ns = Some(trace.now_ns());
     }
@@ -1627,13 +1629,52 @@ async fn fetch_verified_pages_core(
     max_bytes: usize,
     mut probe: Option<&mut Probe>,
 ) -> Result<VerifiedRange, RangeFetchError> {
-    stamp(&mut probe, |span, ns| span.first_poll_ns = Some(ns));
-    if etag.is_empty() {
-        return Err(RangeFetchError::UnexpectedMetadata);
-    }
     let expected = authority
         .byte_range(first_page, last_page)
         .map_err(RangeFetchError::Page)?;
+    let bytes = fetch_exact_range_core(
+        store,
+        location,
+        expected.clone(),
+        authority.object_bytes(),
+        etag,
+        max_bytes,
+        probe.as_deref_mut(),
+    )
+    .await?;
+    stamp(&mut probe, |span, ns| {
+        span.auth_start_ns = Some(ns);
+        span.outcome = "page_auth";
+    });
+    let authenticated = authority.verify_payload(first_page, last_page, &bytes);
+    stamp(&mut probe, |span, ns| {
+        span.auth_end_ns = Some(ns);
+        if authenticated.is_ok() {
+            span.outcome = "ok";
+        }
+    });
+    authenticated.map_err(RangeFetchError::Page)?;
+    Ok(VerifiedRange {
+        start: expected.start,
+        bytes,
+    })
+}
+
+// Physical transport has no page geometry; the caller supplies real authentication.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_exact_range_core(
+    store: &dyn ObjectStore,
+    location: &Path,
+    expected: std::ops::Range<usize>,
+    object_bytes: usize,
+    etag: &str,
+    max_bytes: usize,
+    mut probe: Option<&mut Probe>,
+) -> Result<Bytes, RangeFetchError> {
+    stamp(&mut probe, |span, ns| span.first_poll_ns = Some(ns));
+    if etag.is_empty() || expected.start >= expected.end || expected.end > object_bytes {
+        return Err(RangeFetchError::UnexpectedMetadata);
+    }
     let expected_len = expected.end - expected.start;
     if expected_len > max_bytes {
         return Err(RangeFetchError::UnexpectedMetadata);
@@ -1657,8 +1698,7 @@ async fn fetch_verified_pages_core(
     });
     if result.range != (start..stop)
         || result.meta.size
-            != u64::try_from(authority.object_bytes())
-                .map_err(|_| RangeFetchError::UnexpectedMetadata)?
+            != u64::try_from(object_bytes).map_err(|_| RangeFetchError::UnexpectedMetadata)?
         || result.meta.e_tag.as_deref() != Some(etag)
     {
         return Err(RangeFetchError::UnexpectedMetadata);
@@ -1704,22 +1744,167 @@ async fn fetch_verified_pages_core(
         }
     }
     let bytes = collected.freeze();
-    stamp(&mut probe, |span, ns| {
-        span.auth_start_ns = Some(ns);
-        span.outcome = "page_auth";
-    });
-    let authenticated = authority.verify_payload(first_page, last_page, &bytes);
-    stamp(&mut probe, |span, ns| {
-        span.auth_end_ns = Some(ns);
-        if authenticated.is_ok() {
-            span.outcome = "ok";
+    Ok(bytes)
+}
+
+// Include both the growing ordered-outcome vector and the retained result vector.
+pub(crate) fn capsule_fetch_descriptor_bytes<T>(ranges: usize) -> Option<usize> {
+    std::mem::size_of::<(usize, bool, Result<T, RangeFetchError>)>()
+        .checked_mul(OUTCOME_VECTOR_GROWTH_FACTOR)?
+        .checked_add(std::mem::size_of::<T>())?
+        .checked_mul(ranges)
+}
+
+struct CapsuleRangeReader<'a, A> {
+    store: &'a dyn ObjectStore,
+    location: &'a Path,
+    object_bytes: usize,
+    etag: &'a str,
+    max_bytes: usize,
+    budget: Option<&'a Arc<InFlightBytes>>,
+    authenticate: &'a A,
+}
+
+impl<A: Sync> CapsuleRangeReader<'_, A> {
+    async fn fetch_range<T>(
+        &self,
+        index: usize,
+        range: &std::ops::Range<usize>,
+    ) -> (usize, bool, Result<T, RangeFetchError>)
+    where
+        A: Fn(usize, Vec<u8>) -> Result<T, RangeFetchError>,
+    {
+        let _permit = if let Some(budget) = self.budget {
+            match budget.reserve(range.len()).await {
+                Some(permit) => Some(permit),
+                None => return (index, false, Err(RangeFetchError::UnexpectedMetadata)),
+            }
+        } else {
+            None
+        };
+        let result = async {
+            let body = fetch_exact_range_core(
+                self.store,
+                self.location,
+                range.clone(),
+                self.object_bytes,
+                self.etag,
+                self.max_bytes,
+                None,
+            )
+            .await?;
+            if body.len() != range.len() {
+                return Err(RangeFetchError::UnexpectedMetadata);
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(body.len())
+                .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
+            // The generation admits two full framed copies; reject excess capacity.
+            if bytes.capacity() > range.len() {
+                return Err(RangeFetchError::UnexpectedMetadata);
+            }
+            bytes.extend_from_slice(&body);
+            drop(body);
+            (self.authenticate)(range.start, bytes)
         }
-    });
-    authenticated.map_err(RangeFetchError::Page)?;
-    Ok(VerifiedRange {
-        start: expected.start,
-        bytes,
-    })
+        .await;
+        (index, true, result)
+    }
+}
+
+// Both paths refill on completion, drain all original requests and restore plan order.
+async fn drain_ordered<F: std::future::Future>(
+    futures: impl Iterator<Item = F>,
+    parallel: usize,
+    mut index: impl FnMut(&F::Output) -> usize,
+) -> Vec<F::Output> {
+    let mut outcomes = stream::iter(futures)
+        .buffer_unordered(parallel)
+        .collect::<Vec<_>>()
+        .await;
+    outcomes.sort_unstable_by_key(|outcome| index(outcome));
+    outcomes
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_capsule_ranges<T>(
+    store: &dyn ObjectStore,
+    location: &Path,
+    object_bytes: usize,
+    ranges: &[std::ops::Range<usize>],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    budget: Option<&Arc<InFlightBytes>>,
+    authenticate: impl Fn(usize, Vec<u8>) -> Result<T, RangeFetchError> + Sync,
+) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure> {
+    let fail = || RankedSq8Failure {
+        error: RangeFetchError::UnexpectedMetadata,
+        stats: Sq8ReadStats::default(),
+    };
+    if ranges.is_empty()
+        || ranges.len() > max_gets
+        || max_parallel == 0
+        || etag.is_empty()
+        || etag.starts_with("W/")
+        || etag.chars().any(char::is_control)
+    {
+        return Err(fail());
+    }
+    let mut bytes = 0usize;
+    let mut previous = 0;
+    for range in ranges {
+        if range.start < previous
+            || range.start >= range.end
+            || range.end > object_bytes
+            || budget.is_some_and(|b| range.len() > b.capacity)
+        {
+            return Err(fail());
+        }
+        bytes = bytes
+            .checked_add(range.len())
+            .filter(|n| *n <= max_bytes)
+            .ok_or_else(fail)?;
+        previous = range.end;
+    }
+    let reader = CapsuleRangeReader {
+        store,
+        location,
+        object_bytes,
+        etag,
+        max_bytes,
+        budget,
+        authenticate: &authenticate,
+    };
+    let outcomes = drain_ordered(
+        // Keep borrowed range lifetimes out of the future factory's input.
+        (0..ranges.len()).map(|index| reader.fetch_range(index, &ranges[index])),
+        max_parallel.min(ranges.len()),
+        |(index, _, _)| *index,
+    )
+    .await;
+    let mut stats = Sq8ReadStats::default();
+    let mut fetched = Vec::with_capacity(ranges.len());
+    let mut first_error = None;
+    for (index, submitted, outcome) in outcomes {
+        stats.submitted_gets += usize::from(submitted);
+        match outcome {
+            Ok(range) => {
+                stats.verified_bytes += ranges[index].len();
+                fetched.push(range);
+            }
+            Err(error) => {
+                stats.failed_gets += usize::from(submitted);
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(RankedSq8Failure { error, stats });
+    }
+    Ok((fetched, stats))
 }
 
 /// A range's diagnostic state while its future runs: private to that future.
@@ -1758,8 +1943,9 @@ fn stamp(probe: &mut Option<&mut Probe>, set: impl FnOnce(&mut RangeSpan, u64)) 
 pub const SQ8_TRACE_MAX_RANGES: usize = 128;
 pub const SQ8_TRACE_MAX_BYTES: usize = 1 << 20;
 /// Preregistered allowance for ONE pending range, whether or not tracing is on: the
-/// instrumentable future (`fetch_verified_pages_traced`, the exact element `buffered`
-/// holds), plus its executor node (`BUFFERED_NODE_ALLOWANCE_BYTES`) and the allocation
+/// complete scheduled future (`fetch_verified_pages_traced` or
+/// `CapsuleRangeReader::fetch_range`), plus its executor node
+/// (`BUFFERED_NODE_ALLOWANCE_BYTES`) and the allocation
 /// header. A test fails if the compiled future grows past `RANGE_FUTURE_ALLOWANCE_BYTES -
 /// BUFFERED_NODE_ALLOWANCE_BYTES - ALLOCATION_ALLOWANCE_BYTES`.
 pub const RANGE_FUTURE_ALLOWANCE_BYTES: usize = 2048;
@@ -2417,7 +2603,7 @@ pub(crate) mod cold_http_fixture {
         }
         let head = method == "HEAD";
         let (first, end) = range.unwrap_or((0, body.len()));
-        let stage = if key.ends_with("/plane/records.bin") {
+        let stage = if key.ends_with("/plane/records.bin") || key.ends_with("/plane/capsules.bin") {
             Some(0)
         } else if key.contains("/objects/") {
             Some(1)
@@ -6379,5 +6565,531 @@ mod tests {
         assert_eq!(failed.stats.submitted_gets, 1);
         assert_eq!(failed.stats.failed_gets, 1);
         assert_eq!(failed.stats.verified_bytes, 0);
+    }
+    #[tokio::test]
+    async fn capsule_http_exact_ranges_reject_corruption_truncation_etag_and_rebound() {
+        let expected = vec![9_u8; 128];
+        for fault in ["ok", "corrupt", "short", "etag", "range", "size", "status"] {
+            let mut body = expected.clone();
+            if fault == "corrupt" {
+                body[80] ^= 1;
+            }
+            if fault == "short" {
+                body.pop();
+            }
+            let range = match fault {
+                "range" => "bytes 1-128/256",
+                "size" => "bytes 0-127/257",
+                _ => "bytes 0-127/256",
+            };
+            let response = http_response(
+                if fault == "status" {
+                    "200 OK"
+                } else {
+                    "206 Partial Content"
+                },
+                Some(range),
+                if fault == "etag" {
+                    "\"wrong\""
+                } else {
+                    "\"fixture\""
+                },
+                expected.len(),
+                &body,
+            );
+            let (reader, stop, requests, server) = http_fixture(response);
+            let result = fetch_capsule_ranges(
+                reader.store(),
+                &Path::from("gen/plane/capsules.bin"),
+                256,
+                std::slice::from_ref(&(0..128)),
+                "\"fixture\"",
+                1,
+                128,
+                1,
+                None,
+                |offset, body| {
+                    if offset == 0 && body == expected {
+                        Ok(body)
+                    } else {
+                        Err(RangeFetchError::UnexpectedMetadata)
+                    }
+                },
+            )
+            .await;
+            if fault == "ok" {
+                let (ranges, stats) = result.unwrap();
+                assert_eq!(ranges[0], expected);
+                assert_eq!(
+                    stats,
+                    Sq8ReadStats {
+                        submitted_gets: 1,
+                        verified_bytes: 128,
+                        failed_gets: 0
+                    }
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.stats.submitted_gets, 1, "{fault}");
+                assert_eq!(error.stats.failed_gets, 1, "{fault}");
+            }
+            stop.store(true, Ordering::Relaxed);
+            server.join().unwrap();
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1, "{fault}");
+            let request = requests[0].to_ascii_lowercase();
+            assert!(request.contains("range: bytes=0-127"));
+            assert!(request.contains("if-match: \"fixture\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn capsule_transport_admission_rejects_duplicate_overlap_and_minus_one_without_io() {
+        assert!(
+            capsule_fetch_descriptor_bytes::<crate::source_capsule::VerifiedSpan<'_>>(usize::MAX)
+                .is_none()
+        );
+        let (reader, stop, requests, server) = http_fixture(http_response(
+            "206 Partial Content",
+            Some("bytes 0-15/64"),
+            "\"fixture\"",
+            16,
+            &[7; 16],
+        ));
+        for (ranges, cap, parallel) in [
+            (vec![0..16, 0..16], 32, 2),
+            (vec![0..16, 8..24], 32, 2),
+            (vec![16..32, 0..16], 32, 2),
+            (std::iter::once(0..16).collect(), 15, 1),
+            (std::iter::once(0..65).collect(), 65, 1),
+            (std::iter::once(0..16).collect(), 16, 0),
+        ] {
+            let error = fetch_capsule_ranges(
+                reader.store(),
+                &Path::from("gen/plane/capsules.bin"),
+                64,
+                &ranges,
+                "\"fixture\"",
+                2,
+                cap,
+                parallel,
+                None,
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.stats, Sq8ReadStats::default());
+        }
+        let window = InFlightBytes::new(15);
+        assert!(
+            fetch_capsule_ranges(
+                reader.store(),
+                &Path::from("gen/plane/capsules.bin"),
+                64,
+                std::slice::from_ref(&(0..16)),
+                "\"fixture\"",
+                1,
+                16,
+                1,
+                Some(&window),
+                |_, _| Ok(())
+            )
+            .await
+            .is_err()
+        );
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert!(requests.lock().unwrap().is_empty());
+        assert_eq!(*window.available.lock().unwrap(), 15);
+    }
+
+    #[tokio::test]
+    async fn capsule_http_reversed_completion_earliest_error_full_drain_and_permits() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let key = "gen/plane/capsules.bin";
+        let body = vec![7; 64];
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), body)]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        let ranges = (0..4).map(|i| i * 16..(i + 1) * 16).collect::<Vec<_>>();
+        let window = InFlightBytes::new(32);
+        fixture.arm(Some((0, [0, 16, 32])));
+        let location = Path::from(key);
+        let mut work = Box::pin(fetch_capsule_ranges(
+            fixture.reader.store(),
+            &location,
+            64,
+            &ranges,
+            ETAG,
+            4,
+            64,
+            4,
+            Some(&window),
+            |_, bytes| {
+                if bytes.iter().all(|b| *b == 7) {
+                    Ok(())
+                } else {
+                    Err(RangeFetchError::UnexpectedMetadata)
+                }
+            },
+        ));
+        tokio::select! {
+            _ = &mut work => panic!("returned before earliest planned body"),
+            () = fixture.wait(|s| s.finished[0].contains(&16)) => {}
+        }
+        assert!(!fixture.snapshot().finished[0].contains(&0));
+        fixture.release_error();
+        tokio::select! {
+            _ = &mut work => panic!("returned before held sibling drained"),
+            () = fixture.wait(|s| s.finished[0].contains(&0)) => {}
+        }
+        fixture.release_sibling();
+        let error = work.await.unwrap_err();
+        assert!(matches!(error.error, RangeFetchError::Store(_)));
+        assert_eq!(
+            error.stats,
+            Sq8ReadStats {
+                submitted_gets: 4,
+                verified_bytes: 32,
+                failed_gets: 2,
+            }
+        );
+        let state = fixture.snapshot();
+        assert_eq!(state.active[0], 0);
+        assert_eq!(state.finished[0].len(), 4);
+        assert_eq!(state.finished[0][0], 16);
+        assert!(state.peak[0] <= 2);
+        assert_eq!(*window.available.lock().unwrap(), 32);
+        fixture.finish();
+    }
+    #[tokio::test]
+    async fn capsule_disjoint_http_responses_validate_original_units_and_drain() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        use crate::rotated_two_bit::RotatedTwoBitCodec;
+        use crate::semantic_unit_router::SemanticProfile;
+        use crate::source_capsule::{Directory, FetchedSpan, Geometry, LeafPages, pack};
+        use crate::two_bit_generation::authenticate_capsule_response;
+        use crate::two_bit_source::{SourceBuildError, SourcePlaneReceipt};
+        use std::{collections::BTreeMap, io::Cursor};
+
+        // Genuine codec capsules exercise the serving callback without inventing router geometry.
+        let cap = 16 * 1024 * 1024;
+        let rows = 513;
+        let codec = RotatedTwoBitCodec::new(&[0.], 20260923).unwrap();
+        let flat = (0..rows)
+            .flat_map(|row| codec.encode(&[(1 + row % 11) as f32]).unwrap())
+            .collect::<Vec<_>>();
+        let geometry = Geometry::new(rows, 1, SemanticProfile::Scale1m).unwrap();
+        let width = geometry.record_bytes();
+        let sidecar = flat
+            .chunks(32 * width)
+            .flat_map(|bytes| Sha256::digest(bytes).to_vec())
+            .collect::<Vec<_>>();
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let receipt = SourcePlaneReceipt {
+            schema: "borsuk-two-bit-plane-v3".into(),
+            rows,
+            dimensions: 1,
+            seed: 20260923,
+            record_bytes: width,
+            source_sha256: "0".repeat(64),
+            sq8_sha256: "1".repeat(64),
+            source_order_sha256: "2".repeat(64),
+            mean_sha256: "3".repeat(64),
+            records_sha256: hash(&flat),
+            page_rows: 32,
+            page_digest_sha256: hash(&sidecar),
+            query_or_truth_used: false,
+        };
+        let manifest = serde_json::to_vec(&receipt).unwrap();
+        let authority =
+            PageAuthority::load_two_bit(&manifest, &hash(&manifest), 7, &sidecar).unwrap();
+        let leaves = [
+            LeafPages {
+                leaf_id: 0,
+                pages: &[0, 2],
+            },
+            LeafPages {
+                leaf_id: 1,
+                pages: &[1],
+            },
+            LeafPages {
+                leaf_id: 2,
+                pages: &[0],
+            },
+            LeafPages {
+                leaf_id: 3,
+                pages: &[1],
+            },
+            LeafPages {
+                leaf_id: 4,
+                pages: &[2],
+            },
+        ];
+        let mut blob = Vec::new();
+        let mut encoded = Vec::new();
+        let built = pack(
+            geometry,
+            &leaves,
+            &authority,
+            &mut Cursor::new(&flat),
+            &mut blob,
+            &mut encoded,
+            cap,
+        )
+        .unwrap();
+        let selected = [leaves[0], leaves[2], leaves[4]];
+        let ranges = selected
+            .iter()
+            .map(|leaf| {
+                let range = built.directory.byte_range(leaf.leaf_id).unwrap();
+                range.start as usize..range.end as usize
+            })
+            .collect::<Vec<_>>();
+        assert!(ranges.windows(2).all(|pair| pair[0].end < pair[1].start));
+        let physical = ranges.iter().map(|range| range.len()).sum::<usize>();
+        let window = InFlightBytes::new(physical);
+        let key = "disjoint/plane/capsules.bin";
+        let location = Path::from(key);
+        let fixture = Fixture::new(
+            BTreeMap::from([(key.to_owned(), blob.clone())]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        // Hold the earliest response while both later selected capsules finish.
+        fixture.arm(Some((0, [usize::MAX, usize::MAX, ranges[0].start])));
+        let mut work = Box::pin(fetch_capsule_ranges(
+            fixture.reader.store(),
+            &location,
+            blob.len(),
+            &ranges,
+            ETAG,
+            3,
+            physical,
+            3,
+            Some(&window),
+            |offset, bytes| {
+                authenticate_capsule_response(
+                    &built.directory,
+                    &selected,
+                    &authority,
+                    cap,
+                    offset,
+                    bytes,
+                )
+            },
+        ));
+        tokio::select! {
+            _ = &mut work => panic!("returned before earliest selected capsule"),
+            () = fixture.wait(|s| s.finished[0].contains(&ranges[1].start)
+                && s.finished[0].contains(&ranges[2].start)) => {}
+        }
+        assert!(!fixture.snapshot().finished[0].contains(&ranges[0].start));
+        fixture.release_sibling();
+        let (fetched, stats) = work.await.unwrap();
+        assert_eq!(
+            stats,
+            Sq8ReadStats {
+                submitted_gets: 3,
+                verified_bytes: physical,
+                failed_gets: 0,
+            }
+        );
+        assert_eq!(
+            fetched
+                .iter()
+                .map(|range| range.start() as usize)
+                .collect::<Vec<_>>(),
+            ranges.iter().map(|range| range.start).collect::<Vec<_>>(),
+        );
+        let verified = built
+            .directory
+            .verified_rows(&selected, &fetched, &authority, cap)
+            .unwrap();
+        assert_eq!(verified.record(0), Some(&flat[..width]));
+        assert_eq!(verified.record(512), Some(&flat[512 * width..513 * width]));
+        assert!(verified.record(256).is_none());
+        assert!(verified.record(511).is_none());
+        // Pages 0+2, 0 and 2 contain 257+256+1 original records, including duplicates.
+        assert_eq!(verified.charge().hash_bytes, physical + 514 * width);
+        assert_eq!(*window.available.lock().unwrap(), physical);
+        assert_eq!(fixture.snapshot().finished[0].len(), 3);
+        assert!(
+            fixture
+                .snapshot()
+                .requests
+                .iter()
+                .all(|r| r.0 == key && !r.1)
+        );
+        fixture.finish();
+
+        // Rebind BOTH outer hashes after corrupting the later copy's record bytes.
+        let mut corrupt = blob.clone();
+        corrupt[ranges[1].start + 36] ^= 1;
+        let mut rebound = encoded;
+        let hash_offset = 32 + 2 * 64 + 32;
+        rebound[hash_offset..hash_offset + 32]
+            .copy_from_slice(&Sha256::digest(&corrupt[ranges[1].clone()]));
+        let digest: [u8; 32] = Sha256::digest(&rebound).into();
+        let directory = Directory::open(&rebound, &digest, geometry, corrupt.len(), cap).unwrap();
+        let bad_copy = corrupt[ranges[1].clone()].to_vec();
+        assert!(matches!(
+            directory.verify(
+                &selected[1..2],
+                &[FetchedSpan {
+                    offset: ranges[1].start as u64,
+                    bytes: &bad_copy
+                }],
+                &authority,
+                cap,
+            ),
+            Err(SourceBuildError::Invalid("capsule original unit digest")),
+        ));
+        for stream_failure in [false, true] {
+            let fixture = Fixture::new(
+                BTreeMap::from([(key.to_owned(), corrupt.clone())]),
+                Instant::now() + Duration::from_secs(10),
+            );
+            // Leave the corrupt body untouched by the fixture; its original unit SHA fails.
+            fixture.arm(Some((
+                0,
+                [
+                    if stream_failure {
+                        ranges[0].start
+                    } else {
+                        usize::MAX
+                    },
+                    usize::MAX,
+                    ranges[2].start,
+                ],
+            )));
+            let authenticated = Mutex::new(Vec::new());
+            let mut work = Box::pin(fetch_capsule_ranges(
+                fixture.reader.store(),
+                &location,
+                corrupt.len(),
+                &ranges,
+                ETAG,
+                3,
+                physical,
+                3,
+                Some(&window),
+                |offset, bytes| {
+                    let result = authenticate_capsule_response(
+                        &directory, &selected, &authority, cap, offset, bytes,
+                    );
+                    authenticated.lock().unwrap().push((offset, result.is_ok()));
+                    result
+                },
+            ));
+            tokio::select! {
+                _ = &mut work => panic!("returned before held valid sibling"),
+                () = fixture.wait(|s| s.finished[0].contains(&ranges[1].start)
+                    && s.active[0] >= 1
+                    && authenticated.lock().unwrap().contains(&(ranges[1].start, false))) => {}
+            }
+            if stream_failure {
+                assert!(!fixture.snapshot().finished[0].contains(&ranges[0].start));
+                fixture.release_error();
+                tokio::select! {
+                    _ = &mut work => panic!("returned before full capsule drain"),
+                    () = fixture.wait(|s| s.finished[0].contains(&ranges[0].start)) => {}
+                }
+            } else {
+                tokio::select! {
+                    _ = &mut work => panic!("healthy first copy masked corrupt duplicate"),
+                    () = fixture.wait(|_| authenticated.lock().unwrap()
+                        .contains(&(ranges[0].start, true))) => {}
+                }
+            }
+            tokio::select! {
+                _ = &mut work => panic!("cancelled held valid capsule"),
+                () = tokio::time::sleep(Duration::from_millis(30)) => {}
+            }
+            fixture.release_sibling();
+            let error = work.await.unwrap_err();
+            if stream_failure {
+                assert!(matches!(error.error, RangeFetchError::Store(_)));
+            } else {
+                assert!(matches!(error.error, RangeFetchError::UnexpectedMetadata));
+            }
+            assert_eq!(
+                error.stats,
+                Sq8ReadStats {
+                    submitted_gets: 3,
+                    verified_bytes: ranges[2].len()
+                        + if stream_failure { 0 } else { ranges[0].len() },
+                    failed_gets: if stream_failure { 2 } else { 1 },
+                }
+            );
+            let state = fixture.snapshot();
+            assert_eq!(state.active, [0; 3]);
+            assert_eq!(state.finished[0].len(), 3);
+            assert!(state.peak[0] <= 3);
+            assert_eq!(state.requests.len(), 3);
+            assert!(
+                state
+                    .requests
+                    .iter()
+                    .all(|r| r.0 == key && !r.1 && r.3.as_deref() == Some(ETAG))
+            );
+            assert!(
+                authenticated
+                    .lock()
+                    .unwrap()
+                    .contains(&(ranges[2].start, true))
+            );
+            assert_eq!(*window.available.lock().unwrap(), physical);
+            fixture.finish();
+        }
+    }
+
+    #[test]
+    fn capsule_transport_future_is_send_and_fits_scheduler_allowance() {
+        fn require_send<T: Send>(_: T) {}
+        let store = InMemory::new();
+        let location = Path::from("gen/plane/capsules.bin");
+        let window = InFlightBytes::new(16);
+        fn authenticate(
+            _: usize,
+            _: Vec<u8>,
+        ) -> Result<crate::source_capsule::VerifiedSpan<'static>, RangeFetchError> {
+            Err(RangeFetchError::UnexpectedMetadata)
+        }
+        let reader = CapsuleRangeReader {
+            store: &store,
+            location: &location,
+            object_bytes: 16,
+            etag: "etag",
+            max_bytes: 16,
+            budget: Some(&window),
+            authenticate: &authenticate,
+        };
+        let range = 0..16;
+        // This unboxed future is the exact element held by buffer_unordered.
+        let future = reader.fetch_range(0, &range);
+        let future_bytes = std::mem::size_of_val(&future);
+        println!(
+            "capsule_range_future_bytes={future_bytes} scheduler_allowance_bytes={} node_allowance_bytes={} allocation_allowance_bytes={}",
+            RANGE_FUTURE_ALLOWANCE_BYTES, BUFFERED_NODE_ALLOWANCE_BYTES, ALLOCATION_ALLOWANCE_BYTES,
+        );
+        assert!(
+            future_bytes + BUFFERED_NODE_ALLOWANCE_BYTES + ALLOCATION_ALLOWANCE_BYTES
+                <= RANGE_FUTURE_ALLOWANCE_BYTES,
+            "{future_bytes} byte capsule range future exceeds scheduler allowance"
+        );
+        require_send(future);
+        require_send(fetch_capsule_ranges(
+            &store,
+            &location,
+            16,
+            std::slice::from_ref(&(0..16)),
+            "etag",
+            1,
+            16,
+            1,
+            None,
+            authenticate,
+        ));
     }
 }

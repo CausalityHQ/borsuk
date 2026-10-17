@@ -1027,9 +1027,91 @@ mod tests {
         }
     }
 
+    // Exact inverses of registration-only changes since the frozen source:
+    // source_capsule is not called by the old builder; the object_store re-export
+    // changes no trainer/metric binding. The original full lib.rs SHA still gates.
+    const LIB_REGISTRATION_INVERSE: &[(&str, &str)] = &[
+        ("pub mod source_capsule;\n", ""),
+        (
+            "/// The vendored storage API used by BORSUK, including conditional multipart creation.\npub use object_store;\n",
+            "",
+        ),
+    ];
+    // object_store's implementation changed, but is not in the old builder's
+    // numerical call graph. Every other package/version/checksum stays frozen.
+    const LOCK_VENDOR_INVERSE: &[(&str, &str)] = &[(
+        "name = \"object_store\"\nversion = \"0.14.1\"\ndependencies = [\n",
+        "name = \"object_store\"\nversion = \"0.14.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d354792e39fa5f0009e47623cf8b15b099bf9a652fa55c6f817fe28ac84fea50\"\ndependencies = [\n",
+    )];
+
+    fn frozen_source_digest(current: &str, inverse: &[(&str, &str)]) -> Result<String> {
+        let mut original = current.to_owned();
+        for &(added, removed) in inverse {
+            require(
+                !added.is_empty() && original.matches(added).count() == 1,
+                "frozen dependency inverse must match exactly once",
+            )?;
+            original = original.replacen(added, removed, 1);
+        }
+        Ok(digest(original.as_bytes()))
+    }
+
+    #[test]
+    fn partition_reconstruction_frozen_source_proof_rejects_dependency_drift() {
+        let lib = include_str!("../../src/lib.rs");
+        let lib_sha = "40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8";
+        assert!(frozen_source_digest(lib, LIB_REGISTRATION_INVERSE).is_ok_and(|s| s == lib_sha));
+        for changed in [
+            lib.replace("pub mod source_capsule;\n", ""),
+            lib.replace(
+                "pub mod source_capsule;\n",
+                "pub mod source_capsule;\npub mod source_capsule;\n",
+            ),
+            lib.replace(
+                "pub use logical_cell_catalog::train_logical_cell_centroids;",
+                "pub use source_capsule::train_logical_cell_centroids;",
+            ),
+        ] {
+            assert_ne!(changed, lib);
+            assert!(
+                !frozen_source_digest(&changed, LIB_REGISTRATION_INVERSE)
+                    .is_ok_and(|s| s == lib_sha)
+            );
+        }
+
+        let metric = include_str!("../../src/metric.rs");
+        let changed = metric.replacen("acc += delta * delta;", "acc += delta + delta;", 1);
+        assert_ne!(changed, metric);
+        assert_ne!(
+            frozen_source_digest(&changed, &[]).unwrap(),
+            "43a9c3a3fbc9a1f017a7ad7ce131aac7f253a77cb418f451587bd1043a1cdabe"
+        );
+
+        let lock = include_str!("../../../../Cargo.lock");
+        let lock_sha = "81d59b7f67df2a2269974028eeaaffbec29b482abb1a0e8f9e10be63263f055e";
+        assert!(frozen_source_digest(lock, LOCK_VENDOR_INVERSE).is_ok_and(|s| s == lock_sha));
+        for changed in [
+            lock.replace(
+                "name = \"wide\"\nversion = \"0.7.33\"",
+                "name = \"wide\"\nversion = \"0.7.34\"",
+            ),
+            lock.replace(
+                "name = \"object_store\"\nversion = \"0.14.1\"",
+                "name = \"object_store\"\nversion = \"0.14.2\"",
+            ),
+        ] {
+            assert_ne!(changed, lock);
+            assert!(
+                !frozen_source_digest(&changed, LOCK_VENDOR_INVERSE).is_ok_and(|s| s == lock_sha)
+            );
+        }
+    }
+
     #[test]
     fn partition_reconstruction_frozen_old_4097_d1024_radial_parity() {
-        // These dependencies are shared ONLY because exact frozen source bytes match.
+        // The old builder uses UnitCentroidPages -> half/sha2 and the logical-cell
+        // trainer -> metric -> simd_control/wide (plus lib.rs process limits).
+        // These four numerical implementations must remain byte-identical.
         assert_eq!(
             digest(include_bytes!("../../src/unit_centroid_pages.rs")),
             "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307"
@@ -1047,12 +1129,51 @@ mod tests {
             "82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56"
         );
         assert_eq!(
-            digest(include_bytes!("../../src/lib.rs")),
+            frozen_source_digest(include_str!("../../src/lib.rs"), LIB_REGISTRATION_INVERSE)
+                .unwrap(),
             "40be49046e4f292c5c62101c8e2e08333e1a6c6d6715cf1c8d9c5da661aaefa8"
         );
         assert_eq!(
-            digest(include_bytes!("../../../../Cargo.lock")),
+            frozen_source_digest(include_str!("../../../../Cargo.lock"), LOCK_VENDOR_INVERSE)
+                .unwrap(),
             "81d59b7f67df2a2269974028eeaaffbec29b482abb1a0e8f9e10be63263f055e"
+        );
+        // Manifest pins from snapshot abd9e4e (whose lib/lock match the original
+        // pins above) also guard dependency features and path/patch overrides.
+        assert_eq!(
+            frozen_source_digest(
+                include_str!("../../../../Cargo.toml"),
+                &[
+                    ("exclude = [\"vendor/object_store-0.14.1\"]\n", ""),
+                    (
+                        "\n[patch.crates-io]\n# Keep registry dependencies in this workspace (borsuk-v71) on the same storage API.\nobject_store = { path = \"vendor/object_store-0.14.1\" }\n",
+                        "",
+                    ),
+                ],
+            ).unwrap(),
+            "1ec9ac514515662a0f3a371b1a65d72bf825d67f218dc3f6cc1e5fb0925547d6"
+        );
+        assert_eq!(
+            frozen_source_digest(
+                include_str!("../../Cargo.toml"),
+                &[
+                    (
+                        "object_store = { version = \"=0.14.1\", path = \"../../vendor/object_store-0.14.1\", features = [\"aws\", \"azure\", \"gcp\", \"fs\", \"http\"] }",
+                        "object_store = { version = \"0.14\", features = [\"aws\", \"azure\", \"gcp\", \"fs\", \"http\"] }",
+                    ),
+                    ("[[example]]\nname = \"verify_canonical_f32\"\n\n", ""),
+                    ("\n[[example]]\nname = \"source_capsule_geometry\"\n", ""),
+                ],
+            ).unwrap(),
+            "cc22e46fe2e94162d9f89a76d036237013d2e378e703e80290bfa4a797042e11"
+        );
+        // This manifest is byte-identical to the registry .crate authenticated
+        // by d354792e... above: vendoring adds no dependency/feature changes.
+        assert_eq!(
+            digest(include_bytes!(
+                "../../../../vendor/object_store-0.14.1/Cargo.toml"
+            )),
+            "bd07bfed042fd75473b3d2d3a5e5a2142a060b7bd84ce4a7395308eebed3332c"
         );
         let f = Fixture::new();
         let (_, a) = f.auth().unwrap();

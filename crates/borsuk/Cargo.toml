@@ -46,7 +46,7 @@ futures-util = "0.3"
 half = "2.7"
 http-body-util = "=0.1.3"
 nalgebra = "0.33"
-object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs", "http"] }
+object_store = { version = "=0.14.1", path = "../../vendor/object_store-0.14.1", features = ["aws", "azure", "gcp", "fs", "http"] }
 parquet = { version = "58.3", features = ["async", "object_store"] }
 rand_chacha = "0.9"
 rand_core = "0.9"

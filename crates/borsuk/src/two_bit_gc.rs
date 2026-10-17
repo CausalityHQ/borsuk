@@ -96,6 +96,7 @@ fn recognized(prefix: &str, key: &str) -> bool {
         return valid_sha256(root)
             && (METADATA_FILES.contains(&name)
                 || ROUTER_FILES.contains(&name)
+                || ["plane/capsules.bin", "plane/capsule_directory.bin"].contains(&name)
                 || name.strip_prefix("mutations/").is_some_and(valid_sha256));
     }
     if let Some((owner, name)) = relative
@@ -147,7 +148,8 @@ async fn keep_set(
         {
             return Err(bad("GC root geometry"));
         }
-        for name in manifest.discovery.files(false) {
+        manifest.capsule_metadata_bytes()?;
+        for name in manifest.files(false) {
             keep.insert(metadata_location(&head.metadata_prefix(), name));
         }
         keep_object(

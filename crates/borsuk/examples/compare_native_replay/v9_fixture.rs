@@ -588,6 +588,11 @@ mod tests {
         .unwrap();
         fs::write(original.join("page_digests.bin"), &old_sidecar).unwrap();
         fs::write(original.join("page_manifest.json"), &old_page).unwrap();
+        // v8 has implicit flat SOURCE storage; the descriptor belongs to v10.
+        assert_eq!(
+            old_root.as_object_mut().unwrap().remove("source_layout"),
+            Some(json!({"layout":"flat_records"}))
+        );
         old_root["schema"] = json!("borsuk-two-bit-generation-v8");
         old_root["page_manifest_sha256"] = json!(hash(&old_page));
         let old_bytes = serde_json::to_vec(&old_root).unwrap();

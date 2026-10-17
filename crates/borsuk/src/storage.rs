@@ -582,6 +582,26 @@ impl ObjectStore for CountingObjectStore {
         })
     }
 
+    fn put_multipart_create<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        opts: PutMultipartOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<Box<dyn MultipartUpload>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            self.counters.puts.fetch_add(1, Ordering::Relaxed);
+            let inner = self.inner.put_multipart_create(location, opts).await?;
+            Ok(Box::new(CountingMultipartUpload {
+                inner,
+                counters: Arc::clone(&self.counters),
+            }) as Box<dyn MultipartUpload>)
+        })
+    }
+
     fn get_opts<'life0, 'life1, 'async_trait>(
         &'life0 self,
         location: &'life1 ObjectPath,

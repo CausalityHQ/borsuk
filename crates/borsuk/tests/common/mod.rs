@@ -605,6 +605,30 @@ impl ObjectStore for FaultInjectingObjectStore {
         })
     }
 
+    fn put_multipart_create<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        location: &'life1 ObjectPath,
+        opts: PutMultipartOptions,
+    ) -> BoxFuture<'async_trait, object_store::Result<Box<dyn MultipartUpload>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: Sync + 'async_trait,
+    {
+        Box::pin(async move {
+            let _active_put = self
+                .put_concurrency
+                .as_deref()
+                .map(PutConcurrencyProbe::enter);
+            self.maybe_sleep().await;
+            self.maybe_fail(StoreOperation::MultipartPut, location)?;
+            self.record_operation(StoreOperation::MultipartPut, location);
+            self.maybe_wait_at_put_barrier(StoreOperation::MultipartPut, location);
+            self.maybe_wait_at_put_overlap_barrier(StoreOperation::MultipartPut, location);
+            self.inner.put_multipart_create(location, opts).await
+        })
+    }
+
     fn get_opts<'life0, 'life1, 'async_trait>(
         &'life0 self,
         location: &'life1 ObjectPath,

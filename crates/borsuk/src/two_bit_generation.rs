@@ -236,6 +236,7 @@ pub(crate) struct Manifest {
     pub(crate) plane_manifest_sha256: String,
     pub(crate) page_manifest_sha256: String,
     pub(crate) discovery: Discovery,
+    pub(crate) source_layout: SourceLayout,
     pub(crate) sq8_object_sha256: String,
     pub(crate) sq8_object_key: String,
     pub(crate) sq8_etag: String,
@@ -243,7 +244,111 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v9";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v10";
+/// Explicit SOURCE storage choice; existing builders retain the flat control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceLayoutMode {
+    /// Original physical-row records.
+    FlatRecords,
+    /// Whole original pages duplicated into fixed semantic leaf capsules.
+    LeafCapsules,
+}
+/// Authenticated physical SOURCE descriptor from the generation root.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "layout", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceLayout {
+    FlatRecords,
+    LeafCapsules {
+        blob_bytes: u64,
+        blob_sha256: String,
+        directory_bytes: usize,
+        directory_sha256: String,
+    },
+}
+impl SourceLayout {
+    pub(crate) fn object_name(&self) -> &'static str {
+        match self {
+            Self::FlatRecords => "plane/records.bin",
+            Self::LeafCapsules { .. } => "plane/capsules.bin",
+        }
+    }
+    pub(crate) fn is_capsules(&self) -> bool {
+        matches!(self, Self::LeafCapsules { .. })
+    }
+}
+impl Manifest {
+    pub(crate) fn files(&self, startup: bool) -> Vec<&'static str> {
+        let mut files = self.discovery.files(startup);
+        if self.source_layout.is_capsules() {
+            files.retain(|name| *name != "plane/records.bin");
+            files.push("plane/capsule_directory.bin");
+            if !startup {
+                files.push("plane/capsules.bin");
+            }
+        }
+        files
+    }
+    // Joint descriptor admission, before any child metadata or SOURCE payload read.
+    pub(crate) fn capsule_metadata_bytes(&self) -> Result<usize> {
+        let SourceLayout::LeafCapsules {
+            blob_bytes,
+            blob_sha256,
+            directory_bytes,
+            directory_sha256,
+        } = &self.source_layout
+        else {
+            return Ok(0);
+        };
+        let bad = TwoBitGenerationError::Invalid;
+        let Discovery::Semantic {
+            profile,
+            root_bytes,
+            ..
+        } = &self.discovery
+        else {
+            return Err(bad("capsules require semantic discovery"));
+        };
+        if !self
+            .discovery
+            .valid(self.canonical.rows, self.canonical.dimensions)
+            || !crate::resident_graph_generation::valid_sha256(blob_sha256)
+            || !crate::resident_graph_generation::valid_sha256(directory_sha256)
+            || *blob_bytes == 0
+        {
+            return Err(bad("capsule descriptor"));
+        }
+        let geometry = crate::source_capsule::Geometry::new(
+            self.canonical.rows,
+            self.canonical.dimensions,
+            *profile,
+        )
+        .map_err(TwoBitGenerationError::Plane)?;
+        let leaves = (*root_bytes - 512) / (64 + 4 * self.canonical.dimensions);
+        let charge = crate::source_capsule::Directory::open_charge(geometry, leaves)
+            .map_err(TwoBitGenerationError::Plane)?;
+        let bound = self
+            .canonical
+            .rows
+            .div_ceil(32)
+            .checked_mul(4)
+            .and_then(|n| {
+                n.checked_add(leaves.checked_mul(
+                    std::mem::size_of::<Vec<u32>>()
+                        + std::mem::size_of::<crate::source_capsule::LeafPages<'_>>(),
+                )?)
+            })
+            .and_then(|n| n.checked_add(charge.memory_bytes))
+            .ok_or(bad("capsule metadata memory"))?;
+        if *directory_bytes != charge.encoded_directory_bytes
+            || bound > profile.allocation_cap()
+            || usize::try_from(*blob_bytes).is_err()
+        {
+            return Err(bad("capsule directory geometry"));
+        }
+        Ok(bound)
+    }
+}
 pub(crate) const METADATA_FILES: [&str; 10] = [
     "manifest.json",
     "page_manifest.json",
@@ -449,6 +554,253 @@ struct RemoteSource {
     etag: String,
 }
 
+struct CapsuleSource {
+    directory: crate::source_capsule::Directory,
+    closures: Vec<Vec<u32>>,
+    // Only local serving retains a second binding; remote SOURCE owns its authority.
+    local: Option<(std::path::PathBuf, PageAuthority)>,
+    query_memory_bytes: usize,
+}
+
+struct CapsuleRequest<'a> {
+    leaves: Vec<crate::source_capsule::LeafPages<'a>>,
+    ranges: Vec<std::ops::Range<usize>>,
+    charge: crate::source_capsule::Charge,
+}
+// Shared by serving and the real HTTP capsule response regression.
+pub(crate) fn authenticate_capsule_response<'a>(
+    directory: &'a crate::source_capsule::Directory,
+    leaves: &'a [crate::source_capsule::LeafPages<'a>],
+    authority: &'a PageAuthority,
+    query_memory_bytes: usize,
+    offset: usize,
+    bytes: Vec<u8>,
+) -> std::result::Result<
+    crate::source_capsule::VerifiedSpan<'a>,
+    crate::sq8_s3_range::RangeFetchError,
+> {
+    let bad = crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata;
+    let end = offset.checked_add(bytes.len()).ok_or(bad)?;
+    if leaves
+        .iter()
+        .any(|leaf| leaf.leaf_id as usize >= directory.entries().len())
+    {
+        return Err(crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata);
+    }
+    let first = leaves
+        .partition_point(|leaf| directory.entries()[leaf.leaf_id as usize].offset < offset as u64);
+    let last = leaves
+        .partition_point(|leaf| directory.entries()[leaf.leaf_id as usize].offset < end as u64);
+    directory
+        .authenticate_span(
+            &leaves[first..last],
+            offset as u64,
+            bytes,
+            authority,
+            query_memory_bytes,
+        )
+        .map_err(|_| crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata)
+}
+
+impl CapsuleSource {
+    fn request(&self, ids: &[usize], limits: TwoBitGenerationLimits) -> Result<CapsuleRequest<'_>> {
+        let bad = TwoBitGenerationError::Invalid;
+        let mut sorted = ids.to_vec();
+        sorted.sort_unstable();
+        if sorted.is_empty() || sorted.windows(2).any(|w| w[0] == w[1]) {
+            return Err(bad("capsule selected leaves"));
+        }
+        let mut leaves = Vec::with_capacity(sorted.len());
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(sorted.len());
+        for id in sorted {
+            let pages = self.closures.get(id).ok_or(bad("capsule selected leaf"))?;
+            leaves.push(crate::source_capsule::LeafPages {
+                leaf_id: id as u32,
+                pages,
+            });
+            let physical = self
+                .directory
+                .byte_range(id as u32)
+                .map_err(TwoBitGenerationError::Plane)?;
+            let range = usize::try_from(physical.start).map_err(|_| bad("capsule offset"))?
+                ..usize::try_from(physical.end).map_err(|_| bad("capsule offset"))?;
+            if let Some(previous) = ranges.last_mut()
+                && previous.end == range.start
+            {
+                previous.end = range.end;
+            } else {
+                ranges.push(range);
+            }
+        }
+        let charge = self
+            .directory
+            .query_charge(&leaves)
+            .map_err(TwoBitGenerationError::Plane)?;
+        let model = charge
+            .memory_bytes
+            .checked_add(charge.physical_bytes)
+            .and_then(|n| {
+                n.checked_add(crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
+                    crate::source_capsule::VerifiedSpan<'_>,
+                >(ranges.len())?)
+            })
+            .and_then(|n| {
+                n.checked_add(
+                    leaves.capacity() * std::mem::size_of::<crate::source_capsule::LeafPages<'_>>(),
+                )
+            })
+            .and_then(|n| {
+                n.checked_add(ranges.capacity() * std::mem::size_of::<std::ops::Range<usize>>())
+            })
+            .ok_or(bad("capsule query memory"))?;
+        if charge.physical_bytes > limits.max_source_bytes
+            || ranges.len() > limits.max_source_gets
+            || model > self.query_memory_bytes
+        {
+            return Err(bad("capsule query admission"));
+        }
+        Ok(CapsuleRequest {
+            leaves,
+            ranges,
+            charge,
+        })
+    }
+
+    fn validate_local_blob(&self, expected_sha: &str) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let bad = TwoBitGenerationError::Invalid;
+        self.local.as_ref().ok_or(bad("capsule local authority"))?;
+        // All validation allocations are admitted before the first blob read.
+        for (id, pages) in self.closures.iter().enumerate() {
+            let charge = self
+                .directory
+                .query_charge(&[crate::source_capsule::LeafPages {
+                    leaf_id: id as u32,
+                    pages,
+                }])
+                .map_err(TwoBitGenerationError::Plane)?;
+            if charge
+                .memory_bytes
+                .checked_add(4096)
+                .is_none_or(|n| n > self.query_memory_bytes)
+            {
+                return Err(bad("capsule validation memory"));
+            }
+        }
+        let mut digest = Sha256::new();
+        for (id, pages) in self.closures.iter().enumerate() {
+            let leaves = vec![crate::source_capsule::LeafPages {
+                leaf_id: id as u32,
+                pages,
+            }];
+            let range = self
+                .directory
+                .byte_range(id as u32)
+                .map_err(TwoBitGenerationError::Plane)?;
+            let request = CapsuleRequest {
+                charge: self
+                    .directory
+                    .query_charge(&leaves)
+                    .map_err(TwoBitGenerationError::Plane)?,
+                leaves,
+                ranges: std::iter::once(range.start as usize..range.end as usize).collect(),
+            };
+            let fetched = self.read_local(&request)?;
+            digest.update(fetched[0].bytes());
+        }
+        if format!("{:x}", digest.finalize()) != expected_sha {
+            return Err(bad("capsule blob SHA"));
+        }
+        Ok(())
+    }
+
+    fn read_local<'a>(
+        &'a self,
+        request: &'a CapsuleRequest<'a>,
+    ) -> Result<Vec<crate::source_capsule::VerifiedSpan<'a>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let bad = TwoBitGenerationError::Invalid;
+        let (path, authority) = self.local.as_ref().ok_or(bad("capsule local source"))?;
+        let mut file = fs::File::open(path).map_err(TwoBitGenerationError::Io)?;
+        if !file
+            .metadata()
+            .map_err(TwoBitGenerationError::Io)?
+            .is_file()
+            || file.metadata().map_err(TwoBitGenerationError::Io)?.len()
+                != self.directory.blob_bytes() as u64
+        {
+            return Err(bad("capsule local length"));
+        }
+        let mut fetched = Vec::with_capacity(request.ranges.len());
+        for range in &request.ranges {
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(range.len())
+                .map_err(|_| bad("capsule allocation"))?;
+            if bytes.capacity() > range.len() {
+                return Err(bad("capsule buffer capacity"));
+            }
+            bytes.resize(range.len(), 0);
+            file.seek(SeekFrom::Start(range.start as u64))
+                .map_err(TwoBitGenerationError::Io)?;
+            file.read_exact(&mut bytes)
+                .map_err(TwoBitGenerationError::Io)?;
+            let first = request.leaves.partition_point(|leaf| {
+                self.directory.entries()[leaf.leaf_id as usize].offset < range.start as u64
+            });
+            let last = request.leaves.partition_point(|leaf| {
+                self.directory.entries()[leaf.leaf_id as usize].offset < range.end as u64
+            });
+            fetched.push(
+                self.directory
+                    .authenticate_span(
+                        &request.leaves[first..last],
+                        range.start as u64,
+                        bytes,
+                        authority,
+                        self.query_memory_bytes,
+                    )
+                    .map_err(TwoBitGenerationError::Plane)?,
+            );
+        }
+        if file.metadata().map_err(TwoBitGenerationError::Io)?.len()
+            != self.directory.blob_bytes() as u64
+        {
+            return Err(bad("capsule local length"));
+        }
+        Ok(fetched)
+    }
+}
+
+/// Admitted capsule work, separate from logical unique SOURCE and SQ8 bytes.
+/// Successful queries replace estimates with the codec's actual capacity charges.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SourceCapsuleStats {
+    /// Framing plus all original page copies fetched.
+    pub physical_bytes: usize,
+    /// Unique original SOURCE page bytes.
+    pub logical_bytes: usize,
+    /// Repeated original pages, authenticated before deduplication.
+    pub duplicate_bytes: usize,
+    /// Capsule headers and page-ID rosters.
+    pub framing_bytes: usize,
+    /// Capsule and original-unit authentication work.
+    pub hash_bytes: usize,
+    /// Codec model including actual response/lookup capacities.
+    pub memory_bytes: usize,
+}
+impl From<crate::source_capsule::Charge> for SourceCapsuleStats {
+    fn from(c: crate::source_capsule::Charge) -> Self {
+        Self {
+            physical_bytes: c.physical_bytes,
+            logical_bytes: c.logical_bytes,
+            duplicate_bytes: c.duplicate_bytes,
+            framing_bytes: c.framing_bytes,
+            hash_bytes: c.hash_bytes,
+            memory_bytes: c.memory_bytes,
+        }
+    }
+}
 /// Cumulative generation-local cache observations, separate from transport reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceCacheStats {
@@ -553,6 +905,8 @@ pub struct QueryStages {
     pub sq8: StageInterval,
     /// Selected-leaf read concurrency; zero for membership discovery.
     pub leaf_peak_inflight: usize,
+    /// Present for capsule SOURCE, including admission/failure accounting.
+    pub source_capsules: Option<SourceCapsuleStats>,
 }
 /// A bounded generation query with independently charged source and SQ8 reads.
 pub struct TwoBitSearchResult {
@@ -602,6 +956,7 @@ pub struct TwoBitGeneration {
     slots: Semaphore,
     remote_open_stats: Option<RemoteOpenStats>,
     source: Option<RemoteSource>,
+    capsules: Option<CapsuleSource>,
     source_cache: Option<std::sync::Mutex<SourceCache>>,
     byte_window: Option<std::sync::Arc<InFlightBytes>>,
     sq8_range_split: Option<Sq8RangeSplit>,
@@ -1065,6 +1420,38 @@ fn rank_walked_source_with_limit(
     Ok(ranked)
 }
 
+pub(crate) fn capsule_closures(router: &SemanticUnitRouter, cap: usize) -> Result<Vec<Vec<u32>>> {
+    let bad = TwoBitGenerationError::Invalid;
+    let count = router.manifest().leaves.len();
+    let mut closures = Vec::new();
+    let bound = count
+        .checked_mul(std::mem::size_of::<Vec<u32>>())
+        .and_then(|n| n.checked_add(router.unit_membership().len().checked_mul(4)?))
+        .ok_or(bad("capsule closure memory"))?;
+    if bound > cap {
+        return Err(bad("capsule closure memory"));
+    }
+    closures
+        .try_reserve_exact(count)
+        .map_err(|_| bad("capsule allocation"))?;
+    let mut retained = closures.capacity() * std::mem::size_of::<Vec<u32>>();
+    for id in 0..count {
+        let pages = crate::source_capsule::leaf_pages(
+            router,
+            id,
+            cap.checked_sub(retained)
+                .ok_or(bad("capsule closure memory"))?,
+        )
+        .map_err(TwoBitGenerationError::Plane)?;
+        retained = retained
+            .checked_add(pages.capacity() * 4)
+            .filter(|n| *n <= cap)
+            .ok_or(bad("capsule closure memory"))?;
+        closures.push(pages);
+    }
+    Ok(closures)
+}
+
 // SOURCE and SQ8 drains are sequential; retain the larger bound for every active query.
 fn range_scheduler_memory(
     limits: TwoBitGenerationLimits,
@@ -1214,6 +1601,9 @@ impl TwoBitGeneration {
         }
         if max_bytes == 0 {
             return Ok(self);
+        }
+        if self.capsules.is_some() {
+            return Err(bad("capsules do not support SOURCE cache"));
         }
         let source = self
             .source
@@ -1369,7 +1759,13 @@ impl TwoBitGeneration {
         .await
         .map_err(TwoBitGenerationError::Stage)?;
         let staging_wall_ns = staging_started.elapsed().as_nanos();
-        let location = metadata_location(prefix, "plane/records.bin");
+        let root_body =
+            fs::read(scratch.path().join("manifest.json")).map_err(TwoBitGenerationError::Io)?;
+        let root: Manifest = serde_json::from_slice(&root_body)
+            .map_err(|_| TwoBitGenerationError::Invalid("root schema"))?;
+        let location = metadata_location(prefix, root.source_layout.object_name());
+        drop(root);
+        drop(root_body);
         let head_started = std::time::Instant::now();
         let head = store
             .head(&location)
@@ -1403,6 +1799,95 @@ impl TwoBitGeneration {
         Ok(generation)
     }
 
+    // Import validates every physical copy, without SOURCE planning or blob hydration.
+    pub(crate) async fn validate_retained_capsules(
+        &self,
+        store: &dyn ObjectStore,
+        meta: &object_store::ObjectMeta,
+    ) -> Result<()> {
+        use crate::sq8_s3_range::RangeFetchError;
+        use futures_util::StreamExt;
+        use object_store::{GetOptions, GetRange};
+        let bad = TwoBitGenerationError::Invalid;
+        let Some(capsules) = &self.capsules else {
+            return Ok(());
+        };
+        let source = self
+            .source
+            .as_ref()
+            .ok_or(bad("capsule remote authority"))?;
+        if meta.location != source.location
+            || meta.size != capsules.directory.blob_bytes() as u64
+            || meta.e_tag.as_deref() != Some(source.etag.as_str())
+        {
+            return Err(bad("retained capsule identity"));
+        }
+        // Admit every capsule before payload I/O using the existing serving reservation.
+        for id in 0..capsules.closures.len() {
+            capsules.request(&[id], self.limits)?;
+        }
+        let mut verified_bytes = 0;
+        for id in 0..capsules.closures.len() {
+            let request = capsules.request(&[id], self.limits)?;
+            let range = &request.ranges[0];
+            let failed = |error| {
+                TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                    error,
+                    stats: Sq8ReadStats {
+                        submitted_gets: id + 1,
+                        verified_bytes,
+                        failed_gets: 1,
+                    },
+                })
+            };
+            let response = store
+                .get_opts(
+                    &meta.location,
+                    GetOptions {
+                        if_match: meta.e_tag.clone(),
+                        version: meta.version.clone(),
+                        range: Some(GetRange::Bounded(range.start as u64..range.end as u64)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|error| failed(RangeFetchError::Store(error)))?;
+            if response.meta != *meta || response.range != (range.start as u64..range.end as u64) {
+                return Err(failed(RangeFetchError::UnexpectedMetadata));
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(range.len())
+                .map_err(|_| failed(RangeFetchError::UnexpectedMetadata))?;
+            if bytes.capacity() > range.len() {
+                return Err(failed(RangeFetchError::UnexpectedMetadata));
+            }
+            // One in-flight response, drained through EOF before validation or the next GET.
+            let mut stream = response.into_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| failed(RangeFetchError::Store(error)))?;
+                if chunk.len() > range.len() - bytes.len() {
+                    return Err(failed(RangeFetchError::UnexpectedMetadata));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            if bytes.len() != range.len() {
+                return Err(failed(RangeFetchError::UnexpectedMetadata));
+            }
+            authenticate_capsule_response(
+                &capsules.directory,
+                &request.leaves,
+                &source.authority,
+                capsules.query_memory_bytes,
+                range.start,
+                bytes,
+            )
+            .map_err(failed)?;
+            verified_bytes += range.len();
+        }
+        Ok(())
+    }
+
     /// Startup counters for a remote open; absent for local metadata opens.
     pub fn remote_open_stats(&self) -> Option<&RemoteOpenStats> {
         self.remote_open_stats.as_ref()
@@ -1429,7 +1914,7 @@ impl TwoBitGeneration {
         remote: Option<(ObjectPath, String, u64)>,
         validate_local_records: bool,
     ) -> Result<Self> {
-        let paged = remote.is_some() || validate_local_records;
+        let mut paged = remote.is_some() || validate_local_records;
         let mut limits = limits;
         let bad = TwoBitGenerationError::Invalid;
         let size = |name: &str| {
@@ -1498,6 +1983,8 @@ impl TwoBitGeneration {
         {
             return Err(bad("root identity"));
         }
+        let capsule_metadata = manifest.capsule_metadata_bytes()?;
+        paged |= manifest.source_layout.is_capsules();
         if validate_local_records {
             // These files are authenticated by the publisher's existing
             // semantic validation/uploads, before it can commit the head.
@@ -1511,7 +1998,7 @@ impl TwoBitGeneration {
             limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
             limits.max_source_gets = limits.max_source_gets.min(128);
         }
-        let files = manifest.discovery.files(paged);
+        let files = manifest.files(paged);
         let mut disk = manifest_size;
         let mut sizes = Vec::with_capacity(files.len());
         for name in files {
@@ -1566,7 +2053,9 @@ impl TwoBitGeneration {
             || geometry.rows != manifest.canonical.rows
             || admitted_size("plane/mean.bin")? != expected_mean
             || (!paged && admitted_size("plane/records.bin")? != expected_records)
-            || (validate_local_records && size("plane/records.bin")? != expected_records as u64)
+            || (validate_local_records
+                && !manifest.source_layout.is_capsules()
+                && size("plane/records.bin")? != expected_records as u64)
             || admitted_size("plane/page_digests.bin")?
                 != geometry
                     .rows
@@ -1598,10 +2087,31 @@ impl TwoBitGeneration {
         let codec_memory = (admitted_size("plane/mean.bin")? as u64)
             .checked_mul(64)
             .ok_or(bad("codec memory"))?;
+        let source_payload_bytes = match &manifest.source_layout {
+            SourceLayout::FlatRecords => expected_records,
+            SourceLayout::LeafCapsules { blob_bytes, .. } => {
+                usize::try_from(*blob_bytes).map_err(|_| bad("capsule blob length"))?
+            }
+        };
+        // Page references, selected descriptors and their actual capacities are
+        // separate from the two framed transport copies. Flat models stay exact.
+        let capsule_query_memory = if let Some(profile) = manifest.discovery.semantic_profile()
+            && manifest.source_layout.is_capsules()
+        {
+            geometry
+                .rows
+                .div_ceil(32)
+                .min(profile.selected_leaf_limit() * 64)
+                .checked_mul(128)
+                .and_then(|n| n.checked_add(profile.selected_leaf_limit() * 512 + 4096))
+                .ok_or(bad("capsule query memory"))?
+        } else {
+            0
+        };
         let source_query_memory = if paged {
             limits
                 .max_source_bytes
-                .min(expected_records)
+                .min(source_payload_bytes)
                 .checked_mul(2)
                 .and_then(|n| n.checked_mul(limits.max_active_queries))
                 .ok_or(bad("source query memory"))? as u64
@@ -1650,6 +2160,12 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(scheduler_memory))
             .and_then(|n| n.checked_add(source_query_memory))
+            .and_then(|n| n.checked_add(capsule_metadata as u64))
+            .and_then(|n| {
+                n.checked_add(
+                    (capsule_query_memory as u64).checked_mul(limits.max_active_queries as u64)?,
+                )
+            })
             .and_then(|n| n.checked_add(validation_page_bytes))
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
@@ -1657,6 +2173,7 @@ impl TwoBitGeneration {
             return Err(bad("memory cap"));
         }
         let memory = usize::try_from(limits.max_memory_bytes).map_err(|_| bad("memory width"))?;
+        let mut local_capsule_authority = None;
         let (plane, source) = if paged {
             let (plane, authority) = TwoBitPlane::open_metadata(
                 &root.join("plane"),
@@ -1666,14 +2183,13 @@ impl TwoBitGeneration {
                 memory,
             )
             .map_err(TwoBitGenerationError::Plane)?;
-            if validate_local_records {
+            if validate_local_records && !manifest.source_layout.is_capsules() {
                 plane
                     .validate_local_records(&root.join("plane/records.bin"), &authority)
                     .map_err(TwoBitGenerationError::Plane)?;
             }
             let source = if let Some((location, etag, bytes)) = remote {
-                if u64::try_from(authority.object_bytes()).map_err(|_| bad("source size"))? != bytes
-                {
+                if source_payload_bytes as u64 != bytes {
                     return Err(bad("source HEAD geometry"));
                 }
                 Some(RemoteSource {
@@ -1682,6 +2198,12 @@ impl TwoBitGeneration {
                     etag,
                 })
             } else {
+                if manifest.source_layout.is_capsules() {
+                    if size(manifest.source_layout.object_name())? != source_payload_bytes as u64 {
+                        return Err(bad("capsule local geometry"));
+                    }
+                    local_capsule_authority = Some(authority);
+                }
                 None
             };
             (plane, source)
@@ -1800,6 +2322,95 @@ impl TwoBitGeneration {
                 LoadedDiscovery::Semantic { router }
             }
         };
+        let capsules = if let SourceLayout::LeafCapsules {
+            blob_bytes,
+            directory_bytes,
+            directory_sha256,
+            ..
+        } = &manifest.source_layout
+        {
+            let LoadedDiscovery::Semantic { router } = &discovery else {
+                return Err(bad("capsules require semantic discovery"));
+            };
+            if admitted_size("plane/capsule_directory.bin")? != *directory_bytes {
+                return Err(bad("capsule directory length"));
+            }
+            let encoded = read("plane/capsule_directory.bin", directory_sha256)?;
+            let mut digest = [0_u8; 32];
+            for (i, byte) in digest.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&directory_sha256[i * 2..i * 2 + 2], 16)
+                    .map_err(|_| bad("capsule directory SHA"))?;
+            }
+            let capsule_geometry = crate::source_capsule::Geometry::new(
+                geometry.rows,
+                geometry.dimensions,
+                router.manifest().profile,
+            )
+            .map_err(TwoBitGenerationError::Plane)?;
+            let directory = crate::source_capsule::Directory::open(
+                &encoded,
+                &digest,
+                capsule_geometry,
+                *blob_bytes as usize,
+                memory,
+            )
+            .map_err(TwoBitGenerationError::Plane)?;
+            if directory.entries().len() != router.manifest().leaves.len() {
+                return Err(bad("capsule router leaf count"));
+            }
+            let closures = capsule_closures(router, capsule_metadata)?;
+            let roster = closures
+                .iter()
+                .enumerate()
+                .map(|(id, pages)| crate::source_capsule::LeafPages {
+                    leaf_id: id as u32,
+                    pages,
+                })
+                .collect::<Vec<_>>();
+            directory
+                .query_charge(&roster)
+                .map_err(TwoBitGenerationError::Plane)?;
+            let actual = directory
+                .decoded_bytes()
+                .map_err(TwoBitGenerationError::Plane)?
+                .checked_add(encoded.capacity())
+                .and_then(|n| n.checked_add(closures.capacity() * std::mem::size_of::<Vec<u32>>()))
+                .and_then(|n| {
+                    n.checked_add(
+                        roster.capacity()
+                            * std::mem::size_of::<crate::source_capsule::LeafPages<'_>>(),
+                    )
+                })
+                .and_then(|n| {
+                    n.checked_add(
+                        closures
+                            .iter()
+                            .map(|pages| pages.capacity() * 4)
+                            .sum::<usize>(),
+                    )
+                })
+                .ok_or(bad("capsule metadata capacities"))?;
+            if actual > capsule_metadata {
+                return Err(bad("capsule metadata capacities"));
+            }
+            let query_memory_bytes = limits
+                .max_source_bytes
+                .min(source_payload_bytes)
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(capsule_query_memory))
+                .and_then(|n| n.checked_add(capsule_metadata))
+                .ok_or(bad("capsule query memory"))?;
+            Some(CapsuleSource {
+                directory,
+                closures,
+                local: local_capsule_authority
+                    .map(|authority| (root.join("plane/capsules.bin"), authority)),
+                query_memory_bytes: query_memory_bytes
+                    .min(router.manifest().profile.allocation_cap()),
+            })
+        } else {
+            None
+        };
         let receipt = plane.receipt();
         if pages.generation() != manifest.generation
             || pages.object_sha256() != manifest.sq8_object_sha256
@@ -1809,6 +2420,12 @@ impl TwoBitGeneration {
             || manifest.low.len() != receipt.dimensions
         {
             return Err(bad("generation binding"));
+        }
+        if validate_local_records
+            && let (Some(capsules), SourceLayout::LeafCapsules { blob_sha256, .. }) =
+                (&capsules, &manifest.source_layout)
+        {
+            capsules.validate_local_blob(blob_sha256)?;
         }
         Ok(Self {
             root_sha256: trusted_sha256.into(),
@@ -1821,6 +2438,7 @@ impl TwoBitGeneration {
             slots: Semaphore::new(limits.max_active_queries),
             remote_open_stats: None,
             source,
+            capsules,
             source_cache: None,
             byte_window: None,
             sq8_range_split: None,
@@ -1852,13 +2470,23 @@ impl TwoBitGeneration {
         normalized: &[f32],
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<Vec<(usize, Vec<usize>)>> {
+        self.source_walks(normalized, trace).map(|(walks, _)| walks)
+    }
+
+    fn source_walks(
+        &self,
+        normalized: &[f32],
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<(Vec<(usize, Vec<usize>)>, Vec<usize>)> {
         let LoadedDiscovery::Semantic { router } = &self.discovery else {
-            return self.discover_walks(normalized, trace);
+            return self
+                .discover_walks(normalized, trace)
+                .map(|walks| (walks, Vec::new()));
         };
         let ids = router
             .select_leaves(normalized)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
-        Self::semantic_walks(router, &ids, trace)
+        Ok((Self::semantic_walks(router, &ids, trace)?, ids))
     }
     fn plan_inner<'a>(
         &self,
@@ -1885,8 +2513,22 @@ impl TwoBitGeneration {
         // The codec already validated finite, nonzero input. Normalize after its
         // temporary preparation buffer is released, within the same scratch cap.
         let normalized = normalize_two_bit_diagnostic_query(query)?;
-        let walks = self.local_walks(normalized.as_ref(), trace.as_deref_mut())?;
-        let plan = self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?;
+        let (walks, ids) = self.source_walks(normalized.as_ref(), trace.as_deref_mut())?;
+        let plan = if let Some(capsules) = &self.capsules {
+            let request = capsules.request(&ids, self.limits)?;
+            let fetched = capsules.read_local(&request)?;
+            self.plan_capsules(
+                capsules,
+                &request,
+                &fetched,
+                &walks,
+                &prepared,
+                trace,
+                &mut QueryStages::default(),
+            )?
+        } else {
+            self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?
+        };
         Ok((plan, normalized))
     }
 
@@ -1982,6 +2624,49 @@ impl TwoBitGeneration {
         Ok((verified, stats))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn plan_capsules(
+        &self,
+        capsules: &CapsuleSource,
+        request: &CapsuleRequest<'_>,
+        fetched: &[crate::source_capsule::VerifiedSpan<'_>],
+        walks: &[(usize, Vec<usize>)],
+        prepared: &PreparedTwoBit,
+        trace: Option<&mut TwoBitPlanTrace>,
+        stages: &mut QueryStages,
+    ) -> Result<BudgetedPagePlan> {
+        let authority = self
+            .source
+            .as_ref()
+            .map(|s| &s.authority)
+            .or_else(|| capsules.local.as_ref().map(|(_, a)| a))
+            .ok_or(TwoBitGenerationError::Invalid("capsule authority"))?;
+        let extra = request
+            .ranges
+            .capacity()
+            .checked_mul(std::mem::size_of::<std::ops::Range<usize>>())
+            .and_then(|n| {
+                n.checked_add(
+                    request
+                        .leaves
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<crate::source_capsule::LeafPages<'_>>())?,
+                )
+            })
+            .ok_or(TwoBitGenerationError::Invalid("capsule query memory"))?;
+        let cap = capsules
+            .query_memory_bytes
+            .checked_sub(extra)
+            .ok_or(TwoBitGenerationError::Invalid("capsule query memory"))?;
+        let verified = capsules
+            .directory
+            .verified_rows(&request.leaves, fetched, authority, cap)
+            .map_err(TwoBitGenerationError::Plane)?;
+        let charge = verified.charge();
+        stages.source_capsules = Some(charge.into());
+        self.plan_walks(walks, prepared, |row| verified.record(row), trace)
+    }
+
     async fn plan_paged_measured<'a>(
         &self,
         store: &dyn ObjectStore,
@@ -1991,9 +2676,9 @@ impl TwoBitGeneration {
         started: std::time::Instant,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
-        self.source
-            .as_ref()
-            .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
+        if self.source.is_none() && self.capsules.is_none() {
+            return Err(TwoBitGenerationError::Invalid("source binding"));
+        }
         let trace_bytes = if trace.is_some() {
             TwoBitPlanTrace::scratch_bytes(self.rows())
         } else {
@@ -2009,10 +2694,60 @@ impl TwoBitGeneration {
             .prepare_query(query, scratch)
             .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
         let normalized = normalize_two_bit_diagnostic_query(query)?;
-        let result = self.local_walks(normalized.as_ref(), trace.as_deref_mut());
+        let result = self.source_walks(normalized.as_ref(), trace.as_deref_mut());
         stages.discovery.end_ns = started.elapsed().as_nanos();
-        let walks = result?;
+        let (walks, ids) = result?;
         let router_stats = Sq8ReadStats::default();
+        if let Some(capsules) = &self.capsules {
+            admit_source_walks(self.rows(), &walks, self.semantic_profile())?;
+            let request = capsules.request(&ids, self.limits)?;
+            stages.source_capsules = Some(request.charge.into());
+            stages.source.start_ns = started.elapsed().as_nanos().max(1);
+            let result = if let Some(source) = &self.source {
+                crate::sq8_s3_range::fetch_capsule_ranges(
+                    store,
+                    &source.location,
+                    capsules.directory.blob_bytes(),
+                    &request.ranges,
+                    &source.etag,
+                    self.limits.max_source_gets,
+                    self.limits.max_source_bytes,
+                    self.limits.max_parallel_source_gets,
+                    self.byte_window.as_ref(),
+                    |offset, bytes| {
+                        authenticate_capsule_response(
+                            &capsules.directory,
+                            &request.leaves,
+                            &source.authority,
+                            capsules.query_memory_bytes,
+                            offset,
+                            bytes,
+                        )
+                    },
+                )
+                .await
+                .map_err(TwoBitGenerationError::SourceRead)
+            } else {
+                capsules
+                    .read_local(&request)
+                    .map(|ranges| (ranges, Sq8ReadStats::default()))
+            };
+            stages.source.end_ns = started.elapsed().as_nanos();
+            let (fetched, stats) = result?;
+            stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+            let plan = self
+                .plan_capsules(
+                    capsules, &request, &fetched, &walks, &prepared, trace, stages,
+                )
+                .map_err(|error| TwoBitGenerationError::SourcePlanning {
+                    stats,
+                    error: Box::new(error),
+                });
+            stages.planning.end_ns = started.elapsed().as_nanos();
+            let plan = plan?;
+            drop(fetched);
+            return Ok((plan, normalized, stats, router_stats));
+        }
         async {
             // Validate the same explicit discovery bounds before SOURCE cover/I/O.
             let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
@@ -2213,7 +2948,7 @@ impl TwoBitGeneration {
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let mut trace = TwoBitPlanTrace::default();
-        if self.source.is_some() {
+        if self.source.is_some() || self.capsules.is_some() {
             let (plan, _, source, leaves) = self.plan_paged(store, query, Some(&mut trace)).await?;
             Ok((plan, trace, source, leaves))
         } else {
@@ -2249,7 +2984,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        if self.source.is_some() {
+        if self.source.is_some() || self.capsules.is_some() {
             let (plan, _, stats, leaves) = self.plan_paged(store, query, None).await?;
             Ok((plan, stats, leaves))
         } else {
@@ -2601,21 +3336,22 @@ impl TwoBitGeneration {
                 BudgetedPageError::InsufficientBudget,
             ));
         }
-        let (plan, normalized, source_stats, router_stats) = if self.source.is_some() {
-            self.plan_paged_measured(store, query, trace, stages, started)
-                .await?
-        } else {
-            stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
-            let result = self.plan_inner(query, trace);
-            stages.discovery.end_ns = started.elapsed().as_nanos();
-            let (plan, normalized) = result?;
-            (
-                plan,
-                normalized,
-                Sq8ReadStats::default(),
-                Sq8ReadStats::default(),
-            )
-        };
+        let (plan, normalized, source_stats, router_stats) =
+            if self.source.is_some() || self.capsules.is_some() {
+                self.plan_paged_measured(store, query, trace, stages, started)
+                    .await?
+            } else {
+                stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
+                let result = self.plan_inner(query, trace);
+                stages.discovery.end_ns = started.elapsed().as_nanos();
+                let (plan, normalized) = result?;
+                (
+                    plan,
+                    normalized,
+                    Sq8ReadStats::default(),
+                    Sq8ReadStats::default(),
+                )
+            };
 
         // Selection may cover fewer rows than a larger byte cap permits. This
         // is budget exhaustion, not corrupt SQ8. Preserve incurred SOURCE and
@@ -3637,6 +4373,14 @@ mod source_walk_tests {
         ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
             self.writes.lock().unwrap().push(path.to_string());
             self.inner.put_multipart_opts(path, options).await
+        }
+        async fn put_multipart_create(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.writes.lock().unwrap().push(path.to_string());
+            self.inner.put_multipart_create(path, options).await
         }
         fn delete_stream(
             &self,
@@ -9444,6 +10188,13 @@ mod source_walk_tests {
         ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
             self.inner.put_multipart_opts(path, options).await
         }
+        async fn put_multipart_create(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_create(path, options).await
+        }
         fn delete_stream(
             &self,
             paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
@@ -10934,5 +11685,773 @@ mod source_walk_tests {
             TwoBitGenerationError::Invalid("direct closure requires semantic discovery")
         ));
         assert_eq!(error.direct_resource_rejection(), None);
+    }
+    // Small source-only fixture; publication is deliberately manual until the
+    // separate store/GC owner adopts Manifest::files for v10.
+    async fn capsule_control_fixture(dimensions: usize) -> TinyDirect {
+        use crate::{two_bit_build::TwoBitGenerationBuilder, two_bit_source::TwoBitSource};
+        use sha2::{Digest, Sha256};
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let rows = 513;
+        // SQ8 carries application IDs; its vectors remain in the original raw-row order.
+        let source_order = (0..rows as u64).collect::<Vec<_>>();
+        let temp = tempfile::tempdir().unwrap();
+        let low = vec![0.; dimensions];
+        let step = vec![1.; dimensions];
+        let mut raw = Vec::new();
+        let mut sq8 = Vec::new();
+        for row in 0..rows {
+            let values = (0..dimensions)
+                .map(|d| (1 + (row + 3 * d) % 13) as u8)
+                .collect::<Vec<_>>();
+            let norm = values.iter().map(|v| f32::from(*v).powi(2)).sum::<f32>();
+            raw.extend(values.iter().flat_map(|v| f32::from(*v).to_le_bytes()));
+            sq8.extend_from_slice(&((rows - row) as i64).to_le_bytes());
+            sq8.extend_from_slice(&norm.to_le_bytes());
+            sq8.extend_from_slice(&values);
+        }
+        fs::write(temp.path().join("raw"), &raw).unwrap();
+        fs::write(temp.path().join("sq8"), &sq8).unwrap();
+        let inner = RecordedStore::default();
+        let key = ObjectPath::from(format!("capsule/objects/{}", hash(&sq8)));
+        inner.put(&key, sq8.clone().into()).await.unwrap();
+        let etag = inner.head(&key).await.unwrap().e_tag.unwrap();
+        let root = temp.path().join("generation");
+        let root_sha = TwoBitGenerationBuilder {
+            source: TwoBitSource {
+                raw: &temp.path().join("raw"),
+                raw_sha256: &hash(&raw),
+                sq8: &temp.path().join("sq8"),
+                sq8_sha256: &hash(&sq8),
+                rows,
+                dimensions,
+            },
+            base_epoch: 0,
+            generation: 1,
+            low: &low,
+            step: &step,
+            sq8_object_key: key.as_ref(),
+            sq8_etag: &etag,
+        }
+        .build_with_source_layout(
+            Some(&source_order),
+            SemanticProfile::Scale1m,
+            None,
+            SourceLayoutMode::FlatRecords,
+            &root,
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        let limits = TwoBitGenerationLimits {
+            max_memory_bytes: 512 * 1024 * 1024,
+            max_active_queries: 1,
+            max_query_bytes: sq8.len(),
+            max_query_gets: 1,
+            max_parallel_gets: 1,
+            max_source_bytes: 64 * 1024 * 1024,
+            max_source_gets: 128,
+            max_parallel_source_gets: 4,
+            max_query_scratch_bytes:
+                crate::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(dimensions)
+                    .unwrap()
+                    + TwoBitPlanTrace::scratch_bytes(rows),
+            already_pinned_bytes: 4096,
+        };
+        TinyDirect {
+            temp,
+            store: SqFaultStore {
+                inner,
+                sq8_path: key.to_string(),
+                fault: std::sync::Mutex::new("ok"),
+            },
+            prefix: ObjectPath::from("capsule/generation"),
+            root_sha,
+            key,
+            etag,
+            sq8,
+            low,
+            step,
+            limits,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn capsule_v10_repack_d1_d257_d1024_parity_admission_and_no_sq8_after_failure() {
+        use crate::two_bit_build::{TwoBitGenerationBuilder, repackage_source_layout};
+        use crate::two_bit_source::TwoBitSource;
+        use sha2::{Digest, Sha256};
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        for dimensions in [1, 257, 1024] {
+            let tiny = capsule_control_fixture(dimensions).await;
+            let current = tiny.temp.path().join("generation");
+            let output = tiny.temp.path().join("capsules");
+            let root_sha = repackage_source_layout(
+                &current,
+                &tiny.root_sha,
+                &output,
+                2,
+                SourceLayoutMode::LeafCapsules,
+                tiny.limits,
+            )
+            .unwrap();
+            assert_ne!(root_sha, tiny.root_sha);
+            assert!(!output.join("plane/records.bin").exists());
+            for name in [
+                "plane/manifest.json",
+                "plane/page_digests.bin",
+                "router/root.bin",
+                "router/membership.bin",
+                "router/leaves.bin",
+                "page_digests.bin",
+            ] {
+                assert_eq!(
+                    fs::read(current.join(name)).unwrap(),
+                    fs::read(output.join(name)).unwrap(),
+                    "{name}"
+                );
+            }
+            assert_ne!(
+                fs::read(current.join("page_manifest.json")).unwrap(),
+                fs::read(output.join("page_manifest.json")).unwrap()
+            );
+            let manifest: Manifest =
+                serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+            assert_eq!(manifest.schema, SCHEMA);
+            assert_eq!(manifest.generation, 2);
+            assert_eq!(manifest.files(true).len(), 9);
+            for name in manifest.files(false) {
+                tiny.store
+                    .put(
+                        &metadata_location(&tiny.prefix, name),
+                        fs::read(output.join(name)).unwrap().into(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let remote = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            let startup = remote.remote_open_stats().unwrap();
+            assert_eq!(startup.metadata.len(), 9);
+            assert!(startup.metadata[1..].iter().all(|m| m.metadata_wave == 1));
+            assert!(
+                tiny.store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.1 && r.0.ends_with("/plane/capsules.bin"))
+            );
+            assert!(
+                !tiny
+                    .store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.0.ends_with("/plane/records.bin"))
+            );
+            let local = TwoBitGeneration::open(&output, &root_sha, tiny.limits).unwrap();
+            assert!(
+                local.plane.record(0).is_none(),
+                "local capsule open must not hydrate SOURCE"
+            );
+            TwoBitGeneration::validate_local_publication(&output, &root_sha, tiny.limits).unwrap();
+            let flat = TwoBitGeneration::open(&current, &tiny.root_sha, tiny.limits).unwrap();
+            let query = (0..dimensions)
+                .map(|d| (1 + d % 5) as f32)
+                .collect::<Vec<_>>();
+            let (baseline, bt) = flat
+                .diagnostic_search_with_store(&tiny.store, &query, 10)
+                .await
+                .unwrap();
+            for generation in [&local, &remote] {
+                crate::source_capsule::reset_hash_bytes();
+                let (actual, trace) = generation
+                    .diagnostic_search_with_store(&tiny.store, &query, 10)
+                    .await
+                    .unwrap();
+                let hashed_bytes = crate::source_capsule::hash_bytes();
+                assert_eq!(actual.plan, baseline.plan);
+                assert_eq!(ranking_bits(&actual), ranking_bits(&baseline));
+                assert_eq!(
+                    trace.nomination_evaluated_units,
+                    bt.nomination_evaluated_units
+                );
+                assert_eq!(trace.ranked_candidate_pages, bt.ranked_candidate_pages);
+                let capsule_stats = actual.stages.source_capsules.as_ref().unwrap();
+                assert!(capsule_stats.framing_bytes > 0);
+                // This one-leaf fixture hashes the packed object and every flat record per pass.
+                let packed_bytes = fs::metadata(output.join("plane/capsules.bin"))
+                    .unwrap()
+                    .len() as usize;
+                let flat_bytes = fs::metadata(current.join("plane/records.bin"))
+                    .unwrap()
+                    .len() as usize;
+                assert_eq!(capsule_stats.physical_bytes, packed_bytes);
+                assert_eq!(capsule_stats.logical_bytes, flat_bytes);
+                let one_pass = packed_bytes + flat_bytes;
+                assert_eq!(capsule_stats.hash_bytes, one_pass);
+                assert_eq!(hashed_bytes, one_pass, "actual SOURCE SHA bytes");
+                assert_eq!(
+                    hashed_bytes,
+                    2 * capsule_stats.physical_bytes - capsule_stats.framing_bytes
+                );
+                assert!(actual.stages.sq8.start_ns >= actual.stages.source.end_ns);
+                crate::source_capsule::reset_hash_bytes();
+                let ordinary = generation
+                    .search_with_store(&tiny.store, &query, 10, None)
+                    .await
+                    .unwrap();
+                assert_eq!(crate::source_capsule::hash_bytes(), one_pass);
+                assert_eq!(
+                    ranking_bits(&ordinary),
+                    ranking_bits(&actual),
+                    "trace-independent leaf IDs"
+                );
+            }
+            // The explicit build API also packs after fixing the same router.
+            let built = tiny.temp.path().join("built-capsules");
+            let raw = fs::read(tiny.temp.path().join("raw")).unwrap();
+            let source_order = (0..flat.rows() as u64).collect::<Vec<_>>();
+            let built_sha = TwoBitGenerationBuilder {
+                source: TwoBitSource {
+                    raw: &tiny.temp.path().join("raw"),
+                    raw_sha256: &hash(&raw),
+                    sq8: &tiny.temp.path().join("sq8"),
+                    sq8_sha256: &hash(&tiny.sq8),
+                    rows: 513,
+                    dimensions,
+                },
+                base_epoch: 0,
+                generation: 3,
+                low: &tiny.low,
+                step: &tiny.step,
+                sq8_object_key: tiny.key.as_ref(),
+                sq8_etag: &tiny.etag,
+            }
+            .build_with_source_layout(
+                Some(&source_order),
+                SemanticProfile::Scale1m,
+                None,
+                SourceLayoutMode::LeafCapsules,
+                &built,
+                128 * 1024 * 1024,
+            )
+            .unwrap();
+            let built_generation = TwoBitGeneration::open(&built, &built_sha, tiny.limits).unwrap();
+            assert_eq!(built_generation.plan(&query).await.unwrap(), baseline.plan);
+
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let short = TwoBitGenerationLimits {
+                max_memory_bytes: remote.modeled_memory_bytes - 1,
+                ..tiny.limits
+            };
+            assert!(
+                TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &root_sha,
+                    short,
+                    tiny.temp.path()
+                )
+                .await
+                .is_err()
+            );
+            assert!(tiny.store.inner.reads.lock().unwrap().iter().all(
+                |r| r.1 || (!r.0.ends_with("/plane/capsules.bin") && r.0 != tiny.key.as_ref())
+            ));
+            assert!(
+                TwoBitGeneration::open(&output, &root_sha, tiny.limits)
+                    .unwrap()
+                    .with_source_cache(1024 * 1024)
+                    .is_err()
+            );
+
+            let mut bounded = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            let (_, ids) = bounded
+                .source_walks(
+                    normalize_two_bit_diagnostic_query(&query).unwrap().as_ref(),
+                    None,
+                )
+                .unwrap();
+            let request = bounded
+                .capsules
+                .as_ref()
+                .unwrap()
+                .request(&ids, bounded.limits)
+                .unwrap();
+            let model = request.charge.memory_bytes
+                + request.charge.physical_bytes
+                + crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
+                    crate::source_capsule::VerifiedSpan<'_>,
+                >(request.ranges.len())
+                .unwrap()
+                + request.leaves.capacity()
+                    * std::mem::size_of::<crate::source_capsule::LeafPages<'_>>()
+                + request.ranges.capacity() * std::mem::size_of::<std::ops::Range<usize>>();
+            drop(request);
+            bounded.capsules.as_mut().unwrap().query_memory_bytes = model - 1;
+            tiny.store.inner.reads.lock().unwrap().clear();
+            assert!(
+                bounded
+                    .search_with_store(&tiny.store, &query, 10, None)
+                    .await
+                    .is_err()
+            );
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            assert_eq!(bounded.slots.available_permits(), 1);
+
+            let key = metadata_location(&tiny.prefix, "plane/capsules.bin");
+            let mut damaged = fs::read(output.join("plane/capsules.bin")).unwrap();
+            let last = damaged.len() - 1;
+            damaged[last] ^= 1;
+            tiny.store.put(&key, damaged.into()).await.unwrap();
+            for reopen in [false, true] {
+                let rebound;
+                let generation = if reopen {
+                    rebound = TwoBitGeneration::open_remote(
+                        &tiny.store,
+                        &tiny.prefix,
+                        &root_sha,
+                        tiny.limits,
+                        tiny.temp.path(),
+                    )
+                    .await
+                    .unwrap();
+                    &rebound
+                } else {
+                    &remote
+                };
+                tiny.store.inner.reads.lock().unwrap().clear();
+                let error = generation
+                    .search_with_store(&tiny.store, &query, 10, None)
+                    .await
+                    .err()
+                    .unwrap();
+                assert_eq!(error.read_stats().0.submitted_gets, 1);
+                assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+                assert_eq!(generation.slots.available_permits(), 1);
+                assert!(
+                    !tiny
+                        .store
+                        .inner
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r.0 == tiny.key.as_ref())
+                );
+            }
+            // No v9 compatibility reader; graph+capsule fails at descriptor admission.
+            for schema in ["borsuk-two-bit-generation-v9", SCHEMA] {
+                let mut bad: serde_json::Value =
+                    serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap())
+                        .unwrap();
+                bad["schema"] = schema.into();
+                if schema == SCHEMA {
+                    bad["discovery"] = serde_json::json!({
+                        "mode":"graph", "centroids_sha256":"a".repeat(64),
+                        "graph_sha256":"b".repeat(64), "graph_resident_bytes":1,
+                        "diverse_graph_sha256":"c".repeat(64), "diverse_graph_resident_bytes":1
+                    });
+                }
+                let body = serde_json::to_vec(&bad).unwrap();
+                tiny.store
+                    .put(
+                        &metadata_location(&tiny.prefix, "manifest.json"),
+                        body.clone().into(),
+                    )
+                    .await
+                    .unwrap();
+                tiny.store.inner.reads.lock().unwrap().clear();
+                assert!(
+                    TwoBitGeneration::open_remote(
+                        &tiny.store,
+                        &tiny.prefix,
+                        &hash(&body),
+                        tiny.limits,
+                        tiny.temp.path()
+                    )
+                    .await
+                    .is_err()
+                );
+                assert!(
+                    tiny.store
+                        .inner
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .all(|r| r.0.ends_with("/manifest.json"))
+                );
+            }
+            // Reuse the opened generation with the loopback transport's pinned ETags.
+            let mut http = remote;
+            http.source.as_mut().unwrap().etag = DIRECT_ETAG.to_owned();
+            http.manifest.sq8_etag = DIRECT_ETAG.to_owned();
+            let fixture = DirectHttp::new(
+                std::collections::BTreeMap::from([
+                    (
+                        metadata_location(&tiny.prefix, "plane/capsules.bin").to_string(),
+                        fs::read(output.join("plane/capsules.bin")).unwrap(),
+                    ),
+                    (tiny.key.to_string(), tiny.sq8.clone()),
+                ]),
+                Instant::now() + Duration::from_secs(30),
+            );
+            let packed_bytes = fs::metadata(output.join("plane/capsules.bin"))
+                .unwrap()
+                .len() as usize;
+            let flat_bytes = fs::metadata(current.join("plane/records.bin"))
+                .unwrap()
+                .len() as usize;
+            crate::source_capsule::reset_hash_bytes();
+            let (actual, trace) = run_source_and_sq8_http(
+                &fixture,
+                http.diagnostic_search_with_store(fixture.reader.store(), &query, 10),
+            )
+            .await
+            .unwrap();
+            let hashed_bytes = crate::source_capsule::hash_bytes();
+            assert_eq!(
+                hashed_bytes,
+                packed_bytes + flat_bytes,
+                "HTTP SOURCE SHA bytes"
+            );
+            let charge = actual.stages.source_capsules.as_ref().unwrap();
+            assert_eq!(
+                hashed_bytes,
+                2 * charge.physical_bytes - charge.framing_bytes
+            );
+            assert_eq!(actual.plan, baseline.plan);
+            assert_eq!(ranking_bits(&actual), ranking_bits(&baseline));
+            assert_eq!(
+                trace.nomination_evaluated_units,
+                bt.nomination_evaluated_units
+            );
+            assert_eq!(trace.ranked_candidate_pages, bt.ranked_candidate_pages);
+            let state = fixture.snapshot();
+            assert_eq!(state.active, [0; 3]);
+            assert_eq!(state.finished[0].len(), actual.source_stats.submitted_gets);
+            assert_eq!(state.finished[1].len(), actual.ranked.stats.submitted_gets);
+            fixture.finish();
+        }
+    }
+
+    #[tokio::test]
+    async fn capsule_n513_coalesced_duplicate_preserves_original_order_shortlist_and_sq8() {
+        use crate::rotated_two_bit::RotatedTwoBitCodec;
+        use crate::source_capsule::{Directory, Geometry, LeafPages, pack};
+        use crate::sq8_s3_range::fetch_capsule_ranges;
+        use sha2::{Digest, Sha256};
+        use std::io::Cursor;
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        for dimensions in [1, 257, 1024] {
+            let rows = 513;
+            let codec = RotatedTwoBitCodec::new(&vec![0.; dimensions], 20260923).unwrap();
+            let query = vec![1.; dimensions];
+            let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
+            assert!(matches!(
+                codec.prepare_query(&query, scratch - 1),
+                Err(crate::rotated_two_bit::TwoBitError::MemoryBudget)
+            ));
+            let prepared = codec.prepare_query(&query, scratch).unwrap();
+            let flat = (0..rows)
+                .flat_map(|row| {
+                    let vector = (0..dimensions)
+                        .map(|d| {
+                            if row == 512 {
+                                1.
+                            } else {
+                                (1 + (row + d * 3) % 11) as f32
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    codec.encode(&vector).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let geometry = Geometry::new(rows, dimensions, SemanticProfile::Scale1m).unwrap();
+            let width = geometry.record_bytes();
+            let sidecar = flat
+                .chunks(32 * width)
+                .flat_map(|bytes| Sha256::digest(bytes).to_vec())
+                .collect::<Vec<_>>();
+            let receipt = SourcePlaneReceipt {
+                schema: "borsuk-two-bit-plane-v3".into(),
+                rows,
+                dimensions,
+                seed: 20260923,
+                record_bytes: width,
+                source_sha256: "0".repeat(64),
+                sq8_sha256: "1".repeat(64),
+                source_order_sha256: "2".repeat(64),
+                mean_sha256: "3".repeat(64),
+                records_sha256: hash(&flat),
+                page_rows: 32,
+                page_digest_sha256: hash(&sidecar),
+                query_or_truth_used: false,
+            };
+            let manifest = serde_json::to_vec(&receipt).unwrap();
+            let authority =
+                PageAuthority::load_two_bit(&manifest, &hash(&manifest), 7, &sidecar).unwrap();
+            let leaves = [
+                LeafPages {
+                    leaf_id: 0,
+                    pages: &[0, 2],
+                },
+                LeafPages {
+                    leaf_id: 1,
+                    pages: &[0],
+                },
+            ];
+            let mut blob = Vec::new();
+            let mut encoded = Vec::new();
+            let built = pack(
+                geometry,
+                &leaves,
+                &authority,
+                &mut Cursor::new(&flat),
+                &mut blob,
+                &mut encoded,
+                128 * 1024 * 1024,
+            )
+            .unwrap();
+            let source = CapsuleSource {
+                directory: built.directory,
+                closures: vec![vec![0, 2], vec![0]],
+                local: None,
+                query_memory_bytes: 16 * 1024 * 1024,
+            };
+            let limits = TwoBitGenerationLimits {
+                max_memory_bytes: 128 * 1024 * 1024,
+                max_active_queries: 1,
+                max_query_bytes: rows * (dimensions + 12),
+                max_query_gets: 1,
+                max_parallel_gets: 1,
+                max_source_bytes: blob.len(),
+                max_source_gets: 1,
+                max_parallel_source_gets: 1,
+                max_query_scratch_bytes: 400_000,
+                already_pinned_bytes: 0,
+            };
+            let request = source.request(&[1, 0], limits).unwrap();
+            assert_eq!(request.ranges, vec![0..blob.len()]);
+            assert_eq!(request.charge.logical_bytes, 257 * width);
+            assert_eq!(request.charge.duplicate_bytes, 256 * width);
+            assert_eq!(request.charge.framing_bytes, 76);
+            assert!(
+                source
+                    .request(
+                        &[0, 1],
+                        TwoBitGenerationLimits {
+                            max_source_bytes: blob.len() - 1,
+                            ..limits
+                        }
+                    )
+                    .is_err()
+            );
+            let store = RecordedStore::default();
+            let location = ObjectPath::from("closure/plane/capsules.bin");
+            store.put(&location, blob.clone().into()).await.unwrap();
+            let etag = store.head(&location).await.unwrap().e_tag.unwrap();
+            store.reads.lock().unwrap().clear();
+            let (fetched, stats) = fetch_capsule_ranges(
+                &store,
+                &location,
+                blob.len(),
+                &request.ranges,
+                &etag,
+                1,
+                blob.len(),
+                1,
+                None,
+                |offset, bytes| {
+                    authenticate_capsule_response(
+                        &source.directory,
+                        &request.leaves,
+                        &authority,
+                        16 * 1024 * 1024,
+                        offset,
+                        bytes,
+                    )
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(stats.submitted_gets, 1);
+            assert_eq!(store.reads.lock().unwrap().len(), 1);
+            let verified = source
+                .directory
+                .verified_rows(&request.leaves, &fetched, &authority, 16 * 1024 * 1024)
+                .unwrap();
+            assert_eq!(verified.page_leaf(0), Some(0));
+            assert!(verified.record(256).is_none());
+            assert!(verified.record(511).is_none());
+            let sq8 = (0..rows)
+                .flat_map(|row| {
+                    let codes = (0..dimensions)
+                        .map(|d| (1 + (row * 3 + d) % 7) as u8)
+                        .collect::<Vec<_>>();
+                    let norm = codes.iter().map(|v| f32::from(*v).powi(2)).sum::<f32>();
+                    let mut record = ((rows - row) as i64).to_le_bytes().to_vec();
+                    record.extend_from_slice(&norm.to_le_bytes());
+                    record.extend(codes);
+                    record
+                })
+                .collect::<Vec<_>>();
+            let sq8_sidecar = sq8
+                .chunks(SQ8_PAGE_ROWS * (dimensions + 12))
+                .flat_map(|bytes| Sha256::digest(bytes).to_vec())
+                .collect::<Vec<_>>();
+            let sq8_manifest = serde_json::to_vec(&serde_json::json!({
+                "schema":"borsuk-v115-sq8-page-authority-v2", "generation":7,
+                "rows":rows, "dimensions":dimensions, "page_rows":SQ8_PAGE_ROWS,
+                "object_sha256":hash(&sq8), "page_digest_sha256":hash(&sq8_sidecar)
+            }))
+            .unwrap();
+            let pages =
+                PageAuthority::load(&sq8_manifest, &hash(&sq8_manifest), &sq8_sidecar).unwrap();
+            let walks = [(0, (0..8).chain([16]).collect::<Vec<_>>())];
+            let sq8_limits = SelectedSq8Limits {
+                max_gets: 1,
+                max_bytes: sq8.len(),
+                max_planner_bytes: 256 * 1024,
+            };
+            let mut flat_order = Vec::new();
+            let mut capsule_order = Vec::new();
+            let mut flat_trace = TwoBitPlanTrace::default();
+            let mut capsule_trace = TwoBitPlanTrace::default();
+            let flat_plan = plan_two_bit_source_walks(
+                &pages,
+                2,
+                Some(SemanticProfile::Scale1m),
+                &walks,
+                &prepared,
+                |row| {
+                    flat_order.push(row);
+                    flat.get(row * width..(row + 1) * width)
+                },
+                sq8_limits,
+                Some(&mut flat_trace),
+            )
+            .unwrap();
+            let capsule_plan = plan_two_bit_source_walks(
+                &pages,
+                2,
+                Some(SemanticProfile::Scale1m),
+                &walks,
+                &prepared,
+                |row| {
+                    capsule_order.push(row);
+                    verified.record(row)
+                },
+                sq8_limits,
+                Some(&mut capsule_trace),
+            )
+            .unwrap();
+            assert_eq!(flat_order, (0..256).chain([512]).collect::<Vec<_>>());
+            assert_eq!(capsule_order, flat_order);
+            assert_eq!(capsule_plan, flat_plan);
+            assert_eq!(
+                capsule_trace.nomination_evaluated_units,
+                flat_trace.nomination_evaluated_units
+            );
+            for row in capsule_order {
+                assert_eq!(
+                    prepared
+                        .score(verified.record(row).unwrap())
+                        .unwrap()
+                        .to_bits(),
+                    prepared
+                        .score(&flat[row * width..(row + 1) * width])
+                        .unwrap()
+                        .to_bits()
+                );
+            }
+            let sq8_key = ObjectPath::from("closure/objects/sq8");
+            store.put(&sq8_key, sq8.clone().into()).await.unwrap();
+            let sq8_etag = store.head(&sq8_key).await.unwrap().e_tag.unwrap();
+            let normalized = normalize_two_bit_diagnostic_query(&query).unwrap();
+            let mut scored = Vec::new();
+            for plan in [&flat_plan, &capsule_plan] {
+                let unit_bytes = SQ8_PAGE_ROWS * (dimensions + 12);
+                let ranges = plan
+                    .ranges
+                    .iter()
+                    .map(|range| (range.start / unit_bytes, (range.end - 1) / unit_bytes))
+                    .collect::<Vec<_>>();
+                let ranked = rank_verified_sq8_pages_inner(
+                    &store,
+                    &sq8_key,
+                    &pages,
+                    &ranges,
+                    &sq8_etag,
+                    normalized.as_ref(),
+                    &vec![0.; dimensions],
+                    &vec![1.; dimensions],
+                    10,
+                    1,
+                    sq8.len(),
+                    1,
+                    &[],
+                )
+                .await
+                .unwrap();
+                scored.push(
+                    ranked
+                        .candidates
+                        .iter()
+                        .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert_eq!(scored[0], scored[1]);
+
+            // A healthy first copy cannot mask a corrupt duplicate, even after
+            // rebinding the directory to a matching physical capsule hash.
+            let duplicate = source.directory.byte_range(1).unwrap();
+            let mut corrupt = blob.clone();
+            corrupt[duplicate.start as usize + 36] ^= 1;
+            let mut rebound = encoded.clone();
+            let hash_offset = 32 + 64 + 32;
+            rebound[hash_offset..hash_offset + 32].copy_from_slice(&Sha256::digest(
+                &corrupt[duplicate.start as usize..duplicate.end as usize],
+            ));
+            let digest: [u8; 32] = Sha256::digest(&rebound).into();
+            let directory =
+                Directory::open(&rebound, &digest, geometry, corrupt.len(), 16 * 1024 * 1024)
+                    .unwrap();
+            assert!(
+                directory
+                    .verify(
+                        &leaves,
+                        &[crate::source_capsule::FetchedSpan {
+                            offset: 0,
+                            bytes: &corrupt
+                        }],
+                        &authority,
+                        16 * 1024 * 1024
+                    )
+                    .is_err()
+            );
+        }
     }
 }

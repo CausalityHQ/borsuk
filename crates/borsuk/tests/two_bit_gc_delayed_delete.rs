@@ -611,6 +611,13 @@ mod session_tests {
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             self.at(path).put_multipart_opts(path, options).await
         }
+        async fn put_multipart_create(
+            &self,
+            path: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.at(path).put_multipart_create(path, options).await
+        }
         async fn get_opts(
             &self,
             path: &Path,

@@ -1,4 +1,5 @@
 //! Restore original-ordinal raw f32 bytes from LE i64 ordinal + D LE f32 records.
+//! Opt-in --recover-order extracts physical-order LE u64 IDs, requiring the pinned order SHA.
 //! Linux only. See usage in main; paths must be absolute and contain no symlinks.
 //! The memory budget admits explicit buffers/control, not RSS or filesystem cache.
 //! A .pending receipt is never valid. The final receipt is provisional until the
@@ -95,26 +96,32 @@ mod linux {
 
     pub fn main() -> Result<()> {
         let mut args = std::env::args_os().skip(1);
+        let first = args.next().ok_or(USAGE)?;
+        if first.len() > 4096 {
+            return Err("argument exceeds 4096 bytes".into());
+        }
+        let order_mode = first == "--recover-order";
+        let usage = if order_mode { ORDER_USAGE } else { USAGE };
         let mut next = || -> Result<OsString> {
-            let value = args.next().ok_or(USAGE)?;
+            let value = args.next().ok_or(usage)?;
             if value.len() > 4096 {
                 return Err("argument exceeds 4096 bytes".into());
             }
             Ok(value)
         };
-        let canonical = PathBuf::from(next()?);
-        let canonical_bytes = next()?.to_str().ok_or(USAGE)?.parse()?;
-        let canonical_sha256 = sha_arg(next()?.to_str().ok_or(USAGE)?)?;
-        let n = next()?.to_str().ok_or(USAGE)?.parse()?;
-        let d = next()?.to_str().ok_or(USAGE)?.parse()?;
-        let original_raw_sha256 = sha_arg(next()?.to_str().ok_or(USAGE)?)?;
+        let canonical = PathBuf::from(if order_mode { next()? } else { first });
+        let canonical_bytes = next()?.to_str().ok_or(usage)?.parse()?;
+        let canonical_sha256 = sha_arg(next()?.to_str().ok_or(usage)?)?;
+        let n = next()?.to_str().ok_or(usage)?.parse()?;
+        let d = next()?.to_str().ok_or(usage)?.parse()?;
+        let original_raw_sha256 = sha_arg(next()?.to_str().ok_or(usage)?)?;
         let raw = PathBuf::from(next()?);
         let receipt = PathBuf::from(next()?);
-        let memory_budget_bytes = next()?.to_str().ok_or(USAGE)?.parse()?;
+        let memory_budget_bytes = next()?.to_str().ok_or(usage)?.parse()?;
         if args.next().is_some() {
-            return Err(USAGE.into());
+            return Err(usage.into());
         }
-        verify(&Config {
+        let config = Config {
             canonical,
             canonical_bytes,
             canonical_sha256,
@@ -124,7 +131,12 @@ mod linux {
             raw,
             receipt,
             memory_budget_bytes,
-        })
+        };
+        if order_mode {
+            recover_order(&config)
+        } else {
+            verify(&config)
+        }
     }
 
     // Anchor operations to nofollow directory descriptors; re-open the path to detect replacement.
@@ -406,11 +418,175 @@ mod linux {
         })
     }
 
+    // 10 bounded argv values, 24 live path/name copies, receipt, fixed caller/hash scratch.
+    const ORDER_CONTROL_BYTES: u64 = (10 + 24) * 4096 + RECEIPT_BYTES as u64 + 16_384;
+    const ORDER_WRITER_BYTES: u64 = 8; // Direct File writes have no buffered-writer allocation.
+    const ORDER_USAGE: &str = "usage: verify_canonical_f32 --recover-order CANONICAL_PATH CANONICAL_BYTES CANONICAL_SHA256 N D EXPECTED_ORDER_SHA256 NEW_ORDER_PATH NEW_RECEIPT_PATH MEMORY_BUDGET_BYTES";
+
+    impl Config {
+        fn order_geometry(&self) -> Result<Geometry> {
+            let mut geometry = self.geometry()?;
+            geometry.raw_bytes = self.n.checked_mul(8).ok_or("order size overflow")?;
+            geometry.admitted_bytes = (geometry.bitmap_bytes as u64)
+                .checked_add(BUFFER_BYTES as u64)
+                .and_then(|n| n.checked_add(ORDER_WRITER_BYTES))
+                .and_then(|n| n.checked_add(ORDER_CONTROL_BYTES))
+                .ok_or("order memory admission overflow")?;
+            if geometry.admitted_bytes > self.memory_budget_bytes {
+                return Err("explicit order memory budget is insufficient".into());
+            }
+            Ok(geometry)
+        }
+    }
+
+    #[derive(Serialize)]
+    struct OrderReceipt {
+        schema: &'static str,
+        status: &'static str,
+        success_requires: &'static str,
+        source_sha256: String,
+        executable_sha256: String,
+        canonical_bytes: u64,
+        canonical_sha256: String,
+        order_bytes: u64,
+        order_sha256: String,
+        n: u64,
+        d: u64,
+        id_bijection: bool,
+        order_bit_identity: bool,
+        memory_budget_bytes: u64,
+        admitted_bytes: u64,
+    }
+
+    // The legacy CLI output path/hash slots name order.u64 in this opt-in mode.
+    fn recover_order(config: &Config) -> Result<()> {
+        let geometry = config.order_geometry()?;
+        let input_entry = Entry::new(&config.canonical)?;
+        let order_entry = Entry::new(&config.raw)?;
+        let receipt_entry = Entry::new(&config.receipt)?;
+        order_entry.absent()?;
+        receipt_entry.absent()?;
+        let mut input = input_entry.open(false)?;
+        let input_meta = input.metadata()?;
+        if input_meta.len() != config.canonical_bytes {
+            return Err("canonical length mismatch".into());
+        }
+        input_entry.check(&input, &input_meta)?;
+
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(BUFFER_BYTES)?;
+        buffer.resize(BUFFER_BYTES, 0_u8);
+        let executable_entry = Entry::new(&std::env::current_exe()?)?;
+        let mut executable = executable_entry.open(false)?;
+        let executable_meta = executable.metadata()?;
+        let executable_sha256 = hash_file(&mut executable, executable_meta.len(), &mut buffer)?;
+        executable_entry.check(&executable, &executable_meta)?;
+        let mut seen = Vec::new();
+        seen.try_reserve_exact(geometry.bitmap_bytes)?;
+        seen.resize(geometry.bitmap_bytes, 0_u8);
+        let mut order = order_entry.open(true)?;
+        let mut input_hash = Sha256::new();
+        let mut order_hash = Sha256::new();
+        for _ in 0..config.n {
+            let mut ordinal = [0; 8];
+            input.read_exact(&mut ordinal)?;
+            input_hash.update(ordinal);
+            let id = u64::from_le_bytes(ordinal);
+            if id >= config.n {
+                return Err("ordinal out of range".into());
+            }
+            let index = usize::try_from(id / 8)?;
+            let mask = 1_u8 << (id % 8);
+            if seen[index] & mask != 0 {
+                return Err("duplicate ordinal (therefore missing ordinal)".into());
+            }
+            seen[index] |= mask;
+            order.write_all(&ordinal)?;
+            order_hash.update(ordinal);
+            let mut left = geometry.row_bytes;
+            while left != 0 {
+                let take = left.min(BUFFER_BYTES as u64) as usize;
+                input.read_exact(&mut buffer[..take])?;
+                input_hash.update(&buffer[..take]);
+                left -= take as u64;
+            }
+        }
+        // N distinct in-range IDs prove the complete 0..N permutation.
+        if input.read(&mut [0])? != 0
+            || <[u8; 32]>::from(input_hash.finalize()) != config.canonical_sha256
+        {
+            return Err("canonical hash/EOF mismatch".into());
+        }
+        input_entry.check(&input, &input_meta)?;
+        let order_sha256: [u8; 32] = order_hash.finalize().into();
+        if order_sha256 != config.original_raw_sha256 {
+            return Err("expected source order hash mismatch".into());
+        }
+        let order_meta = order.metadata()?;
+        if order_meta.len() != geometry.raw_bytes {
+            return Err("order length mismatch".into());
+        }
+        order_entry.check(&order, &order_meta)?;
+        if hash_file(&mut order, geometry.raw_bytes, &mut buffer)? != order_sha256 {
+            return Err("order readback hash mismatch".into());
+        }
+        order.sync_all()?;
+        order_entry.parent.sync_all()?;
+        order_entry.check(&order, &order_meta)?;
+        if hash_file(&mut input, config.canonical_bytes, &mut buffer)? != config.canonical_sha256 {
+            return Err("canonical post-processing hash mismatch".into());
+        }
+        input_entry.check(&input, &input_meta)?;
+        executable_entry.check(&executable, &executable_meta)?;
+        order_entry.check(&order, &order_meta)?;
+
+        let receipt = OrderReceipt {
+            schema: "borsuk-canonical-order-provenance-v1",
+            status: "provisional",
+            success_requires: "original_exit_zero_after_final_receipt_directory_sync",
+            source_sha256: hex(&Sha256::digest(include_bytes!("verify_canonical_f32.rs")).into()),
+            executable_sha256: hex(&executable_sha256),
+            canonical_bytes: config.canonical_bytes,
+            canonical_sha256: hex(&config.canonical_sha256),
+            order_bytes: geometry.raw_bytes,
+            order_sha256: hex(&order_sha256),
+            n: config.n,
+            d: config.d,
+            id_bijection: true,
+            order_bit_identity: true,
+            memory_budget_bytes: config.memory_budget_bytes,
+            admitted_bytes: geometry.admitted_bytes,
+        };
+        let mut receipt_buffer = [0; RECEIPT_BYTES];
+        let mut cursor = Cursor::new(receipt_buffer.as_mut_slice());
+        serde_json::to_writer(&mut cursor, &receipt)?;
+        cursor.write_all(b"\n")?;
+        let length = usize::try_from(cursor.position())?;
+        let _receipt_file = stage_receipt(&receipt_entry, &receipt_buffer[..length], || {
+            input_entry.check(&input, &input_meta)?;
+            order_entry.check(&order, &order_meta)?;
+            executable_entry.check(&executable, &executable_meta)
+        })?;
+        // Never unlink by name after publication: a concurrent owner may have replaced it.
+        receipt_entry.parent.sync_all().map_err(|error| {
+            format!("order receipt directory sync failed: {error}; receipt remains provisional; original exit zero is required").into()
+        })
+    }
+
     fn publish_receipt(
         entry: &Entry,
         bytes: &[u8],
         final_check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
+        let file = stage_receipt(entry, bytes, final_check)?;
+        finish_publication(entry, &file, entry.parent.sync_all())
+    }
+
+    fn stage_receipt(
+        entry: &Entry,
+        bytes: &[u8],
+        final_check: impl FnOnce() -> Result<()>,
+    ) -> Result<File> {
         let mut pending_path = entry.path.clone().into_os_string();
         pending_path.push(".pending");
         let pending = Entry::new(Path::new(&pending_path))?;
@@ -437,7 +613,7 @@ mod linux {
             &entry.name,
             RenameFlags::NOREPLACE,
         )?;
-        finish_publication(entry, &file, entry.parent.sync_all())
+        Ok(file)
     }
 
     fn finish_publication(entry: &Entry, file: &File, synced: io::Result<()>) -> Result<()> {
@@ -499,6 +675,140 @@ mod linux {
                 config,
                 raw,
             }
+        }
+
+        fn order_fixture() -> Fixture {
+            let mut fixture = fixture();
+            fixture.config.original_raw_sha256 =
+                sha_arg("53afea624a503a0bf39e469e8979f67fcb1890ea0392adf9e155124f5ede9ebb")
+                    .unwrap();
+            fixture.config.memory_budget_bytes =
+                1 + BUFFER_BYTES as u64 + ORDER_WRITER_BYTES + ORDER_CONTROL_BYTES;
+            fixture
+        }
+
+        fn order_rejected(fixture: &Fixture, reason: &str) {
+            let error = recover_order(&fixture.config).unwrap_err().to_string();
+            assert!(error.contains(reason), "expected {reason:?}, got {error:?}");
+            assert!(!fixture.config.receipt.exists());
+        }
+
+        #[test]
+        fn recover_order_exact_permutation_bytes_and_sha_golden() {
+            let fixture = order_fixture();
+            recover_order(&fixture.config).unwrap();
+            let expected = [
+                2_u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+            ];
+            assert_eq!(fs::read(&fixture.config.raw).unwrap(), expected);
+            assert_eq!(
+                hex(&Sha256::digest(expected).into()),
+                "53afea624a503a0bf39e469e8979f67fcb1890ea0392adf9e155124f5ede9ebb"
+            );
+            let receipt: serde_json::Value =
+                serde_json::from_slice(&fs::read(&fixture.config.receipt).unwrap()).unwrap();
+            assert_eq!(receipt["schema"], "borsuk-canonical-order-provenance-v1");
+            assert_eq!(receipt["status"], "provisional");
+            assert_eq!(
+                receipt["success_requires"],
+                "original_exit_zero_after_final_receipt_directory_sync"
+            );
+            assert_eq!(receipt["order_bytes"], 24);
+            assert_eq!(
+                receipt["order_sha256"],
+                "53afea624a503a0bf39e469e8979f67fcb1890ea0392adf9e155124f5ede9ebb"
+            );
+            assert_eq!(
+                receipt["canonical_sha256"],
+                hex(&fixture.config.canonical_sha256)
+            );
+            assert_eq!(receipt["id_bijection"], true);
+            assert_eq!(receipt["order_bit_identity"], true);
+            assert_eq!(
+                receipt["admitted_bytes"],
+                fixture.config.memory_budget_bytes
+            );
+        }
+
+        #[test]
+        fn recover_order_rejects_duplicate_range_truncate_trailing_and_hashes() {
+            for id in [0_u64, 3, u64::MAX] {
+                let mut fixture = order_fixture();
+                let mut bytes = fs::read(&fixture.config.canonical).unwrap();
+                bytes[..8].copy_from_slice(&id.to_le_bytes());
+                replace_input(&mut fixture, &bytes);
+                order_rejected(
+                    &fixture,
+                    if id == 0 {
+                        "duplicate ordinal"
+                    } else {
+                        "ordinal out of range"
+                    },
+                );
+            }
+            for size in [0, 7, 47, 49] {
+                let mut fixture = order_fixture();
+                let mut bytes = fs::read(&fixture.config.canonical).unwrap();
+                bytes.resize(size, 0);
+                replace_input(&mut fixture, &bytes);
+                order_rejected(&fixture, "canonical length mismatch");
+                assert!(!fixture.config.raw.exists());
+            }
+            let mut fixture = order_fixture();
+            fixture.config.canonical_sha256[0] ^= 1;
+            order_rejected(&fixture, "canonical hash");
+            let mut fixture = order_fixture();
+            fixture.config.original_raw_sha256[0] ^= 1;
+            order_rejected(&fixture, "source order hash");
+        }
+
+        #[test]
+        fn recover_order_occupied_paths_and_budget_fail_closed() {
+            for receipt_path in [false, true] {
+                let fixture = order_fixture();
+                let path = if receipt_path {
+                    &fixture.config.receipt
+                } else {
+                    &fixture.config.raw
+                };
+                fs::write(path, b"foreign").unwrap();
+                assert!(recover_order(&fixture.config).is_err());
+                assert_eq!(fs::read(path).unwrap(), b"foreign");
+                if receipt_path {
+                    assert!(!fixture.config.raw.exists());
+                } else {
+                    assert!(!fixture.config.receipt.exists());
+                }
+            }
+            let fixture = order_fixture();
+            let pending = fixture._dir.path().join("receipt.json.pending");
+            fs::write(&pending, b"foreign pending").unwrap();
+            order_rejected(&fixture, "File exists");
+            assert_eq!(fs::read(&pending).unwrap(), b"foreign pending");
+
+            let mut fixture = order_fixture();
+            fixture.config.memory_budget_bytes -= 1;
+            order_rejected(&fixture, "order memory budget");
+            assert!(!fixture.config.raw.exists());
+        }
+
+        #[test]
+        fn recover_order_streams_rows_larger_than_buffer() {
+            let mut fixture = order_fixture();
+            fixture.config.d = (BUFFER_BYTES / 4 + 1) as u64;
+            let mut bytes = Vec::new();
+            for id in [2_u64, 0, 1] {
+                bytes.extend_from_slice(&id.to_le_bytes());
+                bytes.resize(bytes.len() + fixture.config.d as usize * 4, 0);
+            }
+            fixture.config.canonical_bytes = bytes.len() as u64;
+            replace_input(&mut fixture, &bytes);
+            recover_order(&fixture.config).unwrap();
+            assert_eq!(fs::metadata(&fixture.config.raw).unwrap().len(), 24);
+            assert_eq!(
+                hex(&Sha256::digest(fs::read(&fixture.config.raw).unwrap()).into()),
+                "53afea624a503a0bf39e469e8979f67fcb1890ea0392adf9e155124f5ede9ebb"
+            );
         }
 
         fn replace_input(fixture: &mut Fixture, bytes: &[u8]) {

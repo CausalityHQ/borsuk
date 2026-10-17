@@ -1,0 +1,118 @@
+{
+  "schema": "borsuk-source-capsule-onepass-delivery-v1",
+  "status": "QUALIFIED_BOUNDED_INCREMENT",
+  "product_goal_complete": false,
+  "source_revision": "099bf2e20dde836b0546ba0e532202d5936325af",
+  "producer_revision": "64b6463871234fac74790f4adcb1134a3d7a8ec4",
+  "delivery_base": "51a87a8538281f181f1e7357baabcfec6ba6152a",
+  "delivery_native_tree": "b2c39dc0d47fc8e02885a632fb6128d8e7f05a67",
+  "native_equivalence": {
+    "paths_checked": 513,
+    "overlay_paths": 96,
+    "rust_paths_changed_or_added": 83,
+    "deletions": 0,
+    "native_input_map_sha256": "9673c190a8c4a6ff7adaf6c39f7217258b180ed65ecfde6ef602a0ef90a8e316",
+    "main_only_rust_or_cargo_paths": 0,
+    "main_cargo_config_or_toolchain_files": false,
+    "build_time_BORSUK_SOURCE_COMMIT": "unset",
+    "environment_sha256": "aadb50c547782ba4b3c61b96d889ffcae2c7e2b5b72532c152e4d2b7568ff5ea"
+  },
+  "artifacts": {
+    "query_elf_sha256": "f7eae0d65b1e05418183193725e1aeacfaecd3f70f1473a79c8c6360c51168ef",
+    "reader_elf_sha256": "8b47d8e1902d9dc2ed9afd714edd0d548ddd1208211c8cb87b06cc2e44d32e3b"
+  },
+  "native_checks": [
+    {
+      "revision": "27975e4786ad8470ac0c7fd7edf6b84aa427ed52",
+      "scope": "affected lib/bin/example/application_ids compilation; real hash counter1; handoff comparator2; capsule lifecycle9",
+      "exit": 0,
+      "ssm": "ebc3d39b-6396-468e-9068-ca80d5b7cc9d"
+    },
+    {
+      "revision": "64b6463871234fac74790f4adcb1134a3d7a8ec4",
+      "scope": "historical fixture exact1; release query+reader; workspace correctness/suspicious Clippy; actual shim-unset workspace test compilation",
+      "exit": 0,
+      "ssm": "0e293458-36d4-484b-a035-9b6278288a61"
+    },
+    {
+      "revision": "099bf2e20dde836b0546ba0e532202d5936325af",
+      "scope": "handoff comparator2; actual four-producer exact1; release reader; workspace correctness/suspicious Clippy; actual shim-unset workspace test compilation; release strict reduction",
+      "exit": 0,
+      "ssm": "f048a8f0-9cf7-4ad9-8d15-b468b892a12c"
+    }
+  ],
+  "commands": {
+    "compile": "CARGO_BUILD_JOBS=4 cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay --test two_bit_application_ids --no-run",
+    "clippy": "CARGO_BUILD_JOBS=4 cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+    "test_build": "env -u BORSUK_TEST_BUILD_COMMAND CARGO_BUILD_JOBS=4 BORSUK_TEST_BUILD_JOBS=4 bash scripts/check_rust_test_build.sh",
+    "resources": "Causality EC2; compiler CPU4-7/400%,16GiB/swap0/tasks512; no Devbox compilation"
+  },
+  "full1000": {
+    "native_exit": 0,
+    "strict_reader_exit": 0,
+    "rank_score_plan_trace_recall_parity_exit": 0,
+    "queries": 1000,
+    "k": 10,
+    "hits": 9783,
+    "denominator": 10000,
+    "p50_ms": 199.38111,
+    "p90_ms": 253.266787,
+    "p95_ms": 281.477363,
+    "p99_ms": 360.741922,
+    "sequential_qps": 4.776168923718792,
+    "query_cpu_ns": 158619090182,
+    "peak_bytes": 120057856,
+    "source_gets": 24710,
+    "source_bytes": 41963275448,
+    "sq8_gets": 30041,
+    "sq8_bytes": 10722616576,
+    "parity_query_sha256": "90b4257273ff499e5ae64391a90e6d9c98f745b7af66a6ebc43b576e614b6209",
+    "parity_recall_sha256": "284dc8d3a67c9ab61d8b740262f66fdb959df55e04ea48fa19caab372a9275d9",
+    "ssm": "e36aafd8-aac8-482f-8f4f-ea67e29c5acf",
+    "invocation": "d42e51033d30406585e10e2ae2028a27"
+  },
+  "abba32": {
+    "quality_and_plan_parity": true,
+    "hits": 309,
+    "denominator": 320,
+    "query_cpu_drop_pct": [
+      26.94552488373223,
+      25.203814788254743
+    ],
+    "planning_time_drop_pct": [
+      59.60415129403939,
+      58.744051009761336
+    ],
+    "serial_qps_ratio": [
+      1.5057819745425935,
+      1.234621514399912
+    ],
+    "p95_control_ms": [
+      464.101993,
+      293.054508
+    ],
+    "p95_candidate_ms": [
+      254.068709,
+      339.745418
+    ],
+    "population_percentiles_valid": false,
+    "protocol_sha256": "6507929f139d83c33b65e34675e76356dfbc516618c54f214a4dc1d8a318600b",
+    "ssm": "1227e68b-4fdf-47a2-abf0-ea7f77479661"
+  },
+  "limits": {
+    "vendor_win": false,
+    "matched_turbopuffer_run": false,
+    "backend_cache_eviction_verified": false,
+    "cache": "source cache off; S3 backend cache uncontrolled",
+    "registry_packaging_qualified": false,
+    "downstream_path_api_check": "PASS on f1 workspace/fork; public API signature unchanged by private handoff optimization",
+    "decision": "retain verified CPU/GET Pareto gain; flat remains latency incumbent; do not freeze capsules as latency winner"
+  },
+  "historical_failures_preserved": [
+    "onepass missing fixture type compile101",
+    "historical v8 fixture retained v10 source_layout",
+    "initial handoff comparator rejected variable startup chunks",
+    "first full parity helper used sealed-prefix SHA as whole-file SHA; corrected against original whole-file manifest, no producer rerun"
+  ],
+  "evidence_prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/capsule-onepass-delivery-closure-a0001/"
+}

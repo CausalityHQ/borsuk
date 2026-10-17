@@ -162,6 +162,13 @@ impl object_store::ObjectStore for LostHeadResponse {
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
         self.inner.put_multipart_opts(path, options).await
     }
+    async fn put_multipart_create(
+        &self,
+        path: &ObjectPath,
+        options: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_create(path, options).await
+    }
     async fn get_opts(
         &self,
         path: &ObjectPath,

@@ -492,6 +492,13 @@ async fn stage_metadata(
                             .checked_mul(32)
                             .ok_or(overflow)?,
                     ),
+                    "plane/capsule_directory.bin" => match &root.source_layout {
+                        crate::two_bit_generation::SourceLayout::LeafCapsules {
+                            directory_bytes,
+                            ..
+                        } => Some(*directory_bytes),
+                        _ => return Err(ObjectNativeOpenError::Invalid("capsule descriptor")),
+                    },
                     "router/root.bin" => match &root.discovery {
                         crate::two_bit_generation::Discovery::Semantic { root_bytes, .. } => {
                             Some(*root_bytes)
@@ -600,6 +607,9 @@ async fn stage_metadata(
                         "two-bit discovery descriptor",
                     ));
                 }
+                let capsule_metadata = root
+                    .capsule_metadata_bytes()
+                    .map_err(|_| ObjectNativeOpenError::Invalid("capsule metadata admission"))?;
                 if let crate::two_bit_generation::Discovery::Semantic {
                     root_bytes,
                     membership_bytes,
@@ -609,12 +619,13 @@ async fn stage_metadata(
                     let modeled = (*root_bytes as u64)
                         .checked_mul(35)
                         .and_then(|n| n.checked_add(*membership_bytes as u64 * 8))
-                        .and_then(|n| n.checked_add(131072));
+                        .and_then(|n| n.checked_add(131072))
+                        .and_then(|n| n.checked_add(capsule_metadata as u64));
                     if modeled.is_none_or(|n| n > max_bytes) {
                         return Err(ObjectNativeOpenError::Invalid("router metadata admission"));
                     }
                 }
-                names = root.discovery.files(true);
+                names = root.files(true);
                 authenticated = Some(root);
             }
             if !two_bit {
@@ -1204,6 +1215,13 @@ mod tests {
             o: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             self.inner.put_multipart_opts(p, o).await
+        }
+        async fn put_multipart_create(
+            &self,
+            p: &ObjectPath,
+            o: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_create(p, o).await
         }
         fn delete_stream(
             &self,

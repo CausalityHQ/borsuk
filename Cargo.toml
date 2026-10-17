@@ -12,6 +12,7 @@ members = [
   "crates/borsuk-python",
 ]
 resolver = "3"
+exclude = ["vendor/object_store-0.14.1"]
 
 [workspace.package]
 edition = "2024"
@@ -30,3 +31,7 @@ all = "warn"
 debug = 0
 incremental = false
 split-debuginfo = "off"
+
+[patch.crates-io]
+# Keep registry dependencies in this workspace (borsuk-v71) on the same storage API.
+object_store = { path = "vendor/object_store-0.14.1" }

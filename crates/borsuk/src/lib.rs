@@ -845,6 +845,8 @@ pub use metadata::{
 /// A dense vector and its stored metadata returned by point-read APIs.
 pub type StoredRecord = (Vec<f32>, Metadata);
 pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric_names};
+/// The vendored storage API used by BORSUK, including conditional multipart creation.
+pub use object_store;
 #[doc(hidden)]
 pub use object_store::ObjectStore;
 pub use physical_layout::{

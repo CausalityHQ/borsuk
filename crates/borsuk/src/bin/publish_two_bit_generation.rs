@@ -1,4 +1,4 @@
-//! Publish a fresh local generation or rebind an authenticated retained generation to Local/S3.
+//! Publish a fresh generation or rebind an authenticated retained generation to Local/S3.
 use borsuk::{
     semantic_unit_router::{Artifact, LeafPartition, SemanticProfile, SourceIdentity},
     sq8_s3_range::OneAttemptS3,
@@ -23,8 +23,8 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CONFIG_CAP: u64 = 65_536;
-const CONFIG_SCHEMA: &str = "borsuk-two-bit-local-publication-config-v1";
-const RECEIPT_SCHEMA: &str = "borsuk-two-bit-local-publication-receipt-v1";
+const CONFIG_SCHEMA: &str = "borsuk-two-bit-publication-config-v2";
+const RECEIPT_SCHEMA: &str = "borsuk-two-bit-publication-receipt-v2";
 const RETAINED_CONFIG_SCHEMA: &str = "borsuk-two-bit-retained-publication-config-v3";
 const RETAINED_RECEIPT_SCHEMA: &str = "borsuk-two-bit-retained-publication-receipt-v3";
 const REPLACEMENT_APPROVAL_SCHEMA: &str = "borsuk-retained-router-replacement-approval-v1";
@@ -34,7 +34,7 @@ const REPLACEMENT_APPROVAL_SCHEMA: &str = "borsuk-retained-router-replacement-ap
 struct Config {
     schema: String,
     root: Root,
-    store_root: PathBuf,
+    backend: RetainedBackend,
     prefix: String,
     limits: Limits,
 }
@@ -697,8 +697,41 @@ fn config(path: &Path, trusted_sha: &str) -> Result<Config> {
     if !is_sha(&c.root.sha256) {
         return Err("invalid root sha".into());
     }
-    if !c.store_root.is_dir() {
-        return Err("store_root not a directory".into());
+    validate_backend(&c.backend)?;
+    let prefix = ObjectPath::parse(&c.prefix)?;
+    if c.prefix.is_empty() || prefix.as_ref() != c.prefix || c.prefix.contains([':', '\\']) {
+        return Err("invalid prefix".into());
+    }
+    if let RetainedBackend::S3 {
+        bucket,
+        region,
+        namespace,
+        ..
+    } = &c.backend
+    {
+        if bucket.split('.').any(|label| {
+            label.is_empty()
+                || !label.as_bytes()[0].is_ascii_alphanumeric()
+                || !label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+        }) || bucket.parse::<std::net::Ipv4Addr>().is_ok()
+            || region.split('-').count() < 3
+            || region.split('-').any(str::is_empty)
+            || region
+                .rsplit_once('-')
+                .unwrap()
+                .0
+                .bytes()
+                .any(|b| !b.is_ascii_lowercase() && b != b'-')
+            || !region
+                .rsplit('-')
+                .next()
+                .unwrap()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+            || namespace.contains([':', '\\'])
+        {
+            return Err("invalid S3 bucket/region/namespace".into());
+        }
     }
     Ok(c)
 }
@@ -716,7 +749,11 @@ fn retained_config(path: &Path, trusted_sha: &str) -> Result<RetainedConfig> {
     if !c.scratch_parent.is_dir() {
         return Err("retained scratch not a directory".into());
     }
-    match &c.backend {
+    validate_backend(&c.backend)?;
+    Ok(c)
+}
+fn validate_backend(backend: &RetainedBackend) -> Result<()> {
+    match backend {
         RetainedBackend::Local { store_root } if !store_root.is_dir() => {
             return Err("retained store not a directory".into());
         }
@@ -743,7 +780,7 @@ fn retained_config(path: &Path, trusted_sha: &str) -> Result<RetainedConfig> {
         }
         _ => {}
     }
-    Ok(c)
+    Ok(())
 }
 /// Same-directory temp file, fsync, then hard link: atomic and never overwrites.
 fn write_receipt(path: &Path, body: &[u8]) -> Result<()> {
@@ -760,7 +797,12 @@ fn write_receipt(path: &Path, body: &[u8]) -> Result<()> {
     drop(file);
     let linked = fs::hard_link(&tmp, path);
     fs::remove_file(&tmp)?;
-    linked.map_err(|_| "receipt exists")?;
+    linked.map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("create-only receipt {}: {error}", path.display()),
+        )
+    })?;
     File::open(parent)?.sync_all()?;
     Ok(())
 }
@@ -780,24 +822,49 @@ async fn publish(config_path: &Path, config_sha: &str, receipt: &Path) -> Result
     if receipt.symlink_metadata().is_ok() {
         return Err("receipt exists".into());
     }
+    let mut limits = TwoBitGenerationLimits::from(&c.limits);
+    limits.already_pinned_bytes = limits
+        .already_pinned_bytes
+        .checked_add(CONFIG_CAP * 16 + 131072)
+        .filter(|&n| n < limits.max_memory_bytes)
+        .ok_or("CLI memory admission")?;
     let prefix = ObjectPath::parse(&c.prefix)?;
-    if prefix.as_ref().is_empty() {
-        return Err("invalid prefix".into());
-    }
-    let store = LocalFileSystem::new_with_prefix(&c.store_root)?;
-    if read_two_bit_head(&store, &prefix).await?.is_some() {
+    let local;
+    let remote;
+    let store: &dyn object_store::ObjectStore = match &c.backend {
+        RetainedBackend::Local { store_root } => {
+            local = LocalFileSystem::new_with_prefix(store_root)?;
+            &local
+        }
+        RetainedBackend::S3 {
+            bucket,
+            region,
+            namespace,
+            request_timeout_seconds,
+        } => {
+            remote = OneAttemptS3::new_with_prefix_and_timeout(
+                bucket,
+                region,
+                ObjectPath::parse(namespace)?,
+                std::time::Duration::from_secs(*request_timeout_seconds),
+            )
+            .map_err(|error| format!("S3 transport: {error:?}"))?;
+            remote.store()
+        }
+    };
+    if read_two_bit_head(store, &prefix).await?.is_some() {
         return Err("head not fresh".into());
     }
     let published = publish_two_bit_generation(
-        &store,
+        store,
         &prefix,
         &c.root.path,
         &c.root.sha256,
-        (&c.limits).into(),
+        limits,
         None,
     )
     .await?;
-    let head = read_two_bit_head(&store, &prefix)
+    let head = read_two_bit_head(store, &prefix)
         .await?
         .ok_or("published head missing")?;
     if head.root_sha256() != c.root.sha256
@@ -811,6 +878,12 @@ async fn publish(config_path: &Path, config_sha: &str, receipt: &Path) -> Result
     let body = serde_json::to_vec_pretty(&json!({
         "schema": RECEIPT_SCHEMA,
         "config_sha256": config_sha,
+        "backend": c.backend,
+        "root_path": c.root.path,
+        "head_key": prefix.clone().join("head.json").to_string(),
+        "local_file_only": matches!(&c.backend, RetainedBackend::Local { .. }),
+        "credential_mode": match &c.backend { RetainedBackend::Local { .. } => "none", RetainedBackend::S3 { .. } => "instance_role_imds" },
+        "performance_claim": false,
         "prefix": c.prefix,
         "metadata_prefix": head.metadata_prefix().to_string(),
         "root_sha256": head.root_sha256(),
@@ -1041,7 +1114,7 @@ mod tests {
         let config = json!({
             "schema": CONFIG_SCHEMA,
             "root": {"path": root, "sha256": root_sha},
-            "store_root": store_root,
+            "backend": {"kind": "Local", "store_root": store_root},
             "prefix": "semantic/index",
             "limits": {
                 "max_memory_bytes": 512 * 1024 * 1024,
@@ -1065,7 +1138,8 @@ mod tests {
         (path, sha_hex(&body))
     }
     async fn head_exists(c: &Value) -> bool {
-        let store = LocalFileSystem::new_with_prefix(c["store_root"].as_str().unwrap()).unwrap();
+        let store =
+            LocalFileSystem::new_with_prefix(c["backend"]["store_root"].as_str().unwrap()).unwrap();
         let prefix = ObjectPath::from(c["prefix"].as_str().unwrap());
         read_two_bit_head(&store, &prefix).await.unwrap().is_some()
     }
@@ -1717,6 +1791,78 @@ mod tests {
     }
 
     #[test]
+    fn fresh_backend_config_is_strict_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = json!({
+            "schema": CONFIG_SCHEMA,
+            "root": {"path": dir.path(), "sha256": "1".repeat(64)},
+            "backend": {"kind": "S3", "bucket": "fixture-bucket", "region": "eu-central-1",
+                "namespace": "tenant/publication", "request_timeout_seconds": 120},
+            "prefix": "semantic/index",
+            "limits": {"max_memory_bytes": 16_000_000, "max_active_queries": 1,
+                "max_query_bytes": 1, "max_query_gets": 1, "max_parallel_gets": 1,
+                "max_source_bytes": 1, "max_source_gets": 1, "max_parallel_source_gets": 1,
+                "max_query_scratch_bytes": 1, "already_pinned_bytes": 0}
+        });
+        let (path, sha) = write_config(dir.path(), &good);
+        // Only decoding: even the valid S3 descriptor cannot access credentials/network.
+        assert!(config(&path, &sha).is_ok());
+        for (field, bad) in [
+            ("bucket", json!("")), ("bucket", json!("UPPERCASE")),
+            ("bucket", json!("-fixture")), ("bucket", json!("fixture-")),
+            ("bucket", json!("fixture..bucket")), ("bucket", json!("fixture.-bucket")),
+            ("bucket", json!("127.0.0.1")), ("bucket", json!("x".repeat(64))),
+            ("region", json!("")), ("region", json!("invalid region")),
+            ("region", json!("eu-central")), ("region", json!("eu--1")),
+            ("region", json!("123-central-1")), ("region", json!("eu-central-x")),
+            ("namespace", json!("")), ("namespace", json!("/tenant")),
+            ("namespace", json!("tenant/")), ("namespace", json!("tenant/../foreign")),
+            ("namespace", json!("s3://foreign-bucket/tenant")),
+            ("namespace", json!("tenant:foreign")),
+            ("request_timeout_seconds", json!(0)), ("request_timeout_seconds", json!(601)),
+            ("request_timeout_seconds", json!(-1)), ("request_timeout_seconds", json!("120")),
+            ("kind", json!("other")), ("store_root", json!(dir.path())),
+        ] {
+            let mut value = good.clone();
+            value["backend"][field] = bad;
+            let (path, sha) = write_config(dir.path(), &value);
+            assert!(config(&path, &sha).is_err(), "{field}: {value}");
+        }
+        for field in ["kind", "bucket", "region", "namespace", "request_timeout_seconds"] {
+            let mut value = good.clone();
+            value["backend"].as_object_mut().unwrap().remove(field);
+            let (path, sha) = write_config(dir.path(), &value);
+            assert!(config(&path, &sha).is_err(), "missing backend {field}");
+        }
+        for field in ["schema", "root", "backend", "prefix", "limits"] {
+            let mut value = good.clone();
+            value.as_object_mut().unwrap().remove(field);
+            let (path, sha) = write_config(dir.path(), &value);
+            assert!(config(&path, &sha).is_err(), "missing {field}");
+        }
+        for (field, bad) in [
+            ("schema", json!("borsuk-two-bit-local-publication-config-v1")),
+            ("unknown", json!(1)), ("store_root", json!(dir.path())),
+            ("prefix", json!("")), ("prefix", json!("/semantic/index")),
+            ("prefix", json!("semantic/index/")), ("prefix", json!("../foreign/index")),
+            ("prefix", json!("s3://foreign-bucket/semantic/index")),
+            ("backend", Value::Null),
+            ("backend", json!({"kind": "Local", "store_root": dir.path(), "bucket": "fixture"})),
+        ] {
+            let mut value = good.clone();
+            value[field] = bad;
+            let (path, sha) = write_config(dir.path(), &value);
+            assert!(config(&path, &sha).is_err(), "{field}: {value}");
+        }
+        let mut legacy = good.clone();
+        legacy["schema"] = json!("borsuk-two-bit-local-publication-config-v1");
+        legacy.as_object_mut().unwrap().remove("backend");
+        legacy["store_root"] = json!(dir.path());
+        let (path, sha) = write_config(dir.path(), &legacy);
+        assert!(config(&path, &sha).is_err());
+    }
+
+    #[test]
     fn retained_backend_descriptors_are_strict_before_store_operations() {
         let dir = tempfile::tempdir().unwrap();
         let mut value = json!({
@@ -1924,6 +2070,12 @@ mod tests {
         let body: Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
         assert_eq!(body["schema"], RECEIPT_SCHEMA);
         assert_eq!(body["config_sha256"], sha);
+        assert_eq!(body["backend"], c["backend"]);
+        assert_eq!(body["root_path"], c["root"]["path"]);
+        assert_eq!(body["head_key"], "semantic/index/head.json");
+        assert_eq!(body["local_file_only"], true);
+        assert_eq!(body["credential_mode"], "none");
+        assert_eq!(body["performance_claim"], false);
         assert_eq!(body["root_sha256"], c["root"]["sha256"]);
         assert_eq!(body["generation"], 1);
         assert_eq!(body["prefix"], "semantic/index");
@@ -1934,7 +2086,8 @@ mod tests {
                 .starts_with("semantic/")
         );
         // Independent readback of the head against the receipt and config.
-        let store = LocalFileSystem::new_with_prefix(c["store_root"].as_str().unwrap()).unwrap();
+        let store =
+            LocalFileSystem::new_with_prefix(c["backend"]["store_root"].as_str().unwrap()).unwrap();
         let head = read_two_bit_head(&store, &ObjectPath::from("semantic/index"))
             .await
             .unwrap()
@@ -1981,7 +2134,10 @@ mod tests {
             ("unknown", json!(1)),
             ("schema", json!("other")),
             ("prefix", json!("../index")),
-            ("store_root", json!(dir.path().join("missing"))),
+            (
+                "backend",
+                json!({"kind": "Local", "store_root": dir.path().join("missing")}),
+            ),
         ] {
             let mut v = good.clone();
             v[field] = value;

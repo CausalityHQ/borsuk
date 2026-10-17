@@ -8,7 +8,8 @@ use borsuk::{
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
-        TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits, TwoBitPlanTrace,
+        SourceLayout, TwoBitGeneration, TwoBitGenerationError, TwoBitGenerationLimits,
+        TwoBitPlanTrace,
     },
     two_bit_source::SourcePlaneReceipt,
 };
@@ -39,19 +40,23 @@ const CONFIG_CAP: usize = 65_536;
 const LINE_CAP: usize = 256 * 1024;
 const OUTPUT_CAP: u64 = 64 * 1024 * 1024;
 const TERMINAL_RESERVE: u64 = 8192;
+#[cfg(test)]
 const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-// v7 additionally pins the executable/source authority of a corpus-only v2 derivation.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v10";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v12";
-const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
+// v13 binds the compiled onepass policy; result v13 remains the historical v12 record.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v13";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v14";
+const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "capsule_sha256_original_units_once_v1";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
 const PANEL_LINE_CAP: usize = 65_536;
+// Two 64-KiB raw authorities may each expand sixfold in JSON; the envelope
+// retains the original panel bound. No query or historical record uses this cap.
+const SOURCE_BINDING_LINE_CAP: usize = 2 * 6 * CONFIG_CAP + PANEL_LINE_CAP;
 const PANEL_ERROR_CHARS: usize = 2048;
 // Per active query: range trace, host snapshot buffers and serialization together.
 const DIAGNOSTIC_CAP: usize = 1 << 20;
@@ -316,6 +321,8 @@ struct Config {
     truth: Artifact,
     native_source: NativeSource,
     max_memory_bytes: u64,
+    source_byte_budget: usize,
+    source_layout: SourceLayout,
     // Explicit operating-point limits, independent of transport concurrency.
     sq8_get_budget: usize,
     sq8_byte_budget: usize,
@@ -749,10 +756,34 @@ fn bounded_path(path: &Path) -> Result<()> {
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     validate_population(c)?;
+    require(
+        c.max_memory_bytes > 0
+            && usize::try_from(c.max_memory_bytes).is_ok()
+            && c.source_byte_budget > 0,
+        "explicit positive memory/SOURCE byte budgets with checked width",
+    )?;
+    if let SourceLayout::LeafCapsules {
+        blob_bytes,
+        blob_sha256,
+        directory_bytes,
+        directory_sha256,
+    } = &c.source_layout
+    {
+        require(
+            *blob_bytes > 0
+                && *blob_bytes <= usize::MAX as u64
+                && *directory_bytes >= 96
+                && (*directory_bytes - 32) % 64 == 0
+                && (*directory_bytes - 32) / 64 <= c.rows.div_ceil(32)
+                && valid_sha(blob_sha256)
+                && valid_sha(directory_sha256),
+            "SOURCE capsule descriptor",
+        )?;
+    }
     let shape = population(c, shape);
     require(
         (1..=256).contains(&c.sq8_get_budget)
-            && (1..=MEMORY_CAP as usize).contains(&c.sq8_byte_budget),
+            && (1..=usize::try_from(c.max_memory_bytes)?).contains(&c.sq8_byte_budget),
         "explicit SQ8 GET/byte budgets",
     )?;
     require(
@@ -765,7 +796,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     )?;
     if let Some(split) = c.sq8_range_split {
         require(
-            (1..=MEMORY_CAP as usize).contains(&split.max_physical_range_bytes)
+            (1..=usize::try_from(c.max_memory_bytes)?).contains(&split.max_physical_range_bytes)
                 && (1..=128).contains(&split.max_physical_gets)
                 && split
                     .scratch_bytes(c.sq8_byte_budget, c.fetch_parallelism)
@@ -775,25 +806,23 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     if let Some(window) = c.shared_byte_window {
         require(
-            (1..=MEMORY_CAP as usize).contains(&window.max_bytes)
+            (1..=usize::try_from(c.max_memory_bytes)?).contains(&window.max_bytes)
                 && c.fetch_parallelism
                     .checked_mul(ACTIVE_QUERIES)
                     .is_some_and(|requests| window.max_waiters >= requests)
-                && (1..=MEMORY_CAP as usize).contains(&window.max_state_bytes)
+                && (1..=usize::try_from(c.max_memory_bytes)?).contains(&window.max_state_bytes)
                 && InFlightBytes::modeled_state_bytes(window.max_waiters)
                     .is_some_and(|bytes| bytes <= window.max_state_bytes),
             "shared byte-window explicit capacity/waiters/state budget",
         )?;
     }
     require(
-        c.schema == CONFIG_SCHEMA
-            || (c.schema == READ_RETRY_CONFIG_SCHEMA && c.s3_read_retry.is_some()),
-        "config format marker must be borsuk-cohere-native-baseline-config-v10; older formats refuse",
+        c.schema == CONFIG_SCHEMA,
+        "config format marker must be borsuk-cohere-native-baseline-config-v13; older formats refuse",
     )?;
     require(
-        c.s3_read_retry.is_none()
-            || (c.schema == READ_RETRY_CONFIG_SCHEMA && matches!(&c.backend, Backend::S3 { .. })),
-        "S3 read retries require explicit v11 policy and S3 backend",
+        c.s3_read_retry.is_none() || matches!(&c.backend, Backend::S3 { .. }),
+        "S3 read retries require explicit v13 policy and S3 backend",
     )?;
     if let Execution::DiagnosticPanel { ordinals, .. } = &c.execution {
         require(
@@ -807,13 +836,13 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         // Sanity bounds only; the library admits the real envelope (modeled memory and
         // the planned cover) before any query allocation or I/O.
         require(
-            (1..=MEMORY_CAP as usize).contains(&direct.max_sq8_bytes)
+            (1..=usize::try_from(c.max_memory_bytes)?).contains(&direct.max_sq8_bytes)
                 && (1..=128).contains(&direct.max_sq8_gets),
             "direct closure caps must be explicit, positive and bounded",
         )?;
     }
     require(
-        (c.schema == CONFIG_SCHEMA || c.schema == READ_RETRY_CONFIG_SCHEMA)
+        c.schema == CONFIG_SCHEMA
             && c.dataset == DATASET
             && c.revision == REVISION
             && c.metric == "cosine"
@@ -822,8 +851,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.rows == shape.rows
             && c.dimensions == D
             && c.count == shape.count
-            && c.k == K
-            && c.max_memory_bytes == MEMORY_CAP,
+            && c.k == K,
         "fixed Cohere corpus/query/D1024/k10/profile/cap",
     )?;
     for path in [
@@ -926,22 +954,37 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     ] {
         require(valid_sha(pin), "root-frozen producer SHA256")?;
     }
+    require(
+        pinned_bytes(c)? <= c.max_memory_bytes,
+        "caller buffers exceed explicit memory cap",
+    )?;
     Ok(())
+}
+// Serde's internally tagged unit variants ignore extra keys; preserve exact descriptors.
+fn exact_source_layout(body: &[u8], expected: &SourceLayout) -> Result<()> {
+    #[derive(Deserialize)]
+    struct LayoutField {
+        source_layout: Value,
+    }
+    let raw: LayoutField = serde_json::from_slice(body)?;
+    require(
+        raw.source_layout == serde_json::to_value(expected)?,
+        "authenticated root/config SOURCE layout agreement",
+    )
 }
 fn config(path: &Path, sha: &str, shape: Shape) -> Result<Config> {
     // Metadata comes from a nonblocking, no-follow regular descriptor, even for CONFIG.
     let file = regular(path, None, CONFIG_CAP)?;
-    let c: Config = serde_json::from_slice(
-        &checked(
-            &Artifact {
-                path: path.into(),
-                bytes: usize::try_from(file.metadata()?.len())?,
-                sha256: sha.into(),
-            },
-            CONFIG_CAP,
-        )?
-        .0,
+    let (body, _) = checked(
+        &Artifact {
+            path: path.into(),
+            bytes: usize::try_from(file.metadata()?.len())?,
+            sha256: sha.into(),
+        },
+        CONFIG_CAP,
     )?;
+    let c: Config = serde_json::from_slice(&body)?;
+    exact_source_layout(&body, &c.source_layout)?;
     validate_config(&c, shape)?;
     Ok(c)
 }
@@ -968,14 +1011,20 @@ thread_local! {
     static LOCAL_METADATA_OPEN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
         std::cell::RefCell::new(None);
 }
-async fn metadata<T: serde::de::DeserializeOwned>(
+async fn metadata(
     c: &Config,
     store: &dyn ObjectStore,
     name: &str,
     sha: &str,
     charge: &mut Charge,
-) -> Result<T> {
+) -> Result<Vec<u8>> {
     require(valid_sha(sha), "metadata SHA descriptor")?;
+    let decode = |body: Vec<u8>| -> Result<Vec<u8>> {
+        if name == "manifest.json" {
+            exact_source_layout(&body, &c.source_layout)?;
+        }
+        Ok(body)
+    };
     let location = ObjectPath::from(format!("{}/{name}", c.generation_prefix));
     if let Backend::Local { store_root } = &c.backend {
         let path = store_root.join(location.as_ref());
@@ -988,9 +1037,7 @@ async fn metadata<T: serde::de::DeserializeOwned>(
         });
         // Read the descriptor we guarded. LocalFileSystem::get would independently
         // reopen the path without NOFOLLOW/NONBLOCK, allowing a FIFO swap to hang.
-        return Ok(serde_json::from_slice(
-            &checked_file(file, None, CONFIG_CAP, sha)?.0,
-        )?);
+        return decode(checked_file(file, None, CONFIG_CAP, sha)?.0);
     }
     charge.add(Sq8ReadStats {
         submitted_gets: 1,
@@ -1032,8 +1079,8 @@ async fn metadata<T: serde::de::DeserializeOwned>(
         })?;
     }
     // Schema refusal does not turn a successfully authenticated GET into a failed GET.
-    // Neither root nor plane body survives this call.
-    Ok(serde_json::from_slice(&result?)?)
+    // Authenticated bodies remain caller-owned until the binding record is emitted.
+    decode(result?)
 }
 // Decode exactly D coefficients with a fallible, fixed reservation. A malformed
 // manifest cannot grow the calibration vectors beyond the caller's admission.
@@ -1076,9 +1123,12 @@ async fn bind_source(
     receipt: &ReceiptBinding,
     store: &dyn ObjectStore,
     charge: &mut Charge,
-) -> Result<()> {
+) -> Result<Value> {
     #[derive(Deserialize)]
     struct Root {
+        schema: String,
+        source_layout: SourceLayout,
+        page_manifest_sha256: String,
         plane_manifest_sha256: String,
         sq8_object_sha256: String,
         sq8_object_key: String,
@@ -1088,7 +1138,12 @@ async fn bind_source(
         #[serde(deserialize_with = "manifest_coefficients")]
         step: Vec<f32>,
     }
-    let root: Root = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
+    let root_body = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
+    let root: Root = serde_json::from_slice(&root_body)?;
+    require(
+        root.schema == "borsuk-two-bit-generation-v10" && root.source_layout == c.source_layout,
+        "authenticated root/config SOURCE layout agreement",
+    )?;
     require(
         root.sq8_object_sha256 == c.native_source.sq8_sha256,
         "root SQ8 source binding",
@@ -1117,9 +1172,11 @@ async fn bind_source(
         )?;
     }
     let plane_sha = root.plane_manifest_sha256.clone();
+    let page_sha = root.page_manifest_sha256.clone();
     drop(root);
-    let plane: SourcePlaneReceipt =
-        metadata(c, store, "plane/manifest.json", &plane_sha, charge).await?;
+    let plane: SourcePlaneReceipt = serde_json::from_slice(
+        &metadata(c, store, "plane/manifest.json", &plane_sha, charge).await?,
+    )?;
     require(
         plane.rows == c.rows
             && plane.dimensions == D
@@ -1128,7 +1185,10 @@ async fn bind_source(
             && plane.sq8_sha256 == c.native_source.sq8_sha256
             && plane.source_order_sha256 == c.native_source.source_order_sha256,
         "native source receipt binding",
-    )
+    )?;
+    let page_body = metadata(c, store, "page_manifest.json", &page_sha, charge).await?;
+    Ok(json!({"root_manifest":std::str::from_utf8(&root_body)?,
+        "page_manifest":std::str::from_utf8(&page_body)?}))
 }
 fn scratch_bytes(rows: usize) -> Result<usize> {
     // RotatedTwoBitCodec::prepare_query: (packed_bytes * 256 + padded_D) * sizeof(f64).
@@ -1156,7 +1216,16 @@ fn caller_bytes(c: &Config) -> usize {
             .map(|s| s.capacity())
             .sum(),
     };
+    let layout_bytes = match &c.source_layout {
+        SourceLayout::FlatRecords => 0,
+        SourceLayout::LeafCapsules {
+            blob_sha256,
+            directory_sha256,
+            ..
+        } => blob_sha256.capacity() + directory_sha256.capacity(),
+    };
     let descriptors = size_of::<Config>()
+        + layout_bytes
         + [
             &c.schema,
             &c.dataset,
@@ -1203,7 +1272,7 @@ fn caller_bytes(c: &Config) -> usize {
     let query = c.requests.bytes + size_of::<[f32; D]>() + returned;
     // Reduction drops generation/requests first: one capped JSONL line, one truth body,
     // 8KiB reader, k hits. Authentication uses one 64KiB stack block.
-    let reduction = LINE_CAP + 1 + c.truth.bytes + 8192 + 2 * K * size_of::<Hit>();
+    let reduction = SOURCE_BINDING_LINE_CAP + 1 + c.truth.bytes + 8192 + 2 * K * size_of::<Hit>();
     // Capped receipt/config bodies cover sequential authentication/decoding; identity,
     // descriptors duplicated by store/path/runtime setup fit another CONFIG_CAP.
     // Native histogram has 900 possible codes; allow doubled Vec capacity and a
@@ -1219,7 +1288,10 @@ fn caller_bytes(c: &Config) -> usize {
     descriptors
         + transport
         + size_of::<Progress>()
-        + 5 * CONFIG_CAP
+        + 8 * CONFIG_CAP
+        // Binding serialization and its coexisting record tree are startup-only,
+        // outside the unchanged per-query diagnostic reservation.
+        + 2 * SOURCE_BINDING_LINE_CAP
         + BLOCK
         + 4 * D * size_of::<u32>()
         + query.max(reduction)
@@ -1306,12 +1378,12 @@ fn pinned_bytes(c: &Config) -> Result<u64> {
 }
 fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
-        max_memory_bytes: MEMORY_CAP,
+        max_memory_bytes: c.max_memory_bytes,
         max_active_queries: ACTIVE_QUERIES,
         max_query_bytes: c.sq8_byte_budget,
         max_query_gets: c.sq8_get_budget,
         max_parallel_gets: c.fetch_parallelism,
-        max_source_bytes: 64 * 1024 * 1024,
+        max_source_bytes: c.source_byte_budget,
         max_source_gets: c.source_get_budget,
         max_parallel_source_gets: c.fetch_parallelism,
         max_query_scratch_bytes: scratch_bytes(c.rows)?,
@@ -1684,6 +1756,7 @@ struct Output {
     digest: Sha256,
     bytes: u64,
     line_bytes: usize,
+    line_cap: usize,
     cap: u64,
     // Diagnostic panels only: every line is serialized whole into this preallocated buffer and
     // admitted below `panel_cap` before any byte is published.
@@ -1709,7 +1782,7 @@ fn output_directory(path: &Path) -> Result<File> {
 impl Write for Output {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() as u64 > self.cap.saturating_sub(self.bytes)
-            || bytes.len() > LINE_CAP.saturating_sub(self.line_bytes)
+            || bytes.len() > self.line_cap.saturating_sub(self.line_bytes)
         {
             return Err(io::Error::other("output/line byte cap"));
         }
@@ -1741,6 +1814,7 @@ impl Output {
             digest: Sha256::new(),
             bytes: 0,
             line_bytes: 0,
+            line_cap: LINE_CAP,
             cap: OUTPUT_CAP - TERMINAL_RESERVE,
             panel: None,
             panel_cap: PANEL_LINE_CAP,
@@ -1763,6 +1837,16 @@ impl Output {
         serde_json::to_writer(&mut *self, value)?;
         self.write_all(b"\n")?;
         Ok(())
+    }
+    fn emit_source_binding(&mut self, value: &impl Serialize) -> Result<()> {
+        // Keep the larger allocation scoped to this authority record.
+        let mut line = Vec::with_capacity(SOURCE_BINDING_LINE_CAP);
+        bounded_line(&mut line, value, SOURCE_BINDING_LINE_CAP)?;
+        self.line_bytes = 0;
+        self.line_cap = SOURCE_BINDING_LINE_CAP;
+        let result = self.write_all(&line).map_err(Into::into);
+        self.line_cap = LINE_CAP;
+        result
     }
     // Keeps a smaller cap already installed (tests); otherwise allocates the one buffer.
     fn admit_panel_lines(&mut self, cap: usize) {
@@ -2111,9 +2195,9 @@ async fn query_and_seal_with(
     let binding = bind_source(c, &receipt, store, &mut p.binding_charge).await;
     drop(receipt);
     p.transport.finish(&reader);
-    out.emit(
+    out.emit_source_binding(
         &json!({"phase":"source_binding","transport":p.transport,"charges":p.binding_charge,"success":binding.is_ok(),
-        "truth_opened":false}),
+        "generation_authority":binding.as_ref().ok(),"truth_opened":false}),
     )?;
     binding?;
     p.stage = "generation_open";
@@ -2150,9 +2234,10 @@ async fn query_and_seal_with(
     )?;
     let mut startup = json!({"phase":"startup","metadata":generation.remote_open_stats(),
         "serving":c.serving,
-        "library_cap_bytes":MEMORY_CAP,"caller_pinned_bytes":admission.already_pinned_bytes,
+        "library_cap_bytes":c.max_memory_bytes,"caller_pinned_bytes":admission.already_pinned_bytes,
         "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
+    startup["source_layout"] = json!(c.source_layout);
     startup["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
     if let Some(bytes) = generation.byte_window_state_bytes() {
         startup["shared_byte_window_state_bytes"] = json!(bytes);
@@ -2499,7 +2584,7 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
     }
     p.stage = "reduction";
     let mut reader = BufReader::with_capacity(8192, prefix.take(seal.prefix_bytes));
-    let mut line = Vec::with_capacity(LINE_CAP + 1);
+    let mut line = Vec::with_capacity(SOURCE_BINDING_LINE_CAP + 1);
     let mut digest = Sha256::new();
     let mut consumed = 0_u64;
     let mut queries = 0_usize;
@@ -2515,18 +2600,27 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
     }
     loop {
         line.clear();
-        let n = Read::take(&mut reader, (LINE_CAP + 1) as u64).read_until(b'\n', &mut line)?;
+        let n = Read::take(&mut reader, (SOURCE_BINDING_LINE_CAP + 1) as u64)
+            .read_until(b'\n', &mut line)?;
         if n == 0 {
             break;
         }
         require(
-            n <= LINE_CAP && line.last() == Some(&b'\n'),
+            n <= SOURCE_BINDING_LINE_CAP && line.last() == Some(&b'\n'),
             "sealed row cap/EOF",
         )?;
         consumed += n as u64;
         digest.update(&line);
         // Ignored trace fields deserialize without constructing a JSON tree.
         let row: Row = serde_json::from_slice(&line)?;
+        require(
+            n <= if row.phase == "source_binding" {
+                SOURCE_BINDING_LINE_CAP
+            } else {
+                LINE_CAP
+            },
+            "sealed phase-specific row cap",
+        )?;
         if row.phase != "query" {
             continue;
         }
@@ -2688,6 +2782,14 @@ fn execute_paths_status(
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false});
         // Added after the literal: json! recursion depth grows with the entry count.
+        identity["source_capsule_source_sha256"] =
+            json!(hash(include_bytes!("../source_capsule.rs")));
+        identity["config_schema"] = json!(CONFIG_SCHEMA);
+        identity["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+        identity["source_layout"] = json!(configured.as_ref().ok().map(|c| &c.source_layout));
+        identity["source_byte_budget"] =
+            json!(configured.as_ref().ok().map(|c| c.source_byte_budget));
+        identity["max_memory_bytes"] = json!(configured.as_ref().ok().map(|c| c.max_memory_bytes));
         identity["range_scheduler_owner"] = json!("library");
         identity["sq8_range_split"] =
             json!(configured.as_ref().ok().and_then(|c| c.sq8_range_split));
@@ -2699,7 +2801,6 @@ fn execute_paths_status(
         }
         if let Some(policy) = configured.as_ref().ok().and_then(|c| c.s3_read_retry) {
             identity["s3_read_retry"] = read_retry_identity(policy);
-            identity["config_schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
         }
         out.emit(&identity)?;
         let c = configured?;
@@ -2727,6 +2828,10 @@ fn execute_paths_status(
         bound["derivation_receipt_sha256"] = json!(c.derivation_receipt.sha256);
         bound["producer_authority"] = json!(c.producer_authority);
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
+        bound["source_byte_budget"] = json!(c.source_byte_budget);
+        bound["source_layout"] = json!(c.source_layout);
+        bound["config_schema"] = json!(CONFIG_SCHEMA);
+        bound["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
         bound["range_scheduler_owner"] = json!("library");
         bound["sq8_range_split"] = json!(c.sq8_range_split);
         bound["execution"] = json!(c.execution);
@@ -2736,7 +2841,6 @@ fn execute_paths_status(
         }
         if let Some(policy) = c.s3_read_retry {
             bound["s3_read_retry"] = read_retry_identity(policy);
-            bound["config_schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
         }
         out.emit(&bound)?;
         let seal = query(&c, shape, &mut out, &mut p)?;
@@ -2919,6 +3023,110 @@ pub(crate) fn scale_reducer_native_fixture(
     Ok((dir, result))
 }
 
+#[cfg(test)]
+pub(crate) fn source_layout_reducer_native_fixture() -> Result<(tempfile::TempDir, [PathBuf; 2])> {
+    source_layout_reducer_native_fixture_with(32, 2, false, false)
+}
+
+#[cfg(test)]
+pub(crate) fn source_layout_reducer_native_fixture_with(
+    rows: usize,
+    count: usize,
+    panel: bool,
+    padded_authority: bool,
+) -> Result<(tempfile::TempDir, [PathBuf; 2])> {
+    use borsuk::two_bit_build::repackage_source_layout;
+    use borsuk::two_bit_generation::SourceLayoutMode;
+    let shape = Shape {
+        rows,
+        count,
+        returned_limit: K,
+    };
+    let (dir, mut value) = query_runtime(default_fetch_parallelism())?
+        .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
+    value["reserved_query_interval"] = json!({"start":rows,"end":rows + shape.count});
+    if panel {
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":(1..count).collect::<Vec<_>>(),"trace":false});
+    }
+    if padded_authority {
+        value["source_byte_budget"] = json!(67_108_865);
+        value["max_memory_bytes"] = json!(MEMORY_CAP + 1);
+        let root = dir.path().join("generation");
+        let mut page = std::fs::read(root.join("page_manifest.json"))?;
+        require(page.len() <= CONFIG_CAP, "fixture page cap")?;
+        page.resize(CONFIG_CAP, b'\t');
+        std::fs::write(root.join("page_manifest.json"), &page)?;
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
+        manifest["page_manifest_sha256"] = json!(hash(&page));
+        let mut body = serde_json::to_vec(&manifest)?;
+        require(body.len() <= CONFIG_CAP, "fixture root cap")?;
+        body.resize(CONFIG_CAP, b'\t');
+        std::fs::write(root.join("manifest.json"), &body)?;
+        value["generation_root_sha256"] = json!(hash(&body));
+        let c: Config = serde_json::from_value(value.clone())?;
+        let store = Reader::new(&c.backend, None)?;
+        let head = query_runtime(c.fetch_parallelism)?.block_on(
+            borsuk::two_bit_store::publish_two_bit_generation(
+                store.store(), &ObjectPath::from("padded/index"), &root,
+                &c.generation_root_sha256, limits(&c)?, None,
+            ),
+        )?;
+        value["generation_prefix"] = json!(head.metadata_prefix().as_ref());
+    }
+    let (config, sha) = tests::write_config(dir.path(), &value);
+    let flat = dir.path().join("scale-native-result.jsonl");
+    require(
+        matches!(execute_paths_status(&config, &sha, &flat, shape, |c, shape, out, p|
+            query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
+        )?, Status::Measured),
+        "flat layout fixture must seal",
+    )?;
+    let c: Config = serde_json::from_value(value.clone())?;
+    let root = dir.path().join("capsule-generation");
+    let sha = repackage_source_layout(
+        &dir.path().join("generation"),
+        &c.generation_root_sha256,
+        &root,
+        2,
+        SourceLayoutMode::LeafCapsules,
+        limits(&c)?,
+    )?;
+    let manifest: Value = serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
+    value["source_layout"] = manifest["source_layout"].clone();
+    value["generation_root_sha256"] = json!(sha);
+    let store = Reader::new(&c.backend, None)?;
+    let head = query_runtime(c.fetch_parallelism)?.block_on(
+        borsuk::two_bit_store::publish_two_bit_generation(
+            store.store(),
+            &ObjectPath::from("capsule/index"),
+            &root,
+            &sha,
+            limits(&c)?,
+            None,
+        ),
+    )?;
+    value["generation_prefix"] = json!(head.metadata_prefix().as_ref());
+    let config = dir.path().join("capsule-config.json");
+    let body = serde_json::to_vec(&value)?;
+    std::fs::write(&config, &body)?;
+    let capsules = dir.path().join("capsule-result.jsonl");
+    require(
+        matches!(
+            execute_paths_status(
+                &config,
+                &hash(&body),
+                &capsules,
+                shape,
+                |c, shape, out, p| query_runtime(c.fetch_parallelism)?
+                    .block_on(query_and_seal(c, shape, out, p))
+            )?,
+            Status::Measured
+        ),
+        "capsule fixture must seal before truth",
+    )?;
+    Ok((dir, [flat, capsules]))
+}
+
 // Header-only producer interoperability fixture: the injected query never opens S3.
 #[cfg(test)]
 pub(crate) fn scale_reducer_retry_header_fixture(dir: &Path) -> Result<PathBuf> {
@@ -2928,7 +3136,7 @@ pub(crate) fn scale_reducer_retry_header_fixture(dir: &Path) -> Result<PathBuf> 
         count: value["count"].as_u64().ok_or("fixture count")? as usize,
         returned_limit: K,
     };
-    value["schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
+    value["schema"] = json!(CONFIG_SCHEMA);
     value["s3_read_retry"] = json!("one_retry_100ms");
     value["backend"] = json!({
         "kind":"s3","bucket":"fixture-bucket","region":"eu-central-1",
@@ -2961,7 +3169,7 @@ mod tests {
         json!({"path":path,"bytes":bytes.len(),"sha256":hash(bytes)})
     }
     fn config_value(dir: &Path, shape: Shape) -> Value {
-        let mut value = json!({"sq8_range_split":null,"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
+        let mut value = json!({"source_layout":{"layout":"flat_records"},"source_byte_budget":64*1024*1024,"sq8_range_split":null,"schema":CONFIG_SCHEMA,"dataset":DATASET,"revision":REVISION,
             "metric":"cosine","tie_rule":"corpus_ordinal_ascending",
             "reserved_query_interval":{"start":shape.rows,"end":shape.rows+shape.count},
             "corpus_intervals":[{"start":0,"end":shape.rows}],"corpus_source_first":0,"query_source_first":shape.rows,"rows":shape.rows,
@@ -3347,14 +3555,14 @@ mod tests {
         }
     }
     #[test]
-    fn s3_read_retry_requires_v11_and_binds_identity_without_widening_logical_caps() {
+    fn s3_read_retry_requires_v13_and_binds_identity_without_widening_logical_caps() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
         let mut value = config_value(dir.path(), shape);
         let original: Config = serde_json::from_value(value.clone()).unwrap();
         validate_config(&original, shape).unwrap();
         assert_eq!(original.s3_read_retry, None);
-        value["schema"] = json!(READ_RETRY_CONFIG_SCHEMA);
+        value["schema"] = json!(CONFIG_SCHEMA);
         value["s3_read_retry"] = json!("one_retry_100ms");
         let local: Config = serde_json::from_value(value.clone()).unwrap();
         assert!(validate_config(&local, shape).is_err());
@@ -3392,8 +3600,16 @@ mod tests {
         let output = records(&output);
         let policy = read_retry_identity(S3ReadRetryPolicy::OneRetry100Ms);
         assert_eq!(output[0]["schema"], RESULT_SCHEMA);
-        assert_eq!(output[0]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
-        assert_eq!(output[1]["config_schema"], READ_RETRY_CONFIG_SCHEMA);
+        assert_eq!(output[0]["config_schema"], CONFIG_SCHEMA);
+        assert_eq!(output[1]["config_schema"], CONFIG_SCHEMA);
+        for header in &output[..2] {
+            assert_eq!(header["source_capsule_verification_policy"], SOURCE_CAPSULE_VERIFICATION_POLICY);
+        }
+        for key in ["source_capsule_verification_policy", "skip_source_capsule_verification"] {
+            let mut override_policy = value.clone();
+            override_policy[key] = json!(false);
+            assert!(serde_json::from_value::<Config>(override_policy).is_err(), "{key}");
+        }
         assert_eq!(output[0]["s3_read_retry"], policy);
         assert_eq!(output[1]["s3_read_retry"], policy);
         assert_eq!(output[0]["config_sha256"], sha);
@@ -3402,14 +3618,16 @@ mod tests {
             2
         );
         assert_eq!(policy["sdk_retry_window_is_hard_deadline"], false);
-        let mut old = value.clone();
-        old["schema"] = json!(CONFIG_SCHEMA);
-        let c: Config = serde_json::from_value(old).unwrap();
-        assert!(validate_config(&c, shape).is_err());
+        for schema in ["borsuk-cohere-native-baseline-config-v11", "borsuk-cohere-native-baseline-config-v12"] {
+            let mut old = value.clone();
+            old["schema"] = json!(schema);
+            let c: Config = serde_json::from_value(old).unwrap();
+            assert!(validate_config(&c, shape).is_err(), "{schema}");
+        }
         let mut absent = value.clone();
         absent.as_object_mut().unwrap().remove("s3_read_retry");
         let c: Config = serde_json::from_value(absent).unwrap();
-        assert!(validate_config(&c, shape).is_err());
+        validate_config(&c, shape).unwrap();
         value["s3_read_retry"] = json!("unbounded");
         assert!(serde_json::from_value::<Config>(value).is_err());
     }
@@ -3645,7 +3863,8 @@ mod tests {
             20 => v[0] = 1.,
             21 => v[1] = 1.,
             26 => v[D - 1] = 1.,
-            _ => v[200 + id] = 1.,
+            // Larger layout fixtures can reuse the query-orthogonal tail directions.
+            _ => v[200 + id % (D - 200)] = 1.,
         }
         v
     }
@@ -3992,6 +4211,78 @@ mod tests {
         assert!(!body.contains("all_queries_sealed") && !body.contains("\"phase\":\"query\""));
         assert!(body.contains("\"success\":false"));
     }
+
+    #[test]
+    fn source_layout_and_explicit_byte_memory_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut good = config_value(dir.path(), shape);
+        good["max_memory_bytes"] = json!(MEMORY_CAP + 1);
+        good["source_byte_budget"] = json!(67_108_865);
+        let c: Config = serde_json::from_value(good.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        let admitted = limits(&c).unwrap();
+        assert_eq!(admitted.max_memory_bytes, MEMORY_CAP + 1);
+        assert_eq!(admitted.max_source_bytes, 67_108_865);
+        for key in ["source_layout", "source_byte_budget"] {
+            let mut bad = good.clone();
+            bad.as_object_mut().unwrap().remove(key);
+            assert!(serde_json::from_value::<Config>(bad).is_err(), "{key}");
+        }
+        for (key, value) in [
+            ("source_byte_budget", json!(0)),
+            ("source_byte_budget", json!(-1)),
+            ("max_memory_bytes", json!(0)),
+            ("max_memory_bytes", json!(1)),
+            ("max_memory_bytes", json!(-1)),
+            ("source_layout", json!({"layout":"unknown"})),
+            ("source_layout", json!({"layout":"flat_records","extra":1})),
+            (
+                "source_layout",
+                json!({"layout":"leaf_capsules","blob_bytes":100,"blob_sha256":"bad",
+                "directory_bytes":96,"directory_sha256":"e".repeat(64)}),
+            ),
+        ] {
+            let mut bad = good.clone();
+            bad[key] = value;
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(config(&path, &sha, shape).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn flat_source_layout_extra_fields_are_refused_at_both_decode_boundaries() {
+        let good = br#"{"source_layout":{"layout":"flat_records"}}"#;
+        exact_source_layout(good, &SourceLayout::FlatRecords).unwrap();
+        for bad in [
+            br#"{"source_layout":{"layout":"flat_records","blob_bytes":1}}"#.as_slice(),
+            br#"{"source_layout":{"layout":"flat_records"},"source_layout":{"layout":"flat_records"}}"#.as_slice(),
+        ] {
+            assert!(exact_source_layout(bad, &SourceLayout::FlatRecords).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_layout_must_match_authenticated_root_before_query_or_truth() {
+        let shape = Shape::tiny(32);
+        let (dir, mut value) = fixture(shape).await;
+        value["source_layout"] = json!({"layout":"leaf_capsules","blob_bytes":100,
+            "blob_sha256":"d".repeat(64),"directory_bytes":96,"directory_sha256":"e".repeat(64)});
+        let c: Config = serde_json::from_value(value).unwrap();
+        validate_config(&c, shape).unwrap();
+        let mut out = Output::create(&dir.path().join("bad-layout.jsonl")).unwrap();
+        let mut p = Progress::default();
+        let error = query_and_seal(&c, shape, &mut out, &mut p)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "authenticated root/config SOURCE layout agreement"
+        );
+        assert!(!p.sealed && !p.truth_opened && p.completed == 0);
+    }
+
     #[test]
     fn production_contract_rejects_unknown_hash_geometry_and_caps() {
         let dir = tempfile::tempdir().unwrap();
@@ -4006,7 +4297,7 @@ mod tests {
             ("count", json!(999)),
             ("k", json!(100)),
             ("profile", json!("fresh1m")),
-            ("max_memory_bytes", json!(MEMORY_CAP - 1)),
+            ("max_memory_bytes", json!(0)),
             ("query_source_first", json!(0)),
             ("generation_prefix", json!("../index")),
             ("metric", json!("l2")),
@@ -4081,7 +4372,7 @@ mod tests {
         let root = dir.path().join("store").join(&c.generation_prefix);
         std::fs::create_dir_all(&root).unwrap();
         let metadata_path = root.join("manifest.json");
-        let body = br#"{"guarded":true}"#;
+        let body = br#"{"guarded":true,"source_layout":{"layout":"flat_records"}}"#;
         std::fs::write(&metadata_path, body).unwrap();
         LOCAL_METADATA_OPEN_HOOK.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(|path| {
@@ -4101,7 +4392,7 @@ mod tests {
             8192,
         );
         let mut charge = Charge::default();
-        let value: Value = tokio::runtime::Builder::new_current_thread()
+        let value: Vec<u8> = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
@@ -4113,7 +4404,10 @@ mod tests {
                 &mut charge,
             ))
             .unwrap();
-        assert_eq!(value, json!({"guarded":true}));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&value).unwrap(),
+            json!({"guarded":true,"source_layout":{"layout":"flat_records"}})
+        );
         assert_eq!(charge.submitted_gets, 0); // Direct Local FD reads are not store GETs.
         LOCAL_METADATA_OPEN_HOOK.with(|hook| assert!(hook.borrow().is_none()));
         assert!(regular(&metadata_path, None, CONFIG_CAP).is_err());
@@ -4906,6 +5200,13 @@ mod tests {
         ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
             self.inner.put_multipart_opts(path, options).await
         }
+        async fn put_multipart_create(
+            &self,
+            path: &ObjectPath,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_create(path, options).await
+        }
         fn delete_stream(
             &self,
             paths: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
@@ -5200,7 +5501,7 @@ mod tests {
             ) {
                 assert_eq!(
                     reads.len(),
-                    if fault == "output" { 2 } else { 1 },
+                    if fault == "output" { 3 } else { 1 },
                     "{fault}"
                 );
             } else {
@@ -5225,7 +5526,7 @@ mod tests {
                 let rows = records(&out.path);
                 assert_eq!(rows.last().unwrap()["phase"], "all_queries_sealed");
                 assert_eq!(rows[0]["transport"]["before"]["attempts"], 37);
-                assert_eq!(rows[0]["charges"]["submitted_gets"], 2);
+                assert_eq!(rows[0]["charges"]["submitted_gets"], 3);
                 let mut previous = serde_json::to_value(&initial).unwrap();
                 for row in rows.iter().filter(|r| r["transport"].is_object()) {
                     assert_eq!(row["transport"]["before"], previous, "{fault}");
@@ -6942,6 +7243,30 @@ mod tests {
         assert!(full.panel.is_none());
         full.emit(&"x".repeat(100_000)).unwrap();
         assert!(full.emit(&"x".repeat(LINE_CAP)).is_err());
+    }
+
+    #[test]
+    fn source_binding_has_a_separate_bounded_serialization_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut out = Output::create(&dir.path().join("binding")).unwrap();
+        out.admit_panel_lines(PANEL_LINE_CAP);
+        // Exercise the six-byte JSON escape bound independently of manifest parsing.
+        let raw = "\u{0001}".repeat(CONFIG_CAP);
+        let binding = json!({"phase":"source_binding",
+            "generation_authority":{"root_manifest":raw,"page_manifest":raw}});
+        let bytes = serde_json::to_vec(&binding).unwrap().len() + 1;
+        assert!(bytes > LINE_CAP && bytes <= SOURCE_BINDING_LINE_CAP);
+        out.emit_source_binding(&binding).unwrap();
+        assert_eq!(out.bytes, bytes as u64);
+        assert_eq!(out.line_cap, LINE_CAP);
+        assert_eq!(out.panel_cap, PANEL_LINE_CAP);
+        assert!(out.emit(&"x".repeat(PANEL_LINE_CAP)).is_err());
+        assert_eq!(out.bytes, bytes as u64);
+        assert!(out.emit_source_binding(&"x".repeat(SOURCE_BINDING_LINE_CAP)).is_err());
+        assert_eq!(out.bytes, bytes as u64);
+        let c: Config = serde_json::from_value(config_value(dir.path(), Shape::tiny(32))).unwrap();
+        assert!(caller_bytes(&c) >= 2 * SOURCE_BINDING_LINE_CAP);
+        assert_eq!(diagnostic_bytes(&c).unwrap(), 0);
     }
 
     #[test]

@@ -1,0 +1,414 @@
+--- a/src/aws/mod.rs
++++ b/src/aws/mod.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -97,0 +99,31 @@
++    async fn multipart_upload(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++        create: bool,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        if create
++            && matches!(
++                self.client.config.conditional_put,
++                S3ConditionalPut::Disabled
++            )
++        {
++            return Err(Error::NotSupported {
++                source: "S3 conditional multipart completion is disabled".into(),
++            });
++        }
++
++        let upload_id = self.client.create_multipart(location, opts).await?;
++
++        Ok(Box::new(S3MultiPartUpload {
++            part_idx: 0,
++            create,
++            state: Arc::new(UploadState {
++                client: Arc::clone(&self.client),
++                location: location.clone(),
++                upload_id: upload_id.clone(),
++                parts: Default::default(),
++            }),
++        }))
++    }
++
+@@ -250,11 +282,9 @@
+-        let upload_id = self.client.create_multipart(location, opts).await?;
+-
+-        Ok(Box::new(S3MultiPartUpload {
+-            part_idx: 0,
+-            state: Arc::new(UploadState {
+-                client: Arc::clone(&self.client),
+-                location: location.clone(),
+-                upload_id: upload_id.clone(),
+-                parts: Default::default(),
+-            }),
+-        }))
++        self.multipart_upload(location, opts, false).await
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        self.multipart_upload(location, opts, true).await
+@@ -425,0 +456 @@
++    create: bool,
+@@ -467 +498,5 @@
+-                CompleteMultipartMode::Overwrite,
++                if self.create {
++                    CompleteMultipartMode::Create
++                } else {
++                    CompleteMultipartMode::Overwrite
++                },
+@@ -469,0 +505,7 @@
++            .map_err(|e| match e {
++                Error::Precondition { .. } if self.create => Error::AlreadyExists {
++                    path: self.state.location.to_string(),
++                    source: Box::new(e),
++                },
++                e => e,
++            })
+--- a/src/chunked.rs
++++ b/src/chunked.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -80,0 +82,8 @@
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        self.inner.put_multipart_create(location, opts).await
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -931,0 +933,31 @@
++
++    /// Start an atomic create-only multipart upload.
++    ///
++    /// Completion publishes the entire object only if the destination is absent at
++    /// that instant; an existing destination yields [Error::AlreadyExists].
++    /// Unlike an option on [Self::put_multipart_opts], the default implementation
++    /// refuses with [Error::NotSupported] before initiating any upload.
++    ///
++    /// Implemented for AmazonS3 (conditional completion must be enabled and supported
++    /// by the service), LocalFileSystem, and InMemory, and forwarded by this crate's
++    /// wrappers. Other implementations must opt in explicitly.
++    ///
++    /// Callers bound in-flight part sizes and concurrency as for [MultipartUpload].
++    /// InMemory retains the object's chunks in RAM; it does not allocate a second
++    /// contiguous payload on completion. No completed staging object or copy is used.
++    ///
++    /// The original [MultipartUpload] abort and failure semantics still apply:
++    /// dropping an upload does not guarantee cleanup, and a completion error or lost
++    /// response can leave a committed object. An AlreadyExists after a retry cannot
++    /// identify its writer. S3 HTTP 409 conflicts retain the client's existing
++    /// AlreadyExists mapping. S3 lifecycle cleanup and application reconciliation may
++    /// still be needed; this API promises no universal orphan-storage bound.
++    async fn put_multipart_create(
++        &self,
++        _location: &Path,
++        _opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        Err(Error::NotSupported {
++            source: "create-only multipart uploads are not supported".into(),
++        })
++    }
+@@ -1319,0 +1352,8 @@
++            async fn put_multipart_create(
++                &self,
++                location: &Path,
++                opts: PutMultipartOptions,
++            ) -> Result<Box<dyn MultipartUpload>> {
++                self.as_ref().put_multipart_create(location, opts).await
++            }
++
+--- a/src/limit.rs
++++ b/src/limit.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -96,0 +98,12 @@
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        let upload = self.inner.put_multipart_create(location, opts).await?;
++        Ok(Box::new(LimitUpload {
++            semaphore: Arc::clone(&self.semaphore),
++            upload,
++        }))
++    }
++
+--- a/src/local.rs
++++ b/src/local.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -266,0 +268,20 @@
++    fn multipart_upload(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++        create: bool,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        if !opts.attributes.is_empty() {
++            return Err(crate::Error::NotImplemented {
++                operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
++                implementer: self.to_string(),
++            });
++        }
++
++        let dest = self.path_to_filesystem(location)?;
++        let (file, src) = new_staged_upload(&dest, self.fsync)?;
++        let mut upload = LocalUpload::new(src, dest, file, self.fsync);
++        upload.create = create;
++        Ok(Box::new(upload))
++    }
++
+@@ -462,10 +483,9 @@
+-        if !opts.attributes.is_empty() {
+-            return Err(crate::Error::NotImplemented {
+-                operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
+-                implementer: self.to_string(),
+-            });
+-        }
+-
+-        let dest = self.path_to_filesystem(location)?;
+-        let (file, src) = new_staged_upload(&dest, self.fsync)?;
+-        Ok(Box::new(LocalUpload::new(src, dest, file, self.fsync)))
++        self.multipart_upload(location, opts, false)
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        self.multipart_upload(location, opts, true)
+@@ -1095,0 +1116,2 @@
++    /// Whether completion must preserve an existing destination
++    create: bool,
+@@ -1114,0 +1137 @@
++            create: false,
+@@ -1147,0 +1171 @@
++        let create = self.create;
+@@ -1158,4 +1182,9 @@
+-            // Durably publish the freshly-written staging file: flush its contents, close it, then
+-            // rename it into place and fsync the destination's parent directory (the fsync calls
+-            // are bundled into the helper and only run when fsync is enabled).
+-            finish_staged_rename(file, &src, &s.dest, fsync)?;
++            if create {
++                let result = finish_staged_hard_link(file, &src, &s.dest, fsync);
++                if result.is_err() {
++                    let _ = std::fs::remove_file(&src); // Best-effort staging cleanup only.
++                }
++                result?;
++            } else {
++                finish_staged_rename(file, &src, &s.dest, fsync)?;
++            }
+--- a/src/memory.rs
++++ b/src/memory.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -57,0 +59,3 @@
++
++    #[error("Object length exceeds usize::MAX")]
++    LengthOverflow,
+@@ -80,0 +85,3 @@
++///
++/// ObjectStore multipart completion retains payload chunks without a second
++/// contiguous allocation. Object bytes and chunk metadata still reside in RAM.
+@@ -88 +95 @@
+-    data: Bytes,
++    data: PutPayload,
+@@ -96 +103 @@
+-        data: Bytes,
++        data: PutPayload,
+@@ -126 +133 @@
+-    fn insert(&mut self, location: &Path, bytes: Bytes, attributes: Attributes) -> usize {
++    fn insert(&mut self, location: &Path, bytes: PutPayload, attributes: Attributes) -> usize {
+@@ -207,0 +215 @@
++        checked_length(payload.iter().map(|chunk| chunk.len()))?;
+@@ -210 +218 @@
+-        let entry = Entry::new(payload.into(), Utc::now(), etag, opts.attributes);
++        let entry = Entry::new(payload, Utc::now(), etag, opts.attributes);
+@@ -231,6 +239,9 @@
+-        Ok(Box::new(InMemoryUpload {
+-            location: location.clone(),
+-            attributes: opts.attributes,
+-            parts: vec![],
+-            storage: Arc::clone(&self.storage),
+-        }))
++        self.multipart_upload(location, opts, false)
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        self.multipart_upload(location, opts, true)
+@@ -246 +257 @@
+-            size: entry.data.len() as u64,
++            size: entry.data.content_length() as u64,
+@@ -255 +266 @@
+-                    .as_range(entry.data.len() as u64)
++                    .as_range(entry.data.content_length() as u64)
+@@ -259 +270 @@
+-                    entry.data.slice(r.start as usize..r.end as usize),
++                    slice_payload(&entry.data, r.start as usize..r.end as usize),
+@@ -262 +273 @@
+-            None => (0..entry.data.len() as u64, entry.data),
++            None => (0..entry.data.content_length() as u64, entry.data),
+@@ -264 +275 @@
+-        let stream = futures_util::stream::once(futures_util::future::ready(Ok(data)));
++        let stream = futures_util::stream::iter(data.into_iter().map(Ok));
+@@ -281 +292 @@
+-                    .as_range(entry.data.len() as u64)
++                    .as_range(entry.data.content_length() as u64)
+@@ -295 +306 @@
+-                Ok(entry.data.slice(r_start..r_end))
++                Ok(slice_payload(&entry.data, r_start..r_end).into())
+@@ -333 +344 @@
+-                    size: value.data.len() as u64,
++                    size: value.data.content_length() as u64,
+@@ -378 +389 @@
+-                    size: v.data.len() as u64,
++                    size: v.data.content_length() as u64,
+@@ -495,0 +507,15 @@
++    fn multipart_upload(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++        create: bool,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        Ok(Box::new(InMemoryUpload {
++            location: location.clone(),
++            create,
++            attributes: opts.attributes,
++            parts: vec![],
++            storage: Arc::clone(&self.storage),
++        }))
++    }
++
+@@ -522,0 +549,20 @@
++fn checked_length(mut lengths: impl Iterator<Item = usize>) -> Result<usize> {
++    lengths
++        .try_fold(0_usize, |total, len| total.checked_add(len))
++        .ok_or_else(|| Error::LengthOverflow.into())
++}
++
++// Slice chunk references without coalescing the object's bytes.
++fn slice_payload(payload: &PutPayload, range: Range<usize>) -> PutPayload {
++    let mut offset = 0;
++    payload
++        .iter()
++        .filter_map(|chunk| {
++            let start = range.start.saturating_sub(offset).min(chunk.len());
++            let end = range.end.saturating_sub(offset).min(chunk.len());
++            offset += chunk.len();
++            (start < end).then(|| chunk.slice(start..end))
++        })
++        .collect()
++}
++
+@@ -525,0 +572 @@
++    create: bool,
+@@ -539,7 +586,22 @@
+-        let cap = self.parts.iter().map(|x| x.content_length()).sum();
+-        let mut buf = Vec::with_capacity(cap);
+-        let parts = self.parts.iter().flatten();
+-        parts.for_each(|x| buf.extend_from_slice(x));
+-        let etag = self.storage.write().insert(
+-            &self.location,
+-            buf.into(),
++        let mut storage = self.storage.write();
++        if self.create && storage.map.contains_key(&self.location) {
++            return Err(Error::AlreadyExists {
++                path: self.location.to_string(),
++            }
++            .into());
++        }
++        checked_length(
++            self.parts
++                .iter()
++                .flat_map(|part| part.iter().map(|chunk| chunk.len())),
++        )?;
++        let payload = self
++            .parts
++            .iter()
++            .flat_map(|part| part.iter().cloned())
++            .collect();
++        let etag = storage.next_etag;
++        let entry = Entry::new(
++            payload,
++            Utc::now(),
++            etag,
+@@ -547,0 +610,6 @@
++        if self.create {
++            storage.create(&self.location, entry)?;
++        } else {
++            storage.overwrite(&self.location, entry);
++        }
++        storage.next_etag += 1;
+@@ -565,0 +634,22 @@
++
++    #[test]
++    fn checked_length_rejects_aggregate_overflow() {
++        assert_eq!(checked_length([].into_iter()).unwrap(), 0);
++        assert_eq!(
++            checked_length([usize::MAX - 1, 1, 0].into_iter()).unwrap(),
++            usize::MAX
++        );
++        assert!(matches!(
++            checked_length([usize::MAX, 1].into_iter()),
++            Err(crate::Error::Generic {
++                store: "InMemory",
++                ..
++            })
++        ));
++        let aliased_lengths = std::iter::repeat_n(1024 * 1024, 4096);
++        if usize::BITS == 32 {
++            assert!(checked_length(aliased_lengths).is_err());
++        } else {
++            assert_eq!(checked_length(aliased_lengths).unwrap() as u64, 1_u64 << 32);
++        }
++    }
+--- a/src/prefix.rs
++++ b/src/prefix.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -124,0 +126,9 @@
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        let full_path = self.full_path(location);
++        self.inner.put_multipart_create(&full_path, opts).await
+--- a/src/throttle.rs
++++ b/src/throttle.rs
+@@ -16,0 +17 @@
++// Modified for BORSUK: conditional multipart creation; see BORSUK-PROVENANCE.md.
+@@ -170,0 +172,12 @@
++        Ok(Box::new(ThrottledUpload {
++            upload,
++            sleep: self.config().wait_put_per_call,
++        }))
++    }
++
++    async fn put_multipart_create(
++        &self,
++        location: &Path,
++        opts: PutMultipartOptions,
++    ) -> Result<Box<dyn MultipartUpload>> {
++        let upload = self.inner.put_multipart_create(location, opts).await?;

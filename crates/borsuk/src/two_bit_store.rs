@@ -4,8 +4,8 @@ use crate::{
     resident_graph_generation::{Artifact, valid_sha256},
     resident_graph_store::{ResidentGraphStoreError, upload_authenticated_file},
     two_bit_generation::{
-        Discovery, DiscoveryMode, Manifest, TwoBitGeneration, TwoBitGenerationError,
-        TwoBitGenerationLimits,
+        Discovery, DiscoveryMode, Manifest, SourceLayout, SourceLayoutMode, TwoBitGeneration,
+        TwoBitGenerationError, TwoBitGenerationLimits,
     },
     two_bit_source::{SourcePlaneReceipt, read_authenticated},
 };
@@ -71,15 +71,18 @@ pub(crate) struct EmptyRoot {
     pub(crate) dimensions: usize,
     pub(crate) base_epoch: u64,
     pub(crate) discovery: DiscoveryMode,
+    pub(crate) source_layout: SourceLayoutMode,
     #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) profile: Option<crate::semantic_unit_router::SemanticProfile>,
 }
 impl EmptyRoot {
     pub(crate) fn valid(&self) -> bool {
-        self.schema == "borsuk-two-bit-empty-generation-v4"
+        self.schema == "borsuk-two-bit-empty-generation-v5"
             && self.generation > 0
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
+            && (self.discovery == DiscoveryMode::Semantic
+                || self.source_layout == SourceLayoutMode::FlatRecords)
             && match (self.discovery, self.profile) {
                 (DiscoveryMode::Graph, None) => true,
                 (DiscoveryMode::Semantic, Some(profile)) => {
@@ -312,6 +315,7 @@ fn root_properties(bytes: &[u8], digest: &str, generation: u64) -> Result<(usize
                     .discovery
                     .valid(manifest.canonical.rows, manifest.canonical.dimensions) =>
         {
+            manifest.capsule_metadata_bytes()?;
             Ok((manifest.low.len(), false))
         }
         _ => Err(TwoBitStoreError::Invalid("head generation")),
@@ -324,6 +328,17 @@ pub(crate) async fn discovery_profile(
     DiscoveryMode,
     Option<crate::semantic_unit_router::SemanticProfile>,
 )> {
+    let (mode, profile, _) = discovery_profile_and_source_layout(store, head).await?;
+    Ok((mode, profile))
+}
+pub(crate) async fn discovery_profile_and_source_layout(
+    store: &dyn ObjectStore,
+    head: &TwoBitHead,
+) -> Result<(
+    DiscoveryMode,
+    Option<crate::semantic_unit_router::SemanticProfile>,
+    SourceLayoutMode,
+)> {
     let (body, _) =
         small_object(store, &head.metadata_prefix().join("manifest.json"), 65536).await?;
     use sha2::{Digest, Sha256};
@@ -334,7 +349,7 @@ pub(crate) async fn discovery_profile(
         serde_json::from_slice(&body).map_err(|_| TwoBitStoreError::Invalid("discovery schema"))?;
     match root {
         Root::Empty(root) if root.valid() && root.generation == head.generation => {
-            Ok((root.discovery, root.profile))
+            Ok((root.discovery, root.profile, root.source_layout))
         }
         Root::Populated(root)
             if root.schema == crate::two_bit_generation::SCHEMA
@@ -344,7 +359,13 @@ pub(crate) async fn discovery_profile(
                     .valid(root.canonical.rows, root.canonical.dimensions) =>
         {
             let profile = root.discovery.semantic_profile();
-            Ok((root.discovery.mode(), profile))
+            root.capsule_metadata_bytes()?;
+            let layout = if root.source_layout.is_capsules() {
+                SourceLayoutMode::LeafCapsules
+            } else {
+                SourceLayoutMode::FlatRecords
+            };
+            Ok((root.discovery.mode(), profile, layout))
         }
         _ => Err(TwoBitStoreError::Invalid("discovery authority")),
     }
@@ -389,7 +410,7 @@ async fn validate_owned_object(
     .await?;
     let claim: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| TwoBitStoreError::Invalid("maintenance claim schema"))?;
-    if claim["schema"] != "borsuk-two-bit-compaction-job-v4"
+    if claim["schema"] != "borsuk-two-bit-compaction-job-v5"
         || claim["index_prefix"].as_str() != Some(prefix.as_ref())
         || claim["base_epoch"].as_u64() != Some(epoch)
     {
@@ -429,6 +450,54 @@ fn publication_phase_budget(
         .and_then(|n| n.checked_sub(retained))
         .ok_or(TwoBitStoreError::Invalid("publication memory"))?;
     usize::try_from(remaining).map_err(|_| TwoBitStoreError::Invalid("publication memory"))
+}
+
+// Physical SOURCE identities never replace the plane's original flat identity.
+fn source_artifacts<'a>(
+    manifest: &'a Manifest,
+    plane: &'a SourcePlaneReceipt,
+) -> Result<Vec<(&'static str, usize, &'a str)>> {
+    manifest.capsule_metadata_bytes()?;
+    let mut files = Vec::with_capacity(if manifest.source_layout.is_capsules() {
+        2
+    } else {
+        1
+    });
+    match &manifest.source_layout {
+        SourceLayout::FlatRecords => {
+            let padded =
+                crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(plane.dimensions)
+                    .map_err(|_| TwoBitStoreError::Invalid("publication codec geometry"))?;
+            let bytes = plane
+                .rows
+                .checked_mul(padded.div_ceil(4) + 8)
+                .ok_or(TwoBitStoreError::Invalid("publication record geometry"))?;
+            files.push((
+                manifest.source_layout.object_name(),
+                bytes,
+                plane.records_sha256.as_str(),
+            ));
+        }
+        SourceLayout::LeafCapsules {
+            blob_bytes,
+            blob_sha256,
+            directory_bytes,
+            directory_sha256,
+        } => {
+            files.push((
+                manifest.source_layout.object_name(),
+                usize::try_from(*blob_bytes)
+                    .map_err(|_| TwoBitStoreError::Invalid("capsule blob length"))?,
+                blob_sha256.as_str(),
+            ));
+            files.push((
+                "plane/capsule_directory.bin",
+                *directory_bytes,
+                directory_sha256.as_str(),
+            ));
+        }
+    }
+    Ok(files)
 }
 
 /// Independent construction approval and the current, explicitly approved SQ8
@@ -832,10 +901,11 @@ async fn retained_roster<'a>(
     prefix: &ObjectPath,
     roster: impl Iterator<Item = &'a ObjectMeta> + Clone,
 ) -> Result<()> {
-    if roster.clone().count() != 10 {
+    let count = roster.clone().count();
+    if count == 0 {
         return Err(TwoBitStoreError::Invalid("retained artifact roster"));
     }
-    let mut seen = [false; 10];
+    let mut seen = vec![false; count];
     let mut objects = store.list(Some(prefix));
     while let Some(meta) = objects.next().await {
         let meta = meta?;
@@ -919,6 +989,23 @@ pub async fn republish_retained_two_bit_generation(
     if root_bytes == 0 || root_bytes > 65536 {
         return Err(bad("retained root memory admission"));
     }
+    publication_phase_budget(
+        limits.max_memory_bytes,
+        pinned,
+        [root_bytes, 65536, 65536],
+        0,
+        0,
+    )?;
+    let manifest: Manifest =
+        serde_json::from_slice(&retained.root).map_err(|_| bad("retained root schema"))?;
+    manifest.capsule_metadata_bytes()?;
+    if manifest.source_layout.is_capsules() && approved.router_replacement.is_some() {
+        return Err(bad("capsule router replacement requires repack"));
+    }
+    let files = manifest.files(false);
+    let startup = manifest.files(true);
+    let roster_count = files.len();
+    let startup_count = startup.len();
     // Every metadata path adds <128 bytes to its namespace; object keys decoded
     // from the approved root have at most root_bytes bytes. String/PathBuf growth
     // is charged at twice the longest final path, not eight namespace copies.
@@ -934,19 +1021,24 @@ pub async fn republish_retained_two_bit_generation(
     .unwrap()
     .checked_add(128)
     .ok_or(bad("retained path memory"))?;
-    // Ten source ObjectMeta paths + ten destination pins + ten created clones;
-    // three payload pins, four prefixes/returned-head paths, eight temporaries;
-    // eight serving-wave objects each reserve eight path/parent/response copies.
-    // Staged destination rosters coexist with the serving validation wave.
-    let path_slots = 10_usize + 10 + 10 + 3 + 4 + 8 + 8 * 8;
+    // Source pins, destination pins and cleanup paths coexist with serving.
+    let path_slots = roster_count
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(3 + 4 + 8))
+        .and_then(|n| n.checked_add(startup_count.checked_mul(8)?))
+        .ok_or(bad("retained path memory"))?;
     let paths = path_bytes
         .checked_mul(2)
         .and_then(|n| n.checked_mul(path_slots))
         .ok_or(bad("retained path memory"))?;
     // Source/destination/payload tokens, two control views, a conditional response
-    // and its GetOptions clones, and eight serving-wave responses. Each strong
+    // and its GetOptions clones, and the selected serving wave. Each strong
     // ETag/version String capacity is capped at 4096 before any clone we own.
-    let token_slots = 10_usize + 10 + 3 + 2 + 1 + 1 + 8;
+    let token_slots = roster_count
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(3 + 2 + 1 + 1))
+        .and_then(|n| n.checked_add(startup_count))
+        .ok_or(bad("retained token memory"))?;
     let tokens = token_slots
         .checked_mul(2 * 4096)
         .ok_or(bad("retained token memory"))?;
@@ -964,8 +1056,24 @@ pub async fn republish_retained_two_bit_generation(
         .and_then(|n| n.checked_mul(2))
         .and_then(|n| n.checked_add(2 * 65536 + 2 * 4096))
         .ok_or(bad("retained serialization memory"))?;
+    let descriptors = roster_count
+        .checked_mul(
+            std::mem::size_of::<(&str, &str, ObjectMeta)>()
+                + std::mem::size_of::<ObjectMeta>()
+                + std::mem::size_of::<ObjectPath>()
+                + std::mem::size_of::<(&str, Option<usize>, &str)>()
+                + std::mem::size_of::<bool>(),
+        )
+        .and_then(|n| {
+            n.checked_add(
+                (files.capacity() + startup.capacity()) * std::mem::size_of::<&str>()
+                    + 2 * std::mem::size_of::<(&str, usize, &str)>(),
+            )
+        })
+        .ok_or(bad("retained descriptor memory"))?;
     let bookkeeping = paths
         .checked_add(tokens)
+        .and_then(|n| n.checked_add(descriptors))
         .and_then(|n| n.checked_add(serialized))
         .and_then(|n| n.checked_add(8 * 4096))
         .ok_or(bad("retained cumulative memory"))?;
@@ -1033,8 +1141,6 @@ pub async fn republish_retained_two_bit_generation(
     let root =
         authenticate_retained_body(store, &root_meta, approved.root_sha256, buffer_bytes, true)
             .await?;
-    let manifest: Manifest =
-        serde_json::from_slice(&root).map_err(|_| bad("retained root schema"))?;
     if manifest.schema != crate::two_bit_generation::SCHEMA
         || manifest.base_epoch != 0
         || manifest.generation != approved.generation
@@ -1120,12 +1226,6 @@ pub async fn republish_retained_two_bit_generation(
     {
         return Err(bad("retained source geometry"));
     }
-    let padded = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(plane.dimensions)
-        .map_err(|_| bad("retained codec geometry"))?;
-    let records_bytes = plane
-        .rows
-        .checked_mul(padded.div_ceil(4) + 8)
-        .ok_or(bad("retained record geometry"))?;
     let sq8_bytes = plane
         .rows
         .checked_mul(
@@ -1147,7 +1247,8 @@ pub async fn republish_retained_two_bit_generation(
     else {
         return Err(bad("retained semantic descriptor"));
     };
-    let descriptors = [
+    let mut descriptors = Vec::with_capacity(roster_count - 3);
+    descriptors.extend([
         (
             "page_digests.bin",
             plane
@@ -1160,11 +1261,6 @@ pub async fn republish_retained_two_bit_generation(
             "plane/mean.bin",
             plane.dimensions.checked_mul(4),
             plane.mean_sha256.as_str(),
-        ),
-        (
-            "plane/records.bin",
-            Some(records_bytes),
-            plane.records_sha256.as_str(),
         ),
         (
             "plane/page_digests.bin",
@@ -1182,8 +1278,13 @@ pub async fn republish_retained_two_bit_generation(
             Some(*leaves_bytes),
             leaves_sha256.as_str(),
         ),
-    ];
-    let mut roster = Vec::with_capacity(10);
+    ]);
+    descriptors.extend(
+        source_artifacts(&manifest, &plane)?
+            .into_iter()
+            .map(|(name, bytes, digest)| (name, Some(bytes), digest)),
+    );
+    let mut roster = Vec::with_capacity(roster_count);
     roster.extend([
         ("manifest.json", approved.root_sha256, root_meta),
         (
@@ -1202,6 +1303,13 @@ pub async fn republish_retained_two_bit_generation(
         let meta =
             retained_meta(store, &metadata_location(&source_prefix, name), Some(size)).await?;
         roster.push((name, digest, meta));
+    }
+    if roster.len() != roster_count
+        || !files
+            .iter()
+            .all(|name| roster.iter().any(|(n, _, _)| n == name))
+    {
+        return Err(bad("retained manifest roster"));
     }
     retained_roster(
         store,
@@ -1233,7 +1341,7 @@ pub async fn republish_retained_two_bit_generation(
         Some(manifest.canonical.bytes),
     )
     .await?;
-    // Startup stages no records/leaves; all publication metadata is charged,
+    // Startup stages only the manifest-selected metadata; all publication bytes are charged,
     // including the maximum new root, before any scratch or destination write.
     roster
         .iter()
@@ -1243,7 +1351,7 @@ pub async fn republish_retained_two_bit_generation(
             let copies = if *name == "manifest.json" {
                 0
             } else {
-                1 + u64::from(!["plane/records.bin", "router/leaves.bin"].contains(name))
+                1 + u64::from(startup.contains(name))
             };
             let size = approved
                 .router_replacement
@@ -1291,7 +1399,7 @@ pub async fn republish_retained_two_bit_generation(
         false,
     )
     .await?;
-    let mut created = Vec::with_capacity(10);
+    let mut created = Vec::with_capacity(roster_count);
     let mut head_attempted = false;
     let result = async {
         // Native create-only copies retain every payload byte; copied identity is
@@ -1348,7 +1456,7 @@ pub async fn republish_retained_two_bit_generation(
             .clone()
             .join("generations")
             .join(new_sha.as_str());
-        let mut destination_pins = Vec::with_capacity(10);
+        let mut destination_pins = Vec::with_capacity(roster_count);
         for (name, digest, meta) in &roster {
             if *name == "manifest.json" {
                 continue;
@@ -1406,20 +1514,27 @@ pub async fn republish_retained_two_bit_generation(
         // Validate the exact staged root/metadata that the head will publish.
         // One serving pass, no centroids; proof bodies/rosters/pins are already
         // subtracted from this budget. Its temporary scratch is RAII owned.
-        drop(
-            TwoBitGeneration::open_remote(
-                store,
-                &new_prefix,
-                &new_sha,
-                TwoBitGenerationLimits {
-                    max_memory_bytes: validation_budget as u64,
-                    already_pinned_bytes: 0,
-                    ..limits
-                },
-                scratch_parent,
-            )
-            .await?,
-        );
+        let validation = TwoBitGeneration::open_remote(
+            store,
+            &new_prefix,
+            &new_sha,
+            TwoBitGenerationLimits {
+                max_memory_bytes: validation_budget as u64,
+                already_pinned_bytes: 0,
+                ..limits
+            },
+            scratch_parent,
+        )
+        .await?;
+        let source_location = metadata_location(&new_prefix, manifest.source_layout.object_name());
+        let source_pin = destination_pins
+            .iter()
+            .find(|meta| meta.location == source_location)
+            .ok_or(bad("retained SOURCE pin"))?;
+        validation
+            .validate_retained_capsules(store, source_pin)
+            .await?;
+        drop(validation);
         for meta in roster
             .iter()
             .map(|(_, _, meta)| meta)
@@ -1581,11 +1696,30 @@ pub async fn publish_two_bit_generation(
     let page_body = read("page_manifest.json", &manifest.page_manifest_sha256)?;
     let pages: serde_json::Value =
         serde_json::from_slice(&page_body).map_err(|_| TwoBitStoreError::Invalid("page schema"))?;
+    let files = manifest.files(false);
+    let physical_source = source_artifacts(&manifest, &plane)?;
+    let longest_path = [prefix.as_ref().len(), local.as_os_str().len(), root.len()]
+        .into_iter()
+        .max()
+        .unwrap()
+        .checked_add(128)
+        .ok_or(TwoBitStoreError::Invalid("publication path memory"))?;
+    let bookkeeping = longest_path
+        .checked_mul(2)
+        .and_then(|n| n.checked_mul(files.len() + 8))
+        .and_then(|n| n.checked_add(files.capacity() * std::mem::size_of::<&str>()))
+        .and_then(|n| n.checked_add(files.len() * std::mem::size_of::<(&str, &str)>()))
+        .and_then(|n| {
+            n.checked_add(physical_source.capacity() * std::mem::size_of::<(&str, usize, &str)>())
+        })
+        .and_then(|n| n.checked_add(2 * 4096))
+        .and_then(|n| n.checked_add(head_bytes))
+        .ok_or(TwoBitStoreError::Invalid("publication roster memory"))?;
     let budget = publication_phase_budget(
         limits.max_memory_bytes,
         limits.already_pinned_bytes,
         [root.capacity(), plane_body.capacity(), page_body.capacity()],
-        head_bytes,
+        bookkeeping,
         prefix.as_ref().len(),
     )?;
     drop(plane_body);
@@ -1619,8 +1753,8 @@ pub async fn publish_two_bit_generation(
         return Err(TwoBitStoreError::Invalid("SQ8 HEAD identity"));
     }
     drop(source);
-    let mut roster = vec![
-        ("manifest.json", trusted_root_sha256),
+    let mut roster = Vec::with_capacity(files.len());
+    roster.extend([
         ("page_manifest.json", manifest.page_manifest_sha256.as_str()),
         (
             "page_digests.bin",
@@ -1633,9 +1767,13 @@ pub async fn publish_two_bit_generation(
             manifest.plane_manifest_sha256.as_str(),
         ),
         ("plane/mean.bin", plane.mean_sha256.as_str()),
-        ("plane/records.bin", plane.records_sha256.as_str()),
         ("plane/page_digests.bin", plane.page_digest_sha256.as_str()),
-    ];
+    ]);
+    roster.extend(
+        physical_source
+            .iter()
+            .map(|&(name, _, digest)| (name, digest)),
+    );
     match &manifest.discovery {
         Discovery::Graph {
             centroids_sha256,
@@ -1704,6 +1842,15 @@ pub async fn publish_two_bit_generation(
             ]);
         }
     }
+    // Seal the immutable root only after every selected dependency.
+    roster.push(("manifest.json", trusted_root_sha256));
+    if roster.len() != files.len()
+        || !files
+            .iter()
+            .all(|name| roster.iter().any(|(n, _)| n == name))
+    {
+        return Err(TwoBitStoreError::Invalid("publication manifest roster"));
+    }
     let metadata_prefix = prefix.clone().join("generations").join(trusted_root_sha256);
     upload_authenticated_file(
         store,
@@ -1717,8 +1864,15 @@ pub async fn publish_two_bit_generation(
     )
     .await?;
     for (name, digest) in roster {
+        let bytes = if name == "manifest.json" {
+            root.len() as u64
+        } else if let Some((_, bytes, _)) = physical_source.iter().find(|(n, _, _)| *n == name) {
+            *bytes as u64
+        } else {
+            fs::metadata(local.join(name))?.len()
+        };
         let artifact = Artifact {
-            bytes: fs::metadata(local.join(name))?.len(),
+            bytes,
             sha256: digest.to_owned(),
         };
         upload_authenticated_file(
@@ -1731,6 +1885,7 @@ pub async fn publish_two_bit_generation(
         .await?;
     }
     let generation = manifest.generation;
+    drop(physical_source);
     drop(manifest);
     drop(plane);
     drop(pages);
@@ -1847,6 +2002,47 @@ pub(crate) async fn publish_empty_with_profile(
     mode: Option<DiscoveryMode>,
     profile: Option<crate::semantic_unit_router::SemanticProfile>,
 ) -> Result<TwoBitHead> {
+    publish_empty(
+        store, prefix, dimensions, generation, expected, mode, profile, None,
+    )
+    .await
+}
+/// Publish an empty base retaining an explicit SOURCE layout for later refill.
+/// Graph discovery requires FlatRecords. Discovery/profile may inherit the old root.
+#[allow(clippy::too_many_arguments)]
+pub async fn publish_empty_two_bit_generation_with_source_layout(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+    mode: Option<DiscoveryMode>,
+    profile: Option<crate::semantic_unit_router::SemanticProfile>,
+    source_layout: SourceLayoutMode,
+) -> Result<TwoBitHead> {
+    publish_empty(
+        store,
+        prefix,
+        dimensions,
+        generation,
+        expected,
+        mode,
+        profile,
+        Some(source_layout),
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+async fn publish_empty(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    dimensions: usize,
+    generation: u64,
+    expected: Option<&TwoBitHead>,
+    mode: Option<DiscoveryMode>,
+    profile: Option<crate::semantic_unit_router::SemanticProfile>,
+    source_layout: Option<SourceLayoutMode>,
+) -> Result<TwoBitHead> {
     let bad = TwoBitStoreError::Invalid;
     if dimensions == 0
         || generation == 0
@@ -1857,11 +2053,24 @@ pub(crate) async fn publish_empty_with_profile(
     {
         return Err(bad("empty generation namespace/order/dimensions"));
     }
+    if mode == Some(DiscoveryMode::Semantic) {
+        let selected = profile.unwrap_or(crate::semantic_unit_router::SemanticProfile::Native100k);
+        if selected == crate::semantic_unit_router::SemanticProfile::Fresh1m {
+            return Err(bad("Fresh1m maintenance is unsupported"));
+        }
+        if !selected.valid_geometry(1, dimensions) {
+            return Err(bad("empty generation namespace/order/dimensions"));
+        }
+    }
+    if mode == Some(DiscoveryMode::Graph) && source_layout == Some(SourceLayoutMode::LeafCapsules) {
+        return Err(bad("empty generation namespace/order/dimensions"));
+    }
     let inherited = if let Some(previous) = expected {
-        discovery_profile(store, previous).await?
+        discovery_profile_and_source_layout(store, previous).await?
     } else {
-        (DiscoveryMode::Graph, None)
+        (DiscoveryMode::Graph, None, SourceLayoutMode::FlatRecords)
     };
+    let source_layout = source_layout.unwrap_or(inherited.2);
     let discovery = mode.unwrap_or(inherited.0);
     let profile = if discovery == DiscoveryMode::Semantic {
         Some(
@@ -1876,11 +2085,12 @@ pub(crate) async fn publish_empty_with_profile(
         return Err(bad("Fresh1m maintenance is unsupported"));
     }
     let mut root = EmptyRoot {
-        schema: "borsuk-two-bit-empty-generation-v4".into(),
+        schema: "borsuk-two-bit-empty-generation-v5".into(),
         generation,
         dimensions,
         base_epoch: 0,
         discovery,
+        source_layout,
         profile,
     };
     if !root.valid() {
@@ -2161,6 +2371,45 @@ mod root_seed_tests {
                 "{fault}: {error:?}"
             );
             assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_layout_tests {
+    use super::*;
+    #[tokio::test]
+    async fn empty_discovery_profile_retains_explicit_source_layout() {
+        let store = object_store::memory::InMemory::new();
+        for layout in [
+            SourceLayoutMode::FlatRecords,
+            SourceLayoutMode::LeafCapsules,
+        ] {
+            let prefix = ObjectPath::from(format!("empty/{layout:?}"));
+            let head = publish_empty_two_bit_generation_with_source_layout(
+                &store,
+                &prefix,
+                257,
+                1,
+                None,
+                Some(DiscoveryMode::Semantic),
+                Some(crate::semantic_unit_router::SemanticProfile::Scale1m),
+                layout,
+            )
+            .await
+            .unwrap();
+            let reopened = read_two_bit_head(&store, &prefix).await.unwrap().unwrap();
+            assert_eq!(head.root_sha256(), reopened.root_sha256());
+            assert_eq!(
+                discovery_profile_and_source_layout(&store, &reopened)
+                    .await
+                    .unwrap(),
+                (
+                    DiscoveryMode::Semantic,
+                    Some(crate::semantic_unit_router::SemanticProfile::Scale1m),
+                    layout
+                )
+            );
         }
     }
 }

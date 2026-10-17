@@ -42,6 +42,8 @@ const UNIT_ROWS: usize = 32;
 const PAGE_ROWS: usize = 256;
 const SCRATCH: usize = 3 * size_of::<Sha256>() + 128;
 const SPAN_DESCRIPTOR_BYTES: usize = size_of::<FetchedSpan<'_>>() + size_of::<Vec<u8>>();
+// The raw-span model already includes the Vec owned by a proof.
+const PROOF_EXTRA_BYTES: usize = size_of::<VerifiedSpan<'_>>() - size_of::<Vec<u8>>();
 
 fn require(ok: bool, reason: &'static str) -> Result<()> {
     if ok {
@@ -71,7 +73,19 @@ fn reserve<T>(count: usize) -> Result<Vec<T>> {
         .map_err(|_| SourceBuildError::Invalid("capsule allocation"))?;
     Ok(result)
 }
+#[cfg(test)]
+pub(crate) fn reset_hash_bytes() {
+    tests::HASH_BYTES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn hash_bytes() -> usize {
+    tests::HASH_BYTES.with(|count| count.get())
+}
+
 fn hash(bytes: &[u8]) -> [u8; 32] {
+    #[cfg(test)]
+    tests::HASH_BYTES.with(|count| count.set(count.get() + bytes.len()));
     Sha256::digest(bytes).into()
 }
 fn profile_code(profile: SemanticProfile) -> u32 {
@@ -150,6 +164,8 @@ impl Geometry {
         require(bytes.len() == self.page_bytes(page)?, "capsule page tail")?;
         let first = mul(page as usize, PAGE_ROWS / UNIT_ROWS)?;
         let last = add(first, bytes.len().div_ceil(self.width * UNIT_ROWS))? - 1;
+        #[cfg(test)]
+        tests::HASH_BYTES.with(|count| count.set(count.get() + bytes.len()));
         authority
             .verify_payload(first, last, bytes)
             .map_err(|_| SourceBuildError::Invalid("capsule original unit digest"))
@@ -694,11 +710,40 @@ impl FetchedSpan<'_> {
         Ok(self.offset..end)
     }
 }
+/// Query-scoped proof owns the exact authenticated body; no mutable body or proof fields escape.
+pub(crate) struct VerifiedSpan<'a> {
+    directory: &'a Directory,
+    authority: &'a PageAuthority,
+    leaves: &'a [LeafPages<'a>],
+    offset: u64,
+    bytes: Vec<u8>,
+}
+impl std::fmt::Debug for VerifiedSpan<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifiedSpan")
+            .field("offset", &self.offset)
+            .field("bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+impl VerifiedSpan<'_> {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> u64 {
+        self.offset
+    }
+    fn span(&self) -> FetchedSpan<'_> {
+        FetchedSpan {
+            offset: self.offset,
+            bytes: &self.bytes,
+        }
+    }
+}
 impl Directory {
     /// Verify EVERY capsule copy against its closure and original unit authority
-    /// before exposing rows. Responses may arrive in any order and may coalesce
-    /// exactly adjacent selected capsules. Their ranges must be disjoint and
-    /// contain only complete selected capsules, covering every selected leaf once.
+    /// before exposing rows. Disjoint responses may coalesce adjacent selected capsules.
     pub fn verify<'a>(
         &self,
         leaves: &[LeafPages<'_>],
@@ -706,11 +751,95 @@ impl Directory {
         authority: &PageAuthority,
         cap: usize,
     ) -> Result<VerifiedRows<'a>> {
+        let (charge, occurrences) =
+            self.response_charge(leaves, fetched.iter().copied(), authority, cap)?;
+        for &leaf in leaves {
+            self.authenticate_leaf(
+                leaf,
+                self.leaf_body(leaf.leaf_id, fetched.iter().copied())?,
+                authority,
+            )?;
+        }
+        self.row_lookup(leaves, fetched.iter().copied(), charge, occurrences, cap)
+    }
+
+    pub(crate) fn authenticate_span<'a>(
+        &'a self,
+        leaves: &'a [LeafPages<'a>],
+        offset: u64,
+        bytes: Vec<u8>,
+        authority: &'a PageAuthority,
+        cap: usize,
+    ) -> Result<VerifiedSpan<'a>> {
+        let cap = cap
+            .min(self.geometry.profile.allocation_cap())
+            .checked_sub(PROOF_EXTRA_BYTES)
+            .ok_or(SourceBuildError::Invalid("capsule memory cap"))?;
+        let span = FetchedSpan {
+            offset,
+            bytes: &bytes,
+        };
+        self.response_charge(leaves, std::iter::once(span), authority, cap)?;
+        for &leaf in leaves {
+            self.authenticate_leaf(
+                leaf,
+                self.leaf_body(leaf.leaf_id, std::iter::once(span))?,
+                authority,
+            )?;
+        }
+        Ok(VerifiedSpan {
+            directory: self,
+            authority,
+            leaves,
+            offset,
+            bytes,
+        })
+    }
+
+    pub(crate) fn verified_rows<'a>(
+        &self,
+        leaves: &[LeafPages<'_>],
+        fetched: &'a [VerifiedSpan<'_>],
+        authority: &PageAuthority,
+        cap: usize,
+    ) -> Result<VerifiedRows<'a>> {
+        for proof in fetched {
+            require(
+                std::ptr::eq(self, proof.directory) && std::ptr::eq(authority, proof.authority),
+                "capsule proof generation",
+            )?;
+            for leaf in proof.leaves {
+                let index = leaves
+                    .binary_search_by_key(&leaf.leaf_id, |item| item.leaf_id)
+                    .map_err(|_| SourceBuildError::Invalid("capsule proof selection"))?;
+                require(leaves[index].pages == leaf.pages, "capsule proof closure")?;
+            }
+        }
+        let extra = mul(fetched.len(), PROOF_EXTRA_BYTES)?;
+        let cap = cap
+            .min(self.geometry.profile.allocation_cap())
+            .checked_sub(extra)
+            .ok_or(SourceBuildError::Invalid("capsule memory cap"))?;
+        let spans = fetched.iter().map(VerifiedSpan::span);
+        let (charge, occurrences) = self.response_charge(leaves, spans.clone(), authority, cap)?;
+        let mut rows = self.row_lookup(leaves, spans, charge, occurrences, cap)?;
+        rows.charge.lookup_bytes = add(rows.charge.lookup_bytes, extra)?;
+        rows.charge.memory(false)?;
+        Ok(rows)
+    }
+
+    fn response_charge<'a>(
+        &self,
+        leaves: &[LeafPages<'_>],
+        fetched: impl ExactSizeIterator<Item = FetchedSpan<'a>> + Clone,
+        authority: &PageAuthority,
+        cap: usize,
+    ) -> Result<(Charge, usize)> {
         let cap = cap.min(self.geometry.profile.allocation_cap());
         let mut charge = self.query_charge(leaves)?;
         self.geometry.authority(authority)?;
         require(
-            !fetched.is_empty() && fetched.len() <= leaves.len(),
+            fetched.len() != 0 && fetched.len() <= leaves.len(),
             "capsule response count",
         )?;
         let occurrences = leaves
@@ -725,13 +854,13 @@ impl Directory {
         admit(charge.memory_bytes, cap)?;
         charge.buffer_bytes = 0;
         let mut physical_bytes = 0;
-        for (index, span) in fetched.iter().enumerate() {
+        for (index, span) in fetched.clone().enumerate() {
             let range = span.byte_range()?;
             require(
                 !range.is_empty() && range.end <= self.blob_bytes as u64,
                 "capsule response bounds",
             )?;
-            for other in &fetched[..index] {
+            for other in fetched.clone().take(index) {
                 let other = other.byte_range()?;
                 require(
                     range.end <= other.start || other.end <= range.start,
@@ -768,6 +897,83 @@ impl Directory {
         )?;
         charge.memory(false)?;
         admit(charge.memory_bytes, cap)?;
+        Ok((charge, occurrences))
+    }
+
+    fn leaf_body<'a>(
+        &self,
+        leaf: u32,
+        mut fetched: impl Iterator<Item = FetchedSpan<'a>>,
+    ) -> Result<&'a [u8]> {
+        let range = self.byte_range(leaf)?;
+        let span = fetched
+            .find(|span| {
+                span.offset <= range.start
+                    && span
+                        .offset
+                        .checked_add(span.bytes.len() as u64)
+                        .is_some_and(|end| range.end <= end)
+            })
+            .ok_or(SourceBuildError::Invalid("capsule missing response leaf"))?;
+        let buffer: &'a Vec<u8> = span.bytes;
+        buffer
+            .get(number(range.start - span.offset)?..number(range.end - span.offset)?)
+            .ok_or(SourceBuildError::Invalid("capsule response bounds"))
+    }
+
+    fn authenticate_leaf(
+        &self,
+        leaf: LeafPages<'_>,
+        bytes: &[u8],
+        authority: &PageAuthority,
+    ) -> Result<()> {
+        let item = &self.entries[leaf.leaf_id as usize];
+        require(
+            bytes.len() == number(item.total_bytes)? && hash(bytes) == item.sha256,
+            "capsule fetched size/hash",
+        )?;
+        require(
+            bytes[..HEADER]
+                == self.geometry.header(
+                    b"BORSCP01",
+                    self.entries.len(),
+                    leaf.leaf_id,
+                    item.page_count,
+                ),
+            "capsule header",
+        )?;
+        let mut offset = add(HEADER, mul(leaf.pages.len(), 4)?)?;
+        for (index, &page) in leaf.pages.iter().enumerate() {
+            let start = HEADER + index * 4;
+            require(
+                bytes[start..start + 4] == page.to_le_bytes(),
+                "capsule expected page closure",
+            )?;
+            let end = add(offset, self.geometry.page_bytes(page)?)?;
+            let body = bytes
+                .get(offset..end)
+                .ok_or(SourceBuildError::Invalid("capsule truncated page"))?;
+            self.geometry.verify_page(page, body, authority)?;
+            offset = end;
+        }
+        require(offset == bytes.len(), "capsule trailing payload")?;
+        Ok(())
+    }
+
+    // Only full authentication or an immutable, generation-bound proof reaches this lookup.
+    fn row_lookup<'a>(
+        &self,
+        leaves: &[LeafPages<'_>],
+        fetched: impl ExactSizeIterator<Item = FetchedSpan<'a>> + Clone,
+        mut charge: Charge,
+        occurrences: usize,
+        cap: usize,
+    ) -> Result<VerifiedRows<'a>> {
+        let cap = cap.min(self.geometry.profile.allocation_cap());
+        let descriptors = add(
+            size_of::<VerifiedRows<'_>>(),
+            mul(fetched.len(), SPAN_DESCRIPTOR_BYTES)?,
+        )?;
         let mut pages = reserve(occurrences)?;
         charge.lookup_bytes = add(
             mul(pages.capacity(), size_of::<PageRef<'_>>())?,
@@ -776,47 +982,13 @@ impl Directory {
         charge.memory(false)?;
         admit(charge.memory_bytes, cap)?;
         for &leaf in leaves {
-            let range = self.byte_range(leaf.leaf_id)?;
-            let span = fetched
-                .iter()
-                .find(|span| {
-                    span.offset <= range.start
-                        && span
-                            .offset
-                            .checked_add(span.bytes.len() as u64)
-                            .is_some_and(|end| range.end <= end)
-                })
-                .ok_or(SourceBuildError::Invalid("capsule missing response leaf"))?;
-            let buffer: &'a Vec<u8> = span.bytes;
-            let bytes =
-                &buffer[number(range.start - span.offset)?..number(range.end - span.offset)?];
-            let item = &self.entries[leaf.leaf_id as usize];
-            require(
-                bytes.len() == number(item.total_bytes)? && hash(bytes) == item.sha256,
-                "capsule fetched size/hash",
-            )?;
-            require(
-                bytes[..HEADER]
-                    == self.geometry.header(
-                        b"BORSCP01",
-                        self.entries.len(),
-                        leaf.leaf_id,
-                        item.page_count,
-                    ),
-                "capsule header",
-            )?;
+            let bytes = self.leaf_body(leaf.leaf_id, fetched.clone())?;
             let mut offset = add(HEADER, mul(leaf.pages.len(), 4)?)?;
-            for (index, &page) in leaf.pages.iter().enumerate() {
-                let start = HEADER + index * 4;
-                require(
-                    bytes[start..start + 4] == page.to_le_bytes(),
-                    "capsule expected page closure",
-                )?;
+            for &page in leaf.pages {
                 let end = add(offset, self.geometry.page_bytes(page)?)?;
                 let body = bytes
                     .get(offset..end)
                     .ok_or(SourceBuildError::Invalid("capsule truncated page"))?;
-                self.geometry.verify_page(page, body, authority)?;
                 pages.push(PageRef {
                     page,
                     leaf: leaf.leaf_id,
@@ -824,7 +996,6 @@ impl Directory {
                 });
                 offset = end;
             }
-            require(offset == bytes.len(), "capsule trailing payload")?;
         }
         pages.sort_unstable_by_key(|item| (item.page, item.leaf));
         pages.dedup_by_key(|item| item.page);
@@ -841,6 +1012,10 @@ mod tests {
     use super::*;
     use crate::two_bit_source::SourcePlaneReceipt;
     use std::io::{self, Cursor};
+
+    thread_local! {
+        pub(super) static HASH_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
 
     fn geometry(rows: usize, dimensions: usize) -> Geometry {
         Geometry::new(rows, dimensions, SemanticProfile::Scale1m).unwrap()
@@ -937,6 +1112,174 @@ mod tests {
             self.verify(leaves, &spans, authority, cap)
         }
     }
+    #[test]
+    fn verified_handoff_binds_directory_authority_ranges_bodies_and_rosters() {
+        let g = geometry(513, 1);
+        let (flat, original) = source(g);
+        let leaves = [
+            LeafPages {
+                leaf_id: 0,
+                pages: &[0, 2],
+            },
+            LeafPages {
+                leaf_id: 1,
+                pages: &[1],
+            },
+            LeafPages {
+                leaf_id: 2,
+                pages: &[0],
+            },
+        ];
+        let (built, blob, encoded) = build(g, &leaves, &flat, &original);
+        let directory = &built.directory;
+        let selected = [leaves[0], leaves[2]];
+        let range = directory.byte_range(0).unwrap();
+        let body = blob[range.start as usize..range.end as usize].to_vec();
+        let authenticate = |offset, bytes| {
+            directory.authenticate_span(&selected[..1], offset, bytes, &original, usize::MAX)
+        };
+        let proof = authenticate(range.start, body.clone()).unwrap();
+        let proof = [proof];
+        let other = Directory::open(&encoded, &hash(&encoded), g, blob.len(), usize::MAX).unwrap();
+        assert!(
+            other
+                .verified_rows(&selected[..1], &proof, &original, usize::MAX)
+                .is_err()
+        );
+        let other_authority = authority(g, &flat, hash(&flat));
+        assert!(
+            directory
+                .verified_rows(&selected[..1], &proof, &other_authority, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .verified_rows(&selected, &proof, &original, usize::MAX)
+                .is_err()
+        );
+        let wrong_roster = [LeafPages {
+            leaf_id: 0,
+            pages: &[1, 2],
+        }];
+        assert!(
+            directory
+                .verified_rows(&wrong_roster, &proof, &original, usize::MAX)
+                .is_err()
+        );
+        assert!(authenticate(range.start + 1, body.clone()).is_err());
+        let mut corrupt = body.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert!(authenticate(range.start, corrupt).is_err());
+        assert!(authenticate(range.start, body[..body.len() - 1].to_vec()).is_err());
+        let other_range = directory.byte_range(2).unwrap();
+        assert!(
+            authenticate(
+                range.start,
+                blob[other_range.start as usize..other_range.end as usize].to_vec()
+            )
+            .is_err()
+        );
+        let other_proof = directory
+            .authenticate_span(
+                &selected[1..],
+                other_range.start,
+                blob[other_range.start as usize..other_range.end as usize].to_vec(),
+                &original,
+                usize::MAX,
+            )
+            .unwrap();
+        assert!(
+            directory
+                .verified_rows(&selected[..1], &[other_proof], &original, usize::MAX)
+                .is_err()
+        );
+        let duplicate = [
+            authenticate(range.start, body.clone()).unwrap(),
+            authenticate(range.start, body).unwrap(),
+        ];
+        assert!(
+            directory
+                .verified_rows(&selected[..1], &duplicate, &original, usize::MAX)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn verified_handoff_matches_raw_rows_hash_work_and_budget() {
+        for dimensions in [1, 257, 1024] {
+            let g = geometry(513, dimensions);
+            let (flat, original) = source(g);
+            let leaves = [
+                LeafPages {
+                    leaf_id: 0,
+                    pages: &[0, 2],
+                },
+                LeafPages {
+                    leaf_id: 1,
+                    pages: &[0],
+                },
+            ];
+            let (built, blob, _) = build(g, &leaves, &flat, &original);
+            let directory = &built.directory;
+            let raw = directory
+                .verify(
+                    &leaves,
+                    &[FetchedSpan {
+                        offset: 0,
+                        bytes: &blob,
+                    }],
+                    &original,
+                    usize::MAX,
+                )
+                .unwrap();
+            let pointer = blob.as_ptr();
+            let mut charge = raw.charge();
+            charge.lookup_bytes += PROOF_EXTRA_BYTES;
+            charge.memory(false).unwrap();
+            let expected = (0..=513)
+                .map(|row| raw.record(row).map(<[u8]>::to_vec))
+                .collect::<Vec<_>>();
+            drop(raw);
+            assert!(
+                directory
+                    .authenticate_span(
+                        &leaves,
+                        0,
+                        blob.clone(),
+                        &original,
+                        charge.memory_bytes - charge.buffer_bytes + blob.len() - 1
+                    )
+                    .is_err()
+            );
+            HASH_BYTES.with(|count| count.set(0));
+            let proof = directory
+                .authenticate_span(&leaves, 0, blob, &original, usize::MAX)
+                .unwrap();
+            HASH_BYTES.with(|count| assert_eq!(count.get(), charge.hash_bytes));
+            assert_eq!(proof.bytes().as_ptr(), pointer);
+            let proofs = [proof];
+            let rows = directory
+                .verified_rows(&leaves, &proofs, &original, usize::MAX)
+                .unwrap();
+            for (row, expected) in expected.iter().enumerate() {
+                assert_eq!(rows.record(row), expected.as_deref());
+            }
+            assert_eq!(rows.page_leaf(0), Some(0));
+            assert_eq!(rows.page_leaf(2), Some(0));
+            assert_eq!(rows.charge(), charge);
+            HASH_BYTES.with(|count| assert_eq!(count.get(), charge.hash_bytes));
+            assert_eq!(
+                rows.charge().hash_bytes,
+                2 * charge.physical_bytes - charge.framing_bytes
+            );
+            assert!(
+                directory
+                    .verified_rows(&leaves, &proofs, &original, charge.memory_bytes - 1)
+                    .is_err()
+            );
+        }
+    }
+
     fn rehash_copy(directory: &mut Directory, fetched: &[(u32, Vec<u8>)], leaf: u32) {
         directory.entries[leaf as usize].sha256 =
             hash(&fetched.iter().find(|(id, _)| *id == leaf).unwrap().1);
