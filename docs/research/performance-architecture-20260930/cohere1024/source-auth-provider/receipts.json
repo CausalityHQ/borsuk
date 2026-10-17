@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-source-auth-provider-closure-v1",
+  "candidate_source": "69a2281c7cc327291da0ae8942ed4c175500e7e0",
+  "candidate_integrated": false,
+  "control_source": "d014838fbce1d433b90092f0d20051887422b3ef",
+  "query_binary_sha256": "75645c63e1feb268580dace9a7396813ebc5a1304e6500d33dfa387f43b0987a",
+  "reader_binary_sha256": "7b844b95a57aa453a997a3aa51a88083499f82dff45c089ecea688783c96b81b",
+  "semantic_and_all_logical_charges_sha256": "fd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb",
+  "archive": {
+    "bucket": "borsuk-bench-453182569524-euc1",
+    "key": "research/semantic-router/20261017/source-auth-provider-closure-a0001/evidence.tar.gz",
+    "sha256": "50693319596b8eb337559aa9417a8f151ad74a2237e17b2e1b03e10a841de5bb",
+    "bytes": 14267993
+  },
+  "instance_id": "i-0bbe0101f1825806e",
+  "panel_invocation": "31f954201fe0426f9194abe1b5fe7b9b",
+  "panel_launch_command": "f46d8b09-bbb3-4414-8595-f5b6a84012f2",
+  "closed_analysis_command": "ba0017aa-12b0-4f53-a17e-1a38bf54886a",
+  "reviews_group": "65bcfde46f2b4647",
+  "disposition": "VALID_SCREEN_NO_ADOPTION",
+  "full1000_run": false,
+  "compute": "measurement jobs terminal; host actively serving separate bounded source research, deadline13:00UTC"
+}
