@@ -1,0 +1,35 @@
+{
+  "status": "FROZEN_BEFORE_ABBA",
+  "configs": [
+    {
+      "name": "admission.leaf40.json",
+      "bytes": 3394,
+      "sha256": "c007207cbf1dca512bd7fb773ec5d121e23a4d5f058ab1676effa920207ca4be"
+    },
+    {
+      "name": "admission.leaf48.json",
+      "bytes": 3394,
+      "sha256": "4a2672688a302ad5c2b14a4809c1a9a579a81c43a287a192d3e0fa0e9dc958c2"
+    },
+    {
+      "name": "full.leaf40.json",
+      "bytes": 3329,
+      "sha256": "73016218a0a926eedc2c68ebead5e99a5128c86c6a18acca6c3cd0ef1eed8fe3"
+    },
+    {
+      "name": "full.leaf48.json",
+      "bytes": 3329,
+      "sha256": "3e1f253533e490ff58935e7b8823cf93b3bf795724896ebc1b8816a2e823753f"
+    },
+    {
+      "name": "smoke.leaf40.json",
+      "bytes": 3406,
+      "sha256": "bbbcb2dd5f68232c170779364fa4edcf74ca946f2d05ebc6d08dd64ff98fb2c1"
+    },
+    {
+      "name": "smoke.leaf48.json",
+      "bytes": 3406,
+      "sha256": "1eddd19a28783b251bcfbfb2dd61135f8b954e3ebfeb7baf477212ec9cae4e23"
+    }
+  ]
+}

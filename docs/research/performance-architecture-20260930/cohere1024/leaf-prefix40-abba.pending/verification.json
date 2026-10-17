@@ -1,0 +1,21 @@
+{
+  "scope": "static_only_no_native_or_runtime_stages",
+  "instance": "i-00bf80e4d5592efc8",
+  "base": "beeb3c8218698ccf0c569b3980112bf1b62c0184",
+  "ssm_command_id": "e0144f60-877e-405b-834e-93e64ffeda49",
+  "unit": "leaf-prefix40-abba-static-a0002",
+  "invocation_id": "487a30d5369944d8bbda11027f139037",
+  "exit": 0,
+  "checks": ["bash -n", "ShellCheck warning level", "Python AST parse", "all JSON parse", "single causal full config difference", "two-query smoke ordinals", "local input content hashes", "full frozen header bindings", "canonical query counts and hit totals", "retained source authority equality"],
+  "cpu_quota_percent": 100,
+  "allowed_cpu": 4,
+  "memory_max_bytes": 536870912,
+  "swap_max_bytes": 0,
+  "runtime_max_seconds": 120,
+  "observed_runtime_ms": 236,
+  "native_executed": false,
+  "admission_executed": false,
+  "smoke_executed": false,
+  "measured_executed": false,
+  "strict_reader_executed": false
+}

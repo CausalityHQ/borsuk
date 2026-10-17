@@ -1,0 +1,34 @@
+{
+  "instance": "i-00bf80e4d5592efc8",
+  "aws_profile": "causality",
+  "region": "eu-central-1",
+  "stage_order": [
+    "gates",
+    "run",
+    "collect"
+  ],
+  "preparation": "/mnt/borsuk-workspace/evidence/leaf-prefix40-abba-preparation-a0001",
+  "delivery_base": "beeb3c8218698ccf0c569b3980112bf1b62c0184",
+  "runtime_source": "a0463ed097296c19539d05529ddad615be760fdd",
+  "poweroff_usec": 1792284726321116,
+  "margin_seconds": 60,
+  "order": [
+    [
+      "A1",
+      48
+    ],
+    [
+      "B1",
+      40
+    ],
+    [
+      "B2",
+      40
+    ],
+    [
+      "A2",
+      48
+    ]
+  ],
+  "executed_by_worker": false
+}
