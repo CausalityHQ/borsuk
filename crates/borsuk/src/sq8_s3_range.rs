@@ -3882,7 +3882,7 @@ mod tests {
             Ok(())
         }));
         tokio::select! {
-            result = &mut authentication => panic!("held authentication finished: {result:?}"),
+            _ = &mut authentication => panic!("held authentication finished"),
             () = tokio::time::sleep(Duration::from_millis(10)) => {}
         }
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
