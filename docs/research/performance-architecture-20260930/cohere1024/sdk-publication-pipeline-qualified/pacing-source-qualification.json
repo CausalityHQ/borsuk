@@ -1,0 +1,155 @@
+{
+  "schema": "sdk-physical-pacing-source-qualification-v1",
+  "base_commit": "e808144ee8f00745a2e5d7f4aa48afedc6da281a",
+  "commit": "21b3f8f94cff7d8db95eebbc314e7a34a396828f",
+  "source_file": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+  "source_sha256": "ae4633ecbb7230e7f669dd017ee27f2f319aa5499a6f12bdf4e77b91905f10f2",
+  "worktree": "/mnt/borsuk-workspace/sdk-physical-pacing-source-a0001",
+  "evidence": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001",
+  "source_status": "QUALIFIED: 22 SDK native tests, feature-aware workspace Clippy correctness+suspicious, actual env-unset workspace test build",
+  "service_status": "UNRUN: no live service/data/API experiment",
+  "boundary": "PUT-only SDK read_before_transmit admission after credential resolution and signing. Shared monotonic mutex records the actual admission after sleeping; no catchup. DNS/TLS, connector entry, wire-send and server-arrival spacing are not established.",
+  "blocking_limit": "The synchronous SDK interceptor sleeps on the single application polling lane for the remaining spacing interval; no extra threads or tasks. Eight simultaneous RPC futures and owned response-body overlap remain tested.",
+  "schedule": {
+    "put_rpc_futures_max": 8,
+    "get_rpc_futures_max": 8,
+    "application_compute_lanes": 1,
+    "put_application_spacing_ms_min": 250,
+    "put_authenticated_transmit_admission_spacing_ms_min": 250,
+    "catchup": false,
+    "retry_attempts": 1
+  },
+  "checks": [
+    {
+      "name": "green22",
+      "command": "cargo +1.98.0 test --offline --locked -p borsuk --features s3-vectors-bench --bin check_s3_vectors_baseline -- --test-threads=4",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001/green22.log"
+    },
+    {
+      "name": "clippy",
+      "command": "cargo +1.98.0 clippy --offline --locked --workspace --all-targets --features borsuk/s3-vectors-bench -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001/clippy.log"
+    },
+    {
+      "name": "testbuild",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 CARGO_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001/testbuild.log"
+    }
+  ],
+  "regression": {
+    "test": "publication_delayed_authentication_cannot_burst_transmit_admissions",
+    "red_exit": 101,
+    "old_code_observed_gap_ms": 36.330906,
+    "green_exit": 0,
+    "setup": "all eight PUT application starts await delayed identity readiness; capture monotonic signed read_before_transmit admissions and require every gap >=250ms",
+    "original_tests_retained_unchanged": 21,
+    "total_passing_tests": 22
+  },
+  "tree_audit": {
+    "base": "e808144ee8f00745a2e5d7f4aa48afedc6da281a",
+    "tree": "6d0daf4b08c6fb8d8287112d62b376b0335c95f6",
+    "owned": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+    "tracked_entries": 34682,
+    "unowned_entries_audited": 34681,
+    "unowned_base_digest": "2305f334e8d35c289c8d5236660fbbc8c45997657ee775d2932310a8610c47f3",
+    "unowned_new_digest": "2305f334e8d35c289c8d5236660fbbc8c45997657ee775d2932310a8610c47f3",
+    "unowned_entries_changed": 0,
+    "method": "full recursive base/index/new-tree entry comparison; missing inherited blobs preserved by write-tree --missing-ok",
+    "commit": "21b3f8f94cff7d8db95eebbc314e7a34a396828f"
+  },
+  "protected_regions": {
+    "measurement_query_idle_reduce_cleanup_cli": {
+      "identical": true,
+      "sha256": "e9f4b7a48032b21f270e6305f7332fdfeb1d2e2c3a4086e0c9eee39db3429d12"
+    },
+    "serial_call_create_account": {
+      "identical": true,
+      "sha256": "98915238f1de26082a6aa677e6e907f391e079d35e56f37117f165dede76eec0"
+    },
+    "readback_logic_except_explicit_unpaced_argument": {
+      "identical": true,
+      "sha256": "91eac29767d84a6e65e9aa906012bb2a6a9fd5e4e96a3fc60355a267b8b0c85e"
+    },
+    "capture_schema": {
+      "identical": true,
+      "sha256": "b5f77e1ff64530369b3cff99bc1f0ab1292160c89f694d1f65e84418bfe1a28a"
+    },
+    "all_existing_test_source": {
+      "identical": true,
+      "sha256": "cc68791568db94feac9fe548434e9c880dfb7ff7457c0e95ce168fff62fda863"
+    }
+  },
+  "protected_root": {
+    "invocation": "96475bf14fcc4a4a93c0d6d414d4a2f6",
+    "active": true,
+    "measure_started": false,
+    "all_21_saved_file_pins_unchanged": true,
+    "current_full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+    "changed": false
+  },
+  "resources": {
+    "cpus": "8-15",
+    "cpu_quota": "800%",
+    "memory_max_bytes": 42949672960,
+    "swap_max_bytes": 0,
+    "pids_max": 1024,
+    "shared_lock": "/mnt/borsuk-workspace/cargo-target.lock",
+    "units_max_seconds": 600,
+    "active_cgroup_proofs": [
+      "red.resources",
+      "clippy.resources",
+      "testbuild.resources"
+    ]
+  },
+  "guards": {
+    "every_unit": "full/measure.started absent; now+unitmax+120 < published.data.verified_at_ms/1000+3600",
+    "hard_compiler_stop_utc": "2026-10-17T22:35:00Z",
+    "last_compiler_finish_utc": "2026-10-17T22:20:05Z",
+    "no_worker_units_running_at_final": true
+  },
+  "retained_failures": {
+    "red.log": "initial fixture compilation errors: URI accessor and missing ResolveIdentity trait qualification; fixed before the expected red test",
+    "red-fixed-fixture.log": "expected old-code spacing failure",
+    "bundle-create.log": "git bundle rejected raw positive OID as empty; committed HEAD preserved and exported with HEAD ref instead"
+  },
+  "original_ssm_receipts": {
+    "initial_environment": "53cfd0f5-d446-438a-840c-6450b34b3248",
+    "sparse_worktree": "81ae2081-5b34-47df-8fda-5a7124ee7f74",
+    "fixture_compile_error": "75795cc1-3f48-4227-8bd8-8d86a6646ad1",
+    "red_expected_spacing_failure": "3a272a76-246b-4660-a793-abf08664686e",
+    "format_and_green22": "a8974583-3bea-4318-8b77-330498462189",
+    "clippy_and_actual_testbuild": "6fdd1e97-e41f-4f79-a090-e2389342e23d",
+    "source_regions_and_tree_audit": "46380e20-41cb-4ba9-9860-235dc1dbe0a7",
+    "toolchain_and_dependency_pin_verification": "d281e5ed-5476-46d0-859b-4683a7781435",
+    "commit_and_initial_oid_bundle_refusal": "77a08877-c7f4-4a0e-a883-069661f94bcf",
+    "verified_bundle_and_final_audit": "7ddd12a5-ea81-41b0-b517-e93f16703a31"
+  },
+  "delivery": {
+    "bundle": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001/change.bundle",
+    "patch": "/mnt/borsuk-workspace/evidence/sdk-physical-pacing-a0001/change.patch",
+    "merge": false,
+    "push": false,
+    "local_source_prep": false,
+    "children_or_consultations": false
+  },
+  "unrun": [
+    "live service validation",
+    "full workspace runtime tests",
+    "wire/server-arrival timing"
+  ],
+  "warnings": "Non-denied Rust/Clippy warnings remain. No all-warnings-clean or throughput claim.",
+  "finished_utc": "2026-10-17T22:21:41.094797+00:00",
+  "ssm_actual_response_codes": {
+    "75795cc1-3f48-4227-8bd8-8d86a6646ad1": 101,
+    "3a272a76-246b-4660-a793-abf08664686e": 101,
+    "a8974583-3bea-4318-8b77-330498462189": 0,
+    "6fdd1e97-e41f-4f79-a090-e2389342e23d": 0,
+    "46380e20-41cb-4ba9-9860-235dc1dbe0a7": 0,
+    "d281e5ed-5476-46d0-859b-4683a7781435": 0,
+    "77a08877-c7f4-4a0e-a883-069661f94bcf": 1,
+    "7ddd12a5-ea81-41b0-b517-e93f16703a31": 0
+  }
+}

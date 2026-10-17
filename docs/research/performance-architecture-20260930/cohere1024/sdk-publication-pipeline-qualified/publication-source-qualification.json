@@ -1,0 +1,172 @@
+{
+  "schema": "sdk-publication-pipeline-source-qualification-v1",
+  "base_commit": "e8b5653f27b3588c504c15afed93dcb95f662146",
+  "commit": "e808144ee8f00745a2e5d7f4aa48afedc6da281a",
+  "source_file": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+  "source_sha256": "348cf64c9d7bb5a1bb8262b4da6af69156dadf792fcb6fe12ecc100c213332a9",
+  "source_status": "QUALIFIED: affected SDK tests, feature-aware workspace Clippy, actual shim-unset workspace test build",
+  "service_status": "UNRUN: no real AWS service/data operations or paid experiment; no throughput claim",
+  "worktree": "/mnt/borsuk-workspace/sdk-publication-pipeline-source-a0001",
+  "evidence": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001",
+  "schedule": {
+    "put_rpc_futures_max": 8,
+    "get_rpc_futures_max": 8,
+    "application_compute_lanes": 1,
+    "additional_compute_workers": 0,
+    "put_batch_rows": 500,
+    "get_batch_rows": 100,
+    "put_application_send_spacing_ms_min": 250,
+    "put_catchup": false,
+    "nominal_vector_start_rate_cap_per_second": 2000,
+    "list_pagination": "serial unchanged token semantics"
+  },
+  "response_ownership": "Each publication RPC replaces serial client capture with a fresh Tap; its body/hash/status/request ID remain call-owned. Serial call!/create!/Service.body users retain their unchanged capture.",
+  "error_order": "earliest batch in admission order; stop admitting after any error; drain every started future and account its result before returning, terminal receipt, or cleanup",
+  "integrity": "Original authenticated corpus Identity passed into upload; raw f32 bits, keys, 500/100 partial batches, EOF, complete enumeration, complete readback, post-readback stamps and seals preserved",
+  "checks": [
+    {
+      "name": "final21",
+      "command": "cargo +1.98.0 test --offline --locked -p borsuk --features s3-vectors-bench --bin check_s3_vectors_baseline -- --test-threads=4",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/final21.log"
+    },
+    {
+      "name": "final-clippy",
+      "command": "cargo +1.98.0 clippy --offline --locked --workspace --all-targets --features borsuk/s3-vectors-bench -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/final-clippy.log"
+    },
+    {
+      "name": "final-testbuild",
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 CARGO_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/final-testbuild.log"
+    }
+  ],
+  "native_tests": {
+    "passed": 21,
+    "original_fixtures_retained": 16,
+    "new_tests": 5,
+    "test_threads": 4
+  },
+  "new_fixture_coverage": [
+    "held response bodies reach eight PUT and GET RPCs",
+    "preparation, verification and SDK tap scopes peak at one and all execute on the polling task thread",
+    "individual response IDs and body SHA256 never cross calls",
+    "reordered 503 failures return earliest batch after drain; cleanup sees zero active bodies",
+    "reservation cap refuses further sends, drains reservations, keeps cleanup ledger locked",
+    "4501 rows preserve exact f32 bits, final PUT=1 row and GET=1 row; application starts >=250ms apart after held-body backlog",
+    "authenticated-stamp mutation before first PUT makes zero reservations and zero service calls"
+  ],
+  "preserved_regions": {
+    "measurement_reduction_cleanup_and_cli": {
+      "identical": true,
+      "base_sha256": "e9f4b7a48032b21f270e6305f7332fdfeb1d2e2c3a4086e0c9eee39db3429d12",
+      "new_sha256": "e9f4b7a48032b21f270e6305f7332fdfeb1d2e2c3a4086e0c9eee39db3429d12"
+    },
+    "serial_call_create_account": {
+      "identical": true,
+      "base_sha256": "47a1564a3b91705cf61503ecc615733836f54535a16562245a97c751e30c904a",
+      "new_sha256": "47a1564a3b91705cf61503ecc615733836f54535a16562245a97c751e30c904a"
+    },
+    "serial_token_enumeration": {
+      "identical": true,
+      "base_sha256": "68ee7b58bf45fd6feaf61f4625f674b6578c4a9d8e435b54332e23c787edc359",
+      "new_sha256": "68ee7b58bf45fd6feaf61f4625f674b6578c4a9d8e435b54332e23c787edc359"
+    }
+  },
+  "tree_audit": {
+    "base": "e8b5653f27b3588c504c15afed93dcb95f662146",
+    "tree": "3bd04713c7736e51974d6a4007852d65bc912c55",
+    "owned": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+    "tracked_entries": 34682,
+    "unowned_entries_audited": 34681,
+    "unowned_base_digest": "66455c020311c273ac54e5b05467d10ed43cf126ddcc804f152c971ddef4adc0",
+    "unowned_new_digest": "66455c020311c273ac54e5b05467d10ed43cf126ddcc804f152c971ddef4adc0",
+    "unowned_entries_changed": 0,
+    "method": "full recursive base/index/new-tree comparison including sparse and missing inherited blobs; write-tree --missing-ok only after equality audit",
+    "commit": "e808144ee8f00745a2e5d7f4aa48afedc6da281a"
+  },
+  "resources": {
+    "cpus": "8-15",
+    "cpu_quota": "800%",
+    "memory_max_bytes": 42949672960,
+    "swap_max_bytes": 0,
+    "pids_max": 1024,
+    "runtime_max_seconds": 900,
+    "shared_lock": "/mnt/borsuk-workspace/cargo-target.lock",
+    "active_cgroup_proof": "qualified-tests.resources",
+    "runner": "unit.sh"
+  },
+  "guard": {
+    "marker": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full/measure.started",
+    "publication": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/published.json",
+    "condition": "marker absent AND now+unitmax+120 < published.data.verified_at_ms/1000+3600; absent publication uses now+3600; overall deadline also asserted",
+    "parent_clarification": "1792272056372155498-816231"
+  },
+  "protected_live_invocation": "96475bf14fcc4a4a93c0d6d414d4a2f6",
+  "documentation": {
+    "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors-best-practices.html",
+    "verified_at_utc": "2026-10-17",
+    "limit_vectors_per_second": 2500,
+    "batch_max": 500
+  },
+  "future_canary": {
+    "script": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/future-canary.sh",
+    "syntax_checked": true,
+    "executed": false,
+    "usage": "future-canary.sh BINARY BINARY_SHA256 SCALE_CONFIG SCALE_CONFIG_SHA256",
+    "behavior": "Clone supplied pinned scale config into fresh random namespace, admit/prepare 257-row raw canary, admit/publish/verify schedule/measure/reduce, then single ownership-checked cleanup even on error. Preserves original full config and state. Two canary queries are synthetic validation, not quality/performance evidence.",
+    "limit": "The fixed 257-row real canary cannot qualify full PUT throughput or eight PUTs; native loopback 4501-row fixture covers concurrency. A future paid full run remains root-owned.",
+    "exact_command_file": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/future-canary.command",
+    "cleanup_barrier": "All durable reservations must be observed before trap may dispatch cleanup; unknown calls preserve receipts for operator reconciliation.",
+    "prerequisites": "Separate root authorization, valid causality profile in retained root, clear current experiment/resource lane, approved service/cost envelope; command is supplied but was not executed."
+  },
+  "retained_failed_attempts": {
+    "red.log": "Expected serial readback regression: peak one vs three",
+    "green.log": "E0507 captured Identity ownership compile error, fixed by reference",
+    "fixtures.log": "Mock Axum 2MiB request cap rejected 500-row batch; mock raised to existing API 20MiB cap",
+    "final-tests.log": "Parallel held-body completions reordered audit records; cadence assertion sorted by call ID",
+    "stamp-red.log": "Expected regression: fresh stamp masked pre-dispatch mutation; fixed by passing authenticated stamp"
+  },
+  "warnings": "Clippy correctness/suspicious gate passed; non-denied warnings remain. No all-warnings-clean claim.",
+  "unrun": [
+    "real service canary",
+    "real full-scale throughput experiment",
+    "complete workspace runtime test suite"
+  ],
+  "delivery": {
+    "bundle": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/change.bundle",
+    "patch": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/change.patch",
+    "merge": false,
+    "push": false,
+    "local_source_prep": false,
+    "children_or_consultations": false
+  },
+  "canary_binary": {
+    "path": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/artifacts/check_s3_vectors_baseline",
+    "sha256": "63cc908cde1b48559d57219ad61ddf68577d2b4e35ad5ad82dc5224dd230ecfa",
+    "profile": "dev, unoptimized with debuginfo; compatibility canary only, not a throughput benchmark binary",
+    "build_command": "cargo +1.98.0 build --offline --locked -p borsuk --features s3-vectors-bench --bin check_s3_vectors_baseline",
+    "build_exit": 0,
+    "executed_against_service": false
+  },
+  "validation_feature_scope": "SDK bin tests/build and full workspace Clippy explicitly enable s3-vectors-bench; actual unmodified workspace testbuild script compiles its default-feature surface with shim unset.",
+  "original_ssm_receipts": {
+    "final_native_tests_clippy_testbuild": "ab4533f7-0622-4a9a-8ebc-4de2630ffd8f",
+    "commit_bundle_binary_build": "98d73294-aa1a-471c-b24e-b96d526861ff",
+    "regression_serial_red": "4d06e9ad-3f50-4df7-99aa-6317d4f21c3e",
+    "regression_authenticated_stamp_red": "d5c650d8-58b4-404c-9c80-4bfb9af3c942",
+    "guard_clarification_ask": "1792272002325354050-816231"
+  },
+  "finished_utc": "2026-10-17T21:44:44.270802+00:00",
+  "elapsed_from_assignment_seconds": 1612,
+  "protected_root_final_audit": {
+    "invocation": "96475bf14fcc4a4a93c0d6d414d4a2f6",
+    "source_blob_matches_base": true,
+    "source_blob": "96b378a57040ce298411558574e1cae9982fe239",
+    "current_full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+    "modified": false
+  },
+  "inventory_manifest": "/mnt/borsuk-workspace/evidence/sdk-publication-pipeline-a0001/inventory.sha256"
+}
