@@ -998,6 +998,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::current_v10;
     use super::super::tests::{authenticate, encode, paired_scale_fixture};
     use super::*;
     use sha2::{Digest, Sha256};
