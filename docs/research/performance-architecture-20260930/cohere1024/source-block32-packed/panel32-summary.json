@@ -1,0 +1,156 @@
+{
+  "schema": "borsuk-source-block32-packed-summary-v1",
+  "scope": "fixed queries repeated twice per arm; not independent extra queries",
+  "cells": [
+    {
+      "cell": "A1",
+      "queries": 32,
+      "cpu_ns": 3569746079,
+      "wall_ns": 4924962357,
+      "p50_ms": 152.023297,
+      "p90_ms": 182.452824,
+      "p95_ms": 188.77992,
+      "p99_ms": 210.223852,
+      "qps": 6.497511591031233,
+      "planning_wall_ns": 989845303,
+      "source_wall_ns": 2415387623,
+      "sq8_wall_ns": 1448536749,
+      "hits": 309,
+      "denominator": 320,
+      "recall": 0.965625,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 3474,
+          "verified_bytes": 914411520
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 1004,
+          "verified_bytes": 290875648
+        }
+      },
+      "rss_bytes": 76218368
+    },
+    {
+      "cell": "B1",
+      "queries": 32,
+      "cpu_ns": 3355853260,
+      "wall_ns": 4780993932,
+      "p50_ms": 140.98449,
+      "p90_ms": 183.253846,
+      "p95_ms": 185.627379,
+      "p99_ms": 210.823803,
+      "qps": 6.693168921595695,
+      "planning_wall_ns": 796395156,
+      "source_wall_ns": 2433323178,
+      "sq8_wall_ns": 1485114754,
+      "hits": 309,
+      "denominator": 320,
+      "recall": 0.965625,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 3474,
+          "verified_bytes": 914411520
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 1004,
+          "verified_bytes": 290875648
+        }
+      },
+      "rss_bytes": 74354688
+    },
+    {
+      "cell": "B2",
+      "queries": 32,
+      "cpu_ns": 3365800915,
+      "wall_ns": 4723503064,
+      "p50_ms": 142.864904,
+      "p90_ms": 177.24273,
+      "p95_ms": 187.65505,
+      "p99_ms": 191.922907,
+      "qps": 6.774633056531028,
+      "planning_wall_ns": 795615155,
+      "source_wall_ns": 2403193273,
+      "sq8_wall_ns": 1458566470,
+      "hits": 309,
+      "denominator": 320,
+      "recall": 0.965625,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 3474,
+          "verified_bytes": 914411520
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 1004,
+          "verified_bytes": 290875648
+        }
+      },
+      "rss_bytes": 73748480
+    },
+    {
+      "cell": "A2",
+      "queries": 32,
+      "cpu_ns": 3572853422,
+      "wall_ns": 4915042234,
+      "p50_ms": 149.106102,
+      "p90_ms": 188.786172,
+      "p95_ms": 190.507671,
+      "p99_ms": 195.766815,
+      "qps": 6.510625641960659,
+      "planning_wall_ns": 983750514,
+      "source_wall_ns": 2410881033,
+      "sq8_wall_ns": 1448877670,
+      "hits": 309,
+      "denominator": 320,
+      "recall": 0.965625,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 3474,
+          "verified_bytes": 914411520
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 1004,
+          "verified_bytes": 290875648
+        }
+      },
+      "rss_bytes": 77320192
+    }
+  ],
+  "ratios": {
+    "cpu": 0.9410655286018675,
+    "wall": 0.9659037156032563,
+    "source": 1.0021233370395284,
+    "planning": 0.8066546844530529,
+    "forward_wall": 0.9707676090568746,
+    "reverse_wall": 0.9610300052611919,
+    "forward_cpu": 0.9400817833351558,
+    "reverse_cpu": 0.9420484182964055
+  }
+}

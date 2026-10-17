@@ -1,0 +1,105 @@
+{
+  "schema": "borsuk-source-block32-packed-evidence-receipts-v1",
+  "decision": "VALID_SCREEN_RETAIN_PENDING_FULL1000",
+  "instance": "i-0bbe0101f1825806e",
+  "region": "eu-central-1",
+  "base_commit": "a6663b4ea4b8bada6195f4575da86a7203b1513e",
+  "candidate_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+  "candidate_code_adopted": false,
+  "candidate_full1000": "UNRUN",
+  "historical_incumbent_full1000_recall_percent": 97.83,
+  "historical_full1000_is_separate": true,
+  "independent_review": {
+    "id": "028dc62f9db547f5",
+    "status": "root previously read; no blocker per assignment; no new review performed"
+  },
+  "evidence": {
+    "panel": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-abba32-a0001",
+      "exits": {
+        "A1.exit": 0,
+        "A1.reader.exit": 0,
+        "A2.exit": 0,
+        "A2.reader.exit": 0,
+        "B1.exit": 0,
+        "B1.reader.exit": 0,
+        "B2.exit": 0,
+        "B2.reader.exit": 0,
+        "runner.exit": 0
+      },
+      "terminal.txt": "panel NATIVE_AND_STRICT_READERS_PASSED_PARITY_ANALYSIS_PENDING\n",
+      "semantic.sha256": "fd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb  /mnt/borsuk-workspace/evidence/source-block32-packed-abba32-a0001/A1.semantic.v1.jsonl\nfd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb  /mnt/borsuk-workspace/evidence/source-block32-packed-abba32-a0001/A2.semantic.v1.jsonl\nfd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb  /mnt/borsuk-workspace/evidence/source-block32-packed-abba32-a0001/B1.semantic.v1.jsonl\nfd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb  /mnt/borsuk-workspace/evidence/source-block32-packed-abba32-a0001/B2.semantic.v1.jsonl\n",
+      "summary_sha256": "16c38569328d5adc36ded854dc467f5c1635913d604b8da4859099648fc5beab",
+      "semantic_sha256": "fd7eb4eefd3844640e3207d55f2aadec580a065f33caaf7c2af2f46bae0b99bb"
+    },
+    "correctness": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final",
+      "exits": {
+        "clippy.exit": 0,
+        "fmt.exit": 0,
+        "generation.exit": 0,
+        "integration.exit": 0,
+        "rotated.exit": 0,
+        "scalar-control.exit": 0,
+        "workspace-test-build.exit": 0
+      },
+      "terminal": "PASS\n",
+      "commit.txt": "commit 7acbbb82d48078f46c0a163614db39eeee15afc7\nAuthor:     Roman Bartusiak <riomus@gmail.com>\nAuthorDate: Sat Oct 17 12:43:05 2026 +0000\nCommit:     Roman Bartusiak <riomus@gmail.com>\nCommitDate: Sat Oct 17 12:43:05 2026 +0000\n\n    Pack independent rows in the current SOURCE block scorer\n",
+      "artifacts.sha256": "a57664a2a0c855ce0ff3a25549bc83e1ecb281c0664e7c4f48ae9d84cf384f81  /mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final/change.bundle\n9465c43905e7b5e23fc8e02504e52e45506ef2e5c9841c98587bce15dbb88fc3  /mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final/change.patch\n",
+      "passed_counts": {
+        "rotated": 5,
+        "generation": 51,
+        "integration": 2,
+        "scalar-control": 7
+      }
+    },
+    "release": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001",
+      "exits": {
+        "build.exit": 0,
+        "normalization-test.exit": 0,
+        "runner.exit": 0,
+        "terminal.exit": 0
+      },
+      "source.commit": "7acbbb82d48078f46c0a163614db39eeee15afc7\n",
+      "artifacts.sha256": "d1b001f2aadffb2e36b10f081e47ff03dce6f66f290df9aaa48c8d441ff5f074  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/build_sq8_source\n9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/check_cohere_native_baseline\n0e446a2a9e4abc6499a54445993ecb62917a486be39f36ee04a864bf1674e103  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/compare_native_replay\n",
+      "codegen": {
+        "file": "score.asm",
+        "sse2_addpd_instruction_count": 16,
+        "frame_hex": "0x208",
+        "frame_evidence": [
+          "6b9f2a:\t48 81 ec 08 02 00 00 \tsub    $0x208,%rsp",
+          "6ba20c:\t48 8b 8f 08 02 00 00 \tmov    0x208(%rdi),%rcx",
+          "6baa90:\t48 81 c4 08 02 00 00 \tadd    $0x208,%rsp"
+        ],
+        "sha256": "23243410d6d0950d2341b7d131063ca7358cb491da678d0fa52a2d7bff49b75b"
+      }
+    },
+    "runtime_gates": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-runtime-gates-a0001",
+      "exits": {
+        "candidate.admission.exit": 0,
+        "candidate.admission.reader.exit": 0,
+        "candidate.canary.exit": 0,
+        "candidate.canary.reader.exit": 0,
+        "control.admission.exit": 0,
+        "control.admission.reader.exit": 0,
+        "control.canary.exit": 0,
+        "control.canary.reader.exit": 0,
+        "runner.exit": 0
+      },
+      "terminal.txt": "gates NATIVE_AND_STRICT_READERS_PASSED_PARITY_ANALYSIS_PENDING\n",
+      "admission.terminal.txt": "admission COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+      "canary.terminal.txt": "canary COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+      "canary_semantic_sha256": {
+        "control.canary.semantic": "d6117e397af259bd62c5a841acdd0cdafb422b2d16d4d90349520187f1a190a4",
+        "candidate.canary.semantic": "d6117e397af259bd62c5a841acdd0cdafb422b2d16d4d90349520187f1a190a4"
+      }
+    },
+    "protocol": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-runtime-preparation-a0001/protocol.txt",
+      "sha256": "7a1c92ec0153cbe16a339e12f232e21bf48898c62c0199fab1290afae1b385c0",
+      "text": "Prospective CURRENT full32 scorer packed-lane experiment.\nControl native d014 immutable a3678661 ELF. Candidate is separately frozen packed32 source after affected correctness, workspace Clippy and actual shim-unset workspace test compile; exact release artifact+codegen inspection required before native measurements. Only packed independent-row additions and necessary conservative scratch accounting change; hashes/layout/routing/quality/tails/callbacks/limits/concurrency unchanged. No old fourrow candidate or historical threshold/verdict is relabeled.\nSame original SOURCE128 config for both arms, Cohere1M D1024 cosine k10/fixed1000 cohort, fixed32 panel ordinals. SOURCE64MiB/SQ832GET32MiB/query2GiB/fetch64/cacheoff; CPU4/cpus0-3/16GiB/swap0/pids1024. Exact primitive score bits and result ID/order/score bits required; ALL logicalGET/byte charges unchanged. Any serialized scratch/model delta must be derived and recorded prospectively before canonical comparison, never broadly excluded.\nAdmission on actual authenticated records/requests/truth, then separate2query real-service canary+strictreader+cleanup, before panel. Codegen must show actual serving packed additions; no unsafe/fastmath/reassociation/horizontal reduction/new flags.\nFixed32ABBA closed-only analysis, perorder+pooled CPU/planning/wall/p90/p95/RSS; no arbitrary gain threshold. Four successful native cells and strictreaders, same semantics+charges. Population tails not qualified by32. Full1000 requires separate root decision after valid panel. Interruptions/OOM/config failures INVALID, preserve originals and handles. Absolute stop before12:58UTC, host13UTC.\n"
+    }
+  }
+}
