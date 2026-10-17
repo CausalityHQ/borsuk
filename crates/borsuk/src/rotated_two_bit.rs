@@ -578,36 +578,68 @@ mod tests {
     fn source_block32_release_primitive() {
         use std::{hint::black_box, time::Instant};
         assert!(!cfg!(debug_assertions), "run this primitive with --release");
-        const ITERATIONS: usize = 64;
+        const UNIT_ROSTER: usize = 256;
+        const MIN_ROWS_PER_REPETITION: usize = 524_288;
         const REPETITIONS: usize = 8;
         for dimensions in [257, 768, 1000, 1024] {
             let (prepared, records) = block_fixture(dimensions, 0);
-            for count in [1, 7, 32] {
-                let records = &records[..count];
-                let mut block = TwoBitScoreBlock::new(&prepared);
-                for record in records {
-                    block.push(record).unwrap();
+            let roster = (0..UNIT_ROSTER)
+                .map(|unit| {
+                    records
+                        .iter()
+                        .enumerate()
+                        .map(|(lane, record)| {
+                            let mut record = record.clone();
+                            for (byte, word) in
+                                record[..prepared.packed_bytes].iter_mut().enumerate()
+                            {
+                                *word = (unit + lane * 73 + byte * 29) as u8;
+                            }
+                            record
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            for byte in 0..prepared.packed_bytes {
+                let mut seen = [false; 256];
+                for unit in &roster {
+                    seen[usize::from(unit[0][byte])] = true;
                 }
-                for (record, actual) in records.iter().zip(block.score()) {
-                    assert_eq!(prepared.score(record).unwrap().to_bits(), actual.to_bits());
+                assert!(seen.into_iter().all(|present| present));
+            }
+            for count in [1, 7, 32] {
+                let iterations = MIN_ROWS_PER_REPETITION.div_ceil(UNIT_ROSTER * count);
+                for unit in &roster {
+                    let records = &unit[..count];
+                    let mut block = TwoBitScoreBlock::new(&prepared);
+                    for record in records {
+                        block.push(record).unwrap();
+                    }
+                    for (record, actual) in records.iter().zip(block.score()) {
+                        assert_eq!(prepared.score(record).unwrap().to_bits(), actual.to_bits());
+                    }
                 }
                 let scalar = || {
                     let started = Instant::now();
-                    for _ in 0..ITERATIONS {
-                        for record in records {
-                            black_box(black_box(&prepared).score(black_box(record)).unwrap());
+                    for _ in 0..iterations {
+                        for unit in &roster {
+                            for record in &unit[..count] {
+                                black_box(black_box(&prepared).score(black_box(record)).unwrap());
+                            }
                         }
                     }
                     started.elapsed().as_nanos()
                 };
                 let blocked = || {
                     let started = Instant::now();
-                    for _ in 0..ITERATIONS {
-                        let mut block = TwoBitScoreBlock::new(black_box(&prepared));
-                        for record in records {
-                            block.push(black_box(record)).unwrap();
+                    for _ in 0..iterations {
+                        for unit in &roster {
+                            let mut block = TwoBitScoreBlock::new(black_box(&prepared));
+                            for record in &unit[..count] {
+                                block.push(black_box(record)).unwrap();
+                            }
+                            black_box(block.score());
                         }
-                        black_box(block.score());
                     }
                     started.elapsed().as_nanos()
                 };
@@ -628,7 +660,10 @@ mod tests {
                         "kind": "source_block32_primitive",
                         "dimensions": dimensions,
                         "rows": count,
-                        "iterations": ITERATIONS,
+                        "iterations": iterations,
+                        "units_per_iteration": UNIT_ROSTER,
+                        "rows_per_repetition": iterations * UNIT_ROSTER * count,
+                        "packed_values_per_byte": 256,
                         "repetitions": REPETITIONS,
                         "scalar_ns": scalar_ns,
                         "block_ns": block_ns
