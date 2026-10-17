@@ -13706,7 +13706,11 @@ mod tests {
                 let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
                 assert_eq!(rows[admission]["panel_line_cap_bytes"], 131072);
                 let check = |name: &str, records: &[Value]| {
-                    let (path, _) = write_fixture(dir.path(), name, records.to_vec());
+                    let (path, _) = write_fixture(
+                        dir.path(),
+                        &format!("reader-{name}.jsonl"),
+                        records.to_vec(),
+                    );
                     let (config, pin) = scale_config(dir.path(), &path, records);
                     reduce_scale(&config, &pin)
                 };
