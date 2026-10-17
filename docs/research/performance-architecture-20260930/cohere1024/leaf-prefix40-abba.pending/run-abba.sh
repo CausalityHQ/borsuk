@@ -11,6 +11,7 @@ for stage in admission smoke; do
   done
  done
 done
+[[ $(cat "$gates/checkpoint-probe.checkpoint.exit") == 0 ]]
 cmp "$prep/SHA256SUMS" "$gates/preparation.sha256"
 fi
 (cd "$prep" && sha256sum -c SHA256SUMS > /dev/null && sha256sum -c artifacts.sha256 > /dev/null && sha256sum -c environment.sha256 > /dev/null)
@@ -99,7 +100,9 @@ PY
    set -e
    printf '%s\n' "$rc" >"$out/$cell.reader.exit"
    ((rc==0))
+   bash "$prep/checkpoint.sh" cell "$out" "$cell" "$leaf"
   fi
  done
 done
+if [[ $mode == gates ]]; then bash "$prep/checkpoint.sh" probe "$out"; fi
 sync -f "$out"

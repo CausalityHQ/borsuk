@@ -12,7 +12,7 @@ def stats(a):
 rows={};reports={};times={};stages={};cells=[]
 for name,leaf in [('A1',48),('B1',40),('B2',40),('A2',48)]:
  cell=f'{name}.leaf{leaf}'
- for suffix in ['exit','native.exit','timeout.exit','drain.exit','cleanup.exit','reader.exit']:assert (p/f'{cell}.{suffix}').read_text().strip()=='0'
+ for suffix in ['exit','native.exit','timeout.exit','drain.exit','cleanup.exit','reader.exit','checkpoint.exit']:assert (p/f'{cell}.{suffix}').read_text().strip()=='0'
  rp=p/f'{cell}.reader-report.json';r=json.loads(rp.read_bytes());t=r['native_terminal']
  assert r['complete'] and r['status']=='MEASURED' and r['identity']['semantic_leaf_limit']==leaf
  assert t['all_queries_sealed'] and t['complete'] and r['statistics']['count']==1000

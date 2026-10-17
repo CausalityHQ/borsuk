@@ -6,7 +6,18 @@
   "unit": "leaf-prefix40-abba-static-a0002",
   "invocation_id": "487a30d5369944d8bbda11027f139037",
   "exit": 0,
-  "checks": ["bash -n", "ShellCheck warning level", "Python AST parse", "all JSON parse", "single causal full config difference", "two-query smoke ordinals", "local input content hashes", "full frozen header bindings", "canonical query counts and hit totals", "retained source authority equality"],
+  "checks": [
+    "bash -n",
+    "ShellCheck warning level",
+    "Python AST parse",
+    "all JSON parse",
+    "single causal full config difference",
+    "two-query smoke ordinals",
+    "local input content hashes",
+    "full frozen header bindings",
+    "canonical query counts and hit totals",
+    "retained source authority equality"
+  ],
   "cpu_quota_percent": 100,
   "allowed_cpu": 4,
   "memory_max_bytes": 536870912,
@@ -17,5 +28,11 @@
   "admission_executed": false,
   "smoke_executed": false,
   "measured_executed": false,
-  "strict_reader_executed": false
+  "strict_reader_executed": false,
+  "checkpoint_revision_static": {
+    "unit": "leaf-prefix40-abba-static-a0004",
+    "exit": 0,
+    "previous_attempt": "leaf-prefix40-abba-static-a0003 failed ShellCheck SC2154; initialized trap status variable; original failure retained",
+    "cloud_calls_executed": false
+  }
 }
