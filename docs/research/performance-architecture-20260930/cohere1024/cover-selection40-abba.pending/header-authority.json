@@ -1,0 +1,25 @@
+{
+  "binary_sha256": {
+    "A": "3e86a3e8d5b59db6150ea2db0575725df7200ee1a82018ee3257f5b73178d81c",
+    "B": "5619fad91c4d16f43630284d3e359f584b0879e334ac8b53304a4d5500174e24"
+  },
+  "extra_changed_library_file_sha256": "19533e7a952013a187c877dc37eec04aebcf5edc17ce0a7c0bb024997d00ab42",
+  "full_config_sha256": {
+    "A": "608aff3d3675d40a1f74b2e3c911c632e2de8c32d5eaa6f78b239a864137fadd",
+    "B": "608aff3d3675d40a1f74b2e3c911c632e2de8c32d5eaa6f78b239a864137fadd"
+  },
+  "header_source_fields_unchanged": true,
+  "headers_frozen_before_any_query": true,
+  "helper_source_sha256": "19533e7a952013a187c877dc37eec04aebcf5edc17ce0a7c0bb024997d00ab42",
+  "only_native_source_diff": [
+    "crates/borsuk/src/budgeted_page_rank.rs"
+  ],
+  "qualification_receipt": "/mnt/borsuk-workspace/evidence/cover-charge-selection-gates-a0001/root-verification.json",
+  "qualification_receipt_sha256": "274f5911d001abf5dc8f6bdb6725d7911059f72e2cf7df90abe59d5db1b9b200",
+  "schema": "borsuk-cover-selection40-authority-v1",
+  "source_revisions": {
+    "A": "a0463ed097296c19539d05529ddad615be760fdd",
+    "B": "a62dc853941893c8d267daf5d0ff6d8107d69b31"
+  },
+  "strict_reader_sha256": "ec0b3651f8921599f4597cfe6e1ce38f3fd3d14ce14e72c23eb04847164009e4"
+}

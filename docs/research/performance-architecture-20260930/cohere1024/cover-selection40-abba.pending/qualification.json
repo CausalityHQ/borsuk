@@ -1,0 +1,57 @@
+{
+  "schema": "borsuk-cover-charge-native-qualification-v1",
+  "source_commit": "a62dc853941893c8d267daf5d0ff6d8107d69b31",
+  "instance": "i-08f0d6520a3cb73df",
+  "original_invocation": "53d299edb91249889dba0e43792186c5",
+  "launcher_ssm": "eb9c38f5-4954-4380-ac3e-99fffbba6bb2",
+  "collection_ssm": "8e3fa589-278d-4d1c-b3fc-42b429e7bf14",
+  "manager_exit": 0,
+  "terminal_at": "2026-10-17T21:06:40Z",
+  "phases": {
+    "budget_tests": {
+      "exit": 0,
+      "selected": 12
+    },
+    "authority_tests": {
+      "exit": 0,
+      "selected": 8
+    },
+    "serving_oracle": {
+      "exit": 0,
+      "selected": 1
+    },
+    "source_parity": {
+      "exit": 0,
+      "selected": 1
+    },
+    "release": {
+      "exit": 0
+    },
+    "clippy": {
+      "exit": 0,
+      "scope": "locked workspace all-targets -D clippy::correctness -D clippy::suspicious; other lint warnings remain"
+    },
+    "testbuild": {
+      "exit": 0,
+      "shim_unset": true,
+      "jobs": 8,
+      "seconds": 115
+    }
+  },
+  "source_manifest_before_sha256": "d8cb7e04650bf964640682700669f52f99c7ff711d33f2b3758dba7985c60521",
+  "source_manifest_after_sha256": "d8cb7e04650bf964640682700669f52f99c7ff711d33f2b3758dba7985c60521",
+  "source_worktree_clean": true,
+  "release_sha256": "5619fad91c4d16f43630284d3e359f584b0879e334ac8b53304a4d5500174e24",
+  "run_script_sha256": "95db6992cfeec4935ff05941910a33185af7eeba59332ee79b8d28dac0161de0",
+  "external_envelope": {
+    "cpu_set": "8-15",
+    "cpu_quota_percent": 800,
+    "memory_max": 42949672960,
+    "swap_max": 0,
+    "tasks_max": 1024,
+    "runtime_max_seconds": 2400
+  },
+  "scope": "Affected native correctness, release and workspace compilation/lints only; not all workspace runtime tests. No ANN gain established; candidate not integrated.",
+  "sdk_original_invocation": "96475bf14fcc4a4a93c0d6d414d4a2f6",
+  "sdk_job_unchanged": true
+}

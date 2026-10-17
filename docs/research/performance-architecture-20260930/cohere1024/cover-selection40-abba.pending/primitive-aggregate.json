@@ -1,0 +1,14 @@
+{
+  "pairs": 216,
+  "cells": 27,
+  "reps": 8,
+  "calls_per_arm_cell_rep": 20000,
+  "old_ns": 1842693308,
+  "new_ns": 970259934,
+  "old_over_new": 1.8991748947143479,
+  "min_cell_ratio": 0.8548006078106806,
+  "max_cell_ratio": 3.719237028176567,
+  "cell_geomean_ratio": 1.3341780449216183,
+  "faster_cells": 17,
+  "slower_cells": 10
+}

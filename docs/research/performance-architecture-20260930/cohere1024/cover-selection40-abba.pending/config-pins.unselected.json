@@ -1,0 +1,35 @@
+{
+  "configs": [
+    {
+      "bytes": 3398,
+      "name": "admission.A.json",
+      "sha256": "37ed2d8c247df76b0b19c0e3ec2f29d2e2cde02a5bf91caf170d93c673dc24ed"
+    },
+    {
+      "bytes": 3398,
+      "name": "admission.B.json",
+      "sha256": "37ed2d8c247df76b0b19c0e3ec2f29d2e2cde02a5bf91caf170d93c673dc24ed"
+    },
+    {
+      "bytes": 3333,
+      "name": "full.A.json",
+      "sha256": "608aff3d3675d40a1f74b2e3c911c632e2de8c32d5eaa6f78b239a864137fadd"
+    },
+    {
+      "bytes": 3333,
+      "name": "full.B.json",
+      "sha256": "608aff3d3675d40a1f74b2e3c911c632e2de8c32d5eaa6f78b239a864137fadd"
+    },
+    {
+      "bytes": 3410,
+      "name": "smoke.A.json",
+      "sha256": "e815d5a4d6549e5b7964a5e7e60db241ddbe869ba7e92eda7b3d3dc12e3afdd2"
+    },
+    {
+      "bytes": 3410,
+      "name": "smoke.B.json",
+      "sha256": "e815d5a4d6549e5b7964a5e7e60db241ddbe869ba7e92eda7b3d3dc12e3afdd2"
+    }
+  ],
+  "status": "FROZEN_BEFORE_ANY_QUERY"
+}

@@ -1,0 +1,19 @@
+Experimental cover-charge selection packet
+Commit: a62dc853941893c8d267daf5d0ff6d8107d69b31
+Base: e8b5653f27b3588c504c15afed93dcb95f662146
+Tree: faf8e25bee36cd6de331a8cfeb3248c152e49400
+EC2 instance: i-08f0d6520a3cb73df; AWS profile causality; region eu-central-1
+Worktree: /mnt/borsuk-workspace/cover-charge-selection-source-a0001
+Evidence: /mnt/borsuk-workspace/evidence/cover-charge-selection-a0001
+First source inspection: 2026-10-17T20:44:11.622Z; commit unit complete: 2026-10-17T20:52:19.751Z
+All source/native/static commands used own bounded systemd units: CPU12 quota100%, MemoryMax2G, MemorySwapMax0, TasksMax128, RuntimeMax600s.
+Root checkout HEAD and borsuk-matched-raw-full-a0001 preserved; unit active/running at final commit. No service measurement contents inspected.
+Guards checked both workspace and root-checkout evidence paths before native execution and between every primitive arm.
+
+Change and review
+Only crates/borsuk/src/budgeted_page_rank.rs changed: +102/-29, mostly expanded tests.
+Production diff replaces the full gaps sort in bridges>0 with select_nth_unstable(bridges) only when bridges<gaps.len().
+Checked gap multiplication/addition retained. cover_pages and its gap-index tie rules are byte-for-byte unchanged.
+Scoring/floats/auth/config and both caller implementations unchanged.
+Reviewed choose_ranked_pages (sorted unique candidates, geometry and full/total bytes checked) and plan_source_shortlist_blocks in sq8_page_authority (32-row authenticated SQ8 geometry, <=256 finite-score nominees, sorted unique admitted pages, checked full-block bytes).
+Every unowned tree entry audited: 37235. Changed tree entries are only owned file and its three necessary ancestor trees. Inherited missing .github workflow blob remains unchanged. Used write-tree --missing-ok and commit-tree, exact Roman Bartusiak identity, no trailers.

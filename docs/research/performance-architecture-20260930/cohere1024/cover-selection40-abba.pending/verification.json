@@ -1,0 +1,31 @@
+{
+  "base": "8e8418b20c8de81520bce48264893835947840d1",
+  "earlier_failure": "Self-check expected selected mode; inherited actual diagnostic_panel configs were correct, self-check corrected",
+  "earlier_static_failure_ssm": "684ca7ee-f8cd-4868-8240-0fac652db602",
+  "initial_commit_check_ssm": "b1ea57d7-16e8-4dfb-8f30-d8cf2e6c91a1",
+  "initial_commit_issue": "One trailing blank line in retained review excerpt; removed before final delivery",
+  "instance": "i-0a540555f138f1b66",
+  "scientific_claim": false,
+  "source_binding_static_success_ssm": "1aa800f1-d15e-42a3-889b-304890e46639",
+  "static_checks": [
+    "bash -n",
+    "ShellCheck warning",
+    "Python AST",
+    "JSON parse",
+    "actual input sizes/SHA256",
+    "both exact ELF/header/config pins",
+    "canonical1000/charges",
+    "reused parity digest scorebits/order asserts",
+    "git native-tree and embedded-source authority"
+  ],
+  "static_success_ssm": "33a9173a-b47d-43e7-846f-a72f91ae49fc",
+  "status": "STATIC_CHECKED_RUNTIME_UNRUN",
+  "unrun": [
+    "runtime admission ordinal0 both arms",
+    "separate smoke32,161 both arms",
+    "checkpoint S3 probe",
+    "full ABBA",
+    "strict reader actual output",
+    "closed reduction"
+  ]
+}
