@@ -1,0 +1,80 @@
+{
+  "schema": "borsuk-source-auth-offload-screen-analysis-v1",
+  "logical_parity": true,
+  "unique_queries": 8,
+  "executions": 32,
+  "query_concurrency": 1,
+  "arms": [
+    {
+      "arm": "A",
+      "wall_ns": 2435196872,
+      "cpu_ns": 1768773437,
+      "source_wall_ns": 1300460648,
+      "attempts": 2148,
+      "consumed_bytes": 559110656,
+      "transport_failures": 0,
+      "stream_failures": 0
+    },
+    {
+      "arm": "B",
+      "wall_ns": 2279490066,
+      "cpu_ns": 1831825155,
+      "source_wall_ns": 1127629836,
+      "attempts": 2148,
+      "consumed_bytes": 559110656,
+      "transport_failures": 0,
+      "stream_failures": 0
+    }
+  ],
+  "ratios": {
+    "wall": 0.9360598694133013,
+    "cpu": 1.0356471420709152,
+    "source_wall": 0.8671003138266433
+  },
+  "per_ordinal": [
+    {
+      "ordinal": 32,
+      "wall_ratio": 0.9227910468412707,
+      "cpu_ratio": 1.037492566014683
+    },
+    {
+      "ordinal": 161,
+      "wall_ratio": 0.899214898783225,
+      "cpu_ratio": 1.0153000698648207
+    },
+    {
+      "ordinal": 290,
+      "wall_ratio": 0.9599158417252573,
+      "cpu_ratio": 1.0448556713662327
+    },
+    {
+      "ordinal": 418,
+      "wall_ratio": 0.8536252180996802,
+      "cpu_ratio": 1.0511089378094312
+    },
+    {
+      "ordinal": 547,
+      "wall_ratio": 1.0159422562978841,
+      "cpu_ratio": 1.0066587581292805
+    },
+    {
+      "ordinal": 676,
+      "wall_ratio": 0.9269895599770321,
+      "cpu_ratio": 1.0200730139629484
+    },
+    {
+      "ordinal": 805,
+      "wall_ratio": 0.9294107588845781,
+      "cpu_ratio": 1.0490227260881189
+    },
+    {
+      "ordinal": 934,
+      "wall_ratio": 0.9911755887658777,
+      "cpu_ratio": 1.063789357098831
+    }
+  ],
+  "population_tail_claim": false,
+  "concurrent_qps_claim": false,
+  "competitor_claim": false,
+  "default_changed": false
+}

@@ -1,0 +1,11 @@
+Source2ef7ce0a642bca0e25f9e7bbd35740fea5d9a95c
+Causality Spot i-0437b3ad203c05b24
+Archive s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/source-auth-offload-closure-a0001/
+evidence.tar.gz SHA2560504a1b0d9ccd0fee49c861bea98935a9ede8abebd19c2cb446e20897b871d80 bytes13948903
+source.tar.gz SHA256e823607c19216bb13dff1a07092383d5f2941867b696ddb2232ad1634fc9888b bytes4750054
+Qualification originalunit borsuk-source-auth-offload-gates-a0003 invocationad231f7d7d5d4813ad994fa2185099a1 terminalPASS; Clippy0, shim-unset workspace testbuild0.
+Exact10 tests1PASS each. Regressions capsule21, generation53, range48+1ignored, currentreader14+1ignored, runner63.
+Admission16queries/readers0; canary2queries/readers0 exactlogicalparity; measurement32queries/eightcells/readers0 exactlogicalparity.
+Original measurement launchSSM7b472e9e-d52a-4fe6-bf26-a4e35ddb7df7 invocation4dd8e91a329241fca07a73eeb229f416; closedstatusSSMe0a713c5-a37e-47d7-8480-94c89bfb4628.
+Closure upload originalSSM17939831-61c9-4e0d-812d-21e4bd0baf83; read terminal before interpreting archive asclosed.
+No default adoption, population tail, concurrent QPS or vendor win.
