@@ -6,6 +6,7 @@
 //! Historical research records stored a different final scalar and are not
 //! accepted as this format. These codes nominate pages; SQ8 ranks fetched rows.
 
+use crate::simd_control::f64x4;
 use sha2::{Digest, Sha256};
 
 /// Invalid codec geometry, source/query vector or encoded record.
@@ -87,7 +88,12 @@ impl<'q, 'r> TwoBitScoreBlock<'q, 'r> {
             .checked_add(std::mem::size_of::<[usize; 6]>())?
             .checked_add(std::mem::size_of::<[&[u8]; 2]>())?
             .checked_add(std::mem::size_of::<&[f64]>())?
-            .checked_add(std::mem::size_of::<f64>())
+            .checked_add(std::mem::size_of::<f64>())?
+            // Eight dot vectors, three expression temporaries, gather/extract
+            // arrays, and worst-case vector alignment padding; no heap allocation.
+            .checked_add(std::mem::size_of::<[f64x4; 11]>())?
+            .checked_add(std::mem::size_of::<[f64; 8]>())?
+            .checked_add(std::mem::align_of::<f64x4>() - 1)
     }
 
     /// Finish width/scalar validation before the caller requests another record.
@@ -117,11 +123,30 @@ impl<'q, 'r> TwoBitScoreBlock<'q, 'r> {
         let rows = &self.rows[..self.len];
         let scores = &mut self.scores[..self.len];
         // Match f64::Sum's signed identity and each row's original byte order.
-        scores.fill(-0.0);
-        for byte in 0..self.prepared.packed_bytes {
-            let table = &self.prepared.table[byte * 256..(byte + 1) * 256];
-            for (row, dot) in rows.iter().zip(scores.iter_mut()) {
-                *dot += table[usize::from(row.packed[byte])];
+        if self.len == 32 {
+            let mut dots = [f64x4::splat(-0.0); 8];
+            for byte in 0..self.prepared.packed_bytes {
+                let table = &self.prepared.table[byte * 256..(byte + 1) * 256];
+                for (rows, dot) in rows.chunks_exact(4).zip(dots.iter_mut()) {
+                    *dot = *dot
+                        + f64x4::from([
+                            table[usize::from(rows[0].packed[byte])],
+                            table[usize::from(rows[1].packed[byte])],
+                            table[usize::from(rows[2].packed[byte])],
+                            table[usize::from(rows[3].packed[byte])],
+                        ]);
+                }
+            }
+            for (scores, dot) in scores.chunks_exact_mut(4).zip(dots.iter()) {
+                scores.copy_from_slice(&dot.to_array());
+            }
+        } else {
+            scores.fill(-0.0);
+            for byte in 0..self.prepared.packed_bytes {
+                let table = &self.prepared.table[byte * 256..(byte + 1) * 256];
+                for (row, dot) in rows.iter().zip(scores.iter_mut()) {
+                    *dot += table[usize::from(row.packed[byte])];
+                }
             }
         }
         for (row, dot) in rows.iter().zip(scores.iter_mut()) {
@@ -421,7 +446,11 @@ impl PreparedTwoBit {
 mod tests {
     use super::*;
 
-    fn block_fixture(dimensions: usize, domain: usize) -> (PreparedTwoBit, Vec<Vec<u8>>) {
+    fn block_fixture(
+        dimensions: usize,
+        domain: usize,
+        rows: usize,
+    ) -> (PreparedTwoBit, Vec<Vec<u8>>) {
         let mean = (0..dimensions)
             .map(|i| match domain {
                 1 => {
@@ -469,7 +498,7 @@ mod tests {
             f32::MAX,
         ];
         let norms = [f32::from_bits(1), f32::MIN_POSITIVE, 1.0, f32::MAX];
-        let records = (0..32)
+        let records = (0..rows)
             .map(|lane| {
                 let mut record = vec![0; codec.record_bytes()];
                 for (byte, word) in record[..prepared.packed_bytes].iter_mut().enumerate() {
@@ -487,35 +516,44 @@ mod tests {
 
     #[test]
     fn source_block32_scalar_bit_parity_dimensions_batches_and_extreme_scalars() {
-        for dimensions in [1, 5, 257, 768, 1000, 1024] {
+        for dimensions in [1, 3, 5, 257, 768, 1000, 1024] {
             for domain in 0..3 {
-                let (prepared, records) = block_fixture(dimensions, domain);
-                for batch in 1..=32 {
-                    for chunk in records.chunks(batch) {
-                        let mut block = TwoBitScoreBlock::new(&prepared);
-                        for record in chunk {
-                            block.push(record).unwrap();
+                let (prepared, records) = block_fixture(dimensions, domain, 256);
+                for byte in 0..prepared.packed_bytes {
+                    let mut seen = [false; 256];
+                    for record in &records {
+                        seen[usize::from(record[byte])] = true;
+                    }
+                    assert!(seen.into_iter().all(|present| present));
+                }
+                for rows in [1, 7, 31, 32, 33, 39, 63, 65, 256] {
+                    for batch in 1..=32 {
+                        for chunk in records[..rows].chunks(batch) {
+                            let mut block = TwoBitScoreBlock::new(&prepared);
+                            for record in chunk {
+                                block.push(record).unwrap();
+                            }
+                            let actual = block.score();
+                            assert_eq!(actual.len(), chunk.len());
+                            for (lane, (record, &score)) in chunk.iter().zip(actual).enumerate() {
+                                assert_eq!(
+                                    score.to_bits(),
+                                    prepared.score(record).unwrap().to_bits(),
+                                    "D{dimensions} domain{domain} batch{batch} lane{lane}"
+                                );
+                            }
+                            // Reusing the block must reset every accumulator.
+                            let again = block
+                                .score()
+                                .iter()
+                                .map(|x| x.to_bits())
+                                .collect::<Vec<_>>();
+                            let expected = chunk
+                                .iter()
+                                .map(|r| prepared.score(r).unwrap().to_bits())
+                                .collect::<Vec<_>>();
+                            assert_eq!(again, expected);
                         }
-                        let actual = block.score();
-                        assert_eq!(actual.len(), chunk.len());
-                        for (lane, (record, &score)) in chunk.iter().zip(actual).enumerate() {
-                            assert_eq!(
-                                score.to_bits(),
-                                prepared.score(record).unwrap().to_bits(),
-                                "D{dimensions} domain{domain} batch{batch} lane{lane}"
-                            );
-                        }
-                        // Reusing the block must reset every accumulator.
-                        let again = block
-                            .score()
-                            .iter()
-                            .map(|x| x.to_bits())
-                            .collect::<Vec<_>>();
-                        let expected = chunk
-                            .iter()
-                            .map(|r| prepared.score(r).unwrap().to_bits())
-                            .collect::<Vec<_>>();
-                        assert_eq!(again, expected);
                     }
                 }
             }
@@ -566,10 +604,17 @@ mod tests {
             + std::mem::size_of::<[usize; 6]>()
             + std::mem::size_of::<[&[u8]; 2]>()
             + std::mem::size_of::<&[f64]>()
-            + std::mem::size_of::<f64>();
+            + std::mem::size_of::<f64>()
+            + std::mem::size_of::<[crate::simd_control::f64x4; 11]>()
+            + std::mem::size_of::<[f64; 8]>()
+            + std::mem::align_of::<crate::simd_control::f64x4>()
+            - 1;
         assert_eq!(TwoBitScoreBlock::scratch_bytes(), Some(expected));
         if usize::BITS == 64 {
-            assert_eq!(expected, 1200);
+            assert_eq!(
+                expected,
+                1616 + std::mem::align_of::<crate::simd_control::f64x4>() - 1
+            );
         }
     }
 
@@ -582,7 +627,7 @@ mod tests {
         const MIN_ROWS_PER_REPETITION: usize = 524_288;
         const REPETITIONS: usize = 8;
         for dimensions in [257, 768, 1000, 1024] {
-            let (prepared, records) = block_fixture(dimensions, 0);
+            let (prepared, records) = block_fixture(dimensions, 0, 32);
             let roster = (0..UNIT_ROSTER)
                 .map(|unit| {
                     records

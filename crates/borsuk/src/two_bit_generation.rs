@@ -1157,8 +1157,8 @@ fn retain_source_shortlist(
 /// graph limits. Semantic discovery supplies its entire admitted page closure.
 /// Standalone callers must also reserve 3MiB planner working payload for Scale1m
 /// (1MiB for other profiles), plus 256KiB for shortlist admission, prepared-query
-/// and optional retained-trace memory. The separate block payload is 1200 bytes
-/// on 64-bit hosts (computed from its actual types); include it in planner memory.
+/// and optional retained-trace memory. Include the separate block payload
+/// (computed from its actual scalar/vector types) in planner memory.
 /// Generation methods enforce their modeled admission separately.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
