@@ -1,0 +1,156 @@
+{
+  "schema": "borsuk-source-block32-full1000-summary-v1",
+  "candidate": "d014838fbce1d433b90092f0d20051887422b3ef",
+  "scope": "same1000queries-repeated-twice-per-arm-not2000independent",
+  "cells": [
+    {
+      "cell": "A1",
+      "queries": 1000,
+      "cpu_ns": 119731207771,
+      "wall_ns": 167303372893,
+      "p50_ms": 159.444389,
+      "p90_ms": 209.780474,
+      "p95_ms": 226.238636,
+      "p99_ms": 272.958904,
+      "qps": 5.977165807885755,
+      "planning_wall_ns": 34082039657,
+      "source_wall_ns": 77702182880,
+      "sq8_wall_ns": 53411445742,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 94060544
+    },
+    {
+      "cell": "B1",
+      "queries": 1000,
+      "cpu_ns": 115224877192,
+      "wall_ns": 162277495844,
+      "p50_ms": 154.62879,
+      "p90_ms": 203.753001,
+      "p95_ms": 221.043206,
+      "p99_ms": 258.591148,
+      "qps": 6.162283900173788,
+      "planning_wall_ns": 31500018320,
+      "source_wall_ns": 75975889634,
+      "sq8_wall_ns": 52527639982,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 82538496
+    },
+    {
+      "cell": "B2",
+      "queries": 1000,
+      "cpu_ns": 115176093008,
+      "wall_ns": 169622241218,
+      "p50_ms": 153.560315,
+      "p90_ms": 205.01005,
+      "p95_ms": 220.963709,
+      "p99_ms": 265.486488,
+      "qps": 5.895453289729801,
+      "planning_wall_ns": 31536526332,
+      "source_wall_ns": 83863886592,
+      "sq8_wall_ns": 51959726964,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 95952896
+    },
+    {
+      "cell": "A2",
+      "queries": 1000,
+      "cpu_ns": 118543990891,
+      "wall_ns": 165085357393,
+      "p50_ms": 156.563807,
+      "p90_ms": 207.712583,
+      "p95_ms": 221.964053,
+      "p99_ms": 266.170035,
+      "qps": 6.057472423913487,
+      "planning_wall_ns": 33993962417,
+      "source_wall_ns": 76645778398,
+      "sq8_wall_ns": 52345260782,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 94773248
+    }
+  ],
+  "ratios": {
+    "cpu": 0.9669532183533301,
+    "wall": 0.9985288513735732,
+    "planning": 0.9259730702675224,
+    "forward_cpu": 0.9623629405992555,
+    "reverse_cpu": 0.9715894676930799,
+    "forward_wall": 0.9699594995480795,
+    "reverse_wall": 1.0274820486604366
+  }
+}
