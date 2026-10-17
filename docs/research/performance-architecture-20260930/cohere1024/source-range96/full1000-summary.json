@@ -1,0 +1,156 @@
+{
+  "schema": "borsuk-source-range96-summary-v1",
+  "scope": "fixed queries repeated twice per arm; not independent extra queries",
+  "cells": [
+    {
+      "cell": "A1",
+      "queries": 1000,
+      "cpu_ns": 113888885423,
+      "wall_ns": 167360675549,
+      "p50_ms": 157.524932,
+      "p90_ms": 213.454159,
+      "p95_ms": 232.169799,
+      "p99_ms": 279.902869,
+      "qps": 5.9751192848598365,
+      "planning_wall_ns": 31020399025,
+      "source_wall_ns": 78497296033,
+      "sq8_wall_ns": 55594634533,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 91250688
+    },
+    {
+      "cell": "B1",
+      "queries": 1000,
+      "cpu_ns": 115685571959,
+      "wall_ns": 166160632694,
+      "p50_ms": 155.215652,
+      "p90_ms": 206.683288,
+      "p95_ms": 234.459927,
+      "p99_ms": 371.610234,
+      "qps": 6.018272702665929,
+      "planning_wall_ns": 30861084615,
+      "source_wall_ns": 79783154690,
+      "sq8_wall_ns": 53273469461,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 92634,
+          "verified_bytes": 31383171072
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 101908480
+    },
+    {
+      "cell": "B2",
+      "queries": 1000,
+      "cpu_ns": 116307986216,
+      "wall_ns": 165004360448,
+      "p50_ms": 155.272525,
+      "p90_ms": 206.354041,
+      "p95_ms": 230.612835,
+      "p99_ms": 323.526681,
+      "qps": 6.060445901459333,
+      "planning_wall_ns": 30833961695,
+      "source_wall_ns": 78877617242,
+      "sq8_wall_ns": 53040314980,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 92634,
+          "verified_bytes": 31383171072
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 98230272
+    },
+    {
+      "cell": "A2",
+      "queries": 1000,
+      "cpu_ns": 114930090820,
+      "wall_ns": 163274939585,
+      "p50_ms": 155.118429,
+      "p90_ms": 204.77548,
+      "p95_ms": 224.039424,
+      "p99_ms": 275.933581,
+      "qps": 6.124638615954935,
+      "planning_wall_ns": 31266003619,
+      "source_wall_ns": 77213837074,
+      "sq8_wall_ns": 52527193607,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 93130752
+    }
+  ],
+  "ratios": {
+    "cpu": 1.0138737703669676,
+    "wall": 1.0016010919083398,
+    "source": 1.0189430181782384,
+    "planning": 0.9905058518569467,
+    "forward_wall": 0.9928296007944313,
+    "reverse_wall": 1.010592077800768,
+    "forward_cpu": 1.0157757846986284,
+    "reverse_cpu": 1.0119889872719061
+  }
+}
