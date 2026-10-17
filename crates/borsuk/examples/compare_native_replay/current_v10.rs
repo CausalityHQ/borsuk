@@ -122,6 +122,45 @@ fn split_option(header: &Value) -> Result<()> {
     Ok(())
 }
 
+fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
+    use borsuk::sq8_s3_range::SourceAuthentication;
+    let Some(value) = inputs.get("source_authentication") else {
+        return Ok(None);
+    };
+    let policy = match value.as_str() {
+        Some("inline") => SourceAuthentication::Inline,
+        Some("offload2") => SourceAuthentication::Offload2,
+        _ => return Err("SOURCE authentication selector".into()),
+    };
+    require(
+        cpu_profile_config(inputs) && inputs["range_scheduler_owner"] == "library",
+        "SOURCE authentication versioned library scheduler",
+    )?;
+    Ok(Some(
+        policy
+            .additional_memory_bytes(
+                usize::try_from(number(&inputs["fetch_parallelism"])?)?,
+                usize::try_from(number(&inputs["source_get_budget"])?)?,
+                1,
+            )
+            .ok_or("SOURCE authentication memory overflow")?,
+    ))
+}
+
+fn validate_source_authentication_charge(raw: &Value, inputs: &Value) -> Result<()> {
+    match source_authentication_charge(inputs)? {
+        Some(bytes) => require(
+            raw.get("source_authentication_extra_library_bytes") == Some(&json!(bytes)),
+            "SOURCE authentication exact library reservation",
+        ),
+        None => require(
+            raw.get("source_authentication_extra_library_bytes")
+                .is_none(),
+            "historical SOURCE authentication reservation absent",
+        ),
+    }
+}
+
 pub(super) fn physical_cap(inputs: &Value) -> Result<u64> {
     split_option(inputs)?;
     number(if inputs["sq8_range_split"].is_null() {
@@ -162,11 +201,22 @@ pub(super) fn validate_row_envelope(
             } else {
                 "range_state_pinned_by_runner_bytes trace_peak_charged_by_library_at_traced_admission"
             };
-            let profile_fields = if cpu_profile {
-                "source_trace_ranges"
+            let mut profile_fields = if cpu_profile {
+                "source_trace_ranges".to_owned()
             } else {
-                ""
+                String::new()
             };
+            if raw
+                .get("source_authentication_extra_library_bytes")
+                .is_some()
+            {
+                require(
+                    cpu_profile && library_scheduler,
+                    "SOURCE authentication admission version",
+                )?;
+                number(&raw["source_authentication_extra_library_bytes"])?;
+                profile_fields.push_str(" source_authentication_extra_library_bytes");
+            }
             fields(
                 &raw,
                 &format!(
@@ -246,6 +296,22 @@ pub(super) fn validate_row_envelope(
             roster.push(' ');
             roster.push_str(key);
         }
+    }
+    if matches!(phase, "identity" | "bound_inputs") && raw.get("source_authentication").is_some() {
+        source_authentication_charge(&raw)?;
+        roster.push_str(" source_authentication");
+    }
+    if phase == "startup"
+        && raw
+            .get("source_authentication_extra_library_bytes")
+            .is_some()
+    {
+        require(
+            cpu_profile && library_scheduler,
+            "SOURCE authentication startup version",
+        )?;
+        number(&raw["source_authentication_extra_library_bytes"])?;
+        roster.push_str(" source_authentication_extra_library_bytes");
     }
     fields(&raw, &roster)?;
     if retry {
@@ -449,6 +515,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "source_layout",
         "source_byte_budget",
         "source_capsule_verification_policy",
+        "source_authentication",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }
@@ -1082,6 +1149,7 @@ fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
 }
 
 pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<DiagnosticModel> {
+    validate_source_authentication_charge(raw, inputs)?;
     use borsuk::sq8_s3_range::Sq8RangeTrace;
     let traced = inputs["execution"]["trace"] == true;
     let ranges = usize::try_from(physical_cap(inputs)?)?;
@@ -1210,6 +1278,7 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
+    validate_source_authentication_charge(raw, inputs)?;
     require(
         if inputs["range_scheduler_owner"] == "library" {
             raw["range_state_charged_by_library_bytes"] == library_scheduler_bytes(inputs)?
@@ -3549,5 +3618,55 @@ mod tests {
             inputs["sq8_range_split"] = split;
             assert!(physical_cap(&inputs).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod source_authentication_tests {
+    use super::*;
+    #[test]
+    fn source_authentication_selector_and_exact_reservation_are_bound() {
+        let mut inputs = json!({"config_schema":CPU_PROFILE_CONFIG_SCHEMA,
+            "range_scheduler_owner":"library","fetch_parallelism":64,"source_get_budget":128,
+            "source_authentication":"offload2"});
+        assert_eq!(
+            source_authentication_charge(&inputs).unwrap(),
+            Some(2_380_032)
+        );
+        let valid = json!({"source_authentication_extra_library_bytes":2_380_032});
+        validate_source_authentication_charge(&valid, &inputs).unwrap();
+        for bad in [
+            json!({}),
+            json!({"source_authentication_extra_library_bytes":2_380_031}),
+            json!({"source_authentication_extra_library_bytes":2_380_033}),
+            json!({"source_authentication_extra_library_bytes":"2380032"}),
+        ] {
+            assert!(validate_source_authentication_charge(&bad, &inputs).is_err());
+        }
+        for value in [
+            Value::Null,
+            json!(2),
+            json!("offload"),
+            json!({}),
+            json!(true),
+        ] {
+            inputs["source_authentication"] = value;
+            assert!(source_authentication_charge(&inputs).is_err());
+        }
+        inputs["source_authentication"] = json!("inline");
+        assert_eq!(source_authentication_charge(&inputs).unwrap(), Some(0));
+        validate_source_authentication_charge(
+            &json!({"source_authentication_extra_library_bytes":0}),
+            &inputs,
+        )
+        .unwrap();
+        assert!(validate_source_authentication_charge(&valid, &inputs).is_err());
+        inputs
+            .as_object_mut()
+            .unwrap()
+            .remove("source_authentication");
+        assert_eq!(source_authentication_charge(&inputs).unwrap(), None);
+        validate_source_authentication_charge(&json!({}), &inputs).unwrap();
+        assert!(validate_source_authentication_charge(&valid, &inputs).is_err());
     }
 }

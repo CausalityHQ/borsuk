@@ -35,8 +35,10 @@ continue to return their generation-pinned authenticated bytes.
 
 ## Lifetime, backpressure and memory contract
 
-Each candidate SOURCE batch owns exactly two dedicated 1 MiB-stack worker
-threads. A two-permit semaphore bounds the TOTAL queued/running jobs, with a
+Each admitted candidate SOURCE batch owns exactly two dedicated 1 MiB-stack worker
+threads. A process-wide asynchronous admission lease permits only one batch across
+all queries, generations and runtimes; waiting queries create no worker threads.
+The lease is released only after both workers join. A two-permit semaphore bounds the TOTAL queued/running jobs, with a
 bounded channel of capacity two. This private SOURCE helper has one operation:
 authenticate an owned response; it is not a public executor or configurable pool.
 No spawn_blocking, unsafe, borrowed lifetime extension or detached task is used.
@@ -46,7 +48,9 @@ authentication jobs coexist; at most min(planned_ranges,D+2) response futures
 are scheduled. A completed body waiting for compute retains its future and
 byte-window permit, applying backpressure. Pending downloads continue to be
 polled while compute is held. Byte-window permits span download and authentication.
-Bodies move into jobs; no additional body copy is made for flat SOURCE. Capsule
+Both compute-slot and physical-byte permits move into jobs and remain held through
+authentication even if the awaiting future is cancelled. Bodies move into jobs;
+no additional body copy is made for flat SOURCE. Capsule
 collection retains its existing, already admitted Bytes-to-Vec copy.
 
 Jobs own Arc pins to the original authority and, for capsules, the exact
@@ -153,10 +157,10 @@ byte windows, logical budgets, transport/retry settings and CPU/RSS ceilings.
 Only source_authentication differs. Preserve config hashes and every command,
 original job handle and terminal receipt. No fetch128 or SHA-provider repeat.
 
-Proposed new budget: 16 authenticated-input admissions (eight units by two arms),
-two disposable canaries (one per arm), 32 trace-OFF measurements (two repetitions
-per arm per workload), and 16 trace-ON diagnostic measurements (one per arm per
-workload): 66 total native invocations. Parent must authorize the new budget and
+Root prospective budget: 16 authenticated-input query executions (eight units by
+two arms), two disposable canary query executions (one per arm), and 32 trace-OFF
+measurement query executions (two repetitions per arm per workload):50 actual
+query executions total. No additional trace-ON measurements are included. Parent must authorize the new budget and
 runtime envelopes; this packet launches none. Reuse fresh unchanged evidence
 where the parent establishes that the same exact inputs and source are covered.
 
@@ -173,12 +177,10 @@ failures/retries or extra payload; no resource breach or surviving workers.
 Setup, code, timeout or interrupted runs are INVALID, not algorithm negatives.
 Preserve failed attempts and do not silently substitute extra runs.
 
-Suggested screen thresholds for parent preregistration: at least 5% lower summed
-trace-OFF query wall, no more than 5% higher summed process CPU, and no workload's
-median query wall above 1.10x control, while staying within the unchanged RSS cap.
-These are proposed screening tolerances, not inherited historical scientific
-gates or production acceptance. Report per-workload ratios and all repetitions;
-eight workload units do not establish population tail latency or recall.
+Root screen interpretation: report paired per-workload and aggregate wall/CPU,
+RSS and transport cost, retaining useful reproducible Pareto gains. No universal
+5% or20% speed threshold is introduced. Mixed/noisy evidence does not justify
+default adoption; eight workload units do not establish population tails.
 
 If the candidate fails parity/resource/cleanup, it cannot advance. If it shows
 no measured benefit, retain inline and close this falsifier without another
@@ -192,3 +194,20 @@ out-of-order failure selection, borrowed pins and cancellation; adversarial drai
 pin and cancellation fixtures address those. Retrieval predicts exact unchanged
 nomination/rank; any score-bit, plan or logical-charge mismatch invalidates the
 candidate. No stakeholder simulation is evidence of a speedup or socket readiness.
+
+## Root integration repairs and evidence boundaries
+Original worker43d44b91 preserved unchanged. Its review corrections remained in an
+undeliverable draft; orchestration audit/one-shot attestation were deferred behind
+a full queue. Root made bounded repairs only in a separate EBS snapshot, preserving
+the original worker/source/draft. No recipient consumption is claimed.
+- process-wide worker-batch admission and job-held compute/byte permits
+- actual constructor API in generation test, no production visibility widening
+- held-worker cancellation/competing-query permit-recovery fixture
+- strict reader selector/header agreement and exact offload memory reservation
+Original compile43d failed E0624 test private constructor; repair45ae compile failed
+E0277 Debug in the new assertion, corrected atc6078e. These are execution/compiler
+failures, not performance rejections. All original logs retained.
+Additional required exact tests:
+sq8_s3_range::tests::source_auth_offload_shared_admission_and_cancelled_job_keep_permits
+current_v10::source_authentication_tests::source_authentication_selector_and_exact_reservation_are_bound
+Parent native qualification remains pending at this source checkpoint.
