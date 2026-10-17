@@ -1,0 +1,90 @@
+{
+  "schema": "borsuk-raw-normalization-reexecution-documentation-v1",
+  "status": "RAW_TO_NORMALIZED_POSITIONAL_MAPPING_LINK_CLOSED",
+  "documentation_base_commit": "f58a4e6a48fc5ae3d3241816b89ba16e36eb8478",
+  "evidence_host": {
+    "instance": "i-0f168289eda791b07",
+    "region": "eu-central-1"
+  },
+  "native_source_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+  "native_source_parent_prefix": "a666",
+  "producer_elf_sha256": "d1b001f2aadffb2e36b10f081e47ff03dce6f66f290df9aaa48c8d441ff5f074",
+  "unchanged_api_source_sha256": {
+    "crates/borsuk/examples/build_sq8_source.rs": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+    "crates/borsuk/src/sq8_source.rs": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+  },
+  "release_evidence": "evidence/source-block32-packed-release-a0001",
+  "raw": {
+    "rows": 1000000,
+    "dimensions": 1024,
+    "bytes": 4096000000,
+    "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+    "authentication": "complete raw input authenticated by native API while streaming; no documentation-task payload read",
+    "before_after_followup_stamps_equal": true
+  },
+  "normalized": {
+    "sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+    "independent_sha256_readbacks": 2
+  },
+  "original_wrapper": {
+    "exit": 1,
+    "status": "INVALID",
+    "native_exit": 0,
+    "failure": "final source check used wrong working directory after native success, correct output, and raw/executable stamp comparisons",
+    "receipt_preserved": true
+  },
+  "followup": {
+    "exit": 0,
+    "status": "VERIFIED_EXISTING_NATIVE_EXECUTION",
+    "correct_working_directory": true,
+    "native_rerun": false,
+    "terminal_json_sha256": "659bb97e1566ab77424bde024c216164f915712289dd0539b912697beb52da99"
+  },
+  "closed_metadata_sha256": {
+    "evidence/raw-normalized-reexecution-a0001": {
+      "command.txt": "5dc370a26060e13508ce8a3ea2db0b3c249563992cf29699a8d2398cfcdbad3c",
+      "executable.after.sha256": "9f4bb668741fb6b7334f20b02d600a3b67250c200158ff0b258a0d1f47f9ed27",
+      "executable.before.sha256": "9f4bb668741fb6b7334f20b02d600a3b67250c200158ff0b258a0d1f47f9ed27",
+      "native.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "native.resources": "e9bf6d5d457435e3bb9b01753ad346961bcf791ba82dd596ae9010269ec9540b",
+      "native.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native.stdout": "bb23f0558443771d6238e6d3e5a612e74a1b923034efd229c3d2dd8f576f5ae4",
+      "normalized.sha256": "7e69e705bd00033f89f7afe92360d02b98090c7935e7c8fc68b8d0cf527772cb",
+      "raw.after": "7701a2933348437f618d3fa7c2c6e8caf61a659e17d608a98584ab6d05a730af",
+      "raw.before": "7701a2933348437f618d3fa7c2c6e8caf61a659e17d608a98584ab6d05a730af",
+      "runner.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "source.sha256": "06832178de26542bdde81a4d75259c91185a8d26416d66784808ae4f322fe941"
+    },
+    "evidence/raw-normalized-reexecution-verification-a0001": {
+      "executable-check.txt": "eae9767fc1b328065ce5d2221ae75b232b4cdc48ab0b5084652486130a482727",
+      "normalized-check.txt": "ed6f3582c9e6eed0458fca93f886476f85be55817f04ed13327f7fd85433f520",
+      "raw.now": "7701a2933348437f618d3fa7c2c6e8caf61a659e17d608a98584ab6d05a730af",
+      "source-check.txt": "1874479786b189fd9b090bf7a0bb2c4b1bd5a198b7b0b53aaf4954b41c6f53dc",
+      "stdout-check.txt": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74",
+      "terminal.json": "659bb97e1566ab77424bde024c216164f915712289dd0539b912697beb52da99",
+      "verification.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    }
+  },
+  "archive": {
+    "key": "research/semantic-router/20261017/source-block32-packed-closure-a0001/normalization-evidence.tar.gz",
+    "sha256": "5806b60045ae0ba5653899d9823befac5477e18a8262f28a18c20cf785695970",
+    "root_terminal_json_sha256": "6b76bed1cf00e51bb1d1adb7a4a1372de422664fc25e840aff294f764d1eabe4",
+    "verification": "root previously HEAD-verified both S3 objects; supplied by original assignment; no new S3 API in this documentation task",
+    "root_terminal_is_local_followup_terminal": false
+  },
+  "claim_limits": {
+    "fresh_source_bound_reexecution_of_original_normalization_api": true,
+    "original_producer_elf_4f502_recovered": false,
+    "independent_arithmetic_oracle": false,
+    "query_or_truth_opened": false,
+    "new_ann_measurement": false,
+    "quality_or_performance_claim": false,
+    "vendor_win": false,
+    "complete_vendor_admission": false
+  },
+  "documentation_checks": {
+    "scope": "two documents only; closed metadata read; JSON parse and static Git diff check",
+    "native_or_build_or_tests_run": false,
+    "payloads_read": false
+  }
+}
