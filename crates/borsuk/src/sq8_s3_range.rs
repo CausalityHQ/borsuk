@@ -71,53 +71,62 @@ pub(crate) fn authenticate_inline<T>(
 }
 
 type SourceAuthJob = Box<dyn FnOnce() + Send + 'static>;
-// One process-wide admitted SOURCE worker batch, shared by generations and runtimes.
-// Acquire before creating the two threads, and release only after both join.
-static SOURCE_AUTH_BATCH: LazyLock<Arc<tokio::sync::Semaphore>> =
-    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
-/// Query-owned SOURCE workers. Dropping the query joins every owned job before releasing pins.
-pub(crate) struct SourceAuthWorkers {
+// Weak ownership lets the last query close and join the pool. The worker lease also
+// covers that join, so reinitialization cannot overlap old and new worker threads.
+static SOURCE_AUTH_POOL: LazyLock<Mutex<std::sync::Weak<SourceAuthPool>>> =
+    LazyLock::new(|| Mutex::new(std::sync::Weak::new()));
+static SOURCE_AUTH_INITIALIZE: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
+static SOURCE_AUTH_THREADS: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(SOURCE_AUTH_WORKERS)));
+
+struct SourceAuthPool {
     sender: Option<std::sync::mpsc::SyncSender<SourceAuthJob>>,
     workers: Vec<std::thread::JoinHandle<()>>,
     slots: Arc<tokio::sync::Semaphore>,
-    _batch_lease: tokio::sync::OwnedSemaphorePermit,
-    downloads: tokio::sync::Semaphore,
-    #[cfg(test)]
-    lifetime: Arc<()>,
+    _worker_lease: tokio::sync::OwnedSemaphorePermit,
 }
 
-impl SourceAuthWorkers {
-    pub(crate) async fn new(downloads: usize) -> Result<Self, RangeFetchError> {
-        if downloads == 0 || downloads > tokio::sync::Semaphore::MAX_PERMITS {
-            return Err(RangeFetchError::UnexpectedMetadata);
+impl SourceAuthPool {
+    async fn acquire() -> Result<Arc<Self>, RangeFetchError> {
+        let current = SOURCE_AUTH_POOL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade();
+        if let Some(current) = current {
+            return Ok(current);
         }
-        let batch_lease = Arc::clone(&SOURCE_AUTH_BATCH)
+        let _initialize = Arc::clone(&SOURCE_AUTH_INITIALIZE)
             .acquire_owned()
+            .await
+            .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
+        let current = SOURCE_AUTH_POOL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .upgrade();
+        if let Some(current) = current {
+            return Ok(current);
+        }
+        let worker_lease = Arc::clone(&SOURCE_AUTH_THREADS)
+            .acquire_many_owned(SOURCE_AUTH_WORKERS as u32)
             .await
             .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
         let (sender, receiver) =
             std::sync::mpsc::sync_channel::<SourceAuthJob>(SOURCE_AUTH_WORKERS);
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut owner = Self {
+        let mut pool = Self {
             sender: Some(sender),
             workers: Vec::with_capacity(SOURCE_AUTH_WORKERS),
             slots: Arc::new(tokio::sync::Semaphore::new(SOURCE_AUTH_WORKERS)),
-            _batch_lease: batch_lease,
-            downloads: tokio::sync::Semaphore::new(downloads),
-            #[cfg(test)]
-            lifetime: Arc::new(()),
+            _worker_lease: worker_lease,
         };
         for _ in 0..SOURCE_AUTH_WORKERS {
             let receiver = Arc::clone(&receiver);
-            #[cfg(test)]
-            let lifetime = Arc::clone(&owner.lifetime);
             let worker = std::thread::Builder::new()
                 .name("borsuk-source-auth".into())
                 .stack_size(SOURCE_AUTH_STACK_BYTES)
                 .spawn(move || {
-                    #[cfg(test)]
-                    let _lifetime = lifetime;
                     loop {
                         let next = receiver
                             .lock()
@@ -128,9 +137,75 @@ impl SourceAuthWorkers {
                     }
                 })
                 .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
-            owner.workers.push(worker);
+            pool.workers.push(worker);
         }
-        Ok(owner)
+        let pool = Arc::new(pool);
+        *SOURCE_AUTH_POOL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::downgrade(&pool);
+        Ok(pool)
+    }
+}
+
+impl Drop for SourceAuthPool {
+    fn drop(&mut self) {
+        self.sender.take();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Default)]
+struct SourceAuthGroup {
+    pending: Mutex<usize>,
+    changed: std::sync::Condvar,
+}
+
+struct SourceAuthPending {
+    group: Arc<SourceAuthGroup>,
+    #[cfg(test)]
+    _lifetime: Arc<()>,
+}
+
+impl Drop for SourceAuthPending {
+    fn drop(&mut self) {
+        let mut pending = self
+            .group
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *pending -= 1;
+        if *pending == 0 {
+            self.group.changed.notify_all();
+        }
+    }
+}
+
+/// Per-query download admission and drain, with two shared process-wide compute workers.
+pub(crate) struct SourceAuthWorkers {
+    pool: Arc<SourceAuthPool>,
+    group: Arc<SourceAuthGroup>,
+    slots: Arc<tokio::sync::Semaphore>,
+    downloads: tokio::sync::Semaphore,
+    #[cfg(test)]
+    lifetime: Arc<()>,
+}
+
+impl SourceAuthWorkers {
+    pub(crate) async fn new(downloads: usize) -> Result<Self, RangeFetchError> {
+        if downloads == 0 || downloads > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(RangeFetchError::UnexpectedMetadata);
+        }
+        let pool = SourceAuthPool::acquire().await?;
+        Ok(Self {
+            slots: Arc::clone(&pool.slots),
+            pool,
+            group: Arc::new(SourceAuthGroup::default()),
+            downloads: tokio::sync::Semaphore::new(downloads),
+            #[cfg(test)]
+            lifetime: Arc::new(()),
+        })
     }
 
     pub(crate) async fn authenticate<T: Send + 'static>(
@@ -142,10 +217,20 @@ impl SourceAuthWorkers {
             .acquire_owned()
             .await
             .expect("SOURCE worker slots stay open");
+        *self
+            .group
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+        let pending = SourceAuthPending {
+            group: Arc::clone(&self.group),
+            #[cfg(test)]
+            _lifetime: Arc::clone(&self.lifetime),
+        };
         let (send, receive) = tokio::sync::oneshot::channel();
         let job = Box::new(move || {
+            let _pending = pending;
             let _slot = slot;
-            // A verifier panic must not kill a worker and strand the remaining full drain.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 measured_auth(&mut probe.as_deref_mut(), authenticate)
             }))
@@ -153,9 +238,10 @@ impl SourceAuthWorkers {
             let _ = send.send((result, probe));
         });
         if self
+            .pool
             .sender
             .as_ref()
-            .expect("live SOURCE workers")
+            .expect("live SOURCE pool")
             .try_send(job)
             .is_err()
         {
@@ -169,10 +255,17 @@ impl SourceAuthWorkers {
 
 impl Drop for SourceAuthWorkers {
     fn drop(&mut self) {
-        self.sender.take();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
+        let pending = self
+            .group
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(
+            self.group
+                .changed
+                .wait_while(pending, |pending| *pending != 0)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 }
 
@@ -3866,6 +3959,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_auth_shared_queries_admit_without_batch_serialization() {
+        use std::time::Duration;
+        let first = SourceAuthWorkers::new(2).await.unwrap();
+        let second = tokio::time::timeout(Duration::from_millis(100), SourceAuthWorkers::new(2))
+            .await
+            .expect("a live first query must not serialize second query admission")
+            .unwrap();
+        // Both owners remain alive here: admission cannot wait for the first batch to drop.
+        drop(second);
+        drop(first);
+    }
+
+    #[tokio::test]
+    async fn source_auth_shared_queries_download_while_compute_is_held() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
+        let ranges: Vec<_> = (0..9)
+            .map(|page| authority.byte_range(page, page).unwrap())
+            .collect();
+        let first = SourceAuthWorkers::new(4).await.unwrap();
+        let second = SourceAuthWorkers::new(4).await.unwrap();
+        assert!(Arc::ptr_eq(&first.pool, &second.pool));
+        assert_eq!(first.pool.workers.len(), SOURCE_AUTH_WORKERS);
+        let gate = Arc::new(ComputeGate::default());
+        let window = InFlightBytes::new(bytes);
+        let first_job = |gate: Arc<ComputeGate>| {
+            first.authenticate(None, move || {
+                gate.hold();
+                Ok(())
+            })
+        };
+        let work = fetch_capsule_ranges_with_authentication(
+            &store,
+            &location,
+            bytes,
+            &ranges,
+            &etag,
+            9,
+            bytes,
+            4,
+            Some(&window),
+            None,
+            Some(&second),
+            |offset, bytes, probe, byte_lease| {
+                let gate = Arc::clone(&gate);
+                let authority = Arc::clone(&authority);
+                second.authenticate(probe, move || {
+                    let _byte_lease = byte_lease;
+                    gate.hold();
+                    authority
+                        .verify_payload(offset / 320, offset / 320, &bytes)
+                        .map_err(RangeFetchError::Page)?;
+                    Ok(bytes)
+                })
+            },
+        );
+        let (one, two, result, ()) =
+            tokio::time::timeout(std::time::Duration::from_secs(4), async {
+                tokio::join!(
+                    first_job(Arc::clone(&gate)),
+                    first_job(Arc::clone(&gate)),
+                    work,
+                    async {
+                        while gate.entered.load(SeqCst) < 2 || store.state.polled.load(SeqCst) < 6 {
+                            tokio::task::yield_now().await;
+                        }
+                        assert_eq!(gate.active.load(SeqCst), 2);
+                        assert_eq!(store.state.active.load(SeqCst), 4);
+                        store.state.bodies.add_permits(4);
+                        while store.state.completed.load(SeqCst) < 6 {
+                            tokio::task::yield_now().await;
+                        }
+                        assert_eq!(gate.entered.load(SeqCst), 2);
+                        assert_eq!(store.state.requested.lock().unwrap().len(), 6);
+                        assert_eq!(second.slots.available_permits(), 0);
+                        gate.release();
+                    }
+                )
+            })
+            .await
+            .expect("cross-query download progress deadline");
+        one.0.unwrap();
+        two.0.unwrap();
+        let (_, stats) = result.unwrap();
+        assert_eq!(stats.submitted_gets, 9);
+        assert_eq!(stats.verified_bytes, bytes);
+        assert_eq!(gate.entered.load(SeqCst), 11);
+        assert_eq!(gate.peak.load(SeqCst), 2);
+        assert_eq!(gate.active.load(SeqCst), 0);
+        assert_eq!(*window.available.lock().unwrap(), bytes);
+        drop(second);
+        drop(first);
+        assert_eq!(SOURCE_AUTH_THREADS.available_permits(), SOURCE_AUTH_WORKERS);
+    }
+
+    #[tokio::test]
     async fn source_auth_offload_shared_admission_and_cancelled_job_keep_permits() {
         use std::time::Duration;
         let workers = SourceAuthWorkers::new(2).await.unwrap();
@@ -3891,9 +4080,13 @@ mod tests {
         assert_eq!(*window.available.lock().unwrap(), 0);
         // Destruction joins off-thread, while a second query/runtime may seek admission.
         let dropping = std::thread::spawn(move || drop(workers));
-        let mut competing = Box::pin(SourceAuthWorkers::new(2));
+        let next = tokio::time::timeout(Duration::from_secs(1), SourceAuthWorkers::new(2))
+            .await
+            .expect("another query may download while cancelled work drains")
+            .unwrap();
+        assert_eq!(next.slots.available_permits(), 1);
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), competing.as_mut())
+            tokio::time::timeout(Duration::from_millis(20), window.reserve(16))
                 .await
                 .is_err()
         );
@@ -3902,10 +4095,6 @@ mod tests {
         dropping.join().unwrap();
         assert!(lifetime.upgrade().is_none());
         assert_eq!(*window.available.lock().unwrap(), 16);
-        let next = tokio::time::timeout(Duration::from_secs(1), competing)
-            .await
-            .unwrap()
-            .unwrap();
         drop(next);
     }
 
@@ -4076,7 +4265,7 @@ mod tests {
         assert_eq!(
             Arc::strong_count(&lifetime),
             1,
-            "zero worker threads on return"
+            "zero query-owned authentication jobs on return"
         );
         assert_eq!(Arc::strong_count(&authority), 1);
     }
