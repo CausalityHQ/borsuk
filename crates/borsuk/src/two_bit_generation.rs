@@ -6367,7 +6367,9 @@ mod source_walk_tests {
                 - 2 * publication_limits.max_source_bytes as u64
                 - 32 * bounded.plane.receipt().record_bytes as u64
                 - (Sq8RangeTrace::pending_futures_bytes(128, 4)
-                    - Sq8RangeTrace::pending_futures_bytes(32, 4)) as u64,
+                    - Sq8RangeTrace::pending_futures_bytes(32, 4)) as u64
+                // Paged SOURCE pins reserve their new shared allocation headers.
+                - 128,
         );
         let semantic_bytes = crate::semantic_unit_router::admit(
             crate::semantic_unit_router::Geometry {
@@ -8879,6 +8881,7 @@ mod source_walk_tests {
             let resident = 3 * disk
                 + 64 * 4 * 24
                 + 131_072
+                + 128 // shared paged SOURCE authority/directory allocation headers
                 + 32 * router_bytes
                 + directory_peak as u64
                 + limits.already_pinned_bytes;
