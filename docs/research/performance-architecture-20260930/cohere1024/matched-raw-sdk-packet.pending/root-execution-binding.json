@@ -1,0 +1,19 @@
+{
+  "canary_config_sha256": "091404c98e1a270074f3b812af7cec8b674d8e00902ac867f18c5300b325e8d7",
+  "full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+  "guest_horizon_epoch": 1792289276,
+  "host": "i-08f0d6520a3cb73df",
+  "input_payloads_read": false,
+  "native_source_changed": false,
+  "resources": {
+    "allowed_cpus": "4-7",
+    "cpu_quota_percent": 400,
+    "memory_bytes": 8589934592,
+    "pids": 512,
+    "swap_bytes": 0
+  },
+  "scheduled_poweroff_usec": 1792289336727621,
+  "schema": "borsuk-raw-sdk-root-execution-binding-v1",
+  "service_executed": false,
+  "upstream_packet": "3928ab42e156a7e78fc098736c68beee1869f047"
+}

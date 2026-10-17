@@ -9,7 +9,7 @@
   "count": 1000,
   "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
   "dimensions": 1024,
-  "host_identity": "i-01f04c14490040309",
+  "host_identity": "i-08f0d6520a3cb73df",
   "idle_seconds": 3600,
   "index": "baseline-76e40c144cc74c87b7f96d58986fa001",
   "k": 10,

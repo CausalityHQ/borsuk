@@ -39,7 +39,7 @@ Retained outputs per phase: argv, UTC start, original PID, stdout, stderr, actua
 
 ## Conditions and finite termination
 
-Host i-01f04c14490040309, region eu-central-1, explicit causality IMDS profile from aws.config, no copied credentials. Single SDK attempt, no retries, reused client, concurrency 1, zero query interval. Operation timeout 30s. First query includes lazy credentials. Latency covers construction/signing/transport/deserialization/validation, excluding staging/receipt writes.
+Host i-08f0d6520a3cb73df, region eu-central-1, explicit causality IMDS profile from aws.config, no copied credentials. Single SDK attempt, no retries, reused client, concurrency 1, zero query interval. Operation timeout 30s. First query includes lazy credentials. Latency covers construction/signing/transport/deserialization/validation, excluding staging/receipt writes.
 
 Cache-uncontrolled first pass: backend cache unobservable, one-hour inactivity is not proof of eviction. Report first-query latency, integer nearest-rank percentiles, serial reciprocal QPS and whole-pass QPS; not concurrent service capacity. Rust bindings retain their own memory, fetch parallelism, cache and retry conditions. Input matching alone does not prove resource/latency/cost equivalence. Parent must reconcile conditions and complete measurements before any comparison claim. Billed bytes/requests/cost remain unknown.
 
@@ -47,7 +47,7 @@ GNU timeout sends TERM then KILL after 5s. Wrapper waits the original handle and
 
 Full bounds: publish7200s, idle wrapper3610s, measure wrapper1860s, reduce120s, cleanup600s. Native query clock remains1800s; wrapper adds60s for input authentication/startup. Bounds do not guarantee successful import. RuntimeMaxSec=13600 full,2100 gates. TimeoutStopSec=650 both covers10s drain+600s cleanup+escalation/status writes. KillMode=mixed preserves this cleanup window after TERM and ultimately kills the cgroup. A60s stop grace cannot cover600s cleanup and is not used.
 
-Each launch reserves runtime+stop before frozen 2026-10-17 21:46 UTC horizon. Parent must verify the actual shutdown guard is no earlier. Full14250s reservation cannot fit current host horizon: launch MUST fail. Do not shorten frozen idle, extend timers or bypass guard. Another host/envelope needs a separately approved frozen packet before service execution.
+Each launch reserves runtime+stop before actual guest horizon 2026-10-18T02:07:56+00:00. Parent must verify the actual shutdown guard is no earlier. Full14250s reservation is checked at launch against the actual execution horizon and MUST fail if it cannot fit. Do not shorten frozen idle, extend timers or bypass guard. This prospective root binding preserves the original preparation packet; no service call occurred before rebinding.
 
 ## Parent commands
 
@@ -58,7 +58,7 @@ packet=/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/p
 cd "$packet"
 sha256sum --check --strict manifest.sha256
 systemd-run --unit=borsuk-matched-raw-gates-a0001 \
-  -p CPUQuota=100% -p AllowedCPUs=12 -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=128 \
+  -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=2100 -p TimeoutStopSec=650 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" gates
 systemctl show borsuk-matched-raw-gates-a0001 -p ActiveState -p SubState -p Result -p ExecMainStatus -p MemoryPeak
@@ -68,7 +68,7 @@ After gate unit is actually terminal and reviewed:
 
 ~~~bash
 systemd-run --unit=borsuk-matched-raw-verify-canary-a0001 \
-  -p CPUQuota=100% -p AllowedCPUs=12 -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=128 \
+  -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=120 -p TimeoutStopSec=15 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" verify-canary
 ~~~
@@ -77,7 +77,7 @@ Complete full command for review; frozen horizon check currently BLOCKS it:
 
 ~~~bash
 systemd-run --unit=borsuk-matched-raw-full-a0001 \
-  -p CPUQuota=100% -p AllowedCPUs=12 -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=128 \
+  -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=13600 -p TimeoutStopSec=650 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" full
 systemctl show borsuk-matched-raw-full-a0001 -p ActiveState -p SubState -p Result -p ExecMainStatus -p MemoryPeak
@@ -87,7 +87,7 @@ After full unit terminal, independently verify:
 
 ~~~bash
 systemd-run --unit=borsuk-matched-raw-verify-full-a0001 \
-  -p CPUQuota=100% -p AllowedCPUs=12 -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=128 \
+  -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=120 -p TimeoutStopSec=15 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" verify-full
 ~~~
@@ -96,7 +96,7 @@ SIGKILL/OOM/host loss can bypass EXIT. Parent must verify original cgroup is ter
 
 ~~~bash
 systemd-run --unit=borsuk-matched-raw-cleanup-full-a0001 \
-  -p CPUQuota=100% -p AllowedCPUs=12 -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=128 \
+  -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=650 -p TimeoutStopSec=15 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" cleanup-full
 ~~~
@@ -106,3 +106,6 @@ For canary use unit borsuk-matched-raw-cleanup-canary-a0001 and mode cleanup-can
 ## Unrun gates
 
 static-validation.json records remote static checks only. Worker never executed wrapper, native tests/builds, SDK/service probes, payload checks or experiments. Parent must verify actual input admission, IMDS/service permissions, runtime timeout/drain, canary bit preservation, memory, full completion, quality and cleanup. Missing/mismatched proof fails admission. No automatic binary admission, payload download, native rebuild or fallback dataset.
+
+## Root prospective execution binding
+Upstream3928ab42 is preserved unexecuted. This snapshot binds actual execution host and verified guest poweroff minus60s, with an independently prearmed6h termination timer. 8GiB/4CPU/512tasks is an operational safety envelope, not a product acceptance threshold. Native SDK, raw/queries/truth, source proof, idle3600 and all stage/runtime/cleanup bounds are unchanged. Full state/bucket name remains unused; canary config/namespace is deterministically refreshed from new full config SHA before any input admission or service call.

@@ -45,12 +45,11 @@
   "binary": "/mnt/borsuk-workspace/artifacts/s3vectors-original-raw-release-a0003/check_s3_vectors_baseline",
   "binary_sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da",
   "blockers": [
-    "Root must verify current shutdown guard; full 13600+650 second reservation cannot fit this host horizon.",
     "Actual native real-input admission, separate service canary, full import/query/reduction and independent cleanup closure are unrun.",
     "Original normalization producer ELF not recovered; retained source-bound reexecution establishes matching normalized digest, not independent arithmetic proof.",
     "Cost and matched latency comparison require parent reconciliation; no vendor win from canary or incomplete output."
   ],
-  "canary_config_sha256": "d1d567e2a681ad3491800824ed3a1e7d47d56b1a0d649b27e31892bf75d990cb",
+  "canary_config_sha256": "091404c98e1a270074f3b812af7cec8b674d8e00902ac867f18c5300b325e8d7",
   "claims": {
     "input_admitted": false,
     "performance": false,
@@ -59,10 +58,10 @@
     "vendor_win": false
   },
   "execution_root": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001",
-  "full_config_sha256": "9ad311cfe96e170fca87fdd59305471f94c230f071e58f73109052525fdfe6b3",
-  "guest_horizon_epoch": 1792273560,
-  "guest_horizon_status": "brief approximate; root must verify actual guard is no earlier; no timer changes authorized",
-  "host": "i-01f04c14490040309",
+  "full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+  "guest_horizon_epoch": 1792289276,
+  "guest_horizon_status": "Actual scheduled poweroff USEC read on execution host, minus60s safety; external6h timer prearmed",
+  "host": "i-08f0d6520a3cb73df",
   "phase_seconds": {
     "admit": 300,
     "canary_admit": 60,
@@ -115,10 +114,10 @@
   "qualified_sdk_commit": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
   "region": "eu-central-1",
   "resources": {
-    "allowed_cpus": "12",
-    "cpu_quota_percent": 100,
-    "memory_bytes": 536870912,
-    "pids": 128,
+    "allowed_cpus": "4-7",
+    "cpu_quota_percent": 400,
+    "memory_bytes": 8589934592,
+    "pids": 512,
     "swap_bytes": 0
   },
   "runtime_seconds": {
@@ -136,7 +135,7 @@
   "schema": "borsuk-matched-raw-sdk-packet-v1",
   "source_parent": "7a64c62bc253774ae62036977d8282cab07efc14",
   "source_sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c",
-  "status": "STATIC_PREPARATION_ONLY",
+  "status": "ROOT_BOUND_STATIC_UNEXECUTED",
   "stop_seconds": {
     "cleanup": 15,
     "full": 650,

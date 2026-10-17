@@ -36,10 +36,10 @@ assert pathlib.Path('/sys/devices/virtual/dmi/id/board_asset_tag').read_text().s
 cg=[x.split(':',2)[2] for x in pathlib.Path('/proc/self/cgroup').read_text().splitlines() if x.startswith('0::')]
 assert len(cg)==1 and '..' not in pathlib.Path(cg[0]).parts
 base=pathlib.Path('/sys/fs/cgroup'+cg[0])
-for name,value in [('memory.max','536870912'),('memory.swap.max','0'),('pids.max','128'),('cpuset.cpus.effective','12')]:
+for name,value in [('memory.max','8589934592'),('memory.swap.max','0'),('pids.max','512'),('cpuset.cpus.effective','4-7')]:
  assert (base/name).read_text().strip()==value,(name,'external resource guard')
 quota,period=(base/'cpu.max').read_text().split()
-assert quota!='max' and int(quota)==int(period),'CPUQuota=100% required'
+assert quota!='max' and int(quota)==4*int(period),'CPUQuota=400% required'
 kind='gates' if mode=='gates' else 'full' if mode=='full' else 'cleanup' if mode.startswith('cleanup') else 'verify'
 runtime=j['runtime_seconds'][kind]; stop=j['stop_seconds'][kind]
 assert int(time.time())+runtime+stop<=j['guest_horizon_epoch'],'BLOCKED: finite run plus stop/cleanup cannot fit frozen host horizon'
