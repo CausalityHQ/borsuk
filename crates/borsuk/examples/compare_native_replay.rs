@@ -1835,6 +1835,7 @@ fn read_run_observed_policy(
         && expected
             .is_some_and(|c| c.expected_bound_inputs["execution"]["mode"] == "diagnostic_panel");
     let mut split_caller_pinned = None;
+    let mut diagnostic_model = None;
     let mut completed = if let Some(c) = expected {
         require(
             serde_json::from_slice::<Value>(&rows.line)? == c.expected_bound_inputs,
@@ -1870,7 +1871,9 @@ fn read_run_observed_policy(
             // The native untraced panel emits admission before any source or generation open.
             let admission: Value = rows.row("diagnostic_admission")?;
             if v10 {
-                current_v10::validate_admission(&admission, &c.expected_bound_inputs)?;
+                let model = current_v10::validate_admission(&admission, &c.expected_bound_inputs)?;
+                rows.line_cap = model.line_cap();
+                diagnostic_model = Some(model);
                 split_caller_pinned = Some(admission["caller_pinned_bytes"].clone());
             } else if diagnostic {
                 sq8_panel_attribution::validate_admission(
@@ -2074,7 +2077,10 @@ fn read_run_observed_policy(
                     if rows.source_layout {
                         current_v10::validate_source_capsules(&raw, &c.expected_bound_inputs)?;
                     }
-                    if raw.get("diagnostic").is_some() {
+                    if let Some(diag) = raw.get("diagnostic") {
+                        diagnostic_model
+                            .ok_or("diagnostic admission model required")?
+                            .bind(diag)?;
                         sq8_split_panel::validate_diagnostic(&raw, &c.expected_bound_inputs)?;
                     }
                 } else {
@@ -13570,9 +13576,57 @@ mod tests {
         rows
     }
 
+    fn author_profile_v4_diagnostic(diag: &mut Value) {
+        let source = &diag["source_range_trace"];
+        let mut summary = Value::Object(
+            "outcome planned_ranges planned_bytes max_parallel fetch_start_ns all_ranges_complete_ns release_end_ns retained_payload_bytes cpu phase_process_cpu_ns unattributed_process_cpu_ns phase_clock_reads"
+                .split_whitespace().map(|key| (key.to_owned(), source[key].clone())).collect(),
+        );
+        summary["last_completing_range"] = source["ranges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .max_by_key(|row| row[14].as_u64())
+            .cloned()
+            .unwrap_or(Value::Null);
+        diag["schema"] = json!("borsuk-sq8-range-attribution-diagnostic-v4");
+        diag["source_range_trace"] = summary;
+    }
+
+    fn author_historical_panel_memory(rows: &mut [Value]) {
+        let Some(admission) = rows
+            .iter()
+            .find(|row| row["phase"] == "diagnostic_admission")
+        else {
+            return;
+        };
+        let old_pinned = if admission["trace"] == true {
+            534097
+        } else {
+            131072
+        };
+        let delta = admission["diagnostic_pinned_bytes"].as_u64().unwrap() - old_pinned;
+        for row in rows {
+            if row["phase"] == "diagnostic_admission" {
+                row["panel_line_cap_bytes"] = json!(65536);
+                row["diagnostic_pinned_bytes"] = json!(old_pinned);
+                let total = row["diagnostic_bytes_per_active_query"].as_u64().unwrap();
+                row["diagnostic_bytes_per_active_query"] = json!(total - delta);
+            }
+            if matches!(
+                row["phase"].as_str(),
+                Some("diagnostic_admission" | "startup")
+            ) {
+                let caller = row["caller_pinned_bytes"].as_u64().unwrap();
+                row["caller_pinned_bytes"] = json!(caller - delta);
+            }
+        }
+    }
+
     // Synthetic historical records have their own explicit roster and accounting.
     // Never use this conversion on the current producer interoperability path.
     fn author_historical_diagnostics(rows: &mut [Value]) {
+        author_historical_panel_memory(rows);
         use borsuk::sq8_s3_range::Sq8RangeTrace;
         let width = rows[1]["fetch_parallelism"].as_u64().unwrap() as usize;
         for row in rows {
@@ -13650,6 +13704,7 @@ mod tests {
                     .position(|r| r["phase"] == "diagnostic_admission")
                     .unwrap();
                 let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+                assert_eq!(rows[admission]["panel_line_cap_bytes"], 131072);
                 let check = |name: &str, records: &[Value]| {
                     let (path, _) = write_fixture(dir.path(), name, records.to_vec());
                     let (config, pin) = scale_config(dir.path(), &path, records);
@@ -13663,6 +13718,9 @@ mod tests {
                     "retained",
                     "peak",
                     "semantics",
+                    "line_cap",
+                    "scratch",
+                    "cap",
                 ] {
                     let mut bad = rows.clone();
                     match mutation {
@@ -13684,6 +13742,31 @@ mod tests {
                         }
                         "retained" => bad[admission]["trace_retained_bytes"] = json!(0),
                         "peak" => bad[admission]["trace_peak_bytes"] = json!(0),
+                        "line_cap" => {
+                            bad[admission]["panel_line_cap_bytes"] = json!(98304);
+                            for key in [
+                                "diagnostic_pinned_bytes",
+                                "diagnostic_bytes_per_active_query",
+                            ] {
+                                let bytes = bad[admission][key].as_u64().unwrap();
+                                bad[admission][key] = json!(bytes - 65536);
+                            }
+                            for row in &mut bad {
+                                if matches!(
+                                    row["phase"].as_str(),
+                                    Some("diagnostic_admission" | "startup")
+                                ) {
+                                    let bytes = row["caller_pinned_bytes"].as_u64().unwrap();
+                                    row["caller_pinned_bytes"] = json!(bytes - 65536);
+                                }
+                            }
+                        }
+                        "scratch" => {
+                            let pinned =
+                                bad[admission]["diagnostic_pinned_bytes"].as_u64().unwrap();
+                            bad[admission]["diagnostic_pinned_bytes"] = json!(pinned - 1);
+                        }
+                        "cap" => bad[admission]["diagnostic_cap_bytes"] = json!(2097152),
                         "semantics" => {
                             bad[admission]["semantics"] = current_v10::historical_semantics()
                         }
@@ -13697,7 +13780,7 @@ mod tests {
                 if traced {
                     assert_eq!(
                         rows[query]["diagnostic"]["schema"],
-                        "borsuk-sq8-range-attribution-diagnostic-v4"
+                        "borsuk-sq8-range-attribution-diagnostic-v5"
                     );
                     for mutation in [
                         "schema",
@@ -13709,6 +13792,13 @@ mod tests {
                         "poll_cpu",
                         "auth_reads",
                         "single_reads",
+                        "source_unknown",
+                        "source_missing",
+                        "source_dropped",
+                        "source_charge",
+                        "source_order",
+                        "source_stamp",
+                        "model_schema",
                     ] {
                         let mut bad = rows.clone();
                         let diag = &mut bad[query]["diagnostic"];
@@ -13734,6 +13824,26 @@ mod tests {
                                 diag["source_range_trace"]["cpu"]["authentication"]["clock_reads"] =
                                     json!(3)
                             }
+                            "source_unknown" => diag["source_range_trace"]["unknown"] = json!(0),
+                            "source_missing" => {
+                                diag["source_range_trace"]
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("ranges");
+                            }
+                            "source_dropped" => {
+                                diag["source_range_trace"]["dropped_ranges"] = json!(1)
+                            }
+                            "source_charge" => {
+                                diag["source_range_trace"]["ranges"][0][16] = json!(0)
+                            }
+                            "source_order" => diag["source_range_trace"]["ranges"][0][0] = json!(1),
+                            "source_stamp" => {
+                                diag["source_range_trace"]["ranges"][0][14] = json!(u64::MAX)
+                            }
+                            "model_schema" => {
+                                author_profile_v4_diagnostic(diag);
+                            }
                             "single_reads" => {
                                 diag["cpu_profile"]["discovery"]["clock_reads"] = json!(8)
                             }
@@ -13742,6 +13852,23 @@ mod tests {
                         assert!(check(mutation, &bad).is_err(), "{mutation}");
                     }
                 }
+                let mut v4 = rows.clone();
+                author_historical_panel_memory(&mut v4);
+                for row in &mut v4 {
+                    if let Some(diag) = row.get_mut("diagnostic") {
+                        author_profile_v4_diagnostic(diag);
+                    }
+                }
+                check("historical-profile-v4", &v4).unwrap();
+                if traced {
+                    let mut bad = v4.clone();
+                    bad[query]["diagnostic"] = rows[query]["diagnostic"].clone();
+                    assert!(check("v5-with-v4-memory", &bad).is_err());
+                    let mut bad = rows.clone();
+                    bad[query]["diagnostic"] = v4[query]["diagnostic"].clone();
+                    assert!(check("v4-with-v5-memory", &bad).is_err());
+                }
+
                 // Independently constructed old envelope/model remains accepted.
                 let mut historical = rows.clone();
                 historical[0]["schema"] = json!(current_v10::PAGE_RANGE_RESULT_SCHEMA);
@@ -13766,43 +13893,68 @@ mod tests {
                     assert!(check("old-current-sq8-cpu", &bad).is_err());
                 }
 
-                // Reseal the exact duplicate-key bytes, including both prefix and terminal seals.
-                let mut records = rows.clone();
-                let seal = records
-                    .iter()
-                    .position(|r| r["phase"] == "all_queries_sealed")
-                    .unwrap();
-                let mut lines = records
-                    .iter()
-                    .map(|r| encode(std::slice::from_ref(r)))
-                    .collect::<Vec<_>>();
-                let line = &mut lines[admission];
-                line.truncate(line.len() - 2);
-                line.extend_from_slice(
-                    format!(
-                        ",\"source_trace_ranges\":{}}}\n",
-                        rows[admission]["source_trace_ranges"]
-                    )
-                    .as_bytes(),
-                );
-                let prefix = lines[..seal].concat();
-                records[seal]["prefix_bytes"] = json!(prefix.len());
-                records[seal]["prefix_sha256"] = json!(sha(&prefix));
-                lines[seal] = encode(&records[seal..seal + 1]);
-                let sealed = lines[..seal + 1].concat();
-                let terminal = records.len() - 1;
-                let summary = &mut records[terminal]["summary"];
-                summary["prefix_bytes"] = json!(prefix.len());
-                summary["prefix_sha256"] = json!(sha(&prefix));
-                summary["sealed_bytes"] = json!(sealed.len());
-                summary["sealed_sha256"] = json!(sha(&sealed));
-                lines[terminal] = encode(&records[terminal..]);
-                let body = lines.concat();
-                let duplicate = dir.path().join("duplicate-profile.jsonl");
-                std::fs::write(&duplicate, &body).unwrap();
-                let (config, pin) = scale_config(dir.path(), &duplicate, &records);
-                let error = reduce_scale(&config, &pin).unwrap_err().to_string();
-                assert!(error.contains("duplicate"), "{error}");
+                // Reseal exact bytes so parser limits, not stale hashes, reject mutations.
+                for (name, mut records, padded_len, expected_error) in [
+                    ("duplicate-profile", rows.clone(), None, Some("duplicate")),
+                    ("v5-line-at-cap", rows.clone(), Some(131072), None),
+                    (
+                        "v5-line-over-cap",
+                        rows.clone(),
+                        Some(131073),
+                        Some("row cap"),
+                    ),
+                    ("v4-line-at-cap", v4.clone(), Some(65536), None),
+                    ("v4-line-over-cap", v4.clone(), Some(65537), Some("row cap")),
+                ] {
+                    let seal = records
+                        .iter()
+                        .position(|r| r["phase"] == "all_queries_sealed")
+                        .unwrap();
+                    let mut lines = records
+                        .iter()
+                        .map(|r| encode(std::slice::from_ref(r)))
+                        .collect::<Vec<_>>();
+                    if let Some(len) = padded_len {
+                        let line = &mut lines[query];
+                        assert!(line.len() < len);
+                        assert_eq!(line.pop(), Some(b'\n'));
+                        line.resize(len - 1, b' ');
+                        line.push(b'\n');
+                    } else {
+                        let line = &mut lines[admission];
+                        line.truncate(line.len() - 2);
+                        line.extend_from_slice(
+                            format!(
+                                ",\"source_trace_ranges\":{}}}\n",
+                                rows[admission]["source_trace_ranges"]
+                            )
+                            .as_bytes(),
+                        );
+                    }
+                    let prefix = lines[..seal].concat();
+                    records[seal]["prefix_bytes"] = json!(prefix.len());
+                    records[seal]["prefix_sha256"] = json!(sha(&prefix));
+                    lines[seal] = encode(&records[seal..seal + 1]);
+                    let sealed = lines[..seal + 1].concat();
+                    let terminal = records.len() - 1;
+                    let summary = &mut records[terminal]["summary"];
+                    summary["prefix_bytes"] = json!(prefix.len());
+                    summary["prefix_sha256"] = json!(sha(&prefix));
+                    summary["sealed_bytes"] = json!(sealed.len());
+                    summary["sealed_sha256"] = json!(sha(&sealed));
+                    lines[terminal] = encode(&records[terminal..]);
+                    let body = lines.concat();
+                    let path = dir.path().join(format!("{name}.jsonl"));
+                    std::fs::write(&path, &body).unwrap();
+                    let (config, pin) = scale_config(dir.path(), &path, &records);
+                    let result = reduce_scale(&config, &pin);
+                    if let Some(expected) = expected_error {
+                        let error = result.unwrap_err().to_string();
+                        assert!(error.contains(expected), "{name}: {error}");
+                    } else {
+                        result.unwrap();
+                    }
+                }
             }
         }
     }

@@ -592,6 +592,9 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     )?;
     if let Some(diag) = raw.get("diagnostic") {
         diagnostic_shape(diag, cpu_profile_config(inputs))?;
+        if diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v5" {
+            validate_source_trace(raw, inputs)?;
+        }
         let trace = &diag["sq8_range_trace"];
         let ranges = trace["ranges"].as_array().ok_or("v10 trace ranges")?;
         require(
@@ -717,7 +720,35 @@ fn range_cpu(value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn profile_shape(diag: &Value) -> Result<()> {
+#[derive(Clone, Copy)]
+pub(super) enum DiagnosticModel {
+    Sq8V3,
+    SourceSummaryV4,
+    SourceRangesV5,
+}
+
+impl DiagnosticModel {
+    pub(super) fn line_cap(self) -> usize {
+        match self {
+            Self::Sq8V3 | Self::SourceSummaryV4 => 65_536,
+            Self::SourceRangesV5 => 131_072,
+        }
+    }
+
+    pub(super) fn bind(self, diag: &Value) -> Result<()> {
+        require(
+            diag["schema"]
+                == match self {
+                    Self::Sq8V3 => "borsuk-sq8-range-attribution-diagnostic-v3",
+                    Self::SourceSummaryV4 => "borsuk-sq8-range-attribution-diagnostic-v4",
+                    Self::SourceRangesV5 => "borsuk-sq8-range-attribution-diagnostic-v5",
+                },
+            "diagnostic schema/admission model agreement",
+        )
+    }
+}
+
+fn profile_shape(diag: &Value, full_source: bool) -> Result<()> {
     let profile = &diag["cpu_profile"];
     fields(profile, "discovery cover planning acquisition_poll_cpu")?;
     for key in ["discovery", "cover", "planning"] {
@@ -730,7 +761,11 @@ fn profile_shape(diag: &Value) -> Result<()> {
     let source = &diag["source_range_trace"];
     fields(
         source,
-        "outcome planned_ranges planned_bytes max_parallel fetch_start_ns all_ranges_complete_ns release_end_ns retained_payload_bytes cpu phase_process_cpu_ns unattributed_process_cpu_ns phase_clock_reads last_completing_range",
+        &if full_source {
+            format!("{LEGACY_TRACE_FIELDS} {PROFILE_TRACE_FIELDS}")
+        } else {
+            "outcome planned_ranges planned_bytes max_parallel fetch_start_ns all_ranges_complete_ns release_end_ns retained_payload_bytes cpu phase_process_cpu_ns unattributed_process_cpu_ns phase_clock_reads last_completing_range".into()
+        },
     )?;
     let sq8 = &diag["sq8_range_trace"];
     fields(
@@ -762,11 +797,13 @@ fn profile_shape(diag: &Value) -> Result<()> {
         }
         range_cpu(&trace["cpu"])?;
     }
-    let last = &source["last_completing_range"];
-    require(
-        last.is_null() || last.as_array().is_some_and(|r| r.len() == 22),
-        "SOURCE last range width",
-    )?;
+    if !full_source {
+        let last = &source["last_completing_range"];
+        require(
+            last.is_null() || last.as_array().is_some_and(|r| r.len() == 22),
+            "SOURCE last range width",
+        )?;
+    }
     cpu_wall(&sq8["regroup"], 4, false)?;
     number(&sq8["regroup_copied_bytes"])?;
     number(&sq8["rank_clock_reads"])?;
@@ -788,24 +825,246 @@ pub(super) fn diagnostic_shape(diag: &Value, cpu_profile: bool) -> Result<()> {
             }
         ),
     )?;
+    let full_source = diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v5";
     require(
-        diag["schema"]
-            == if cpu_profile {
-                "borsuk-sq8-range-attribution-diagnostic-v4"
-            } else {
-                "borsuk-sq8-range-attribution-diagnostic-v3"
-            }
-            && diag["sq8_range_trace"].is_object()
+        (if cpu_profile {
+            full_source || diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v4"
+        } else {
+            diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v3"
+        }) && diag["sq8_range_trace"].is_object()
             && diag["host"].is_object(),
         "panel diagnostic schema",
     )?;
     if cpu_profile {
-        profile_shape(diag)?;
+        profile_shape(diag, full_source)?;
     } else {
         // Historical SQ8-only records never carried CPU-profile fields.
         fields(&diag["sq8_range_trace"], LEGACY_TRACE_FIELDS)?;
     }
     Ok(())
+}
+
+fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
+    let trace = &raw["diagnostic"]["source_range_trace"];
+    fields(
+        trace,
+        &format!("{LEGACY_TRACE_FIELDS} {PROFILE_TRACE_FIELDS}"),
+    )?;
+    range_cpu(&trace["cpu"])?;
+    let ranges = trace["ranges"].as_array().ok_or("SOURCE range rows")?;
+    require(
+        trace["range_fields"] == json!(borsuk::sq8_s3_range::RangeSpan::FIELDS)
+            && trace["dropped_ranges"] == 0
+            && trace["rank_start_ns"].is_null()
+            && trace["rank_end_ns"].is_null()
+            && trace["rank"].is_null()
+            && trace["regroup"].is_null()
+            && trace["regroup_copied_bytes"] == 0
+            && trace["rank_thread_cpu_ns"].is_null()
+            && trace["rank_clock_reads"] == 0,
+        "SOURCE exact range roster and non-ranking phase",
+    )?;
+    let charge = &raw["charges"]["source"];
+    if inputs["serving"]["mode"] == "direct_closure" {
+        require(
+            raw["source_nomination_skipped"] == true
+                && charge == &json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0})
+                && trace["outcome"] == "started"
+                && ranges.is_empty()
+                && [
+                    "planned_ranges",
+                    "planned_bytes",
+                    "max_parallel",
+                    "phase_clock_reads",
+                ]
+                .iter()
+                .all(|key| trace[*key] == 0)
+                && [
+                    "fetch_start_ns",
+                    "all_ranges_complete_ns",
+                    "release_end_ns",
+                    "retained_payload_bytes",
+                    "phase_process_cpu_ns",
+                    "unattributed_process_cpu_ns",
+                ]
+                .iter()
+                .all(|key| trace[*key].is_null())
+                && trace["cpu"]
+                    == json!({"collector_allocation":null,"collector_copy":null,
+                    "owned_allocation":null,"owned_copy":null,"authentication":null,
+                    "collector_copied_bytes":0,"owned_copied_bytes":0}),
+            "direct query must leave SOURCE trace and charges empty",
+        )?;
+        return Ok(());
+    }
+    require(
+        raw["source_nomination_skipped"] == false
+            && trace["outcome"] == "fetched"
+            && !ranges.is_empty()
+            && ranges.len() as u64 <= number(&inputs["source_get_budget"])?
+            && trace["planned_ranges"] == ranges.len()
+            && trace["max_parallel"]
+                == (ranges.len() as u64).min(number(&inputs["fetch_parallelism"])?)
+            && trace["phase_clock_reads"] == 2,
+        "SOURCE complete bounded range plan",
+    )?;
+    let flat = inputs["source_layout"]["layout"] == "flat_records";
+    require(
+        flat || inputs["source_layout"]["layout"] == "leaf_capsules_v2",
+        "SOURCE diagnostic layout",
+    )?;
+    let width = super::source_record_bytes(usize::try_from(number(&inputs["dimensions"])?)?)?;
+    let plan = if flat {
+        let pages = raw["trace"]["ranked_candidate_pages"]
+            .as_array()
+            .ok_or("SOURCE discovery closure")?
+            .iter()
+            .map(|page| Ok(usize::try_from(number(page)?)?))
+            .collect::<Result<std::collections::BTreeSet<_>>>()?;
+        Some(
+            super::source_cover::cover_pages(
+                &pages,
+                usize::try_from(number(&inputs["rows"])?)?,
+                width,
+                256,
+                usize::try_from(number(&inputs["source_get_budget"])?)?,
+            )?
+            .0,
+        )
+    } else {
+        None
+    };
+    if let Some(plan) = &plan {
+        require(
+            plan.len() == ranges.len(),
+            "SOURCE canonical cover range count",
+        )?;
+    }
+    let fetch = number(&trace["fetch_start_ns"])?;
+    let barrier = number(&trace["all_ranges_complete_ns"])?;
+    let release = number(&trace["release_end_ns"])?;
+    let stages = &raw["stages"];
+    require(
+        number(&stages["source"]["start_ns"])? <= fetch
+            && fetch <= barrier
+            && barrier <= number(&stages["source"]["end_ns"])?
+            && number(&stages["source"]["end_ns"])? <= number(&stages["planning"]["start_ns"])?
+            && number(&stages["planning"]["start_ns"])? <= number(&stages["planning"]["end_ns"])?
+            && number(&stages["planning"]["end_ns"])? <= release
+            && release <= number(&stages["sq8"]["start_ns"])?,
+        "SOURCE fetch/planning/release stage order",
+    )?;
+    let mut bytes = 0;
+    let mut previous_end = 0;
+    for (index, row) in ranges.iter().enumerate() {
+        let row = row.as_array().ok_or("SOURCE compact range row")?;
+        require(row.len() == 22, "SOURCE range column count")?;
+        let n = |column: usize| number(&row[column]);
+        let (start, end) = (n(3)?, n(4)?);
+        require(
+            n(0)? == index as u64
+                && row[21] == "ok"
+                && start >= previous_end
+                && start < end
+                && n(16)? == end - start
+                && (1..=u64::from(u32::MAX)).contains(&n(15)?)
+                && n(20)? == n(15)?,
+            "SOURCE ordered physical range identity/bytes/chunks",
+        )?;
+        if let Some(plan) = &plan {
+            let unit = 32 * width as u64;
+            require(
+                start == plan[index].start as u64
+                    && end == plan[index].end as u64
+                    && n(1)? == start / unit
+                    && n(2)? == (end - 1) / unit,
+                "SOURCE canonical physical cover/page bounds",
+            )?;
+        } else {
+            // The wire plan carries physical offsets, not the pinned binary directory's owners.
+            require(
+                n(1)? == u64::MAX
+                    && n(2)? == u64::MAX
+                    && end <= number(&inputs["source_layout"]["blob_bytes"])?,
+                "SOURCE capsule physical bounds and page sentinels",
+            )?;
+        }
+        let mut previous = fetch;
+        for column in 5..=14 {
+            let stamp = n(column)?;
+            require(
+                previous <= stamp && stamp <= barrier,
+                "SOURCE range timestamp order",
+            )?;
+            previous = stamp;
+        }
+        let chunks = n(15)?;
+        let gap = n(17)?;
+        let gap_end = if row[18].is_null() {
+            None
+        } else {
+            Some(n(18)?)
+        };
+        let copy = n(19)?;
+        let body = n(11)? - n(8)?;
+        require(
+            (chunks != 1 || n(9)? == n(10)?)
+                && plus(gap, copy)? <= body
+                && n(11)? - n(9)?
+                    <= chunks
+                        .checked_mul(gap)
+                        .and_then(|wait| copy.checked_add(wait))
+                        .ok_or("SOURCE body gap overflow")?,
+            "SOURCE single chunk/copy/body gap coverage",
+        )?;
+        if gap == 0 {
+            require(gap_end.is_none(), "SOURCE zero gap boundary")?;
+        } else {
+            let end = gap_end.ok_or("SOURCE missing gap boundary")?;
+            let start = end.checked_sub(gap).ok_or("SOURCE gap underflow")?;
+            require(
+                (chunks > 2 || end == n(9)? || end == n(11)? || (chunks == 2 && end == n(10)?))
+                    && start >= n(8)?
+                    && end >= n(9)?
+                    && end <= n(11)?
+                    && (end <= n(10)? || end == n(11)?)
+                    && !(start < n(9)? && end > n(9)?)
+                    && !(start < n(10)? && end > n(10)?),
+                "SOURCE body gap bounds",
+            )?;
+        }
+        bytes = plus(bytes, end - start)?;
+        previous_end = end;
+    }
+    require(
+        trace["planned_bytes"] == bytes
+            && trace["retained_payload_bytes"] == bytes
+            && bytes <= number(&inputs["source_byte_budget"])?
+            && charge
+                == &json!({"submitted_gets":ranges.len(),"verified_bytes":bytes,"failed_gets":0}),
+        "SOURCE immutable charge conservation",
+    )?;
+    let cpu = &trace["cpu"];
+    let measured = [
+        "collector_allocation",
+        "collector_copy",
+        "owned_allocation",
+        "owned_copy",
+        "authentication",
+    ]
+    .iter()
+    .try_fold(0u64, |sum, key| -> Result<u64> {
+        Ok(sum.saturating_add(if cpu[*key].is_null() {
+            0
+        } else {
+            number(&cpu[*key]["thread_cpu_ns"])?
+        }))
+    })?;
+    require(
+        trace["unattributed_process_cpu_ns"]
+            == number(&trace["phase_process_cpu_ns"])?.saturating_sub(measured),
+        "SOURCE process CPU residual conservation",
+    )
 }
 
 fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
@@ -821,7 +1080,7 @@ fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
         ))
 }
 
-pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
+pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<DiagnosticModel> {
     use borsuk::sq8_s3_range::Sq8RangeTrace;
     let traced = inputs["execution"]["trace"] == true;
     let ranges = usize::try_from(physical_cap(inputs)?)?;
@@ -866,15 +1125,22 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
             && std::mem::size_of::<Vec<u8>>() == 24,
         "v10 producer sampler ABI",
     )?;
-    let diagnostic = if traced {
-        2 * 65536 + 2 * 49 * 16 + 24 + 24 + 131072 + 1 + 8192 + 262144
-    } else {
-        2 * 65536
+    // Trace-OFF has no query schema: admit only the two frozen panel models.
+    let model = match (profile, number(&raw["panel_line_cap_bytes"])?) {
+        (false, 65_536) => DiagnosticModel::Sq8V3,
+        (true, 65_536) => DiagnosticModel::SourceSummaryV4,
+        (true, 131_072) => DiagnosticModel::SourceRangesV5,
+        _ => return Err("versioned diagnostic panel memory model".into()),
     };
+    let diagnostic = 2 * model.line_cap()
+        + if traced {
+            2 * 49 * 16 + 24 + 24 + 131072 + 1 + 8192 + 262144
+        } else {
+            0
+        };
     require(
         raw["trace"] == traced
             && raw["trace_ranges"] == ranges
-            && raw["panel_line_cap_bytes"] == 65536
             && raw["diagnostic_pinned_bytes"] == diagnostic
             && raw["diagnostic_bytes_per_active_query"] == diagnostic + peak
             && diagnostic + peak <= 1048576
@@ -938,7 +1204,8 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<()> {
     require(
         raw["semantics"] == semantics,
         "split exact diagnostic semantics",
-    )
+    )?;
+    Ok(model)
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
@@ -2876,6 +3143,192 @@ mod tests {
                 "logical_range_count":1,"planned_bytes":910,"target_pages":2,
                 "target_shortfall":0,"primary_pages_retained":0,"covered_pages":3,"bridge_pages":1}});
         (query, inputs)
+    }
+
+    fn source_span_fixture() -> (Value, Value) {
+        let inputs = json!({"rows":769,"dimensions":32,"source_get_budget":96,
+            "source_byte_budget":67108864,"fetch_parallelism":16,
+            "source_layout":{"layout":"flat_records"},"serving":{"mode":"baseline"}});
+        let ranges = json!([
+            [
+                0, 0, 7, 0, 4096, 13, 14, 15, 16, 17, 17, 18, 19, 20, 21, 1, 4096, 1, 17, 1, 1,
+                "ok"
+            ],
+            [
+                1, 16, 24, 8192, 12304, 14, 15, 16, 17, 18, 18, 19, 20, 21, 22, 1, 4112, 1, 18, 1,
+                1, "ok"
+            ]
+        ]);
+        let mut source =
+            serde_json::to_value(borsuk::sq8_s3_range::Sq8RangeTrace::new(96).unwrap()).unwrap();
+        for (key, value) in [
+            ("outcome", json!("fetched")),
+            ("planned_ranges", json!(2)),
+            ("planned_bytes", json!(8208)),
+            ("max_parallel", json!(2)),
+            ("fetch_start_ns", json!(12)),
+            ("all_ranges_complete_ns", json!(35)),
+            ("release_end_ns", json!(51)),
+            ("retained_payload_bytes", json!(8208)),
+            ("phase_process_cpu_ns", json!(100)),
+            ("unattributed_process_cpu_ns", json!(100)),
+            ("phase_clock_reads", json!(2)),
+            ("ranges", ranges),
+        ] {
+            source[key] = value;
+        }
+        let raw = json!({"source_nomination_skipped":false,
+            "trace":{"ranked_candidate_pages":[0,2,3]},
+            "stages":{"source":{"start_ns":10,"end_ns":40},
+                "planning":{"start_ns":41,"end_ns":50},"sq8":{"start_ns":60}},
+            "charges":{"source":{"submitted_gets":2,"verified_bytes":8208,"failed_gets":0}},
+            "diagnostic":{"source_range_trace":source}});
+        (raw, inputs)
+    }
+
+    #[test]
+    fn source_v5_complete_roster_plan_timestamps_and_charges() {
+        let (raw, inputs) = source_span_fixture();
+        validate_source_trace(&raw, &inputs).unwrap();
+        for (pointer, value) in [
+            ("/diagnostic/source_range_trace/dropped_ranges", json!(1)),
+            (
+                "/diagnostic/source_range_trace/range_fields/0",
+                json!("offset"),
+            ),
+            ("/diagnostic/source_range_trace/planned_ranges", json!(1)),
+            ("/diagnostic/source_range_trace/planned_bytes", json!(8207)),
+            ("/diagnostic/source_range_trace/max_parallel", json!(1)),
+            (
+                "/diagnostic/source_range_trace/retained_payload_bytes",
+                json!(0),
+            ),
+            ("/diagnostic/source_range_trace/ranges/1/0", json!(0)),
+            ("/diagnostic/source_range_trace/ranges/1/1", json!(15)),
+            ("/diagnostic/source_range_trace/ranges/1/3", json!(8193)),
+            ("/diagnostic/source_range_trace/ranges/1/5", json!(11)),
+            ("/diagnostic/source_range_trace/ranges/1/12", Value::Null),
+            ("/diagnostic/source_range_trace/ranges/1/14", json!(36)),
+            ("/diagnostic/source_range_trace/ranges/1/15", json!(0)),
+            ("/diagnostic/source_range_trace/ranges/1/16", json!(4111)),
+            ("/diagnostic/source_range_trace/ranges/1/17", json!(9)),
+            (
+                "/diagnostic/source_range_trace/ranges/1/18",
+                json!(u64::MAX),
+            ),
+            ("/diagnostic/source_range_trace/ranges/1/19", json!(9)),
+            ("/diagnostic/source_range_trace/ranges/1/20", json!(2)),
+            (
+                "/diagnostic/source_range_trace/ranges/1/21",
+                json!("page_auth"),
+            ),
+            (
+                "/diagnostic/source_range_trace/all_ranges_complete_ns",
+                json!(41),
+            ),
+            ("/diagnostic/source_range_trace/release_end_ns", json!(49)),
+            ("/diagnostic/source_range_trace/rank_start_ns", json!(45)),
+            ("/charges/source/submitted_gets", json!(1)),
+            ("/charges/source/verified_bytes", json!(8207)),
+            ("/charges/source/failed_gets", json!(1)),
+        ] {
+            let mut bad = raw.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_source_trace(&bad, &inputs).is_err(), "{pointer}");
+        }
+        for mutation in [
+            "drop",
+            "duplicate",
+            "reverse",
+            "width",
+            "unknown",
+            "missing",
+        ] {
+            let mut bad = raw.clone();
+            let trace = &mut bad["diagnostic"]["source_range_trace"];
+            match mutation {
+                "drop" => {
+                    trace["ranges"].as_array_mut().unwrap().pop();
+                }
+                "duplicate" => {
+                    trace["ranges"][1] = trace["ranges"][0].clone();
+                }
+                "reverse" => {
+                    trace["ranges"].as_array_mut().unwrap().reverse();
+                }
+                "width" => {
+                    trace["ranges"][1].as_array_mut().unwrap().pop();
+                }
+                "unknown" => {
+                    trace["extra"] = json!(0);
+                }
+                "missing" => {
+                    trace.as_object_mut().unwrap().remove("ranges");
+                }
+                _ => unreachable!(),
+            }
+            assert!(validate_source_trace(&bad, &inputs).is_err(), "{mutation}");
+        }
+        // Capsule byte offsets are physical; no single logical page interval exists.
+        let mut capsule_inputs = inputs.clone();
+        capsule_inputs["source_layout"] = json!({"layout":"leaf_capsules_v2","blob_bytes":12304});
+        let mut capsule = raw.clone();
+        for row in capsule["diagnostic"]["source_range_trace"]["ranges"]
+            .as_array_mut()
+            .unwrap()
+        {
+            row[1] = json!(u64::MAX);
+            row[2] = json!(u64::MAX);
+        }
+        validate_source_trace(&capsule, &capsule_inputs).unwrap();
+        for (pointer, value) in [
+            ("/diagnostic/source_range_trace/ranges/0/1", json!(0)),
+            ("/diagnostic/source_range_trace/ranges/1/3", json!(4095)),
+            ("/diagnostic/source_range_trace/ranges/1/4", json!(12305)),
+        ] {
+            let mut bad = capsule.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                validate_source_trace(&bad, &capsule_inputs).is_err(),
+                "{pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_v5_direct_requires_an_empty_unstarted_source_phase() {
+        let (mut raw, mut inputs) = source_span_fixture();
+        inputs["serving"]["mode"] = json!("direct_closure");
+        raw["source_nomination_skipped"] = json!(true);
+        raw["charges"]["source"] = json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0});
+        let mut trace = borsuk::sq8_s3_range::Sq8RangeTrace::new(96).unwrap();
+        trace.begin(std::time::Instant::now());
+        raw["diagnostic"]["source_range_trace"] = serde_json::to_value(trace).unwrap();
+        validate_source_trace(&raw, &inputs).unwrap();
+        for (pointer, value) in [
+            ("/charges/source/submitted_gets", json!(1)),
+            ("/charges/source/verified_bytes", json!(1)),
+            ("/source_nomination_skipped", json!(false)),
+            ("/diagnostic/source_range_trace/outcome", json!("fetched")),
+            ("/diagnostic/source_range_trace/fetch_start_ns", json!(0)),
+            (
+                "/diagnostic/source_range_trace/retained_payload_bytes",
+                json!(0),
+            ),
+            ("/diagnostic/source_range_trace/phase_clock_reads", json!(2)),
+            (
+                "/diagnostic/source_range_trace/cpu/collector_copied_bytes",
+                json!(1),
+            ),
+            (
+                "/diagnostic/source_range_trace/ranges",
+                source_span_fixture().0["diagnostic"]["source_range_trace"]["ranges"].clone(),
+            ),
+        ] {
+            let mut bad = raw.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_source_trace(&bad, &inputs).is_err(), "{pointer}");
+        }
     }
 
     #[test]
