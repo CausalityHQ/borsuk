@@ -13634,6 +13634,19 @@ mod tests {
     // Synthetic historical records have their own explicit roster and accounting.
     // Never use this conversion on the current producer interoperability path.
     fn author_historical_diagnostics(rows: &mut [Value]) {
+        // These are explicit old-wire fixtures, never a projection of an offload run.
+        for row in &mut *rows {
+            if let Some(policy) = row.as_object_mut().unwrap().remove("source_authentication") {
+                assert_eq!(policy, json!("inline"));
+            }
+            if let Some(bytes) = row
+                .as_object_mut()
+                .unwrap()
+                .remove("source_authentication_extra_library_bytes")
+            {
+                assert_eq!(bytes, json!(0));
+            }
+        }
         author_historical_panel_memory(rows);
         use borsuk::sq8_s3_range::Sq8RangeTrace;
         let width = rows[1]["fetch_parallelism"].as_u64().unwrap() as usize;
