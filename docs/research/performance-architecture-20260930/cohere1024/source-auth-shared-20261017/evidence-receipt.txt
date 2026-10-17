@@ -1,0 +1,11 @@
+Qualified native source8ace22bd6272ac3b6eacea6c3f41d3ef484774c4, parent91eca72f, base99296afd.
+Final gate unitborsuk-source-auth-shared-gates-a0002 invocation73420caa43fb4779afce9829e32a5048 terminalPASS manager0.
+Original final gate SSM3ff8b9f9-a9da-4b37-8a64-a2275f1f9abc. Fourteen exact required tests1selected1passed each; affected regressions203passed+2ignored; release/Clippy/real shim-unset workspace testbuild0.
+Parallel fixture RED8selected6pass2fail; repaired GREEN10selected10pass with8testthreads.
+Independent dual critiquea750144624db4702 (research0ef837d92c6f4e5f completed viaCodex fallback; engineering20d790fff9534bfb completed Astra), actual code91eca72f; test-only repair proof production-invariance.txt binds8ace.
+Causality Spot i-01952191f7868d77d, persistent EBSvol-02541c376657a5814, CPU8/32GiB/noSwap/pids2048/1200s.
+S3 closure s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/source-auth-shared-closure-a0001/
+source.tar.gz4751623B SHA256650145181ba58632f30b8e61dd65c6b5bd76e5ffe2149999e11b629f54e8b77c
+evidence.tar.gz23731511B SHA25689b87423d5b773ff89da1ee10321614054c2de97b3ca44f6d5b897afa4bdfd45
+Upload originalSSMdb1b8ad5-99af-4d51-923d-d62acaa2b858; all objects FULL_OBJECT checksum+length verified, terminalLAST.
+This delivery adds documents to exact qualified Rust source; no additional Rust edits. Inline default unchanged. No new real query/performance/vendor result.
