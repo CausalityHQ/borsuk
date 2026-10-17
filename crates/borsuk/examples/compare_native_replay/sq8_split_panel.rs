@@ -1118,7 +1118,7 @@ mod tests {
         use borsuk::sq8_s3_range::Sq8RangeTrace;
         let ranges = 46;
         let peak = if traced {
-            Sq8RangeTrace::modeled_bytes(ranges, 64)
+            current_v10::historical_trace_peak(ranges, 64)
         } else {
             0
         };
@@ -1136,7 +1136,7 @@ mod tests {
             "diagnostic_bytes_per_active_query":diagnostic_pinned+peak,"diagnostic_cap_bytes":1048576,
             "max_active_queries":1,"charged_in_caller_pinned_bytes":true,"caller_pinned_bytes":2097152,
             "panel_line_cap_bytes":65536,"host_read_cap_bytes":131072,"trace_ranges":ranges,
-            "trace_retained_bytes":if traced {json!(Sq8RangeTrace::retained_bytes(ranges))} else {Value::Null},
+            "trace_retained_bytes":if traced {json!(current_v10::historical_trace_retained(ranges))} else {Value::Null},
             "trace_peak_bytes":if traced {json!(peak)} else {Value::Null},
             "diagnostic_pinned_bytes":diagnostic_pinned,"trace_peak_charged_by_library_at_traced_admission":traced,
             "range_state_pinned_by_runner_bytes":pinned,"range_state_both_paths_bytes":both,
