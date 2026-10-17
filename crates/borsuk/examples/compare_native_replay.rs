@@ -13704,6 +13704,8 @@ mod tests {
                         "source_range_trace",
                         "cpu_profile",
                         "cpu_unknown",
+                        "sq8_unknown",
+                        "sq8_missing",
                         "poll_cpu",
                         "auth_reads",
                         "single_reads",
@@ -13718,6 +13720,13 @@ mod tests {
                                 diag.as_object_mut().unwrap().remove(mutation);
                             }
                             "cpu_unknown" => diag["cpu_profile"]["unknown"] = json!(0),
+                            "sq8_unknown" => diag["sq8_range_trace"]["unknown"] = json!(0),
+                            "sq8_missing" => {
+                                diag["sq8_range_trace"]
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("cpu");
+                            }
                             "poll_cpu" => {
                                 diag["cpu_profile"]["acquisition_poll_cpu"] = json!("measured")
                             }

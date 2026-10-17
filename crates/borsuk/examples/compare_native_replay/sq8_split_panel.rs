@@ -378,13 +378,6 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     super::current_v10::validate_geometry(raw, &fixed_inputs(inputs))
 }
 
-fn diagnostic_shape(diag: &Value) -> Result<()> {
-    super::current_v10::diagnostic_shape(
-        diag,
-        RESULT_SCHEMA == super::current_v10::CPU_PROFILE_RESULT_SCHEMA,
-    )
-}
-
 fn nullable(v: &Value) -> Result<Option<u64>> {
     if v.is_null() {
         Ok(None)
@@ -473,7 +466,8 @@ fn decompose_current(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     let width = plus(number(&inputs["dimensions"])?, 12)?;
     let parallelism = number(&inputs["fetch_parallelism"])?;
     let diag = &raw["diagnostic"];
-    diagnostic_shape(diag)?;
+    let cpu_profile = inputs["config_schema"] == super::current_v10::CPU_PROFILE_CONFIG_SCHEMA;
+    super::current_v10::diagnostic_shape(diag, cpu_profile)?;
     if let (Some(start), Some(end)) = (
         nullable(&diag["query_monotonic_start_ns"])?,
         nullable(&diag["query_monotonic_end_ns"])?,
@@ -485,10 +479,12 @@ fn decompose_current(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     }
     let host = host(diag, number(&raw["query_process_cpu_ns"])?)?;
     let trace = &diag["sq8_range_trace"];
-    fields(
-        trace,
-        "range_fields outcome planned_ranges planned_bytes max_parallel dropped_ranges fetch_start_ns all_ranges_complete_ns rank_start_ns rank_end_ns release_end_ns rank ranges",
-    )?;
+    if !cpu_profile {
+        fields(
+            trace,
+            "range_fields outcome planned_ranges planned_bytes max_parallel dropped_ranges fetch_start_ns all_ranges_complete_ns rank_start_ns rank_end_ns release_end_ns rank ranges",
+        )?;
+    }
     require(
         trace["range_fields"] == json!(RANGE_FIELDS)
             && trace["outcome"] == "ranked"
