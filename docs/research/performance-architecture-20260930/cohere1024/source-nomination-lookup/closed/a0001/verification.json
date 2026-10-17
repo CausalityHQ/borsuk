@@ -1,0 +1,222 @@
+{
+  "schema": "borsuk-source-nomination-lookup-verification-v1",
+  "status": "ACCEPT_INCREMENTAL_RUNTIME_PROGRESS",
+  "source_commit": "14aec21db4690c14e0841346f96759a51fe1518c",
+  "parent": "49abb2c7ac10dac39513c4fef8e0f0f3f0425e08",
+  "instance": "i-0a8a16ceadcb884ee",
+  "volume": "vol-02541c376657a5814",
+  "all_repository_work": "Causality EC2 persistent EBS",
+  "source": {
+    "schema": "borsuk-source-nomination-lookup-source-v1",
+    "source_commit": "14aec21db4690c14e0841346f96759a51fe1518c",
+    "parent": "49abb2c7ac10dac39513c4fef8e0f0f3f0425e08",
+    "archive_sha256": "0a6fca70503c0d68fbc709ae5dddf6c22140fa656fa8cf72db5db674d86cef18",
+    "source_files_sha256": "e066377f2002a51bc769ba006166917f978a2f1c93615678edfe0970b3e52bf9",
+    "files": 437,
+    "scope": "Cargo.toml Cargo.lock crates and actual workspace test-build script; not unrelated historical scripts",
+    "generation_source_sha256": "093262af5422a97cb76120ef13fbdd7cc0c47aac3dab4f9a7e41380b061054d8"
+  },
+  "native_gates": {
+    "red_expected_assertion_exit": 101,
+    "red_searches": 128,
+    "green_searches": 4,
+    "green_exact_passes": 1,
+    "affected_passes": 47,
+    "clippy_exit": 0,
+    "release_exit": 0,
+    "unshimmed_workspace_test_build_exit": 0,
+    "compiler_jobs": 8
+  },
+  "runtime_admission_and_separate_canary": "both arms native and strict readers exit0",
+  "full_abba": {
+    "cells": [
+      {
+        "cell": "A1",
+        "queries": 1000,
+        "cpu_ns": 114847099712,
+        "wall_ns": 160724906545,
+        "qps": 6.221811052788004,
+        "p50_ms": 152.979989,
+        "p90_ms": 203.413374,
+        "p95_ms": 215.034543,
+        "p99_ms": 267.344653,
+        "planning_wall_ns": 33155776012,
+        "source_gets": 109872,
+        "source_bytes": 28967583744,
+        "sq8_gets": 30041,
+        "sq8_bytes": 10722616576,
+        "recall_numerator": 9783,
+        "recall_denominator": 10000,
+        "total_hits10": 9783,
+        "rss_bytes": 103460864
+      },
+      {
+        "cell": "B1",
+        "queries": 1000,
+        "cpu_ns": 112160110705,
+        "wall_ns": 156109913082,
+        "qps": 6.405743109181856,
+        "p50_ms": 149.633432,
+        "p90_ms": 198.019613,
+        "p95_ms": 212.652552,
+        "p99_ms": 240.871247,
+        "planning_wall_ns": 30523545951,
+        "source_gets": 109872,
+        "source_bytes": 28967583744,
+        "sq8_gets": 30041,
+        "sq8_bytes": 10722616576,
+        "recall_numerator": 9783,
+        "recall_denominator": 10000,
+        "total_hits10": 9783,
+        "rss_bytes": 92897280
+      },
+      {
+        "cell": "B2",
+        "queries": 1000,
+        "cpu_ns": 112933660782,
+        "wall_ns": 157968414357,
+        "qps": 6.330379424712428,
+        "p50_ms": 150.258406,
+        "p90_ms": 199.729449,
+        "p95_ms": 215.486339,
+        "p99_ms": 246.384128,
+        "planning_wall_ns": 30304622312,
+        "source_gets": 109872,
+        "source_bytes": 28967583744,
+        "sq8_gets": 30041,
+        "sq8_bytes": 10722616576,
+        "recall_numerator": 9783,
+        "recall_denominator": 10000,
+        "total_hits10": 9783,
+        "rss_bytes": 92774400
+      },
+      {
+        "cell": "A2",
+        "queries": 1000,
+        "cpu_ns": 114581705695,
+        "wall_ns": 159702339101,
+        "qps": 6.26164905053503,
+        "p50_ms": 152.258559,
+        "p90_ms": 201.389101,
+        "p95_ms": 215.823594,
+        "p99_ms": 251.918487,
+        "planning_wall_ns": 32759888135,
+        "source_gets": 109872,
+        "source_bytes": 28967583744,
+        "sq8_gets": 30041,
+        "sq8_bytes": 10722616576,
+        "recall_numerator": 9783,
+        "recall_denominator": 10000,
+        "total_hits10": 9783,
+        "rss_bytes": 87883776
+      }
+    ],
+    "A_cpu": 229428805407,
+    "B_cpu": 225093771487,
+    "cpu_ratio": 0.981105101810081,
+    "wall_ratio": 0.9801860850059732,
+    "planning_ratio": 0.9228181047731802,
+    "forward_cpu_ratio": 0.9766037713295493,
+    "reverse_cpu_ratio": 0.9856168582671753,
+    "forward_wall_ratio": 0.9712863826633622,
+    "reverse_wall_ratio": 0.9891427717730332
+  },
+  "pooled": {
+    "schema": "borsuk-source-nomination-lookup-pooled-v2",
+    "scope": "two repetitions of same1000 queries; 2000 observations are not independent queries",
+    "control": {
+      "observations": 2000,
+      "cpu_ns": 229428805407,
+      "wall_ns": 320427245646,
+      "qps": 6.241666484907935,
+      "p50_ms": 152.53731,
+      "p90_ms": 202.776084,
+      "p95_ms": 215.477109,
+      "p99_ms": 258.286254
+    },
+    "candidate": {
+      "observations": 2000,
+      "cpu_ns": 225093771487,
+      "wall_ns": 314078327439,
+      "qps": 6.367838291511656,
+      "p50_ms": 149.904504,
+      "p90_ms": 198.34524,
+      "p95_ms": 213.489454,
+      "p99_ms": 245.958345
+    }
+  },
+  "diagnostic32": {
+    "cells": [
+      {
+        "cell": "A1",
+        "queries": 32,
+        "cpu_ns": 3676704623,
+        "wall_ns": 6210159391,
+        "p50_ms": 174.174772,
+        "p90_ms": 264.044416,
+        "p95_ms": 335.768105,
+        "planning_wall_ns": 1032506867
+      },
+      {
+        "cell": "B1",
+        "queries": 32,
+        "cpu_ns": 3387098620,
+        "wall_ns": 4744192015,
+        "p50_ms": 141.553031,
+        "p90_ms": 174.451076,
+        "p95_ms": 185.93033,
+        "planning_wall_ns": 955586548
+      },
+      {
+        "cell": "B2",
+        "queries": 32,
+        "cpu_ns": 3495074530,
+        "wall_ns": 4908491960,
+        "p50_ms": 145.74862,
+        "p90_ms": 174.589919,
+        "p95_ms": 193.089764,
+        "planning_wall_ns": 954699564
+      },
+      {
+        "cell": "A2",
+        "queries": 32,
+        "cpu_ns": 3583148548,
+        "wall_ns": 5397796627,
+        "p50_ms": 165.66956,
+        "p90_ms": 195.649976,
+        "p95_ms": 215.292819,
+        "planning_wall_ns": 1055124001
+      }
+    ],
+    "A_cpu": 7259853171,
+    "B_cpu": 6882173150,
+    "cpu_ratio": 0.9479769064051227,
+    "wall_ratio": 0.8315575937772303,
+    "planning_ratio": 0.9150497539012247,
+    "terminal_keys": [
+      "phase",
+      "summary"
+    ]
+  },
+  "parity": {
+    "queries": 1000,
+    "repetitions_per_arm": 2,
+    "all_nonperformance_query_fields_exact": true,
+    "canonical_sha256": "adc988861166fdcfd8923f70f4c43f15697dc4d49a2e4377ad66677410741b77",
+    "recall_numerator": 9783,
+    "recall_denominator": 10000
+  },
+  "artifacts": {
+    "query_elf_sha256": "ab168e709923cda3daee6cc0f1e88e24d4215916257529ba3c5ce790ce908271",
+    "reader_elf_sha256": "10d25415b249c887276a11f4d685550c65dd77a8f0595660f33d46f378ac2301",
+    "control_query_elf_sha256": "0621e025b5c88c66f83c3588a1d8c41d5d57a0421f61f6ec2241602a0f9622fe"
+  },
+  "scope": {
+    "small_quality_preserving_improvement": true,
+    "production_product_goal_complete": false,
+    "vendor_win_claim": false,
+    "pooled_observations_independent": false,
+    "no_architecture_or_budget_change": true
+  },
+  "closure_prefix": "research/semantic-router/20261017/source-nomination-lookup-closure-a0001/"
+}
