@@ -1210,6 +1210,22 @@ pub fn plan_two_bit_source_walks<'a>(
             nomination_evaluated_units.push(unit);
         }
         let first = unit * 32;
+        let end = ((unit + 1) * 32).min(rows);
+        // Partial units keep the scalar path; only full units use blocked scoring.
+        if end - first < 32 {
+            let mut maximum = f64::NEG_INFINITY;
+            for row in first..end {
+                let value = prepared
+                    .score(
+                        record(row)
+                            .ok_or(TwoBitGenerationError::Invalid("missing source record"))?,
+                    )
+                    .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+                retain_source_shortlist(&mut shortlist, row, value)?;
+                maximum = maximum.max(value);
+            }
+            return Ok(maximum);
+        }
         let mut block = TwoBitScoreBlock::new(prepared);
         for row in first..((unit + 1) * 32).min(rows) {
             block

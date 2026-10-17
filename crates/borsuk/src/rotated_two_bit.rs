@@ -658,6 +658,7 @@ mod tests {
                     "{}",
                     serde_json::json!({
                         "kind": "source_block32_primitive",
+                        "production_uses_block": count == 32,
                         "dimensions": dimensions,
                         "rows": count,
                         "iterations": iterations,
