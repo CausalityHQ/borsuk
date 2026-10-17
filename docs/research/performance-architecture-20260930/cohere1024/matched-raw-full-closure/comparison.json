@@ -1,0 +1,125 @@
+{
+  "schema": "borsuk-sdk-observed-comparison-v1",
+  "status": "DESCRIPTIVE_NOT_VENDOR_WIN",
+  "sdk_service_mode": "ENHANCED",
+  "sdk": {
+    "all_queries_sealed": true,
+    "billed_bytes": null,
+    "billed_requests": null,
+    "calls_at_measurement_seal": {
+      "accounting": "all reservations consume allowance; only captured transmits count as observed; credentials excluded",
+      "max_reserved_calls": 22000,
+      "observed_transmit_attempts": 15005,
+      "reserved_calls": 15005,
+      "scope": "all commands for this config",
+      "unconfirmed_reservations": 0
+    },
+    "concurrent_service_capacity_claim": false,
+    "config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+    "cost_usd": null,
+    "first_query_ns": 393524204,
+    "guaranteed_cold_claim": false,
+    "hits": 9617,
+    "index_arn": "arn:aws:s3vectors:eu-central-1:453182569524:bucket/borsuk-s3v-76e40c144cc74c87b7f96d58986fa001/index/baseline-76e40c144cc74c87b7f96d58986fa001",
+    "mode": "scale-measurement",
+    "observed_inactivity_ms": 3605561,
+    "percentile_method": "integer nearest rank",
+    "pooled_condition": "cache-uncontrolled first pass; backend cache state unknown",
+    "pooled_p50_ns": 127514390,
+    "pooled_p90_ns": 192992818,
+    "pooled_p95_ns": 205998414,
+    "pooled_p99_ns": 233462297,
+    "query_count": 1000,
+    "recall_at_10": 0.9617,
+    "recall_denominator": 10000,
+    "response_sha256": "37626f0fc4f0ee73843a31d84ee4580871162dbb4b3556226e620e5dc6c661eb",
+    "schema": "borsuk-s3-vectors-reduction-v1",
+    "serial_reciprocal_qps": 7.483474418685479,
+    "status": "VALID",
+    "sum_query_ns": 133627770211,
+    "truth_opened_after_seal": true,
+    "underfilled_queries": 0,
+    "whole_pass_ns": 138430292380,
+    "whole_pass_qps": 7.223852401141624
+  },
+  "rust_cells": [
+    {
+      "cell": "A1",
+      "leaf_limit": 48,
+      "recall_at_10": 0.9783,
+      "logical_gets": 139913,
+      "logical_verified_bytes": 39690200320,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 149.871007,
+        "p90_ms": 199.019513,
+        "p90_ns": 199019513,
+        "p95_ms": 218.011489,
+        "p95_ns": 218011489,
+        "p99_ms": 252.012496,
+        "query_wall_ns": 157473687235,
+        "sequential_qps": 6.3502672577145365
+      }
+    },
+    {
+      "cell": "B1",
+      "leaf_limit": 44,
+      "recall_at_10": 0.9763,
+      "logical_gets": 134563,
+      "logical_verified_bytes": 37001703424,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 141.928555,
+        "p90_ms": 191.371065,
+        "p90_ns": 191371065,
+        "p95_ms": 207.753324,
+        "p95_ns": 207753324,
+        "p99_ms": 250.914494,
+        "query_wall_ns": 150150570506,
+        "sequential_qps": 6.6599813549162645
+      }
+    },
+    {
+      "cell": "B2",
+      "leaf_limit": 44,
+      "recall_at_10": 0.9763,
+      "logical_gets": 134563,
+      "logical_verified_bytes": 37001703424,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 143.023436,
+        "p90_ms": 199.243081,
+        "p90_ns": 199243081,
+        "p95_ms": 215.558301,
+        "p95_ns": 215558301,
+        "p99_ms": 325.590499,
+        "query_wall_ns": 162470502595,
+        "sequential_qps": 6.154963418145878
+      }
+    },
+    {
+      "cell": "A2",
+      "leaf_limit": 48,
+      "recall_at_10": 0.9783,
+      "logical_gets": 139913,
+      "logical_verified_bytes": 39690200320,
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 147.839641,
+        "p90_ms": 199.27334,
+        "p90_ns": 199273340,
+        "p95_ms": 212.188264,
+        "p95_ns": 212188264,
+        "p99_ms": 261.722965,
+        "query_wall_ns": 155981579650,
+        "sequential_qps": 6.411013417378223
+      }
+    }
+  ],
+  "same_fixed_queries_truth": true,
+  "raw_versus_normalized_corpus": true,
+  "backend_cache_uncontrolled": true,
+  "qps_timer_boundaries_differ": true,
+  "lifecycle_cost_qualified": false,
+  "turbopuffer_measured": false
+}
