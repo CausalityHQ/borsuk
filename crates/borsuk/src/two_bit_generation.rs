@@ -2646,7 +2646,7 @@ impl TwoBitGeneration {
         if !misses.is_empty() {
             // The shared fetcher preserves ordered errors and drains every
             // admitted original miss. A failed batch inserts nothing.
-            let (fetched, charged) = fetch_verified_ranges_traced_with_byte_window(
+            let fetched = fetch_verified_ranges_traced_with_byte_window(
                 store,
                 &source.location,
                 &source.authority,
@@ -2658,8 +2658,17 @@ impl TwoBitGeneration {
                 trace.as_deref_mut(),
                 self.byte_window.as_ref(),
             )
-            .await
-            .map_err(TwoBitGenerationError::SourceRead)?;
+            .await;
+            if let Some(trace) = trace.as_deref_mut() {
+                trace.retained_payload_bytes = Some(
+                    trace.retained_payload_bytes.unwrap_or(0)
+                        + verified
+                            .iter()
+                            .map(|range| range.bytes.len() as u64)
+                            .sum::<u64>(),
+                );
+            }
+            let (fetched, charged) = fetched.map_err(TwoBitGenerationError::SourceRead)?;
             stats = charged;
             let mut cache = cache
                 .lock()
@@ -4858,6 +4867,15 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn cpu_profile_failure_drain_and_slot_parity() {
+        assert_cpu_profile_failure_drain_and_slot_parity(false).await;
+    }
+
+    #[tokio::test]
+    async fn cpu_profile_mixed_cache_failure_retains_verified_source_bytes() {
+        assert_cpu_profile_failure_drain_and_slot_parity(true).await;
+    }
+
+    async fn assert_cpu_profile_failure_drain_and_slot_parity(mixed_cache: bool) {
         use crate::sq8_s3_range::{
             RangeFetchError,
             cold_http_fixture::{ETAG, Fixture, Request},
@@ -5048,10 +5066,29 @@ mod source_walk_tests {
                     }
                 }
 
+                // Warm one complete planned range without populating the failing misses.
+                let cached_start = mixed_cache.then(|| source_cover.last().unwrap().start);
+                let cached_bytes = if mixed_cache { source_cover.last().unwrap().len() } else { 0 };
+                let generation = if mixed_cache {
+                    let generation = generation.with_source_cache(1_048_576).unwrap();
+                    fixture.arm(None);
+                    fixture.release(0);
+                    let (warm, stats) = generation.fetch_source_ranges(
+                        fixture.reader.store(), &[*source_ranges.last().unwrap()],
+                    ).await.unwrap();
+                    assert_eq!(warm.len(), 1);
+                    assert_eq!(warm[0].start, cached_start.unwrap());
+                    assert_eq!(warm[0].bytes.len(), cached_bytes);
+                    assert_eq!(stats, Sq8ReadStats { submitted_gets: 1, verified_bytes: cached_bytes, failed_gets: 0 });
+                    assert_eq!(generation.source_cache_stats().occupied_bytes, cached_bytes);
+                    generation
+                } else { generation };
+
                 // Ordinal 1 fails its digest immediately; ordinal 0 remains a
                 // delayed truncated stream, while ordinal 2 is a held valid
                 // sibling. SOURCE also has queued requests beyond ordinal 32.
                 for (stage, cover) in [(0, &source_cover), (1, &plan.ranges)] {
+                    if mixed_cache && stage != 0 { continue; }
                     for tracing in [false, true] {
                     let mut profile = QueryProfile::new(128, 32).unwrap();
                     let starts = [cover[0].start, cover[1].start, cover[2].start];
@@ -5087,7 +5124,7 @@ mod source_walk_tests {
                         assert!(clocks > 0);
                         let failed_trace = if stage == 0 { &profile.source } else { &profile.sq8 };
                         assert_eq!(failed_trace.outcome, "fetch_failed");
-                        assert_eq!(failed_trace.ranges().len(), cover.len());
+                        assert_eq!(failed_trace.ranges().len(), cover.len() - usize::from(mixed_cache));
                         assert!(failed_trace.cpu.authentication.is_some());
                         assert_eq!(failed_trace.rank_thread_cpu_ns, None);
                         assert!(failed_trace.unattributed_process_cpu_ns.is_some());
@@ -5107,8 +5144,8 @@ mod source_walk_tests {
                     }
                     assert!(matches!(first_error(&error), RangeFetchError::Store(_)), "{error:?}");
                     let failed = Sq8ReadStats {
-                        submitted_gets: cover.len(),
-                        verified_bytes: cover.iter().map(|r| r.len()).sum::<usize>() - cover[0].len() - cover[1].len(),
+                        submitted_gets: cover.len() - usize::from(mixed_cache),
+                        verified_bytes: cover.iter().map(|r| r.len()).sum::<usize>() - cover[0].len() - cover[1].len() - cached_bytes,
                         failed_gets: 2,
                     };
                     assert_eq!(error.read_stats(), if stage == 0 { (failed, Sq8ReadStats::default()) } else { (source_stats, failed) });
@@ -5118,15 +5155,25 @@ mod source_walk_tests {
                     assert!(state.errors.is_empty(), "{:?}", state.errors);
                     assert_eq!(state.active, [0; 3]);
                     state.finished[stage].sort_unstable();
-                    assert_eq!(state.finished[stage], cover.iter().map(|r| r.start).collect::<Vec<_>>());
-                    let expected = expected_requests.iter().filter(|(path, _, _, _)| stage == 1 || path != key.as_ref()).cloned().collect::<Vec<_>>();
+                    assert_eq!(state.finished[stage], cover.iter().map(|r| r.start).filter(|start| Some(*start) != cached_start).collect::<Vec<_>>());
+                    let expected = expected_requests.iter().filter(|(path, _, range, _)| (stage == 1 || path != key.as_ref()) && !(path == source_key.as_ref() && range.is_some_and(|(start, _)| Some(start) == cached_start))).cloned().collect::<Vec<_>>();
                     state.requests.sort();
                     assert_eq!(state.requests, expected);
                     let after = fixture.reader.transport_stats();
                     assert_eq!(after.attempts - before.attempts, expected.len() as u64);
                     assert_eq!(after.stream_failures - before.stream_failures, 1);
-                    let charged = source_bytes + if stage == 1 { plan.planned_bytes } else { 0 };
+                    let charged = source_bytes - cached_bytes + if stage == 1 { plan.planned_bytes } else { 0 };
                     assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, (charged - 1) as u64);
+                    if mixed_cache {
+                        assert_eq!(generation.source_cache_stats().occupied_bytes, cached_bytes);
+                        if tracing {
+                            assert_eq!(
+                                profile.source.retained_payload_bytes,
+                                Some((cached_bytes + failed.verified_bytes) as u64),
+                                "cached SOURCE bytes survive alongside verified misses through a failed drain",
+                            );
+                        }
+                    }
                     }
                 }
             }

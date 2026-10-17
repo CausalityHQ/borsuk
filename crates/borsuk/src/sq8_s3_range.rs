@@ -2024,7 +2024,9 @@ pub(crate) async fn fetch_capsule_ranges_traced<T>(
     Ok((fetched, stats))
 }
 
-/// CPU on the calling thread for one synchronous scope; wall includes descheduling.
+/// Raw CPU on the calling thread for one synchronous scope; wall includes descheduling.
+/// Both include observer and first-touch costs, so copy scopes are not unbiased memcpy
+/// timings and must not have a point estimate of observer cost automatically subtracted.
 /// Clock reads count only the added profile clocks, not pre-existing range stamps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct CpuWall {
@@ -2043,6 +2045,7 @@ impl CpuWall {
 }
 
 /// Never retain this across an await: the two thread clocks must run in one poll.
+/// Reports raw scope time, including observer and first-touch costs.
 pub(crate) struct SyncStart {
     wall: Instant,
     cpu: u64,
@@ -5993,6 +5996,185 @@ mod tests {
         assert!(Sq8RangeTrace::new(SQ8_TRACE_MAX_RANGES + 1).is_err());
         assert!(Sq8RangeTrace::new(usize::MAX).is_err());
         assert_eq!(trace.ranges.capacity(), capacity);
+    }
+
+    // Independent clock reads do not use the profile helpers or their read counter.
+    fn reference_cpu_ns(clock: rustix::time::ClockId) -> u64 {
+        let time = rustix::time::clock_gettime(clock);
+        u64::try_from(time.tv_sec).unwrap() * 1_000_000_000 + u64::try_from(time.tv_nsec).unwrap()
+    }
+
+    fn burn_reference_thread_cpu(budget_ns: u64) -> u64 {
+        use std::hint::black_box;
+        let start = reference_cpu_ns(rustix::time::ClockId::ThreadCPUTime);
+        let step = 0x9e37_79b9_7f4a_7c15u64;
+        let mut value = 17u64;
+        let mut iterations = 0u64;
+        let elapsed = loop {
+            for _ in 0..4096 {
+                value = black_box(value.wrapping_add(black_box(step)));
+            }
+            iterations += 4096;
+            let elapsed = reference_cpu_ns(rustix::time::ClockId::ThreadCPUTime) - start;
+            if elapsed >= budget_ns {
+                break elapsed;
+            }
+        };
+        assert_eq!(value, 17u64.wrapping_add(step.wrapping_mul(iterations)));
+        elapsed
+    }
+
+    #[test]
+    fn cpu_profile_clocks_distinguish_cpu_sleep_and_worker_phase() {
+        use rustix::time::ClockId::{ProcessCPUTime, ThreadCPUTime};
+        const WORK_CPU_NS: u64 = 60_000_000;
+        let clocks_before = PROFILE_CLOCK_READS.with(|reads| reads.get());
+
+        let reference_start = reference_cpu_ns(ThreadCPUTime);
+        let start = SyncStart::now();
+        let work_cpu = burn_reference_thread_cpu(WORK_CPU_NS);
+        let mut busy = None;
+        start.finish(&mut busy);
+        let reference_busy = reference_cpu_ns(ThreadCPUTime) - reference_start;
+        let busy = busy.unwrap();
+        assert!(
+            busy.thread_cpu_ns >= work_cpu / 2,
+            "{busy:?}, work={work_cpu}"
+        );
+        assert!(
+            busy.thread_cpu_ns <= reference_busy,
+            "{busy:?}, reference={reference_busy}"
+        );
+
+        let reference_start = reference_cpu_ns(ThreadCPUTime);
+        let start = SyncStart::now();
+        thread::sleep(Duration::from_millis(80));
+        let mut asleep = None;
+        start.finish(&mut asleep);
+        let reference_sleep = reference_cpu_ns(ThreadCPUTime) - reference_start;
+        let asleep = asleep.unwrap();
+        assert!(asleep.wall_ns >= 60_000_000, "{asleep:?}");
+        assert!(asleep.thread_cpu_ns < asleep.wall_ns / 4, "{asleep:?}");
+        assert!(
+            asleep.thread_cpu_ns <= reference_sleep,
+            "{asleep:?}, reference={reference_sleep}"
+        );
+
+        let mut phase = Sq8RangeTrace::new(1).unwrap();
+        let (go, ready) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            ready.recv().unwrap();
+            burn_reference_thread_cpu(WORK_CPU_NS)
+        });
+        let caller_start = reference_cpu_ns(ThreadCPUTime);
+        let process_start = reference_cpu_ns(ProcessCPUTime);
+        let start = SyncStart::now();
+        phase.start_phase();
+        go.send(()).unwrap();
+        let worker_cpu = worker.join().unwrap();
+        phase.finish_phase();
+        let mut waited = None;
+        start.finish(&mut waited);
+        let reference_process = reference_cpu_ns(ProcessCPUTime) - process_start;
+        let reference_caller = reference_cpu_ns(ThreadCPUTime) - caller_start;
+        let waited = waited.unwrap();
+        let phase_cpu = phase.phase_process_cpu_ns.unwrap();
+        assert!(
+            phase_cpu >= worker_cpu / 2,
+            "phase={phase_cpu}, worker={worker_cpu}"
+        );
+        assert!(
+            phase_cpu <= reference_process,
+            "phase={phase_cpu}, reference={reference_process}"
+        );
+        assert!(
+            reference_caller < phase_cpu / 4,
+            "caller={reference_caller}, phase={phase_cpu}"
+        );
+        assert!(
+            waited.thread_cpu_ns <= reference_caller,
+            "{waited:?}, caller={reference_caller}"
+        );
+        assert!(
+            waited.thread_cpu_ns < phase_cpu / 4,
+            "{waited:?}, phase={phase_cpu}"
+        );
+        assert_eq!(phase.unattributed_process_cpu_ns, Some(phase_cpu));
+        assert_eq!(phase.phase_clock_reads, 2);
+        assert_eq!(
+            [busy.clock_reads, asleep.clock_reads, waited.clock_reads],
+            [4; 3]
+        );
+        assert_eq!(
+            PROFILE_CLOCK_READS.with(|reads| reads.get()) - clocks_before,
+            14
+        );
+    }
+
+    #[test]
+    #[ignore = "exploratory raw observer floor for this test ELF; root runs and interprets"]
+    fn cpu_profile_sync_scope_observer_control() {
+        let clocks_before = PROFILE_CLOCK_READS.with(|reads| reads.get());
+        let mut empty_samples = [CpuWall::default(); 64];
+        let mut empty_total = None;
+        for sample in &mut empty_samples {
+            let start = SyncStart::now();
+            let mut measured = None;
+            start.finish(&mut measured);
+            *sample = measured.unwrap();
+            sample.add_to(&mut empty_total);
+        }
+        let empty_reads = PROFILE_CLOCK_READS.with(|reads| reads.get()) - clocks_before;
+        assert_eq!(empty_reads, 4 * empty_samples.len() as u64);
+        assert_eq!(empty_total.unwrap().clock_reads, empty_reads);
+        println!(
+            "{}",
+            serde_json::json!({
+                "control": "empty_sync_scope", "test_elf_only": true,
+                "sample_count": empty_samples.len(), "bytes": 0, "chunks": 0,
+                "observed_clock_reads": empty_reads,
+                "raw_total": empty_total, "raw_samples": empty_samples.as_slice(),
+            })
+        );
+
+        // At most 2 MiB of byte buffers, 32 MiB copied, and 34,952 timed chunks.
+        let source = vec![0x5au8; 1 << 20];
+        for chunk_bytes in [256usize, 4096, 65536, 1 << 20] {
+            let mut target = BytesMut::with_capacity(source.len());
+            let clocks_before = PROFILE_CLOCK_READS.with(|reads| reads.get());
+            let mut samples = [CpuWall::default(); 8];
+            let mut total = None;
+            for sample in &mut samples {
+                target.clear();
+                let mut measured = None;
+                for chunk in source.chunks(chunk_bytes) {
+                    let start = SyncStart::now();
+                    target.extend_from_slice(std::hint::black_box(chunk));
+                    start.finish(&mut measured);
+                }
+                assert_eq!(&target[..], source.as_slice());
+                *sample = measured.unwrap();
+                sample.add_to(&mut total);
+            }
+            let chunks = samples.len() * (source.len() / chunk_bytes);
+            let reads = PROFILE_CLOCK_READS.with(|reads| reads.get()) - clocks_before;
+            assert_eq!(reads, 4 * chunks as u64);
+            assert_eq!(total.unwrap().clock_reads, reads);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "control": "chunked_copy_sync_scope", "test_elf_only": true,
+                    "allocation_outside_scope": true, "first_touch_controlled": false,
+                    "destination_reused_within_shape": true,
+                    "raw_includes_observer_and_first_touch": true,
+                    "sample_count": samples.len(), "bytes_per_sample": source.len(),
+                    "total_bytes": samples.len() * source.len(),
+                    "chunk_bytes": chunk_bytes, "chunks": chunks,
+                    "observed_clock_reads": reads,
+                    "raw_total": total, "raw_samples": samples.as_slice(),
+                })
+            );
+        }
     }
 
     #[test]
