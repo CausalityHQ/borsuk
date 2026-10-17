@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-raw-normalization-followup-v1",
+  "status": "VERIFIED_EXISTING_NATIVE_EXECUTION",
+  "original_wrapper_exit": 1,
+  "original_native_exit": 0,
+  "wrapper_failure": "final source verification ran from wrong working directory; corrected here without native rerun",
+  "rows": 1000000,
+  "dimensions": 1024,
+  "raw_sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+  "normalized_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+  "native_source_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+  "new_source_bound_execution": true,
+  "original_producer_elf_recovered": false,
+  "independent_arithmetic_implementation": false,
+  "raw_and_executable_stamps_unchanged": true,
+  "output_independent_sha256_readback": true,
+  "query_or_truth_used": false,
+  "ann_quality_or_performance_claim": false
+}

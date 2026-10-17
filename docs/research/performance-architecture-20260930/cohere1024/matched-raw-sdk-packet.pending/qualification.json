@@ -1,0 +1,58 @@
+{
+  "native_qualification": {
+    "clippy_scope": "--locked --workspace --all-targets --features borsuk/s3-vectors-bench -- -D clippy::correctness -D clippy::suspicious; other warnings remain.",
+    "commands_record": "run.sh; each stage has a .log and .exit file; terminal.json binds source and test counts.",
+    "evidence_dir": "/mnt/borsuk-workspace/evidence/s3vectors-original-raw-gates-a0003",
+    "response_code": 0,
+    "ssm_command_id": "c49e7aba-af35-4a47-9ab9-43922ccd4f75",
+    "ssm_status": "Success",
+    "stages": [
+      {
+        "exit_code": 0,
+        "failed": 0,
+        "passed": 16,
+        "stage": "debug-tests"
+      },
+      {
+        "exit_code": 0,
+        "failed": 0,
+        "passed": 16,
+        "stage": "release-tests"
+      },
+      {
+        "exit_code": 0,
+        "stage": "release"
+      },
+      {
+        "exit_code": 0,
+        "stage": "clippy"
+      },
+      {
+        "exit_code": 0,
+        "stage": "testbuild"
+      }
+    ],
+    "terminal_status": "RAW_SDK_NATIVE_GATES_CLOSED_0",
+    "testbuild_command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=4 CARGO_BUILD_JOBS=4 bash scripts/check_rust_test_build.sh",
+    "unit": "borsuk-raw-sdk-gates-a0003.service",
+    "verification_method": "Read retained script, stage exits, test summaries, terminal receipt and original SSM result; no rerun."
+  },
+  "release_binary": {
+    "format": "ELF x86-64",
+    "note": "The publication packet includes its hash receipt, not the ELF itself.",
+    "path": "/mnt/borsuk-workspace/artifacts/s3vectors-original-raw-release-a0003/check_s3_vectors_baseline",
+    "sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da"
+  },
+  "schema": "borsuk-s3vectors-raw-delivery-verification-v1",
+  "source": {
+    "base": "1ec2d07f414865f32f6369c00aa93a69ed2c7755",
+    "changed_files": [
+      "crates/borsuk/src/bin/check_s3_vectors_baseline.rs"
+    ],
+    "checkout": "/mnt/borsuk-workspace/release-next-source",
+    "clean": true,
+    "head": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+    "sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c"
+  },
+  "status": "SOURCE_AND_AUTHENTICATION_QUALIFIED"
+}

@@ -1,0 +1,36 @@
+{
+  "account_id": "453182569524",
+  "bucket": "borsuk-s3v-76e40c144cc74c87b7f96d58986fa001",
+  "corpus": {
+    "bytes": 4096000000,
+    "path": "/mnt/borsuk-workspace/evidence/original-raw-recovery-a0001/corpus.f32",
+    "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+  },
+  "count": 1000,
+  "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+  "dimensions": 1024,
+  "host_identity": "i-01f04c14490040309",
+  "idle_seconds": 3600,
+  "index": "baseline-76e40c144cc74c87b7f96d58986fa001",
+  "k": 10,
+  "metric": "cosine",
+  "mode": "scale-measurement",
+  "profile": "causality",
+  "queries": {
+    "bytes": 4096000,
+    "path": "/mnt/borsuk-sq8-shortlist/inputs/queries.f32",
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "query_interval_ms": 0,
+  "region": "eu-central-1",
+  "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+  "rows": 1000000,
+  "run_id": "76e40c144cc74c87b7f96d58986fa001",
+  "schema": "borsuk-s3-vectors-scale-raw-config-v2",
+  "state_dir": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state",
+  "truth": {
+    "bytes": 80000,
+    "path": "/mnt/borsuk-sq8-shortlist/inputs/truth.u64",
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+  }
+}

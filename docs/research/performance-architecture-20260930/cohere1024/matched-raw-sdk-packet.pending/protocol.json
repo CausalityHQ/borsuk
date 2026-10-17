@@ -1,0 +1,146 @@
+{
+  "assets": {
+    "corpus": {
+      "bytes": 4096000000,
+      "path": "/mnt/borsuk-workspace/evidence/original-raw-recovery-a0001/corpus.f32",
+      "payload_read_by_worker": false,
+      "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+      "stat_only": {
+        "ctime_ns": 1792165507943306883,
+        "dev": 66310,
+        "ino": 1311495,
+        "mtime_ns": 1792165507943306883,
+        "size": 4096000000
+      }
+    },
+    "queries": {
+      "bytes": 4096000,
+      "path": "/mnt/borsuk-sq8-shortlist/inputs/queries.f32",
+      "payload_read_by_worker": false,
+      "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+      "stat_only": {
+        "ctime_ns": 1792150851314118466,
+        "dev": 66310,
+        "ino": 786791,
+        "mtime_ns": 1792150851086100656,
+        "size": 4096000
+      }
+    },
+    "truth": {
+      "bytes": 80000,
+      "path": "/mnt/borsuk-sq8-shortlist/inputs/truth.u64",
+      "payload_read_by_worker": false,
+      "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+      "stat_only": {
+        "ctime_ns": 1792150851009094641,
+        "dev": 66310,
+        "ino": 786787,
+        "mtime_ns": 1792150850673771773,
+        "size": 80000
+      }
+    }
+  },
+  "aws_cli": "/mnt/borsuk-workspace/aws/dist/aws",
+  "aws_cli_sha256": "cf8592f6d5830307168c6397158b8263566471fac00dfc5028fb8a540ddd8332",
+  "binary": "/mnt/borsuk-workspace/artifacts/s3vectors-original-raw-release-a0003/check_s3_vectors_baseline",
+  "binary_sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da",
+  "blockers": [
+    "Root must verify current shutdown guard; full 13600+650 second reservation cannot fit this host horizon.",
+    "Actual native real-input admission, separate service canary, full import/query/reduction and independent cleanup closure are unrun.",
+    "Original normalization producer ELF not recovered; retained source-bound reexecution establishes matching normalized digest, not independent arithmetic proof.",
+    "Cost and matched latency comparison require parent reconciliation; no vendor win from canary or incomplete output."
+  ],
+  "canary_config_sha256": "d1d567e2a681ad3491800824ed3a1e7d47d56b1a0d649b27e31892bf75d990cb",
+  "claims": {
+    "input_admitted": false,
+    "performance": false,
+    "quality": false,
+    "service_executed": false,
+    "vendor_win": false
+  },
+  "execution_root": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001",
+  "full_config_sha256": "9ad311cfe96e170fca87fdd59305471f94c230f071e58f73109052525fdfe6b3",
+  "guest_horizon_epoch": 1792273560,
+  "guest_horizon_status": "brief approximate; root must verify actual guard is no earlier; no timer changes authorized",
+  "host": "i-01f04c14490040309",
+  "phase_seconds": {
+    "admit": 300,
+    "canary_admit": 60,
+    "canary_measure": 120,
+    "canary_publish": 120,
+    "canary_reduce": 120,
+    "cleanup": 600,
+    "idle": 3610,
+    "measure": 1860,
+    "prepare": 600,
+    "publish": 7200,
+    "reduce": 120
+  },
+  "profile": "causality",
+  "proofs": {
+    "cohort.json": {
+      "bytes": 6238,
+      "retained_path": "/mnt/borsuk-sq8-shortlist/inputs/prepared-parent_cohort_complete.json",
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    },
+    "derivation.json": {
+      "bytes": 23128,
+      "retained_path": "/mnt/borsuk-sq8-shortlist/inputs/prepared-parent_derived_derivation.json",
+      "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+    },
+    "normalization.json": {
+      "bytes": 872,
+      "retained_path": "/mnt/borsuk-workspace/evidence/raw-normalized-reexecution-verification-a0001/terminal.json",
+      "sha256": "659bb97e1566ab77424bde024c216164f915712289dd0539b912697beb52da99"
+    },
+    "qualification.json": {
+      "bytes": 2185,
+      "projection": "schema,status,source,release_binary,native_qualification",
+      "retained_document_bytes": 8084,
+      "retained_document_sha256": "a491977ea961da31ad70dbedabc03df77041ebf0e0e5da7e59b64f2556426ed4",
+      "retained_path": "/mnt/borsuk-workspace/evidence/s3vectors-raw-delivery-docs-a0001/verification.json",
+      "sha256": "5b72bdeee1e46b9fef3642818e957816bc3785ddbecabc34300b9e20ab2f76da"
+    },
+    "raw-recovery.json": {
+      "bytes": 234,
+      "retained_path": "/mnt/borsuk-workspace/evidence/original-raw-recovery-a0001/terminal.json",
+      "sha256": "9ff7cc36b896c96622c07fc47743cd5a20a8b9098159c214ee7e2d22fe76df8c"
+    },
+    "rust48-bindings.json": {
+      "bytes": 7525,
+      "retained_path": "/mnt/borsuk-workspace/evidence/leaf-prefix-abba-a0001/A1.leaf48.reader-config.json",
+      "sha256": "c50cb618a250e418086359d0afd5890e8524debc9a95340bd49f8513cadb64c9"
+    }
+  },
+  "qualified_sdk_commit": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+  "region": "eu-central-1",
+  "resources": {
+    "allowed_cpus": "12",
+    "cpu_quota_percent": 100,
+    "memory_bytes": 536870912,
+    "pids": 128,
+    "swap_bytes": 0
+  },
+  "runtime_seconds": {
+    "cleanup": 650,
+    "full": 13600,
+    "gates": 2100,
+    "verify": 120
+  },
+  "rust48_reference": {
+    "basis": "assignment reference; bound-input metadata copied; no result stream read",
+    "denominator": 10000,
+    "hits": 9783,
+    "recall": 0.9783
+  },
+  "schema": "borsuk-matched-raw-sdk-packet-v1",
+  "source_parent": "7a64c62bc253774ae62036977d8282cab07efc14",
+  "source_sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c",
+  "status": "STATIC_PREPARATION_ONLY",
+  "stop_seconds": {
+    "cleanup": 15,
+    "full": 650,
+    "gates": 650,
+    "verify": 15
+  }
+}

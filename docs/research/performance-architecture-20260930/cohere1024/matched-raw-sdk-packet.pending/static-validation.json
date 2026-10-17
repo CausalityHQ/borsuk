@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-matched-raw-static-check-v1",
+  "status": "PASS",
+  "bash_n": true,
+  "embedded_python_ast_blocks": 5,
+  "json_and_config_hashes": true,
+  "proof_chain_metadata": true,
+  "canary_deterministic_namespace": true,
+  "phase_stop_budget_arithmetic": true,
+  "shellcheck": "UNRUN: unavailable in PATH, /usr/bin and retained-root /usr/bin; no installation",
+  "runtime": "UNRUN",
+  "native": "UNCHANGED_QUALIFICATION_REUSED",
+  "payload_reads": false,
+  "resource_guard": "SSM; CPUQuota100%; AllowedCPUs12; MemoryMax1GiB; Swap0; Tasks128; RuntimeMax120s",
+  "drain_failure": "No unbounded wait after failed disappearance; preserve UNREAPED_DRAIN_FAILED and skip cleanup",
+  "runtime_script_sha256": "c1d6864e739c3ca220dc3ed795094236e101ea5b2b2da7b0d13a508e1d799144",
+  "signal_dispatch": "Trap records interruption; phase owns spawned PID before EXIT/drain; no spawn-to-assignment cleanup race"
+}
