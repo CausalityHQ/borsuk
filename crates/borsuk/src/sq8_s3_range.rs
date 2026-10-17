@@ -71,29 +71,39 @@ pub(crate) fn authenticate_inline<T>(
 }
 
 type SourceAuthJob = Box<dyn FnOnce() + Send + 'static>;
+// One process-wide admitted SOURCE worker batch, shared by generations and runtimes.
+// Acquire before creating the two threads, and release only after both join.
+static SOURCE_AUTH_BATCH: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
 /// Query-owned SOURCE workers. Dropping the query joins every owned job before releasing pins.
 pub(crate) struct SourceAuthWorkers {
     sender: Option<std::sync::mpsc::SyncSender<SourceAuthJob>>,
     workers: Vec<std::thread::JoinHandle<()>>,
-    slots: tokio::sync::Semaphore,
+    slots: Arc<tokio::sync::Semaphore>,
+    _batch_lease: tokio::sync::OwnedSemaphorePermit,
     downloads: tokio::sync::Semaphore,
     #[cfg(test)]
     lifetime: Arc<()>,
 }
 
 impl SourceAuthWorkers {
-    pub(crate) fn new(downloads: usize) -> Result<Self, RangeFetchError> {
+    pub(crate) async fn new(downloads: usize) -> Result<Self, RangeFetchError> {
         if downloads == 0 || downloads > tokio::sync::Semaphore::MAX_PERMITS {
             return Err(RangeFetchError::UnexpectedMetadata);
         }
+        let batch_lease = Arc::clone(&SOURCE_AUTH_BATCH)
+            .acquire_owned()
+            .await
+            .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
         let (sender, receiver) =
             std::sync::mpsc::sync_channel::<SourceAuthJob>(SOURCE_AUTH_WORKERS);
         let receiver = Arc::new(Mutex::new(receiver));
         let mut owner = Self {
             sender: Some(sender),
             workers: Vec::with_capacity(SOURCE_AUTH_WORKERS),
-            slots: tokio::sync::Semaphore::new(SOURCE_AUTH_WORKERS),
+            slots: Arc::new(tokio::sync::Semaphore::new(SOURCE_AUTH_WORKERS)),
+            _batch_lease: batch_lease,
             downloads: tokio::sync::Semaphore::new(downloads),
             #[cfg(test)]
             lifetime: Arc::new(()),
@@ -128,13 +138,13 @@ impl SourceAuthWorkers {
         mut probe: Option<Box<Probe>>,
         authenticate: impl FnOnce() -> Result<T, RangeFetchError> + Send + 'static,
     ) -> (Result<T, RangeFetchError>, Option<Box<Probe>>) {
-        let _slot = self
-            .slots
-            .acquire()
+        let slot = Arc::clone(&self.slots)
+            .acquire_owned()
             .await
             .expect("SOURCE worker slots stay open");
         let (send, receive) = tokio::sync::oneshot::channel();
         let job = Box::new(move || {
+            let _slot = slot;
             // A verifier panic must not kill a worker and strand the remaining full drain.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 measured_auth(&mut probe.as_deref_mut(), authenticate)
@@ -313,7 +323,7 @@ impl Drop for ByteWaiter {
     }
 }
 
-struct InFlightPermit {
+pub(crate) struct InFlightPermit {
     budget: Arc<InFlightBytes>,
     bytes: usize,
 }
@@ -1648,10 +1658,15 @@ async fn fetch_verified_ranges_with_authentication(
         }
         previous_last = Some(last);
     }
-    let workers = offload_authority
-        .map(|_| SourceAuthWorkers::new(max_parallel.min(ranges.len())))
-        .transpose()
-        .map_err(fail)?;
+    let workers = if offload_authority.is_some() {
+        Some(
+            SourceAuthWorkers::new(max_parallel.min(ranges.len()))
+                .await
+                .map_err(fail)?,
+        )
+    } else {
+        None
+    };
     let scheduled = max_parallel.saturating_add(if workers.is_some() {
         SOURCE_AUTH_WORKERS
     } else {
@@ -1761,7 +1776,7 @@ async fn fetch_source_pages_offloaded(
         Ok(range) => range,
         Err(error) => return (index, false, (Err(RangeFetchError::Page(error)), None)),
     };
-    let _bytes = if let Some(budget) = budget {
+    let byte_lease = if let Some(budget) = budget {
         match budget.reserve(expected.len()).await {
             Some(permit) => Some(permit),
             None => {
@@ -1803,6 +1818,7 @@ async fn fetch_source_pages_offloaded(
             let authority = Arc::clone(authority);
             let (result, returned_probe) = workers
                 .authenticate(probe, move || {
+                    let _byte_lease = byte_lease;
                     authority
                         .verify_payload(first, last, &bytes)
                         .map_err(RangeFetchError::Page)?;
@@ -2122,10 +2138,10 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
         (Result<T, RangeFetchError>, Option<Box<Probe>>),
     )
     where
-        A: Fn(usize, Vec<u8>, Option<Box<Probe>>) -> F,
+        A: Fn(usize, Vec<u8>, Option<Box<Probe>>, Option<InFlightPermit>) -> F,
         F: std::future::Future<Output = (Result<T, RangeFetchError>, Option<Box<Probe>>)>,
     {
-        let _permit = if let Some(budget) = self.budget {
+        let mut byte_lease = if let Some(budget) = self.budget {
             match budget.reserve(range.len()).await {
                 Some(permit) => Some(permit),
                 None => {
@@ -2192,7 +2208,7 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
             }
             drop(body);
             let (result, returned_probe) =
-                (self.authenticate)(range.start, bytes, probe.take()).await;
+                (self.authenticate)(range.start, bytes, probe.take(), byte_lease.take()).await;
             probe = returned_probe;
             result
         }
@@ -2274,8 +2290,11 @@ pub(crate) async fn fetch_capsule_ranges_traced<T>(
         budget,
         trace,
         None,
-        |offset, bytes, probe| {
-            std::future::ready(authenticate_inline(probe, || authenticate(offset, bytes)))
+        |offset, bytes, probe, byte_lease| {
+            std::future::ready(authenticate_inline(probe, || {
+                let _byte_lease = byte_lease;
+                authenticate(offset, bytes)
+            }))
         },
     )
     .await
@@ -2294,7 +2313,7 @@ pub(crate) async fn fetch_capsule_ranges_with_authentication<T, F>(
     budget: Option<&Arc<InFlightBytes>>,
     mut trace: Option<&mut Sq8RangeTrace>,
     workers: Option<&SourceAuthWorkers>,
-    authenticate: impl Fn(usize, Vec<u8>, Option<Box<Probe>>) -> F + Sync,
+    authenticate: impl Fn(usize, Vec<u8>, Option<Box<Probe>>, Option<InFlightPermit>) -> F + Sync,
 ) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure>
 where
     F: std::future::Future<Output = (Result<T, RangeFetchError>, Option<Box<Probe>>)>,
@@ -3847,6 +3866,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_auth_offload_shared_admission_and_cancelled_job_keep_permits() {
+        use std::time::Duration;
+        let workers = SourceAuthWorkers::new(2).await.unwrap();
+        let lifetime = Arc::downgrade(&workers.lifetime);
+        let window = InFlightBytes::new(16);
+        let byte_lease = window.reserve(16).await.unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut authentication = Box::pin(workers.authenticate(None, move || {
+            let _byte_lease = byte_lease;
+            entered_tx.send(()).unwrap();
+            // A failing assertion must not strand this test's destructor.
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+            Ok(())
+        }));
+        tokio::select! {
+            result = &mut authentication => panic!("held authentication finished: {result:?}"),
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(authentication);
+        assert_eq!(workers.slots.available_permits(), 1);
+        assert_eq!(*window.available.lock().unwrap(), 0);
+        // Destruction joins off-thread, while a second query/runtime may seek admission.
+        let dropping = std::thread::spawn(move || drop(workers));
+        let mut competing = Box::pin(SourceAuthWorkers::new(2));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), competing.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(*window.available.lock().unwrap(), 0);
+        release_tx.send(()).unwrap();
+        dropping.join().unwrap();
+        assert!(lifetime.upgrade().is_none());
+        assert_eq!(*window.available.lock().unwrap(), 16);
+        let next = tokio::time::timeout(Duration::from_secs(1), competing)
+            .await
+            .unwrap()
+            .unwrap();
+        drop(next);
+    }
+
+    #[tokio::test]
     async fn source_auth_offload_parity_and_ordered_errors() {
         for (corrupt, transport) in [(None, None), (Some(0), Some(1)), (Some(1), Some(0))] {
             let mut control = None;
@@ -3955,7 +4018,7 @@ mod tests {
         let ranges: Vec<_> = (0..9)
             .map(|page| authority.byte_range(page, page).unwrap())
             .collect();
-        let workers = SourceAuthWorkers::new(4).unwrap();
+        let workers = SourceAuthWorkers::new(4).await.unwrap();
         let lifetime = Arc::clone(&workers.lifetime);
         let gate = Arc::new(ComputeGate::default());
         let window = InFlightBytes::new(bytes);
@@ -3971,10 +4034,11 @@ mod tests {
             Some(&window),
             None,
             Some(&workers),
-            |offset, bytes, probe| {
+            |offset, bytes, probe, byte_lease| {
                 let gate = Arc::clone(&gate);
                 let authority = Arc::clone(&authority);
                 workers.authenticate(probe, move || {
+                    let _byte_lease = byte_lease;
                     gate.hold();
                     authority
                         .verify_payload(offset / 320, offset / 320, &bytes)
@@ -4024,7 +4088,7 @@ mod tests {
         let ranges: Vec<_> = (0..9)
             .map(|page| authority.byte_range(page, page).unwrap())
             .collect();
-        let workers = SourceAuthWorkers::new(4).unwrap();
+        let workers = SourceAuthWorkers::new(4).await.unwrap();
         let lifetime = Arc::clone(&workers.lifetime);
         let gate = Arc::new(ComputeGate::default());
         let window = InFlightBytes::new(bytes);
@@ -4042,10 +4106,11 @@ mod tests {
                 Some(&window),
                 None,
                 Some(&workers),
-                |offset, bytes, probe| {
+                |offset, bytes, probe, byte_lease| {
                     let gate = Arc::clone(&gate);
                     let authority = Arc::clone(&authority);
                     workers.authenticate(probe, move || {
+                        let _byte_lease = byte_lease;
                         gate.hold();
                         authority
                             .verify_payload(offset / 320, offset / 320, &bytes)
@@ -8645,8 +8710,11 @@ mod tests {
         {
             Err(RangeFetchError::UnexpectedMetadata)
         }
-        let authenticate_async = |offset, bytes, probe| {
-            std::future::ready(authenticate_inline(probe, || authenticate(offset, bytes)))
+        let authenticate_async = |offset, bytes, probe, byte_lease| {
+            std::future::ready(authenticate_inline(probe, || {
+                let _byte_lease = byte_lease;
+                authenticate(offset, bytes)
+            }))
         };
         let reader = CapsuleRangeReader {
             store: &store,

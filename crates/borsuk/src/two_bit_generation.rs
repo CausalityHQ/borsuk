@@ -594,6 +594,7 @@ pub(crate) async fn authenticate_capsule_response_offloaded<'p, 'g>(
     offset: usize,
     bytes: Vec<u8>,
     probe: Option<Box<crate::sq8_s3_range::Probe>>,
+    byte_lease: Option<crate::sq8_s3_range::InFlightPermit>,
     workers: &SourceAuthWorkers,
 ) -> (
     std::result::Result<
@@ -614,6 +615,7 @@ pub(crate) async fn authenticate_capsule_response_offloaded<'p, 'g>(
     };
     let (result, probe) = workers
         .authenticate(probe, move || {
+            let _byte_lease = byte_lease;
             binding
                 .authenticate(bytes)
                 .map_err(|_| RangeFetchError::UnexpectedMetadata)
@@ -2947,7 +2949,9 @@ impl TwoBitGeneration {
                         self.limits
                             .max_parallel_source_gets
                             .min(request.plan.ranges().len()),
-                    ) {
+                    )
+                    .await
+                    {
                         Err(error) => Err(TwoBitGenerationError::SourceRead(RankedSq8Failure {
                             error,
                             stats: Sq8ReadStats::default(),
@@ -2965,7 +2969,7 @@ impl TwoBitGeneration {
                                 self.byte_window.as_ref(),
                                 profile.as_deref_mut().map(|profile| &mut profile.source),
                                 Some(&workers),
-                                |offset, bytes, probe| {
+                                |offset, bytes, probe, byte_lease| {
                                     authenticate_capsule_response_offloaded(
                                         &request.plan,
                                         &capsules.directory,
@@ -2974,6 +2978,7 @@ impl TwoBitGeneration {
                                         offset,
                                         bytes,
                                         probe,
+                                        byte_lease,
                                         &workers,
                                     )
                                 },
@@ -11295,11 +11300,14 @@ mod source_walk_tests {
                     max_physical_gets: 128,
                 })
                 .unwrap();
-            let window = InFlightBytes::new(
+            let window = InFlightBytes::with_waiter_limit(
                 tiny.limits
                     .max_source_bytes
                     .max(tiny.limits.max_query_bytes),
-            );
+                1024,
+                usize::MAX,
+            )
+            .unwrap();
             let generation = generation.with_shared_byte_window(window.clone()).unwrap();
             let mut profile = QueryProfile::new(128, 128).unwrap();
             tiny.store.inner.reads.lock().unwrap().clear();
