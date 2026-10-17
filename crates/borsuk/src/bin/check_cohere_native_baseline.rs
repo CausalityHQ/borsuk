@@ -4,7 +4,7 @@ use borsuk::{
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{
         BoundedReadS3, InFlightBytes, NativeTransportStats, OneAttemptS3, QueryProfile,
-        S3ReadRetryPolicy, SourceRangeSummary, Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats,
+        S3ReadRetryPolicy, Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats,
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
@@ -49,14 +49,14 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
 const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
-const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v4";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v5";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
-const PANEL_LINE_CAP: usize = 65_536;
+const PANEL_LINE_CAP: usize = 128 * 1024;
 // Two 64-KiB raw authorities may each expand sixfold in JSON; the envelope
-// retains the original panel bound. No query or historical record uses this cap.
-const SOURCE_BINDING_LINE_CAP: usize = 2 * 6 * CONFIG_CAP + PANEL_LINE_CAP;
+// retains its original 64-KiB bound. No query or historical record uses this cap.
+const SOURCE_BINDING_LINE_CAP: usize = 2 * 6 * CONFIG_CAP + 64 * 1024;
 const PANEL_ERROR_CHARS: usize = 2048;
 // Per active query: range trace, host snapshot buffers and serialization together.
 const DIAGNOSTIC_CAP: usize = 1 << 20;
@@ -1742,7 +1742,7 @@ struct QueryDiagnostic<'a> {
     process_cpu_start_ns: i128,
     process_cpu_end_ns: i128,
     sq8_range_trace: &'a Sq8RangeTrace,
-    source_range_trace: SourceRangeSummary<'a>,
+    source_range_trace: &'a Sq8RangeTrace,
     cpu_profile: &'a QueryProfile,
     host: HostWindow,
 }
@@ -1761,7 +1761,7 @@ impl Diag {
             process_cpu_start_ns: anchors.process_cpu_start_ns,
             process_cpu_end_ns: anchors.process_cpu_end_ns,
             sq8_range_trace: &self.trace.sq8,
-            source_range_trace: self.trace.source_summary(),
+            source_range_trace: &self.trace.source,
             cpu_profile: &self.trace,
             host: host_window(&self.sampler.before, &self.sampler.after),
         }
@@ -4808,7 +4808,7 @@ mod tests {
                         assert_eq!(row["plan"]["logical_range_count"], 1);
                         assert_eq!(row["plan"]["planned_bytes"], object_bytes);
                         let diag = &row["diagnostic"];
-                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v4");
+                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v5");
                         let trace = &diag["sq8_range_trace"];
                         let fields = trace["range_fields"].as_array().unwrap();
                         let at = |name: &str| fields.iter().position(|f| f == name).unwrap();
@@ -6373,6 +6373,7 @@ mod tests {
         for (direct, trace, parallelism) in [
             (false, false, 16),
             (false, true, 16),
+            (false, true, 64),
             (true, false, 32),
             (true, true, 32),
         ] {
@@ -6438,6 +6439,19 @@ mod tests {
     }
 
     #[test]
+    fn source_diagnostic_refuses_a_peak_above_one_mebibyte_without_widening_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
+        value["fetch_parallelism"] = json!(128);
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        let error = diagnostic_bytes(&c).unwrap_err().to_string();
+        assert!(error.contains("diagnostic budget exceeds 1 MiB"), "{error}");
+        value["execution"]["trace"] = json!(false);
+        let off: Config = serde_json::from_value(value).unwrap();
+        assert_eq!(diagnostic_bytes(&off).unwrap(), 2 * PANEL_LINE_CAP);
+    }
+
+    #[test]
     fn worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record() {
         use borsuk::sq8_s3_range::RangeSpan;
         let dir = tempfile::tempdir().unwrap();
@@ -6499,6 +6513,20 @@ mod tests {
         diag.trace.cover = scope;
         diag.trace.planning = scope;
         for trace in [&mut diag.trace.source, &mut diag.trace.sq8] {
+            trace.outcome = "rejected_before_io";
+            trace.planned_ranges = u32::MAX;
+            trace.planned_bytes = u64::MAX;
+            trace.max_parallel = u32::MAX;
+            trace.rank_start_ns = max;
+            trace.rank_end_ns = max;
+            trace.rank = Some(borsuk::returned_sq8::RankPhases {
+                ranges: u32::MAX,
+                rows: u64::MAX,
+                score_ns: u64::MAX,
+                roster_ns: u64::MAX,
+                sort_ns: u64::MAX,
+                finish_ns: u64::MAX,
+            });
             trace.cpu = borsuk::sq8_s3_range::RangeCpu {
                 collector_allocation: scope,
                 collector_copy: scope,
@@ -6520,14 +6548,80 @@ mod tests {
             trace.all_ranges_complete_ns = max;
             trace.release_end_ns = max;
         }
-        let envelope = serde_json::to_vec(&diag.query(&anchors)).unwrap().len();
-        let row = serde_json::to_vec(&span).unwrap().len();
-        assert!(row <= 22 * 21 + 2, "{row}");
-        // One extra worst-case row replaces SOURCE's null last-completing span.
-        let worst = envelope + 129 * row + 127;
-        assert!(worst < PANEL_LINE_CAP, "{worst}");
-        let typical = envelope + 33 * row + 31;
-        assert!(typical < PANEL_LINE_CAP / 2, "{typical}");
+        let mut diagnostic = serde_json::to_value(diag.query(&anchors)).unwrap();
+        // Both reservations remain private: fill their serialized arrays with exact span rows.
+        for name in ["source_range_trace", "sq8_range_trace"] {
+            assert!(diagnostic[name]["ranges"].as_array().unwrap().is_empty());
+            diagnostic[name]["ranges"] = serde_json::to_value(vec![span; 128]).unwrap();
+        }
+        let worst = serde_json::to_vec(&diagnostic).unwrap().len();
+        assert!(
+            worst > 64 * 1024,
+            "the former cap cannot carry both traces: {worst}"
+        );
+        assert!(worst + 8192 < PANEL_LINE_CAP, "{worst}");
+        // Bound the failed query's materialized Value tree, including allocation allowances.
+        fn heap_bound(value: &Value) -> usize {
+            match value {
+                Value::String(text) => text.capacity() + 32,
+                Value::Array(rows) => {
+                    rows.capacity() * size_of::<Value>()
+                        + 32
+                        + rows.iter().map(heap_bound).sum::<usize>()
+                }
+                Value::Object(fields) => {
+                    // BTreeMap: <= one root plus one node per five non-root keys.
+                    let node = 64
+                        + 11 * (size_of::<String>() + size_of::<Value>())
+                        + 12 * size_of::<usize>();
+                    node * (1 + fields.len().saturating_sub(1) / 5)
+                        + fields
+                            .iter()
+                            .map(|(key, value)| key.capacity() + 32 + heap_bound(value))
+                            .sum::<usize>()
+                }
+                _ => 0,
+            }
+        }
+        let failure_tree = size_of::<Value>() + heap_bound(&diagnostic);
+        assert!(failure_tree <= FAILURE_VALUE_BYTES, "{failure_tree}");
+        eprintln!(
+            "diagnostic bounds: maximal_serialized_bytes={worst} failure_value_heap_bound={failure_tree} panel_line_cap={PANEL_LINE_CAP} failure_value_allowance={FAILURE_VALUE_BYTES}"
+        );
+        let mut out = Output::create(&dir.path().join("maximal-diagnostic")).unwrap();
+        out.admit_panel_lines(PANEL_LINE_CAP);
+        let pointer = out.panel.as_ref().unwrap().as_ptr();
+        emit_failure(
+            &mut out,
+            json!({"phase":"query_failure","ordinal":7,
+                "error":"\u{0000}".repeat(PANEL_ERROR_CHARS),"truth_opened":false}),
+            Some(diagnostic.clone()),
+        )
+        .unwrap();
+        let rows = records(&out.path);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["diagnostic"], diagnostic,
+            "all SOURCE/SQ8 spans survive failure output"
+        );
+        assert_eq!(
+            rows[0]["error"].as_str().unwrap().chars().count(),
+            PANEL_ERROR_CHARS
+        );
+        let published = out.bytes;
+        out.panel_cap = worst / 2;
+        emit_failure(
+            &mut out,
+            json!({"phase":"query_failure","ordinal":8,"error":"original failure"}),
+            Some(diagnostic),
+        )
+        .unwrap();
+        assert!(out.bytes > published);
+        let rows = records(&out.path);
+        assert_eq!(rows[1]["error"], "original failure");
+        assert_eq!(rows[1]["diagnostic"]["omitted"], "serialized_line_cap");
+        assert_eq!(rows[1]["diagnostic"]["cap_bytes"], worst / 2);
+        assert_eq!(out.panel.as_ref().unwrap().as_ptr(), pointer);
     }
 
     #[test]
@@ -6817,6 +6911,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_diagnostic_borrows_all_ranges_in_exact_plan_and_timestamp_order() {
+        let shape = Shape::tiny(257);
+        let (_dir, value) = fixture(shape).await;
+        let c: Config = serde_json::from_value(with_panel(value, &[0], true)).unwrap();
+        let reader = Reader::new(&c.backend, c.s3_read_retry).unwrap();
+        let store = reader.store();
+        let generation = TwoBitGeneration::open_remote(
+            store,
+            &ObjectPath::from(c.generation_prefix.clone()),
+            &c.generation_root_sha256,
+            limits(&c).unwrap(),
+            &c.scratch_parent,
+        )
+        .await
+        .unwrap();
+        let mut diag = Diag::new(&c).unwrap();
+        let (result, _) = generation
+            .diagnostic_search_with_store_traced(store, &fixture_direction(0), K, &mut diag.trace)
+            .await
+            .unwrap();
+        let anchors = Anchors {
+            monotonic_start_ns: None,
+            monotonic_end_ns: None,
+            process_cpu_start_ns: 0,
+            process_cpu_end_ns: 0,
+        };
+        let view = diag.query(&anchors);
+        assert!(std::ptr::eq(view.source_range_trace, &diag.trace.source));
+        let source = serde_json::to_value(&view).unwrap()["source_range_trace"].clone();
+        let spans = diag.trace.source.ranges();
+        assert!(!spans.is_empty());
+        assert_eq!(spans.len(), result.source_stats.submitted_gets);
+        assert_eq!(source["planned_ranges"], spans.len());
+        assert_eq!(source["dropped_ranges"], 0);
+        assert_eq!(
+            source["range_fields"],
+            serde_json::to_value(borsuk::sq8_s3_range::RangeSpan::FIELDS).unwrap()
+        );
+        assert_eq!(source["ranges"], serde_json::to_value(spans).unwrap());
+        for (index, span) in spans.iter().enumerate() {
+            assert_eq!(span.index as usize, index);
+            assert!(span.auth_start_ns.is_some() && span.auth_end_ns.is_some());
+            assert_eq!(source["ranges"][index], serde_json::to_value(span).unwrap());
+        }
+        assert!(view.cpu_profile.source.ranges().as_ptr() == spans.as_ptr());
+    }
+
+    #[tokio::test]
     async fn panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct() {
         let shape = Shape::tiny(257);
         let (dir, base) = fixture(shape).await;
@@ -6875,20 +7017,60 @@ mod tests {
             for query in &on {
                 let diag = &query["diagnostic"];
                 assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
-                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v4");
+                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v5");
                 assert_eq!(
                     diag["cpu_profile"]["acquisition_poll_cpu"],
                     "unresolved_not_instrumented"
                 );
-                assert!(diag["source_range_trace"].get("ranges").is_none());
+                let source = &diag["source_range_trace"];
+                let source_ranges = source["ranges"].as_array().unwrap();
+                let source_fields = source["range_fields"].as_array().unwrap();
+                assert_eq!(source_fields.len(), 22);
+                assert_eq!(source["dropped_ranges"], 0);
+                assert_eq!(source["planned_ranges"], source_ranges.len());
+                assert_eq!(
+                    source_ranges.len() as u64,
+                    query["charges"]["source"]["submitted_gets"]
+                        .as_u64()
+                        .unwrap()
+                );
+                assert!(source.get("last_completing_range").is_none());
                 assert!(diag["cpu_profile"]["discovery"].is_object());
                 assert!(diag["cpu_profile"]["cover"].is_object());
                 if mode == "direct" {
-                    assert!(diag["source_range_trace"]["last_completing_range"].is_null());
+                    assert!(source_ranges.is_empty());
+                    assert_eq!(source["outcome"], "not_started");
                     assert!(diag["source_range_trace"]["phase_process_cpu_ns"].is_null());
                     assert!(diag["cpu_profile"]["planning"].is_null());
                 } else {
-                    assert!(diag["source_range_trace"]["last_completing_range"].is_array());
+                    assert!(!source_ranges.is_empty());
+                    let at = |name: &str| source_fields.iter().position(|f| f == name).unwrap();
+                    let mut previous_end = 0;
+                    for (index, row) in source_ranges.iter().enumerate() {
+                        assert_eq!(row[at("index")], index);
+                        let start = row[at("start_byte")].as_u64().unwrap();
+                        let end = row[at("end_byte")].as_u64().unwrap();
+                        assert!(previous_end <= start && start < end);
+                        previous_end = end;
+                        assert_eq!(row[at("outcome")], "ok");
+                        assert_eq!(row[at("body_bytes")], end - start);
+                        let chain = [
+                            "first_poll_ns",
+                            "request_ns",
+                            "headers_ns",
+                            "metadata_ns",
+                            "first_chunk_ns",
+                            "last_chunk_ns",
+                            "eof_ns",
+                            "auth_start_ns",
+                            "auth_end_ns",
+                            "complete_ns",
+                        ]
+                        .map(|name| row[at(name)].as_u64().expect(name));
+                        assert!(chain.windows(2).all(|w| w[0] <= w[1]), "{chain:?}");
+                        assert!(source["fetch_start_ns"].as_u64().unwrap() <= chain[0]);
+                        assert!(chain[9] <= source["all_ranges_complete_ns"].as_u64().unwrap());
+                    }
                     assert!(diag["source_range_trace"]["cpu"]["authentication"].is_object());
                     assert!(diag["cpu_profile"]["planning"].is_object());
                 }
@@ -7344,9 +7526,10 @@ mod tests {
     }
 
     #[test]
-    fn panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap() {
-        assert_eq!(PANEL_LINE_CAP, 65_536);
+    fn panel_line_admission_has_an_exact_128kib_boundary_and_full_keeps_the_256kib_cap() {
+        assert_eq!(PANEL_LINE_CAP, 128 * 1024);
         assert_eq!(LINE_CAP, 256 * 1024);
+        assert_eq!(SOURCE_BINDING_LINE_CAP, 2 * 6 * CONFIG_CAP + 64 * 1024);
         let mut line = Vec::with_capacity(PANEL_LINE_CAP);
         let (pointer, capacity) = (line.as_ptr(), line.capacity());
         // A JSON string of n bytes serializes to n + 2 bytes; its newline makes n + 3.
