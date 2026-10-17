@@ -31,10 +31,12 @@ use aws_smithy_runtime_api::{
     },
 };
 use aws_smithy_types::config_bag::ConfigBag;
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::{Cell, RefCell},
     collections::BTreeSet,
     error::Error,
     fs::{File, OpenOptions},
@@ -46,6 +48,8 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+const PUBLICATION_IN_FLIGHT: usize = 8;
+const PUT_SPACING: Duration = Duration::from_millis(250);
 const D: usize = 1024;
 const K: usize = 10;
 const CONFIG_CAP: u64 = 65_536;
@@ -623,6 +627,8 @@ impl Intercept for Tap {
         _runtime: &RuntimeComponents,
         _cfg: &mut ConfigBag,
     ) -> std::result::Result<(), BoxError> {
+        #[cfg(test)]
+        let _compute = tests::PublicationCompute::enter();
         let bytes = context
             .request()
             .body()
@@ -644,6 +650,8 @@ impl Intercept for Tap {
         _runtime: &RuntimeComponents,
         _cfg: &mut ConfigBag,
     ) -> std::result::Result<(), BoxError> {
+        #[cfg(test)]
+        let _compute = tests::PublicationCompute::enter();
         let response = context.response();
         let mut c = self.0.lock().map_err(|_| "capture lock poisoned")?;
         c.status = Some(response.status().as_u16());
@@ -660,6 +668,8 @@ impl Intercept for Tap {
         _runtime: &RuntimeComponents,
         _cfg: &mut ConfigBag,
     ) -> std::result::Result<(), BoxError> {
+        #[cfg(test)]
+        let _compute = tests::PublicationCompute::enter();
         let response = context.response();
         let mut c = self.0.lock().map_err(|_| "capture lock poisoned")?;
         if let Some(bytes) = response.body().bytes() {
@@ -734,6 +744,19 @@ impl Service {
                 .build(),
         );
         Ok(Self { client, sts, tap })
+    }
+    fn publication_call(&self) -> Self {
+        let tap = Tap::default();
+        let mut config = self.client.config().to_builder();
+        // Replace, rather than append to, the shared serial-command capture.
+        config.set_interceptors([aws_sdk_s3vectors::config::SharedInterceptor::new(
+            tap.clone(),
+        )]);
+        Self {
+            client: Client::from_conf(config.build()),
+            sts: self.sts.clone(),
+            tap,
+        }
     }
     fn begin(&self) -> Result<()> {
         *self.tap.0.lock().map_err(|_| "capture lock poisoned")? = Capture::default();
@@ -1031,6 +1054,220 @@ fn check_index(c: &Config, v: &Value) -> Result<()> {
         "index ARN/name/creation/shape",
     )
 }
+// All futures are polled by this task: file reads, SDK encoding, capture and
+// verification share one application compute lane. Never spawn these futures.
+fn finish_publication_call(
+    out: &mut Output,
+    s: &Service,
+    call_id: usize,
+    operation: &str,
+    start: Instant,
+    started_at_ms: u64,
+    result: Result<()>,
+) -> Result<()> {
+    let mut capture = s.capture()?;
+    capture.body = None;
+    let elapsed = elapsed_ns(start)?;
+    out.calls.finish(call_id, &capture)?;
+    out.emit(
+        &json!({"phase":"api","call_id":call_id,"operation":operation,
+        "started_at_ms":started_at_ms,"elapsed_ns":elapsed,"capture":capture,
+        "calls":out.calls.summary(),"error":result.as_ref().err().map(error_text)}),
+    )?;
+    result?;
+    require(
+        capture.attempts == 1 && !capture.truncated && capture.status == Some(200),
+        "one-attempt successful response required",
+    )
+}
+async fn upload_corpus(
+    c: &Config,
+    s: &Service,
+    corpus: &mut File,
+    bound: &Identity,
+    out: &mut Output,
+) -> Result<usize> {
+    let corpus = RefCell::new(corpus);
+    let out = RefCell::new(out);
+    let stopped = Cell::new(false);
+    let pace = tokio::sync::Mutex::new(None::<Instant>);
+    let requests = stream::iter((0..c.rows).step_by(500))
+        .map(|first| {
+            let (corpus, out, stopped, pace, bound) = (&corpus, &out, &stopped, &pace, bound);
+            async move {
+                let result: Result<()> = async {
+                    let mut last = pace.lock().await;
+                    if stopped.get() {
+                        return Ok(());
+                    }
+                    if let Some(previous) = *last {
+                        tokio::time::sleep(PUT_SPACING.saturating_sub(previous.elapsed())).await;
+                    }
+                    if stopped.get() {
+                        return Ok(());
+                    }
+                    let end = (first + 500).min(c.rows);
+                    let mut batch = Vec::with_capacity(end - first);
+                    {
+                        #[cfg(test)]
+                        let _compute = tests::PublicationCompute::enter();
+                        let mut corpus = corpus.borrow_mut();
+                        for id in first..end {
+                            batch.push(
+                                PutInputVector::builder()
+                                    .key(key(id))
+                                    .data(VectorData::Float32(read_vector(&mut corpus)?))
+                                    .build()?,
+                            );
+                        }
+                        require(
+                            &identity(&corpus)? == bound,
+                            "corpus changed during publish",
+                        )?;
+                    }
+                    let rpc = s.publication_call();
+                    let call_id = out.borrow_mut().begin_call(&rpc, "PutVectors")?;
+                    let started_at_ms = now_ms()?;
+                    let start = Instant::now();
+                    *last = Some(start);
+                    drop(last);
+                    let result = rpc
+                        .client
+                        .put_vectors()
+                        .index_arn(index_arn(c))
+                        .set_vectors(Some(batch))
+                        .send()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| error_text(&e).into());
+                    finish_publication_call(
+                        &mut out.borrow_mut(),
+                        &rpc,
+                        call_id,
+                        "PutVectors",
+                        start,
+                        started_at_ms,
+                        result,
+                    )
+                }
+                .await;
+                if result.is_err() {
+                    stopped.set(true);
+                }
+                result
+            }
+        })
+        .buffered(PUBLICATION_IN_FLIGHT);
+    futures_util::pin_mut!(requests);
+    let mut failure = None;
+    while let Some(result) = requests.next().await {
+        if let Err(error) = result {
+            if failure.is_none() {
+                failure = Some(error);
+            }
+        }
+    }
+    // Ordered consumption chooses the earliest batch error, after every started RPC drained.
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(c.rows.div_ceil(500))
+}
+async fn readback_corpus(
+    c: &Config,
+    s: &Service,
+    corpus: &mut File,
+    out: &mut Output,
+) -> Result<usize> {
+    let corpus = RefCell::new(corpus);
+    let out = RefCell::new(out);
+    let stopped = Cell::new(false);
+    let requests = stream::iter((0..c.rows).step_by(100))
+        .map(|first| {
+            let (corpus, out, stopped) = (&corpus, &out, &stopped);
+            async move {
+                if stopped.get() {
+                    return Ok(());
+                }
+                let result: Result<()> = async {
+                    let end = (first + 100).min(c.rows);
+                    let rpc = s.publication_call();
+                    let call_id = out.borrow_mut().begin_call(&rpc, "GetVectors")?;
+                    let started_at_ms = now_ms()?;
+                    let start = Instant::now();
+                    let result = rpc
+                        .client
+                        .get_vectors()
+                        .index_arn(index_arn(c))
+                        .set_keys(Some((first..end).map(key).collect()))
+                        .return_data(true)
+                        .return_metadata(false)
+                        .send()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| error_text(&e).into());
+                    finish_publication_call(
+                        &mut out.borrow_mut(),
+                        &rpc,
+                        call_id,
+                        "GetVectors",
+                        start,
+                        started_at_ms,
+                        result,
+                    )?;
+                    #[cfg(test)]
+                    let _compute = tests::PublicationCompute::enter();
+                    let response = rpc.body()?;
+                    let mut corpus = corpus.borrow_mut();
+                    let vectors = response["vectors"].as_array().ok_or("readback shape")?;
+                    require(
+                        vectors.len() == end - first && response.get("nextToken").is_none(),
+                        "readback count/pagination",
+                    )?;
+                    let mut batch_seen = BTreeSet::new();
+                    for v in vectors {
+                        let id = ordinal(v["key"].as_str().ok_or("readback key")?, c.rows)?;
+                        require(
+                            (first..end).contains(&id) && batch_seen.insert(id),
+                            "readback wrong/duplicate key",
+                        )?;
+                        let values: Vec<f32> =
+                            serde_json::from_value(v["data"]["float32"].clone())?;
+                        require(values.len() == D, "readback dimension")?;
+                        corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
+                        let original = read_vector(&mut corpus)?;
+                        require(
+                            values
+                                .iter()
+                                .zip(original)
+                                .all(|(a, b)| a.to_bits() == b.to_bits()),
+                            "readback f32 bit drift",
+                        )?;
+                    }
+                    Ok(())
+                }
+                .await;
+                if result.is_err() {
+                    stopped.set(true);
+                }
+                result
+            }
+        })
+        .buffered(PUBLICATION_IN_FLIGHT);
+    futures_util::pin_mut!(requests);
+    let mut failure = None;
+    while let Some(result) = requests.next().await {
+        if let Err(error) = result {
+            if failure.is_none() {
+                failure = Some(error);
+            }
+        }
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(c.rows.div_ceil(100))
+}
 async fn publish(ctx: &Context, s: &Service) -> Result<()> {
     let mut out = Output::create(ctx, "publish.jsonl")?;
     let result = publish_inner(ctx, s, &mut out).await;
@@ -1110,38 +1347,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     // Authenticate the exact upload descriptor before publishing any payload.
     let bound = scan_descriptor(&c.corpus, &mut corpus, false, c.rows)?;
     corpus.rewind()?;
-    let mut last_put: Option<Instant> = None;
-    let mut put_calls = 0;
-    for first in (0..c.rows).step_by(500) {
-        let end = (first + 500).min(c.rows);
-        let mut batch = Vec::with_capacity(end - first);
-        for id in first..end {
-            batch.push(
-                PutInputVector::builder()
-                    .key(key(id))
-                    .data(VectorData::Float32(read_vector(&mut corpus)?))
-                    .build()?,
-            );
-        }
-        require(identity(&corpus)? == bound, "corpus changed during publish")?;
-        if c.mode == "measurement" || c.mode == "scale-measurement" {
-            if let Some(last) = last_put {
-                tokio::time::sleep(Duration::from_secs(1).saturating_sub(last.elapsed())).await;
-            }
-        }
-        last_put = Some(Instant::now());
-        // 500*1024 finite f32 JSON numbers plus keys stay below the 20 MiB API cap.
-        call!(
-            s,
-            out,
-            "PutVectors",
-            s.client
-                .put_vectors()
-                .index_arn(index_arn(c))
-                .set_vectors(Some(batch))
-        );
-        put_calls += 1;
-    }
+    let put_calls = upload_corpus(c, s, &mut corpus, &bound, &mut *out).await?;
     require(corpus.read(&mut [0])? == 0, "corpus upload EOF")?;
     let mut seen = vec![false; c.rows];
     let mut token: Option<String> = None;
@@ -1184,48 +1390,7 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
         }
     }
     require(seen.iter().all(|v| *v), "incomplete enumeration")?;
-    let mut get_calls = 0;
-    for first in (0..c.rows).step_by(100) {
-        let end = (first + 100).min(c.rows);
-        let keys = (first..end).map(key).collect();
-        call!(
-            s,
-            out,
-            "GetVectors",
-            s.client
-                .get_vectors()
-                .index_arn(index_arn(c))
-                .set_keys(Some(keys))
-                .return_data(true)
-                .return_metadata(false)
-        );
-        get_calls += 1;
-        let response = s.body()?;
-        let vectors = response["vectors"].as_array().ok_or("readback shape")?;
-        require(
-            vectors.len() == end - first && response.get("nextToken").is_none(),
-            "readback count/pagination",
-        )?;
-        let mut batch_seen = BTreeSet::new();
-        for v in vectors {
-            let id = ordinal(v["key"].as_str().ok_or("readback key")?, c.rows)?;
-            require(
-                (first..end).contains(&id) && batch_seen.insert(id),
-                "readback wrong/duplicate key",
-            )?;
-            let values: Vec<f32> = serde_json::from_value(v["data"]["float32"].clone())?;
-            require(values.len() == D, "readback dimension")?;
-            corpus.seek(SeekFrom::Start((id * D * 4) as u64))?;
-            let original = read_vector(&mut corpus)?;
-            require(
-                values
-                    .iter()
-                    .zip(original)
-                    .all(|(a, b)| a.to_bits() == b.to_bits()),
-                "readback f32 bit drift",
-            )?;
-        }
-    }
+    let get_calls = readback_corpus(c, s, &mut corpus, &mut *out).await?;
     require(
         identity(&corpus)? == bound && scan(&c.corpus, false, c.rows)? == bound,
         "post-readback corpus binding",
@@ -1236,6 +1401,10 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
     )?;
     out.sync()?;
     ctx.save("published.json",json!({"index_arn":index_arn(c),"bucket_arn":bucket_arn(c),"rows":c.rows,
+        "publication_schedule":{"put_rpc_max_in_flight":PUBLICATION_IN_FLIGHT,
+            "get_rpc_max_in_flight":PUBLICATION_IN_FLIGHT,"list_rpc_max_in_flight":1,
+            "application_compute_lanes":1,"put_start_spacing_ms":PUT_SPACING.as_millis(),
+            "put_start_clock":"application send; monotonic; no catchup","put_batch_rows":500,"get_batch_rows":100},
         "put_calls":put_calls,"list_calls":list_calls,"list_page_cap":c.list_page_cap(),"get_calls":get_calls,"calls":out.calls.summary(),
         "enumerated_keys":c.rows,"bit_exact_readback_rows":c.rows,"verified_at_ms":now_ms()?,
         "corpus_sha256":c.corpus.sha256,"queries_sha256":c.queries.sha256,"truth_sha256":c.truth.sha256,
@@ -2035,6 +2204,26 @@ mod tests {
         sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
+    thread_local! {
+        static COMPUTE: RefCell<(usize, usize, usize)> = const { RefCell::new((0, 0, 0)) };
+    }
+    pub(super) struct PublicationCompute;
+    impl PublicationCompute {
+        pub(super) fn enter() -> Self {
+            COMPUTE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.0 += 1;
+                state.1 = state.1.max(state.0);
+                state.2 += 1;
+            });
+            Self
+        }
+    }
+    impl Drop for PublicationCompute {
+        fn drop(&mut self) {
+            COMPUTE.with(|state| state.borrow_mut().0 -= 1);
+        }
+    }
     #[derive(Default)]
     struct Mock {
         calls: AtomicUsize,
@@ -2042,6 +2231,13 @@ mod tests {
         query_bytes: Vec<u8>,
         put_calls: AtomicUsize,
         get_calls: AtomicUsize,
+        hold_bodies: bool,
+        hold_put_bodies: bool,
+        hold_for_eight: bool,
+        fail_readback: bool,
+        finished_keys: Mutex<Vec<String>>,
+        active_bodies: AtomicUsize,
+        peak_bodies: AtomicUsize,
         replace_corpus: Mutex<Option<(PathBuf, PathBuf)>>,
         corpus: Mutex<BTreeMap<String, Vec<f32>>>,
         underfill: bool,
@@ -2088,7 +2284,7 @@ mod tests {
         State(s): State<Arc<Mock>>,
         uri: axum::http::Uri,
         axum::Json(body): axum::Json<Value>,
-    ) -> impl IntoResponse {
+    ) -> axum::response::Response {
         s.calls.fetch_add(1, Ordering::SeqCst);
         let mut status = StatusCode::OK;
         let response = match uri.path() {
@@ -2160,11 +2356,21 @@ mod tests {
                 json!({"indexes":indexes})
             }
             "/DeleteIndex" => {
+                assert_eq!(
+                    s.active_bodies.load(Ordering::SeqCst),
+                    0,
+                    "cleanup before drain"
+                );
                 s.delete_calls.fetch_add(1, Ordering::SeqCst);
                 s.index_deleted.store(true, Ordering::SeqCst);
                 json!({})
             }
             "/DeleteVectorBucket" => {
+                assert_eq!(
+                    s.active_bodies.load(Ordering::SeqCst),
+                    0,
+                    "cleanup before drain"
+                );
                 s.delete_calls.fetch_add(1, Ordering::SeqCst);
                 s.bucket_deleted.store(true, Ordering::SeqCst);
                 json!({})
@@ -2192,7 +2398,8 @@ mod tests {
                         status,
                         [("x-amzn-requestid", "fixture-request-id")],
                         axum::Json(json!({"vectors":[],"nextToken":"0"})),
-                    );
+                    )
+                        .into_response();
                 }
                 let start = body["nextToken"]
                     .as_str()
@@ -2280,11 +2487,66 @@ mod tests {
             }
             path => panic!("unexpected service operation {path}"),
         };
+        if (s.hold_bodies && uri.path() == "/GetVectors")
+            || (s.hold_put_bodies && uri.path() == "/PutVectors")
+        {
+            let first = if uri.path() == "/GetVectors" {
+                body["keys"][0].as_str().unwrap()
+            } else {
+                body["vectors"][0]["key"].as_str().unwrap()
+            }
+            .to_owned();
+            let failed = s.fail_readback && (first == "000000" || first == "000100");
+            let response = if failed {
+                status = StatusCode::SERVICE_UNAVAILABLE;
+                json!({"__type":"ServiceUnavailableException","message":format!("failed batch {first}")})
+            } else {
+                response
+            };
+            let is_put = uri.path() == "/PutVectors";
+            let delay = if s.fail_readback && first == "000000" {
+                400
+            } else if s.fail_readback {
+                50
+            } else {
+                250
+            };
+            let active = s.active_bodies.fetch_add(1, Ordering::SeqCst) + 1;
+            s.peak_bodies.fetch_max(active, Ordering::SeqCst);
+            let bytes = serde_json::to_vec(&response).unwrap();
+            return axum::response::Response::builder()
+                .status(status)
+                .header("x-amzn-requestid", first.clone())
+                .body(axum::body::Body::from_stream(futures_util::stream::once(
+                    async move {
+                        if s.hold_for_eight {
+                            tokio::time::timeout(Duration::from_secs(8), async {
+                                while if is_put {
+                                    s.put_calls.load(Ordering::SeqCst)
+                                } else {
+                                    s.get_calls.load(Ordering::SeqCst)
+                                } < 8
+                                {
+                                    tokio::time::sleep(Duration::from_millis(1)).await;
+                                }
+                            })
+                            .await
+                            .unwrap();
+                        }
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        s.active_bodies.fetch_sub(1, Ordering::SeqCst);
+                        s.finished_keys.lock().unwrap().push(first);
+                        Ok::<_, std::io::Error>(bytes)
+                    },
+                )))
+                .unwrap();
+        }
         (
             status,
             [("x-amzn-requestid", "fixture-request-id")],
             axum::Json(response),
         )
+            .into_response()
     }
     async fn mock_service(mock: Arc<Mock>) -> (Service, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2292,6 +2554,7 @@ mod tests {
         let router = Router::new()
             .route("/", post(sts_endpoint))
             .route("/{operation}", post(endpoint))
+            .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024))
             .with_state(mock);
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let tap = Tap::default();
@@ -2481,6 +2744,193 @@ mod tests {
         assert!(output.bytes > OUTPUT_CAP);
         assert!(output.bytes <= ctx.c.output_cap());
         output.sync().unwrap();
+    }
+    fn pipeline_fixture(rows: usize) -> (tempfile::TempDir, Context, Vec<u8>) {
+        let (dir, mut ctx) = scale_fixture();
+        let original = std::fs::read(&ctx.c.corpus.path).unwrap();
+        let raw: Vec<u8> = (0..rows)
+            .flat_map(|id| {
+                let offset = (id % 257) * D * 4;
+                original[offset..offset + D * 4].iter().copied()
+            })
+            .collect();
+        std::fs::write(&ctx.c.corpus.path, &raw).unwrap();
+        ctx.c.rows = rows;
+        ctx.c.corpus.bytes = raw.len() as u64;
+        ctx.c.corpus.sha256 = hash(&raw);
+        ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
+        (dir, ctx, raw)
+    }
+    #[tokio::test]
+    async fn publication_eight_bodies_one_compute_lane_exact_partial_batches_and_cadence() {
+        let (_dir, ctx, raw) = pipeline_fixture(4501);
+        let mock = Arc::new(Mock {
+            hold_bodies: true,
+            hold_put_bodies: true,
+            hold_for_eight: true,
+            ..Mock::default()
+        });
+        let (service, server) = mock_service(mock.clone()).await;
+        let mut out = Output::create(&ctx, "pipeline.jsonl").unwrap();
+        let mut corpus = open_artifact(&ctx.c.corpus).unwrap();
+        let bound = identity(&corpus).unwrap();
+        COMPUTE.with(|state| *state.borrow_mut() = (0, 0, 0));
+        assert_eq!(
+            upload_corpus(&ctx.c, &service, &mut corpus, &bound, &mut out)
+                .await
+                .unwrap(),
+            10
+        );
+        assert_eq!(mock.peak_bodies.load(Ordering::SeqCst), 8);
+        assert_eq!(mock.active_bodies.load(Ordering::SeqCst), 0);
+        assert_eq!(corpus.stream_position().unwrap(), raw.len() as u64);
+        {
+            let stored = mock.corpus.lock().unwrap();
+            assert_eq!(stored.len(), 4501);
+            for (id, row) in raw.chunks_exact(D * 4).enumerate() {
+                assert!(
+                    stored[&key(id)]
+                        .iter()
+                        .zip(row.chunks_exact(4))
+                        .all(|(v, b)| v.to_bits() == u32::from_le_bytes(b.try_into().unwrap()))
+                );
+            }
+        }
+        mock.peak_bodies.store(0, Ordering::SeqCst);
+        assert_eq!(
+            readback_corpus(&ctx.c, &service, &mut corpus, &mut out)
+                .await
+                .unwrap(),
+            46
+        );
+        assert_eq!(mock.peak_bodies.load(Ordering::SeqCst), 8);
+        assert_eq!(mock.active_bodies.load(Ordering::SeqCst), 0);
+        // Every preparation/verification and SDK tap scope ran on this task's thread.
+        COMPUTE.with(|state| assert_eq!(*state.borrow(), (0, 1, 4 * (10 + 46))));
+        assert!(out.calls.pending.is_empty());
+        out.sync().unwrap();
+        let mut rows: Vec<Value> = BufReader::new(File::open(&out.path).unwrap())
+            .lines()
+            .map(|row| serde_json::from_str(&row.unwrap()).unwrap())
+            .collect();
+        rows.sort_by_key(|row| row["call_id"].as_u64().unwrap());
+        let put_times: Vec<u64> = rows
+            .iter()
+            .filter(|r| r["operation"] == "PutVectors")
+            .map(|r| r["started_at_ms"].as_u64().unwrap())
+            .collect();
+        assert!(put_times.windows(2).all(|w| w[1] - w[0] >= 250));
+        for row in rows.iter().filter(|r| r["operation"] == "GetVectors") {
+            let batch = row["call_id"].as_u64().unwrap() as usize - 11;
+            let first = batch * 100;
+            assert_eq!(row["capture"]["request_id"], key(first));
+            let end = (first + 100).min(ctx.c.rows);
+            let stored = mock.corpus.lock().unwrap();
+            let body = json!({"vectors":(first..end).map(|id|
+                json!({"key":key(id),"data":{"float32":stored[&key(id)]}})).collect::<Vec<_>>()});
+            assert_eq!(
+                row["capture"]["body_sha256"],
+                hash(&serde_json::to_vec(&body).unwrap())
+            );
+            assert_eq!(row["capture"]["attempts"], 1);
+        }
+        server.abort();
+    }
+    #[tokio::test]
+    async fn publication_preserves_authenticated_stamp_before_first_put() {
+        let (_dir, ctx) = scale_fixture();
+        let mock = Arc::new(Mock::default());
+        let (service, server) = mock_service(mock.clone()).await;
+        let mut corpus = open_artifact(&ctx.c.corpus).unwrap();
+        let bound = scan_descriptor(&ctx.c.corpus, &mut corpus, false, ctx.c.rows).unwrap();
+        corpus.rewind().unwrap();
+        let mut writer = OpenOptions::new()
+            .write(true)
+            .open(&ctx.c.corpus.path)
+            .unwrap();
+        writer.set_len(ctx.c.corpus.bytes + 4).unwrap();
+        writer.write_all(&2.0f32.to_le_bytes()).unwrap();
+        writer.sync_all().unwrap();
+        let mut out = Output::create(&ctx, "stamp.jsonl").unwrap();
+        let result = upload_corpus(&ctx.c, &service, &mut corpus, &bound, &mut out).await;
+        assert!(result.is_err(), "changed authenticated descriptor accepted");
+        assert_eq!(mock.put_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(out.calls.reserved, 0);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn publication_reordered_errors_drain_before_cleanup() {
+        let (_dir, ctx) = scale_fixture();
+        let mock = Arc::new(Mock {
+            hold_bodies: true,
+            fail_readback: true,
+            ..Mock::default()
+        });
+        let (service, server) = mock_service(mock.clone()).await;
+        admit(&ctx).unwrap();
+        let error = publish(&ctx, &service).await.unwrap_err().to_string();
+        assert!(error.contains("failed batch 000000"), "{error}");
+        assert!(!ctx.path("published.json").exists());
+        assert_eq!(mock.active_bodies.load(Ordering::SeqCst), 0);
+        assert_eq!(mock.finished_keys.lock().unwrap().last().unwrap(), "000000");
+        let calls = Calls::open(&ctx).unwrap();
+        assert!(calls.pending.is_empty());
+        drop(calls);
+        cleanup(&ctx, &service).await.unwrap();
+        assert_eq!(mock.delete_calls.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+    #[tokio::test]
+    async fn publication_reservation_failure_drains_started_calls_and_holds_ledger_lock() {
+        let (_dir, ctx, raw) = pipeline_fixture(901);
+        let mock = Arc::new(Mock {
+            hold_bodies: true,
+            ..Mock::default()
+        });
+        for (id, row) in raw.chunks_exact(D * 4).enumerate() {
+            mock.corpus
+                .lock()
+                .unwrap()
+                .insert(key(id), vector(row).unwrap());
+        }
+        let (service, server) = mock_service(mock.clone()).await;
+        let mut out = Output::create(&ctx, "budget.jsonl").unwrap();
+        out.calls.cap = 3;
+        let mut corpus = open_artifact(&ctx.c.corpus).unwrap();
+        let (result, ()) = tokio::join!(
+            readback_corpus(&ctx.c, &service, &mut corpus, &mut out),
+            async {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while mock.active_bodies.load(Ordering::SeqCst) == 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(Calls::open(&ctx).is_err());
+            }
+        );
+        assert!(result.unwrap_err().to_string().contains("reservation cap"));
+        assert_eq!(mock.get_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(mock.active_bodies.load(Ordering::SeqCst), 0);
+        assert_eq!(out.calls.reserved, 3);
+        assert_eq!(out.calls.observed, 3);
+        assert!(out.calls.pending.is_empty());
+        server.abort();
+    }
+    #[tokio::test]
+    async fn publication_overlaps_owned_response_bodies() {
+        let (_dir, ctx) = scale_fixture();
+        let mock = Arc::new(Mock {
+            hold_bodies: true,
+            ..Mock::default()
+        });
+        let (service, server) = mock_service(mock.clone()).await;
+        admit(&ctx).unwrap();
+        publish(&ctx, &service).await.unwrap();
+        assert_eq!(mock.peak_bodies.load(Ordering::SeqCst), 3);
+        assert_eq!(mock.active_bodies.load(Ordering::SeqCst), 0);
+        server.abort();
     }
     #[tokio::test]
     async fn scale_raw_sdk_publication_readback_measurement_and_cleanup() {
