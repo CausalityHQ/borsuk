@@ -1,0 +1,11 @@
+{
+  "status": "VALID_PARETO_TRADEOFF",
+  "source_revision": "a0463ed097296c19539d05529ddad615be760fdd",
+  "packet_revision": "f43d8161c6f09d86b3aba03a5bab9f588d3be933",
+  "original_run_ssm": "fcbd3f64-f033-43b4-89bd-062b1cc5cb50",
+  "original_collect_ssm": "04ad64b0-6807-47f0-8450-490f564c668e",
+  "all_four_cells_and_checkpoints_zero": true,
+  "default_changed": false,
+  "competitor_win": false,
+  "next_gate": "Optimize SOURCE/planning while preserving the retained40 and48 quality curves; choose one causal change from measured stage evidence. No new experiment authorized by this receipt."
+}
