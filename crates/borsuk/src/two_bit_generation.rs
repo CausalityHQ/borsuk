@@ -8,7 +8,7 @@ use crate::{
     object_native_generation::{
         MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_two_bit_metadata,
     },
-    rotated_two_bit::PreparedTwoBit,
+    rotated_two_bit::{PreparedTwoBit, TwoBitScoreBlock},
     sq8_page_authority::{
         PageAuthority, PageError, SOURCE_SHORTLIST_ROWS, SQ8_PAGE_ROWS, SelectedSq8Limits,
         plan_source_shortlist_blocks,
@@ -1156,8 +1156,10 @@ fn retain_source_shortlist(
 /// The explicit profile admits semantic walk/completion bounds; `None` retains
 /// graph limits. Semantic discovery supplies its entire admitted page closure.
 /// Standalone callers must also reserve 3MiB planner working payload for Scale1m
-/// (1MiB for other profiles), plus 256KiB for shortlist admission, prepared-query and optional retained-trace
-/// memory. Generation methods enforce their modeled admission separately.
+/// (1MiB for other profiles), plus 256KiB for shortlist admission, prepared-query
+/// and optional retained-trace memory. The separate block payload is 1200 bytes
+/// on 64-bit hosts (computed from its actual types); include it in planner memory.
+/// Generation methods enforce their modeled admission separately.
 #[doc(hidden)]
 pub fn plan_two_bit_source_walks<'a>(
     authority: &PageAuthority,
@@ -1180,7 +1182,15 @@ pub fn plan_two_bit_source_walks<'a>(
             BudgetedPageError::InvalidGeometry,
         ));
     }
-    if limits.max_planner_bytes < rows.min(SOURCE_SHORTLIST_ROWS) * 512 + 4096 {
+    let block_scratch = TwoBitScoreBlock::scratch_bytes().ok_or(TwoBitGenerationError::Budget(
+        BudgetedPageError::ArithmeticOverflow,
+    ))?;
+    let planner_required = (rows.min(SOURCE_SHORTLIST_ROWS) * 512 + 4096)
+        .checked_add(block_scratch)
+        .ok_or(TwoBitGenerationError::Budget(
+            BudgetedPageError::ArithmeticOverflow,
+        ))?;
+    if limits.max_planner_bytes < planner_required {
         return Err(TwoBitGenerationError::Budget(
             BudgetedPageError::InsufficientBudget,
         ));
@@ -1199,12 +1209,16 @@ pub fn plan_two_bit_source_walks<'a>(
         if trace.is_some() {
             nomination_evaluated_units.push(unit);
         }
-        let mut maximum = f64::NEG_INFINITY;
-        for row in unit * 32..((unit + 1) * 32).min(rows) {
-            let value = prepared
-                .score(record(row).ok_or(TwoBitGenerationError::Invalid("missing source record"))?)
+        let first = unit * 32;
+        let mut block = TwoBitScoreBlock::new(prepared);
+        for row in first..((unit + 1) * 32).min(rows) {
+            block
+                .push(record(row).ok_or(TwoBitGenerationError::Invalid("missing source record"))?)
                 .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
-            retain_source_shortlist(&mut shortlist, row, value)?;
+        }
+        let mut maximum = f64::NEG_INFINITY;
+        for (lane, &value) in block.score().iter().enumerate() {
+            retain_source_shortlist(&mut shortlist, first + lane, value)?;
             maximum = maximum.max(value);
         }
         Ok(maximum)
@@ -1224,7 +1238,10 @@ pub fn plan_two_bit_source_walks<'a>(
     let selected = plan_source_shortlist_blocks(
         authority,
         &nominees,
-        limits,
+        SelectedSq8Limits {
+            max_planner_bytes: limits.max_planner_bytes - block_scratch,
+            ..limits
+        },
         SOURCE_SHORTLIST_RESERVE as usize,
     )
     .map_err(TwoBitGenerationError::Budget)?;
@@ -2138,8 +2155,12 @@ impl TwoBitGeneration {
         // Scale reserves 3MiB for its full closure/scoring geometry; historical
         // profiles retain 1MiB. Retained diagnostic arrays are charged separately.
         let planner_reserve = query_planner_reserve(manifest.discovery.semantic_profile());
+        let block_scratch = TwoBitScoreBlock::scratch_bytes()
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(bad("query memory"))?;
         let planner_bytes = (limits.max_query_scratch_bytes as u64)
             .checked_add(planner_reserve)
+            .and_then(|bytes| bytes.checked_add(block_scratch))
             .ok_or(bad("query memory"))?;
         let scheduler_memory = range_scheduler_memory(limits, paged, limits.max_query_gets)?;
         let query_memory = crate::returned_sq8::query_payload_bytes(
@@ -3033,7 +3054,12 @@ impl TwoBitGeneration {
             SelectedSq8Limits {
                 max_gets: self.limits.max_query_gets,
                 max_bytes: self.limits.max_query_bytes,
-                max_planner_bytes: SOURCE_SHORTLIST_RESERVE as usize,
+                max_planner_bytes: (SOURCE_SHORTLIST_RESERVE as usize)
+                    .checked_add(
+                        TwoBitScoreBlock::scratch_bytes()
+                            .ok_or(TwoBitGenerationError::Invalid("source block scratch"))?,
+                    )
+                    .ok_or(TwoBitGenerationError::Invalid("source block scratch"))?,
             },
             trace,
         )
@@ -8388,6 +8414,339 @@ mod source_walk_tests {
             .unwrap();
         parity(&actual);
         assert_eq!(actual.0.source_stats.submitted_gets, 1);
+    }
+
+    #[test]
+    fn source_block32_all_lane_winners_match_scalar_maxima_shortlist_and_plan() {
+        let rows = 513;
+        let authority = source_test_authority(rows, 1).unwrap();
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0], 17).unwrap();
+        let prepared = codec.prepare_query(&[1.0], 2056).unwrap();
+        let walks = [(0, (0..rows.div_ceil(32)).collect::<Vec<_>>())];
+        let limits = SelectedSq8Limits {
+            max_gets: 2,
+            max_bytes: 65 * 13,
+            max_planner_bytes: 256 * 1024,
+        };
+        for winner in 0..32 {
+            let records = (0..rows)
+                .map(|row| {
+                    let mut record = codec.encode(&[1.0]).unwrap();
+                    let inverse_norm = if row % 32 == winner || row + 1 == rows {
+                        1000.0 + (row / 32) as f32
+                    } else {
+                        (row % 7 + 1) as f32
+                    };
+                    let width = record.len();
+                    record[width - 4..].copy_from_slice(&inverse_norm.to_le_bytes());
+                    record
+                })
+                .collect::<Vec<_>>();
+            let scores = records
+                .iter()
+                .map(|record| prepared.score(record).unwrap())
+                .collect::<Vec<_>>();
+            let mut expected_units = Vec::new();
+            let ranked = rank_walked_source_with_limit(rows, &walks, 3, None, |unit| {
+                expected_units.push(unit);
+                Ok(scores[unit * 32..((unit + 1) * 32).min(rows)]
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max))
+            })
+            .unwrap();
+            let mut nominees = scores.iter().copied().enumerate().collect::<Vec<_>>();
+            nominees.sort_unstable_by(|&(a, sa), &(b, sb)| sb.total_cmp(&sa).then(a.cmp(&b)));
+            nominees.truncate(SOURCE_SHORTLIST_ROWS);
+            nominees.sort_unstable_by_key(|&(row, _)| row);
+            let expected = plan_source_shortlist_blocks(
+                &authority,
+                &nominees,
+                limits,
+                SOURCE_SHORTLIST_RESERVE as usize,
+            )
+            .unwrap();
+            let mut roster = Vec::new();
+            let mut trace = TwoBitPlanTrace::default();
+            let actual = plan_two_bit_source_walks(
+                &authority,
+                3,
+                None,
+                &walks,
+                &prepared,
+                |row| {
+                    roster.push(row);
+                    Some(records[row].as_slice())
+                },
+                limits,
+                Some(&mut trace),
+            )
+            .unwrap();
+            assert_eq!(roster, (0..rows).collect::<Vec<_>>(), "winner lane{winner}");
+            assert_eq!(trace.nomination_evaluated_units, expected_units);
+            assert_eq!(
+                trace.ranked_candidate_pages,
+                ranked.iter().map(|&(page, _)| page).collect::<Vec<_>>()
+            );
+            assert_eq!(trace.primary_page, ranked[0].0);
+            assert_eq!(actual.selected_pages, expected.selected_pages);
+            assert_eq!(actual.ranges, expected.ranges);
+            assert_eq!(actual.planned_bytes, expected.planned_bytes);
+            let target_pages = nominees
+                .iter()
+                .map(|&(row, _)| row / 32)
+                .collect::<BTreeSet<_>>()
+                .len();
+            assert_eq!(actual.target_pages, target_pages);
+            assert_eq!(
+                actual.target_shortfall,
+                target_pages - actual.selected_pages.len()
+            );
+            assert_eq!(actual.primary_pages_retained, 0);
+        }
+    }
+
+    #[test]
+    fn source_block32_stateful_callbacks_stop_before_later_missing_or_malformed_rows() {
+        let rows = 65;
+        let authority = source_test_authority(rows, 1).unwrap();
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0], 17).unwrap();
+        let prepared = codec.prepare_query(&[f32::from_bits(1)], 2056).unwrap();
+        let valid = codec.encode(&[1.0]).unwrap();
+        let mut extreme = valid.clone();
+        extreme[1..5].copy_from_slice(&f32::MAX.to_le_bytes());
+        extreme[5..].copy_from_slice(&f32::MAX.to_le_bytes());
+        assert!(prepared.score(&extreme).unwrap().is_finite());
+        let mut invalid = vec![vec![], valid[..8].to_vec()];
+        let mut long = valid.clone();
+        long.push(0);
+        invalid.push(long);
+        for scale in [-1.0, f32::INFINITY, f32::NAN] {
+            let mut record = valid.clone();
+            record[1..5].copy_from_slice(&scale.to_le_bytes());
+            invalid.push(record);
+        }
+        for inverse_norm in [0.0, -0.0, -1.0, f32::INFINITY, f32::NAN] {
+            let mut record = valid.clone();
+            record[5..].copy_from_slice(&inverse_norm.to_le_bytes());
+            invalid.push(record);
+        }
+        let walks = [(0, vec![0, 1, 2])];
+        let limits = SelectedSq8Limits {
+            max_gets: 1,
+            max_bytes: rows * 13,
+            max_planner_bytes: 256 * 1024,
+        };
+        for bad_row in [0, 7, 31, 32, 64] {
+            for malformed in &invalid {
+                let mut calls = Vec::new();
+                let error = plan_two_bit_source_walks(
+                    &authority,
+                    1,
+                    None,
+                    &walks,
+                    &prepared,
+                    |row| {
+                        assert_eq!(row, calls.len(), "stateful callback order");
+                        calls.push(row);
+                        if row == bad_row {
+                            Some(malformed.as_slice())
+                        } else if row == bad_row + 1 {
+                            None
+                        } else {
+                            Some(extreme.as_slice())
+                        }
+                    },
+                    limits,
+                    None,
+                )
+                .unwrap_err();
+                assert!(matches!(
+                    error,
+                    TwoBitGenerationError::Plane(SourceBuildError::Codec(
+                        crate::rotated_two_bit::TwoBitError::Record
+                    ))
+                ));
+                assert_eq!(calls, (0..=bad_row).collect::<Vec<_>>());
+            }
+            let mut calls = Vec::new();
+            let error = plan_two_bit_source_walks(
+                &authority,
+                1,
+                None,
+                &walks,
+                &prepared,
+                |row| {
+                    assert_eq!(row, calls.len());
+                    calls.push(row);
+                    if row == bad_row {
+                        None
+                    } else {
+                        Some(extreme.as_slice())
+                    }
+                },
+                limits,
+                None,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                TwoBitGenerationError::Invalid("missing source record")
+            ));
+            assert_eq!(calls, (0..=bad_row).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn source_block32_exact_scratch_admission_precedes_callbacks() {
+        let rows = 33;
+        let authority = source_test_authority(rows, 1).unwrap();
+        let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&[0.0], 17).unwrap();
+        let prepared = codec.prepare_query(&[1.0], 2056).unwrap();
+        let record = codec.encode(&[1.0]).unwrap();
+        let walks = [(0, vec![0, 1])];
+        let required = rows.min(SOURCE_SHORTLIST_ROWS) * 512
+            + 4096
+            + TwoBitScoreBlock::scratch_bytes().unwrap();
+        for budget in [0, required - 1, required] {
+            let mut calls = 0;
+            let result = plan_two_bit_source_walks(
+                &authority,
+                1,
+                None,
+                &walks,
+                &prepared,
+                |_| {
+                    calls += 1;
+                    Some(record.as_slice())
+                },
+                SelectedSq8Limits {
+                    max_gets: 1,
+                    max_bytes: rows * 13,
+                    max_planner_bytes: budget,
+                },
+                None,
+            );
+            if budget < required {
+                assert!(matches!(
+                    result,
+                    Err(TwoBitGenerationError::Budget(
+                        BudgetedPageError::InsufficientBudget
+                    ))
+                ));
+                assert_eq!(
+                    calls, 0,
+                    "no callback/allocation-backed I/O before scratch admission"
+                );
+            } else {
+                result.unwrap();
+                assert_eq!(calls, rows);
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn source_block32_modeled_minus_one_refuses_before_source_or_sq8_io() {
+        let tiny = tiny_direct(513, 24).await;
+        for active in [1, 2] {
+            let limits = TwoBitGenerationLimits {
+                max_active_queries: active,
+                ..tiny.limits
+            };
+            let baseline = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &tiny.root_sha,
+                limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            let modeled = baseline.modeled_memory_bytes();
+            let exact = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &tiny.root_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: modeled,
+                    ..limits
+                },
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(exact.modeled_memory_bytes(), modeled);
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let error = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &tiny.root_sha,
+                TwoBitGenerationLimits {
+                    max_memory_bytes: modeled - 1,
+                    ..limits
+                },
+                tiny.temp.path(),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(matches!(
+                error,
+                TwoBitGenerationError::Invalid("memory cap")
+            ));
+            assert!(
+                tiny.store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(path, head, _, _)| {
+                        *head
+                            || (!path.ends_with("plane/records.bin")
+                                && !path.ends_with("router/leaves.bin")
+                                && path != tiny.key.as_ref())
+                    })
+            );
+            // Independent flat/semantic model: detect an omitted block term, not
+            // merely a boundary computed from the implementation's own total.
+            let root = tiny.temp.path().join("generation");
+            let size = |name: &str| fs::metadata(root.join(name)).unwrap().len();
+            let manifest: Manifest =
+                serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+            let disk = size("manifest.json")
+                + manifest
+                    .files(true)
+                    .iter()
+                    .filter(|&&name| name != "manifest.json" && name != "router/leaves.bin")
+                    .map(|name| size(name))
+                    .sum::<u64>();
+            let router_bytes = size("router/root.bin");
+            let leaves = (router_bytes as usize - 512) / (64 + 4 * 24);
+            let (_, directory_peak) = crate::semantic_unit_router::directory_allocation_bytes(
+                513_usize.div_ceil(32),
+                leaves,
+            )
+            .unwrap();
+            let resident = 3 * disk
+                + 64 * 4 * 24
+                + 131_072
+                + 32 * router_bytes
+                + directory_peak as u64
+                + limits.already_pinned_bytes;
+            let block = TwoBitScoreBlock::scratch_bytes().unwrap() as u64;
+            let query = (3 * limits.max_query_bytes as u64
+                + limits.max_query_scratch_bytes as u64
+                + query_planner_reserve(baseline.semantic_profile())
+                + block
+                + 256 * 513
+                + 4 * 24
+                + 1024 * 1024
+                + 2 * 513 * (8 + 8))
+                * active as u64;
+            let scheduler = range_scheduler_memory(limits, true, limits.max_query_gets).unwrap();
+            assert_eq!(modeled, resident + query + scheduler);
+        }
     }
 
     #[test]

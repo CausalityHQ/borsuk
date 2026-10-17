@@ -46,6 +46,97 @@ pub struct PreparedTwoBit {
     inverse_query_norm: f64,
 }
 
+#[derive(Clone, Copy)]
+struct ValidatedTwoBitRow<'a> {
+    packed: &'a [u8],
+    scale: f32,
+    inverse_norm: f32,
+}
+
+/// One SOURCE unit; output reuses the accumulation lanes without a caller buffer.
+pub(crate) struct TwoBitScoreBlock<'q, 'r> {
+    prepared: &'q PreparedTwoBit,
+    rows: [ValidatedTwoBitRow<'r>; 32],
+    scores: [f64; 32],
+    len: usize,
+}
+
+impl<'q, 'r> TwoBitScoreBlock<'q, 'r> {
+    pub(crate) fn new(prepared: &'q PreparedTwoBit) -> Self {
+        Self {
+            prepared,
+            rows: [ValidatedTwoBitRow {
+                packed: &[],
+                scale: 0.0,
+                inverse_norm: 1.0,
+            }; 32],
+            scores: [-0.0; 32],
+            len: 0,
+        }
+    }
+
+    /// Checked simultaneous payload, including pending validation and caller controls.
+    pub(crate) fn scratch_bytes() -> Option<usize> {
+        // Block: row slices/scalars, shared dot/output lanes, prepared borrow and len.
+        // Then: pending row/scalars, finalization, six indices, two record slices,
+        // returned score slice and caller maximum; compiler/RSS overhead is separate.
+        std::mem::size_of::<Self>()
+            .checked_add(std::mem::size_of::<ValidatedTwoBitRow<'_>>())?
+            .checked_add(std::mem::size_of::<[f32; 2]>())?
+            .checked_add(std::mem::size_of::<[f64; 3]>())?
+            .checked_add(std::mem::size_of::<[usize; 6]>())?
+            .checked_add(std::mem::size_of::<[&[u8]; 2]>())?
+            .checked_add(std::mem::size_of::<&[f64]>())?
+            .checked_add(std::mem::size_of::<f64>())
+    }
+
+    /// Finish width/scalar validation before the caller requests another record.
+    pub(crate) fn push(&mut self, record: &'r [u8]) -> Result<(), TwoBitError> {
+        if self.len == self.rows.len() {
+            return Err(TwoBitError::Geometry);
+        }
+        let packed_bytes = self.prepared.packed_bytes;
+        if record.len() != packed_bytes + 8 {
+            return Err(TwoBitError::Record);
+        }
+        let scale = f32::from_le_bytes(record[packed_bytes..packed_bytes + 4].try_into().unwrap());
+        let inverse_norm = f32::from_le_bytes(record[packed_bytes + 4..].try_into().unwrap());
+        if !scale.is_finite() || scale < 0.0 || !inverse_norm.is_finite() || inverse_norm <= 0.0 {
+            return Err(TwoBitError::Record);
+        }
+        self.rows[self.len] = ValidatedTwoBitRow {
+            packed: &record[..packed_bytes],
+            scale,
+            inverse_norm,
+        };
+        self.len += 1;
+        Ok(())
+    }
+
+    pub(crate) fn score(&mut self) -> &[f64] {
+        let rows = &self.rows[..self.len];
+        let scores = &mut self.scores[..self.len];
+        // Match f64::Sum's signed identity and each row's original byte order.
+        scores.fill(-0.0);
+        for byte in 0..self.prepared.packed_bytes {
+            let table = &self.prepared.table[byte * 256..(byte + 1) * 256];
+            for (row, dot) in rows.iter().zip(scores.iter_mut()) {
+                *dot += table[usize::from(row.packed[byte])];
+            }
+        }
+        for (row, dot) in rows.iter().zip(scores.iter_mut()) {
+            *dot = (self.prepared.mean_dot + f64::from(row.scale) * *dot)
+                * self.prepared.inverse_query_norm
+                * f64::from(row.inverse_norm);
+            // Checked D<=2^32, finite f32 inputs and <=256-coordinate rotations
+            // bound |dot|<2^172, |mean_dot|<2^290, inverse query norm<2^150,
+            // and every final score<2^580: validation leaves no f64 failure.
+            debug_assert!(dot.is_finite());
+        }
+        scores
+    }
+}
+
 fn hadamard(block: &mut [f64]) {
     let mut width = 1;
     while width < block.len() {
@@ -329,6 +420,223 @@ impl PreparedTwoBit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn block_fixture(dimensions: usize, domain: usize) -> (PreparedTwoBit, Vec<Vec<u8>>) {
+        let mean = (0..dimensions)
+            .map(|i| match domain {
+                1 => {
+                    if i % 2 == 0 {
+                        f32::MAX
+                    } else {
+                        -f32::MAX
+                    }
+                }
+                _ => 0.0,
+            })
+            .collect::<Vec<_>>();
+        let query = (0..dimensions)
+            .map(|i| match domain {
+                1 => {
+                    if i % 2 == 0 {
+                        f32::MAX
+                    } else {
+                        -f32::MAX
+                    }
+                }
+                2 => {
+                    if i == 0 {
+                        f32::from_bits(1)
+                    } else {
+                        -0.0
+                    }
+                }
+                _ => ((i * 13 % 29) as f32 - 14.0) / 7.0,
+            })
+            .collect::<Vec<_>>();
+        let codec = RotatedTwoBitCodec::new(&mean, 17).unwrap();
+        let prepared = codec
+            .prepare_query(
+                &query,
+                RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap(),
+            )
+            .unwrap();
+        let scales = [
+            0.0_f32,
+            -0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.0,
+            f32::MAX,
+        ];
+        let norms = [f32::from_bits(1), f32::MIN_POSITIVE, 1.0, f32::MAX];
+        let records = (0..32)
+            .map(|lane| {
+                let mut record = vec![0; codec.record_bytes()];
+                for (byte, word) in record[..prepared.packed_bytes].iter_mut().enumerate() {
+                    *word = (lane * 73 + byte * 29) as u8;
+                }
+                record[prepared.packed_bytes..prepared.packed_bytes + 4]
+                    .copy_from_slice(&scales[lane % scales.len()].to_le_bytes());
+                record[prepared.packed_bytes + 4..]
+                    .copy_from_slice(&norms[lane % norms.len()].to_le_bytes());
+                record
+            })
+            .collect();
+        (prepared, records)
+    }
+
+    #[test]
+    fn source_block32_scalar_bit_parity_dimensions_batches_and_extreme_scalars() {
+        for dimensions in [1, 5, 257, 768, 1000, 1024] {
+            for domain in 0..3 {
+                let (prepared, records) = block_fixture(dimensions, domain);
+                for batch in 1..=32 {
+                    for chunk in records.chunks(batch) {
+                        let mut block = TwoBitScoreBlock::new(&prepared);
+                        for record in chunk {
+                            block.push(record).unwrap();
+                        }
+                        let actual = block.score();
+                        assert_eq!(actual.len(), chunk.len());
+                        for (lane, (record, &score)) in chunk.iter().zip(actual).enumerate() {
+                            assert_eq!(
+                                score.to_bits(),
+                                prepared.score(record).unwrap().to_bits(),
+                                "D{dimensions} domain{domain} batch{batch} lane{lane}"
+                            );
+                        }
+                        // Reusing the block must reset every accumulator.
+                        let again = block
+                            .score()
+                            .iter()
+                            .map(|x| x.to_bits())
+                            .collect::<Vec<_>>();
+                        let expected = chunk
+                            .iter()
+                            .map(|r| prepared.score(r).unwrap().to_bits())
+                            .collect::<Vec<_>>();
+                        assert_eq!(again, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_block32_preserves_sum_signed_zero_and_cancellation_order() {
+        for entries in [vec![-0.0], vec![1e16, 1.0, -1e16, 1.0]] {
+            let prepared = PreparedTwoBit {
+                table: entries.iter().flat_map(|&value| [value; 256]).collect(),
+                packed_bytes: entries.len(),
+                mean_dot: -0.0,
+                inverse_query_norm: 1.0,
+            };
+            let mut record = vec![0; entries.len()];
+            record.extend_from_slice(&1.0_f32.to_le_bytes());
+            record.extend_from_slice(&1.0_f32.to_le_bytes());
+            let expected = prepared.score(&record).unwrap();
+            assert_eq!(
+                expected.to_bits(),
+                if entries.len() == 1 {
+                    (-0.0_f64).to_bits()
+                } else {
+                    1.0_f64.to_bits()
+                }
+            );
+            let mut block = TwoBitScoreBlock::new(&prepared);
+            for _ in 0..32 {
+                block.push(&record).unwrap();
+            }
+            assert!(
+                block
+                    .score()
+                    .iter()
+                    .all(|x| x.to_bits() == expected.to_bits())
+            );
+            assert_eq!(block.push(&record), Err(TwoBitError::Geometry));
+        }
+    }
+
+    #[test]
+    fn source_block32_checked_scratch_matches_simultaneous_payload() {
+        let expected = std::mem::size_of::<TwoBitScoreBlock<'_, '_>>()
+            + std::mem::size_of::<ValidatedTwoBitRow<'_>>()
+            + std::mem::size_of::<[f32; 2]>()
+            + std::mem::size_of::<[f64; 3]>()
+            + std::mem::size_of::<[usize; 6]>()
+            + std::mem::size_of::<[&[u8]; 2]>()
+            + std::mem::size_of::<&[f64]>()
+            + std::mem::size_of::<f64>();
+        assert_eq!(TwoBitScoreBlock::scratch_bytes(), Some(expected));
+        if usize::BITS == 64 {
+            assert_eq!(expected, 1200);
+        }
+    }
+
+    #[test]
+    #[ignore = "bounded release primitive; root runs explicitly with --release --ignored --nocapture"]
+    fn source_block32_release_primitive() {
+        use std::{hint::black_box, time::Instant};
+        assert!(!cfg!(debug_assertions), "run this primitive with --release");
+        const ITERATIONS: usize = 64;
+        const REPETITIONS: usize = 8;
+        for dimensions in [257, 768, 1000, 1024] {
+            let (prepared, records) = block_fixture(dimensions, 0);
+            for count in [1, 7, 32] {
+                let records = &records[..count];
+                let mut block = TwoBitScoreBlock::new(&prepared);
+                for record in records {
+                    block.push(record).unwrap();
+                }
+                for (record, actual) in records.iter().zip(block.score()) {
+                    assert_eq!(prepared.score(record).unwrap().to_bits(), actual.to_bits());
+                }
+                let scalar = || {
+                    let started = Instant::now();
+                    for _ in 0..ITERATIONS {
+                        for record in records {
+                            black_box(black_box(&prepared).score(black_box(record)).unwrap());
+                        }
+                    }
+                    started.elapsed().as_nanos()
+                };
+                let blocked = || {
+                    let started = Instant::now();
+                    for _ in 0..ITERATIONS {
+                        let mut block = TwoBitScoreBlock::new(black_box(&prepared));
+                        for record in records {
+                            block.push(black_box(record)).unwrap();
+                        }
+                        black_box(block.score());
+                    }
+                    started.elapsed().as_nanos()
+                };
+                let mut scalar_ns = Vec::new();
+                let mut block_ns = Vec::new();
+                for repetition in 0..REPETITIONS {
+                    if repetition % 2 == 0 {
+                        scalar_ns.push(scalar());
+                        block_ns.push(blocked());
+                    } else {
+                        block_ns.push(blocked());
+                        scalar_ns.push(scalar());
+                    }
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "kind": "source_block32_primitive",
+                        "dimensions": dimensions,
+                        "rows": count,
+                        "iterations": ITERATIONS,
+                        "repetitions": REPETITIONS,
+                        "scalar_ns": scalar_ns,
+                        "block_ns": block_ns
+                    })
+                );
+            }
+        }
+    }
 
     #[test]
     fn required_query_scratch_matches_exact_prepare_query_budget() {
