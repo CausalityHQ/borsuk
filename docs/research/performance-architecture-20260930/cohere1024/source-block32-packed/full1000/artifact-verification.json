@@ -1,0 +1,103 @@
+{
+  "schema": "borsuk-full-artifact-server-verification-v1",
+  "rows": [
+    {
+      "file": "evidence.tar.gz",
+      "expected_sha256": "428ae295891b93abfcc6c470dd811f02dbfea93c2f4d9c957d5aa460cff87713",
+      "bytes": 74176317,
+      "metadata": {
+        "sha256": ""
+      },
+      "checksum_sha256": "QorilYkbk6v8xsRw3YEfAtv+qTwvTZyVfVqkYM/4dxM=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "428ae295891b93abfcc6c470dd811f02dbfea93c2f4d9c957d5aa460cff87713",
+      "match": true
+    },
+    {
+      "file": "release-artifacts.tar.gz",
+      "expected_sha256": "2f0123f23418779e2496309eca9befb3e1a120348892077b1af3c3076ccc68fe",
+      "bytes": 17267347,
+      "metadata": {
+        "sha256": ""
+      },
+      "checksum_sha256": "LwEj8jQYd54kljCeypvvs+GhIDSIkgd7GvPDB2zMaP4=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "2f0123f23418779e2496309eca9befb3e1a120348892077b1af3c3076ccc68fe",
+      "match": true
+    },
+    {
+      "file": "git-delivery.bundle",
+      "expected_sha256": "a1aca2fe696b01282f1f9019b8c390c773972e4ff3f1136bfbf179685a90704b",
+      "bytes": 18089,
+      "metadata": {
+        "sha256": ""
+      },
+      "checksum_sha256": "oayi/mlrASgvH5AZuMOQx3OXLk/z8RNr+/F5aFqQcEs=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "a1aca2fe696b01282f1f9019b8c390c773972e4ff3f1136bfbf179685a90704b",
+      "match": true
+    },
+    {
+      "file": "summary.json",
+      "expected_sha256": "6cacdda88db3f15ce5f2181eb9825329fee9adae7f240982e713a2884ffcabc4",
+      "bytes": 4030,
+      "metadata": {
+        "sha256": ""
+      },
+      "checksum_sha256": "bKzdqI2z8Vzl8hgeuYJTKf7pra5/JAmC5xOiiE/8q8Q=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "6cacdda88db3f15ce5f2181eb9825329fee9adae7f240982e713a2884ffcabc4",
+      "match": true
+    },
+    {
+      "file": "decision.md",
+      "expected_sha256": "41937e528fbdf94553dfbeaf44c5cf8af74cbb1547fd408d645681c4920df09d",
+      "bytes": 3272,
+      "metadata": {
+        "sha256": ""
+      },
+      "checksum_sha256": "QZN+Uo+9+UVT376vRMXPivdMuxVH/UCNZFaBxJIN8J0=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "41937e528fbdf94553dfbeaf44c5cf8af74cbb1547fd408d645681c4920df09d",
+      "match": true
+    },
+    {
+      "file": "next-plans.tar.gz",
+      "expected_sha256": "0ae30a122f312c365d724c350bb57ace919ec94a0621810ee996bfd3b30b7dd5",
+      "bytes": 10405,
+      "metadata": {
+        "sha256": "0ae30a122f312c365d724c350bb57ace919ec94a0621810ee996bfd3b30b7dd5"
+      },
+      "checksum_sha256": "CuMKEi8xLDZdckw1C7V6zpGeyUoGIYEO6Za/07MLfdU=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "0ae30a122f312c365d724c350bb57ace919ec94a0621810ee996bfd3b30b7dd5",
+      "match": true
+    },
+    {
+      "file": "io128-decision.json",
+      "expected_sha256": "411156344c5ac5fd8b4d738c1951c1ca4e66054f9784768b8066bdcbdef9cef9",
+      "bytes": 760,
+      "metadata": {
+        "sha256": "411156344c5ac5fd8b4d738c1951c1ca4e66054f9784768b8066bdcbdef9cef9"
+      },
+      "checksum_sha256": "QRFWNExaxf2LTXOMGVHByk5mBU+XhHaLgGa9y975zvk=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "411156344c5ac5fd8b4d738c1951c1ca4e66054f9784768b8066bdcbdef9cef9",
+      "match": true
+    },
+    {
+      "file": "metadata-delivery.bundle",
+      "expected_sha256": "8b627f1da46d142201fe190ed7785736ca4723c4d642951638057976f5a06bae",
+      "bytes": 3769,
+      "metadata": {
+        "sha256": "8b627f1da46d142201fe190ed7785736ca4723c4d642951638057976f5a06bae"
+      },
+      "checksum_sha256": "i2J/HaRtFCIB/hkO13hXNspHI8TWQpUWOAV5dvWga64=",
+      "checksum_type": "FULL_OBJECT",
+      "actual_sha256": "8b627f1da46d142201fe190ed7785736ca4723c4d642951638057976f5a06bae",
+      "match": true
+    }
+  ],
+  "all_match": true,
+  "note": "Original objects remain immutable. Some sha256 user-metadata keys are empty; verification uses independent S3 FULL_OBJECT SHA256 checksums, not those empty fields."
+}

@@ -14,5 +14,7 @@
     "io128-decision.json": "411156344c5ac5fd8b4d738c1951c1ca4e66054f9784768b8066bdcbdef9cef9"
   },
   "product_complete": false,
-  "matched_vendor_win": false
+  "matched_vendor_win": false,
+  "artifact_verification_path": "artifact-verification.json",
+  "metadata_upload_note": "Original user metadata sha256 fields are empty for some objects; independent S3 FULL_OBJECT SHA256 verification matches all eight expected digests. Preserve originals; no scientific rerun."
 }
