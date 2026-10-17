@@ -11196,11 +11196,13 @@ mod source_walk_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn source_auth_offload_generation_parity_and_admission() {
+        let _serial = crate::sq8_s3_range::SOURCE_AUTH_TEST_SERIAL.lock().await;
         assert_source_auth_offload_generation(false).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn source_auth_offload_capsule_parity_and_failures() {
+        let _serial = crate::sq8_s3_range::SOURCE_AUTH_TEST_SERIAL.lock().await;
         assert_source_auth_offload_generation(true).await;
     }
 

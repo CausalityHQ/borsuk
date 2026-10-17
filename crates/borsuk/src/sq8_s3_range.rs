@@ -70,6 +70,10 @@ pub(crate) fn authenticate_inline<T>(
     (result, probe)
 }
 
+#[cfg(test)]
+pub(crate) static SOURCE_AUTH_TEST_SERIAL: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 type SourceAuthJob = Box<dyn FnOnce() + Send + 'static>;
 
 // Weak ownership lets the last query close and join the pool. The worker lease also
@@ -3960,6 +3964,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_auth_shared_queries_admit_without_batch_serialization() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         use std::time::Duration;
         let first = SourceAuthWorkers::new(2).await.unwrap();
         let second = tokio::time::timeout(Duration::from_millis(100), SourceAuthWorkers::new(2))
@@ -3973,6 +3978,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_auth_shared_queries_download_while_compute_is_held() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         use std::sync::atomic::Ordering::SeqCst;
         let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
         let ranges: Vec<_> = (0..9)
@@ -4055,7 +4061,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_auth_shared_verifier_panic_preserves_both_workers() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
+        use std::sync::atomic::Ordering::SeqCst;
+        let first = SourceAuthWorkers::new(2).await.unwrap();
+        let second = SourceAuthWorkers::new(2).await.unwrap();
+        assert!(Arc::ptr_eq(&first.pool, &second.pool));
+        let failed = first
+            .authenticate::<()>(None, || panic!("expected SOURCE verifier panic"))
+            .await;
+        assert!(matches!(failed.0, Err(RangeFetchError::UnexpectedMetadata)));
+        drop(first);
+        let gate = Arc::new(ComputeGate::default());
+        let authenticate = |gate: Arc<ComputeGate>| {
+            second.authenticate(None, move || {
+                gate.hold();
+                Ok(())
+            })
+        };
+        let (one, two, ()) = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            tokio::join!(
+                authenticate(Arc::clone(&gate)),
+                authenticate(Arc::clone(&gate)),
+                async {
+                    while gate.entered.load(SeqCst) < 2 {
+                        tokio::task::yield_now().await;
+                    }
+                    gate.release();
+                }
+            )
+        })
+        .await
+        .expect("both workers must survive a verifier panic");
+        one.0.unwrap();
+        two.0.unwrap();
+        assert_eq!(gate.peak.load(SeqCst), 2);
+        drop(second);
+        assert_eq!(SOURCE_AUTH_THREADS.available_permits(), SOURCE_AUTH_WORKERS);
+    }
+
+    #[test]
+    fn source_auth_shared_pool_reuses_across_runtimes_and_releases_last_owner() {
+        let first_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _serial = first_runtime.block_on(SOURCE_AUTH_TEST_SERIAL.lock());
+        let first = first_runtime.block_on(SourceAuthWorkers::new(2)).unwrap();
+        let old_pool = Arc::downgrade(&first.pool);
+        let second_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let second = second_runtime.block_on(SourceAuthWorkers::new(2)).unwrap();
+        assert!(Arc::ptr_eq(&first.pool, &second.pool));
+        drop(first);
+        drop(first_runtime);
+        assert_eq!(
+            second_runtime
+                .block_on(second.authenticate(None, || Ok(41usize)))
+                .0
+                .unwrap(),
+            41
+        );
+        drop(second);
+        assert!(old_pool.upgrade().is_none());
+        assert_eq!(SOURCE_AUTH_THREADS.available_permits(), SOURCE_AUTH_WORKERS);
+        let replacement = second_runtime.block_on(SourceAuthWorkers::new(2)).unwrap();
+        assert_ne!(old_pool.as_ptr(), Arc::as_ptr(&replacement.pool));
+        drop(replacement);
+        assert_eq!(SOURCE_AUTH_THREADS.available_permits(), SOURCE_AUTH_WORKERS);
+    }
+
+    #[tokio::test]
     async fn source_auth_offload_shared_admission_and_cancelled_job_keep_permits() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         use std::time::Duration;
         let workers = SourceAuthWorkers::new(2).await.unwrap();
         let lifetime = Arc::downgrade(&workers.lifetime);
@@ -4100,6 +4180,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_auth_offload_parity_and_ordered_errors() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         for (corrupt, transport) in [(None, None), (Some(0), Some(1)), (Some(1), Some(0))] {
             let mut control = None;
             for mode in [SourceAuthentication::Inline, SourceAuthentication::Offload2] {
@@ -4202,6 +4283,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_auth_offload_polls_downloads_and_bounds_compute() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         use std::sync::atomic::Ordering::SeqCst;
         let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
         let ranges: Vec<_> = (0..9)
@@ -4272,6 +4354,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_auth_offload_cancellation_joins_workers() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
         use std::sync::atomic::Ordering::SeqCst;
         let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
         let ranges: Vec<_> = (0..9)
