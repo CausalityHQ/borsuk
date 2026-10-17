@@ -1,0 +1,36 @@
+{
+  "status": "INDEPENDENTLY_VERIFIED_NATIVE_COMPILER_AND_CORRECTNESS",
+  "source_commit": "6bcef79eebfcaac85510da0d4f3680114cc060c2",
+  "instance": "i-0b2aa991226835621",
+  "source_files_matching_git_bytes_and_modes": 517,
+  "query_elf_sha256": "0621e025b5c88c66f83c3588a1d8c41d5d57a0421f61f6ec2241602a0f9622fe",
+  "reader_elf_sha256": "2a44cd165ab1baa134e3801b73849cbe4f51084e27e64a6fd2bf01db110eebf3",
+  "library_test_pass_executions": 109,
+  "reader_runner_test_pass_executions": 93,
+  "mandatory_profile_tests": 19,
+  "each_selected_exactly_one": true,
+  "cpu_vs_wait_oracle_pass": true,
+  "raw_observer_control_pass": true,
+  "cache_failure_red": {
+    "observed": 512000,
+    "expected": 516096,
+    "exit": 101
+  },
+  "cache_failure_green": {
+    "exit": 0,
+    "selected": 1
+  },
+  "clippy_correctness_and_suspicious_exit": 0,
+  "release_exit": 0,
+  "shim_unset_workspace_test_build_exit": 0,
+  "library_source_before_after_equal": true,
+  "full_source_before_after_equal": true,
+  "root_library_evidence": "cpu-profile-composed-lib-a0001",
+  "root_assurance_evidence": "cpu-profile-final-assurance-a0001",
+  "tracing_disabled_default": true,
+  "raw_scope_cpu_includes_observer_and_first_touch": true,
+  "automatic_observer_subtraction": false,
+  "acquisition_residual_is_tls": false,
+  "performance_qualification": false,
+  "vendor_win": false
+}

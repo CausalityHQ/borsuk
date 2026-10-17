@@ -1,0 +1,13 @@
+# CPU-attribution diagnostic closure
+Source:6bcef79eebfcaac85510da0d4f3680114cc060c2. Query ELF0621e025b5c88c66f83c3588a1d8c41d5d57a0421f61f6ec2241602a0f9622fe.
+One frozen32-query A1/B1/B2/A2 tracing-off/on panel, native+strict-reader exits0. Every cell has309/320 sample hits and identical ordered ranks, score bits, physical rows, plans, traces and logical charges (canonical SHAcd3eb965e30795248e098ab41fd1f3324b2c8f088c1664493ccba0e33450c85b).
+This is diagnostic sample evidence, not population recall or p95 and not a vendor comparison. The existing full1000 flat64 incumbent remains97.83%recall/p95221.573813ms/6.1568967sequentialQPS at source6cf56cd.
+Tracing-off64 pooled observations CPU7.282445502s,wall10.969140270s; tracing-on CPU7.834882050s,wall10.260780164s. CPU ratio1.075858659. Wall ratio0.935422459 is order-sensitive and not a speedup claim.
+On64 observations average queryCPU122.420ms,wall160.325ms. Nonoverlapping coarse CPU: discovery1.542ms; SOURCEphase62.475ms; source nomination/planning32.730ms (cover nested0.040ms); SQ8phase25.594ms. SOURCE raw components:copy7.398ms,allocation0.310ms,authentication16.931ms,unattributed37.835ms. SQ8 raw components:copy1.847ms,authentication5.402ms,ranking5.478ms,unattributed12.800ms. Child scopes must not be added again to parent phases.
+Rawcopy includes observer/firsttouch; do not infer pure memcpy cost or automatically subtract calibration. Residual is not isolated TLS/network CPU.
+Next bounded decision: audit SOURCE nomination/planning, the largest clearly identified synchronous compute scope, before choosing batching, query-table reuse or bounded compute parallelism. A fresh contextless planning specialist d26792efa5f4453b is considering falsifiable options from these facts without source/cloud access. No new implementation or performance campaign is authorized by that consultation alone.
+Keep current flat64 serving defaults. CPU attribution stays opt-in. Preserve previous layout/fanout/scoring experiment dispositions; no threshold reinterpretation.
+
+Immutable evidence namespace: s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/cpu-attribution-closure-a0001/.
+The source package was assembled at the qualified native revision; its original pending label records assembly time. The separately pinned native-verification receipt establishes subsequent qualification. The delivery commit adds only these decision/verification documents; all517 native/support file identities remain equal to the qualified source.
+Infrastructure closure and termination are recorded by the final terminal.json in that namespace, published after independent cleanup verification.
