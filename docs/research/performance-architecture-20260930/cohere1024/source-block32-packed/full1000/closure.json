@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-packed32-full1000-closure-links-v1",
+  "integrated_code_commit": "b7976624fb75a8dd4c58ede0cc6cee13a439b7a1",
+  "qualified_native_source": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+  "same_entire_cargo_crates_and_testbuild_source": true,
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261017/source-block32-packed-full1000-closure-a0002/",
+  "artifacts": {
+    "evidence.tar.gz": "428ae295891b93abfcc6c470dd811f02dbfea93c2f4d9c957d5aa460cff87713",
+    "release-artifacts.tar.gz": "2f0123f23418779e2496309eca9befb3e1a120348892077b1af3c3076ccc68fe",
+    "git-delivery.bundle": "a1aca2fe696b01282f1f9019b8c390c773972e4ff3f1136bfbf179685a90704b",
+    "summary.json": "6cacdda88db3f15ce5f2181eb9825329fee9adae7f240982e713a2884ffcabc4",
+    "next-plans.tar.gz": "0ae30a122f312c365d724c350bb57ace919ec94a0621810ee996bfd3b30b7dd5",
+    "io128-decision.json": "411156344c5ac5fd8b4d738c1951c1ca4e66054f9784768b8066bdcbdef9cef9"
+  },
+  "product_complete": false,
+  "matched_vendor_win": false
+}

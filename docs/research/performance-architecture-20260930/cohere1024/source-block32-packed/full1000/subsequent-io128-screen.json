@@ -1,0 +1,20 @@
+{
+  "schema": "borsuk-source-io128-decision-v1",
+  "status": "VALID_SCREEN_NO_ADOPTION",
+  "scorer": "same original a367 ELF both arms",
+  "queries": 32,
+  "repetitions_per_arm": 2,
+  "independent_queries": 32,
+  "recall_hits": 309,
+  "recall_denominator": 320,
+  "semantics_and_all_logical_charges_equal": true,
+  "cpu_ratio": 1.0381543229641128,
+  "wall_ratio": 1.227681136574375,
+  "source_wall_ratio": 1.4069214911784302,
+  "full1000": "UNRUN",
+  "default_fetch_parallelism": 64,
+  "artifact": "source-io128-abba32-a0001/summary.v1.json",
+  "original_summary_sha256": "0f0f2b8042b9fcc80c18fbf6ac1969b7a74b46240748c38418a81c2c1d21c669",
+  "next_action": "diagnose scheduling versus transport; no blind higher-concurrency promotion",
+  "vendor_win": false
+}
