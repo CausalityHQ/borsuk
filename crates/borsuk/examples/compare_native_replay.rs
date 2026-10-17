@@ -13705,6 +13705,8 @@ mod tests {
                         "cpu_profile",
                         "cpu_unknown",
                         "poll_cpu",
+                        "auth_reads",
+                        "single_reads",
                     ] {
                         let mut bad = rows.clone();
                         let diag = &mut bad[query]["diagnostic"];
@@ -13718,6 +13720,13 @@ mod tests {
                             "cpu_unknown" => diag["cpu_profile"]["unknown"] = json!(0),
                             "poll_cpu" => {
                                 diag["cpu_profile"]["acquisition_poll_cpu"] = json!("measured")
+                            }
+                            "auth_reads" => {
+                                diag["source_range_trace"]["cpu"]["authentication"]["clock_reads"] =
+                                    json!(3)
+                            }
+                            "single_reads" => {
+                                diag["cpu_profile"]["discovery"]["clock_reads"] = json!(8)
                             }
                             _ => unreachable!(),
                         }

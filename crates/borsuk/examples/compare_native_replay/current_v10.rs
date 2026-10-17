@@ -674,15 +674,21 @@ pub(super) fn historical_semantics() -> Value {
         "unset":"a boundary never reached is null, never a fabricated timestamp"})
 }
 
-fn cpu_wall(value: &Value) -> Result<()> {
+fn cpu_wall(value: &Value, quantum: u64, aggregate: bool) -> Result<()> {
     if value.is_null() {
         return Ok(());
     }
     fields(value, "thread_cpu_ns wall_ns clock_reads")?;
     number(&value["thread_cpu_ns"])?;
     number(&value["wall_ns"])?;
+    let reads = number(&value["clock_reads"])?;
     require(
-        number(&value["clock_reads"])? > 0 && number(&value["clock_reads"])?.is_multiple_of(4),
+        reads > 0
+            && if aggregate {
+                reads.is_multiple_of(quantum)
+            } else {
+                reads == quantum
+            },
         "synchronous CPU scope clock accounting",
     )
 }
@@ -699,7 +705,12 @@ fn range_cpu(value: &Value) -> Result<()> {
         "owned_copy",
         "authentication",
     ] {
-        cpu_wall(&value[key])?;
+        // Authentication reuses wall stamps; the other scopes add both clock pairs.
+        cpu_wall(
+            &value[key],
+            if key == "authentication" { 2 } else { 4 },
+            true,
+        )?;
     }
     number(&value["collector_copied_bytes"])?;
     number(&value["owned_copied_bytes"])?;
@@ -710,7 +721,7 @@ fn profile_shape(diag: &Value) -> Result<()> {
     let profile = &diag["cpu_profile"];
     fields(profile, "discovery cover planning acquisition_poll_cpu")?;
     for key in ["discovery", "cover", "planning"] {
-        cpu_wall(&profile[key])?;
+        cpu_wall(&profile[key], 4, false)?;
     }
     require(
         profile["acquisition_poll_cpu"] == "unresolved_not_instrumented",
@@ -756,7 +767,7 @@ fn profile_shape(diag: &Value) -> Result<()> {
         last.is_null() || last.as_array().is_some_and(|r| r.len() == 22),
         "SOURCE last range width",
     )?;
-    cpu_wall(&sq8["regroup"])?;
+    cpu_wall(&sq8["regroup"], 4, false)?;
     number(&sq8["regroup_copied_bytes"])?;
     number(&sq8["rank_clock_reads"])?;
     require(
@@ -2550,6 +2561,67 @@ mod tests {
         assert_eq!(report["qualified"], false);
         assert_eq!(report["comparisons"].as_array().unwrap().len(), 2);
     }
+    #[test]
+    fn cpu_profile_scope_clock_quanta_and_strict_counts() {
+        let scope = |reads: Value| json!({"thread_cpu_ns":1,"wall_ns":2,"clock_reads":reads});
+        let empty = serde_json::to_value(borsuk::sq8_s3_range::RangeCpu::default()).unwrap();
+        range_cpu(&empty).unwrap();
+        for (field, quantum) in [
+            ("authentication", 2),
+            ("collector_allocation", 4),
+            ("collector_copy", 4),
+            ("owned_allocation", 4),
+            ("owned_copy", 4),
+        ] {
+            for calls in [1, 3, 5] {
+                let mut cpu = empty.clone();
+                cpu[field] = scope(json!(quantum * calls));
+                range_cpu(&cpu).unwrap();
+            }
+            for reads in [
+                json!(0),
+                json!(1),
+                json!(3),
+                json!(5),
+                json!(-1),
+                json!(1.5),
+                json!("2"),
+                Value::Null,
+            ] {
+                let mut cpu = empty.clone();
+                cpu[field] = scope(reads.clone());
+                assert!(range_cpu(&cpu).is_err(), "{field}: {reads}");
+            }
+        }
+        for field in [
+            "collector_allocation",
+            "collector_copy",
+            "owned_allocation",
+            "owned_copy",
+        ] {
+            let mut cpu = empty.clone();
+            cpu[field] = scope(json!(2));
+            assert!(
+                range_cpu(&cpu).is_err(),
+                "{field} accepted authentication quantum"
+            );
+        }
+        cpu_wall(&Value::Null, 4, false).unwrap();
+        cpu_wall(&scope(json!(4)), 4, false).unwrap();
+        for reads in [0, 2, 8, 12] {
+            assert!(
+                cpu_wall(&scope(json!(reads)), 4, false).is_err(),
+                "single scope: {reads}"
+            );
+        }
+        let mut missing = scope(json!(4));
+        missing.as_object_mut().unwrap().remove("wall_ns");
+        assert!(cpu_wall(&missing, 4, false).is_err());
+        let mut unknown = scope(json!(4));
+        unknown["extra"] = json!(0);
+        assert!(cpu_wall(&unknown, 4, false).is_err());
+    }
+
     #[test]
     fn historical_trace_abi_is_independent_of_cpu_profile() {
         assert_eq!(historical_trace_retained(30), 8160);
