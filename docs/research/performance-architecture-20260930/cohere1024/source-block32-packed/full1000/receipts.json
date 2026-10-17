@@ -1,0 +1,895 @@
+{
+  "schema": "borsuk-source-block32-packed-full1000-receipts-v1",
+  "decision": "ADOPT_USEFUL_LIBRARY_INCREMENT",
+  "base_commit": "f58a4e6a48fc5ae3d3241816b89ba16e36eb8478",
+  "candidate_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+  "control_commit_prefix": "d014",
+  "code_integration_authority": "parent; this commit changes documentation only",
+  "product_goal": "NOT_COMPLETE",
+  "matched_vendor_win": "UNPROVEN",
+  "host": {
+    "instance": "i-0f168289eda791b07",
+    "region": "eu-central-1",
+    "instance_type": "m6i.4xlarge",
+    "market": "Spot",
+    "retained_ebs_volume_prefix": "vol-025"
+  },
+  "panel": {
+    "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002",
+    "unit": "43f74a8e2fa04bf78beaae7f20f283ee",
+    "exits": {
+      "runner.exit": 0,
+      "A1.exit": 0,
+      "A1.reader.exit": 0,
+      "B1.exit": 0,
+      "B1.reader.exit": 0,
+      "B2.exit": 0,
+      "B2.reader.exit": 0,
+      "A2.exit": 0,
+      "A2.reader.exit": 0
+    },
+    "metadata": {
+      "terminal.txt": "full NATIVE_AND_STRICT_READERS_PASSED_PARITY_ANALYSIS_PENDING\n",
+      "raw-measurement.terminal.txt": "ALL_FOUR_NATIVE_CELLS_TERMINAL0\n",
+      "start.utc": "2026-10-17T13:02:28Z\n",
+      "end.utc": "2026-10-17T13:13:24Z\n",
+      "cgroup.txt": "cpu.max=400000 100000\nmemory.max=17179869184\nmemory.swap.max=0\npids.max=1024\ncpuset.cpus.effective=0-3\n",
+      "artifacts.before.sha256": "a3678661701d97541c66632bd4b7bb73d5fa0fcd0d392266c523b3b60d9de415  /mnt/borsuk-workspace/evidence/source-block32-native-a0003/artifacts/check_cohere_native_baseline\n9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/check_cohere_native_baseline\n0e446a2a9e4abc6499a54445993ecb62917a486be39f36ee04a864bf1674e103  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/compare_native_replay\n",
+      "artifacts.after.sha256": "a3678661701d97541c66632bd4b7bb73d5fa0fcd0d392266c523b3b60d9de415  /mnt/borsuk-workspace/evidence/source-block32-native-a0003/artifacts/check_cohere_native_baseline\n9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/check_cohere_native_baseline\n0e446a2a9e4abc6499a54445993ecb62917a486be39f36ee04a864bf1674e103  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/compare_native_replay\n",
+      "A1.terminal.txt": "A1 NATIVE_TERMINAL0\n",
+      "B1.terminal.txt": "B1 NATIVE_TERMINAL0\n",
+      "B2.terminal.txt": "B2 NATIVE_TERMINAL0\n",
+      "A2.terminal.txt": "A2 NATIVE_TERMINAL0\n"
+    },
+    "summary_sha256": "6cacdda88db3f15ce5f2181eb9825329fee9adae7f240982e713a2884ffcabc4",
+    "semantic_sha256_metadata": "17ecb612b4df5991018d334e2ebad78616a04a20f17b167d49464a0e8a937312  /mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A1.semantic.v1.jsonl\n17ecb612b4df5991018d334e2ebad78616a04a20f17b167d49464a0e8a937312  /mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A2.semantic.v1.jsonl\n17ecb612b4df5991018d334e2ebad78616a04a20f17b167d49464a0e8a937312  /mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B1.semantic.v1.jsonl\n17ecb612b4df5991018d334e2ebad78616a04a20f17b167d49464a0e8a937312  /mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B2.semantic.v1.jsonl\n",
+    "physical_parity_check": true,
+    "transport": {
+      "A1": {
+        "cell": "A1",
+        "queries": 1000,
+        "physical_attempts": 139913,
+        "physical_gets": 139913,
+        "physical_bytes": 39690200320,
+        "transport_failures": 0,
+        "stream_failures": 0,
+        "logical_gets": 139913,
+        "logical_bytes": 39690200320
+      },
+      "B1": {
+        "cell": "B1",
+        "queries": 1000,
+        "physical_attempts": 139913,
+        "physical_gets": 139913,
+        "physical_bytes": 39690200320,
+        "transport_failures": 0,
+        "stream_failures": 0,
+        "logical_gets": 139913,
+        "logical_bytes": 39690200320
+      },
+      "B2": {
+        "cell": "B2",
+        "queries": 1000,
+        "physical_attempts": 139913,
+        "physical_gets": 139913,
+        "physical_bytes": 39690200320,
+        "transport_failures": 0,
+        "stream_failures": 0,
+        "logical_gets": 139913,
+        "logical_bytes": 39690200320
+      },
+      "A2": {
+        "cell": "A2",
+        "queries": 1000,
+        "physical_attempts": 139913,
+        "physical_gets": 139913,
+        "physical_bytes": 39690200320,
+        "transport_failures": 0,
+        "stream_failures": 0,
+        "logical_gets": 139913,
+        "logical_bytes": 39690200320
+      }
+    }
+  },
+  "gates": {
+    "correctness": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final",
+      "metadata": {
+        "artifacts.sha256": "a57664a2a0c855ce0ff3a25549bc83e1ecb281c0664e7c4f48ae9d84cf384f81  /mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final/change.bundle\n9465c43905e7b5e23fc8e02504e52e45506ef2e5c9841c98587bce15dbb88fc3  /mnt/borsuk-workspace/evidence/source-block32-packed-source-a0001/final/change.patch\n",
+        "clippy.exit": "0\n",
+        "commit.txt": "commit 7acbbb82d48078f46c0a163614db39eeee15afc7\nAuthor:     Roman Bartusiak <riomus@gmail.com>\nAuthorDate: Sat Oct 17 12:43:05 2026 +0000\nCommit:     Roman Bartusiak <riomus@gmail.com>\nCommitDate: Sat Oct 17 12:43:05 2026 +0000\n\n    Pack independent rows in the current SOURCE block scorer\n",
+        "fmt.exit": "0\n",
+        "generation.exit": "0\n",
+        "integration.exit": "0\n",
+        "rotated.exit": "0\n",
+        "scalar-control.exit": "0\n",
+        "terminal": "PASS\n",
+        "workspace-test-build.exit": "0\n"
+      }
+    },
+    "release": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001",
+      "metadata": {
+        "artifacts.sha256": "d1b001f2aadffb2e36b10f081e47ff03dce6f66f290df9aaa48c8d441ff5f074  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/build_sq8_source\n9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/check_cohere_native_baseline\n0e446a2a9e4abc6499a54445993ecb62917a486be39f36ee04a864bf1674e103  /mnt/borsuk-workspace/evidence/source-block32-packed-release-a0001/artifacts/compare_native_replay\n",
+        "build.exit": "0\n",
+        "normalization-test.exit": "0\n",
+        "runner.exit": "0\n",
+        "source.commit": "7acbbb82d48078f46c0a163614db39eeee15afc7\n",
+        "terminal.exit": "0\n"
+      }
+    },
+    "runtime_gates": {
+      "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-runtime-gates-a0001",
+      "metadata": {
+        "admission.terminal.txt": "admission COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+        "canary.terminal.txt": "canary COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+        "candidate.admission.exit": "0\n",
+        "candidate.admission.reader.exit": "0\n",
+        "candidate.canary.exit": "0\n",
+        "candidate.canary.reader.exit": "0\n",
+        "control.admission.exit": "0\n",
+        "control.admission.reader.exit": "0\n",
+        "control.canary.exit": "0\n",
+        "control.canary.reader.exit": "0\n",
+        "runner.exit": "0\n",
+        "terminal.txt": "gates NATIVE_AND_STRICT_READERS_PASSED_PARITY_ANALYSIS_PENDING\n"
+      }
+    }
+  },
+  "next_host_gates": {
+    "/mnt/borsuk-workspace/evidence/source-block32-packed-host-a0002": {
+      "setup.exit": "0\n"
+    },
+    "/mnt/borsuk-workspace/evidence/source-block32-packed-runtime-gates-a0002": {
+      "control.canary.reader.exit": "0\n",
+      "candidate.admission.reader.exit": "0\n",
+      "candidate.canary.reader.exit": "0\n",
+      "canary.terminal.txt": "canary COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+      "candidate.canary.exit": "0\n",
+      "runner.exit": "0\n",
+      "terminal.txt": "gates NATIVE_AND_STRICT_READERS_PASSED_PARITY_ANALYSIS_PENDING\n",
+      "admission.terminal.txt": "admission COMPLETE_NOT_PERFORMANCE_EVIDENCE\n",
+      "control.admission.exit": "0\n",
+      "control.canary.exit": "0\n",
+      "control.admission.reader.exit": "0\n",
+      "candidate.admission.exit": "0\n"
+    }
+  },
+  "reader_headers": {
+    "A1": {
+      "reader_config_path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A1.reader-config.json",
+      "reader_config_sha256": "eef09784bb62e7ff049e6d9ca37076561cd4d80c8eb9970b9555f49630c74791",
+      "input_metadata": {
+        "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A1.jsonl",
+        "sha256": "d4f201a7c9d9798256ecd919f1b4d19fdf859897afa5f6e597ef7120860e828b",
+        "bytes": 37880962
+      },
+      "expected_identity": {
+        "billed_bytes": null,
+        "billed_requests": null,
+        "binary_sha256": "a3678661701d97541c66632bd4b7bb73d5fa0fcd0d392266c523b3b60d9de415",
+        "codec_source_sha256": "1e50138edad0ca4bace95fa367dce02b83a06f2f7eaea248b40432a8638c108a",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "config_sha256": "29eb0658cea0cdbcd645b22dfba479dc5839ea59e1cb983d76bd84475f4d68f1",
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "fetch_parallelism": 64,
+        "generation_source_sha256": "472be3e27c19490f171eda97195b5f514d67301df2f6c20caf3929029e642a86",
+        "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "max_memory_bytes": 2147483648,
+        "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+        "phase": "identity",
+        "physical_s3_measured": false,
+        "range_scheduler_owner": "library",
+        "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+        "router_source_sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8",
+        "runner_source_sha256": "6a31cfbd34db122f20d808cd842acdda97937ada9a58792956370e8a62f6261d",
+        "s3_credential_source": "imds_instance_role_only",
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "schema": "borsuk-cohere-native-baseline-result-v16",
+        "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_capsule_source_sha256": "599e7c0f3f69dcf7a2d7855721379c81d2d4001ab6d4b8d764291978b993ac2e",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_source_sha256": "1af76cc3aea861858477cc75b16c711571908305dba24e4ca5ad121d004e7a78",
+        "sq8_range_split": null,
+        "truth_opened": false,
+        "unread_bytes": null,
+        "wire_bytes": null,
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      },
+      "expected_bound_inputs": {
+        "backend": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "kind": "s3",
+          "physical_prefix": "research/native-library-check/source-capsule-pair-a0001-20261016",
+          "region": "eu-central-1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "corpus_intervals": [
+          {
+            "end": 100000,
+            "start": 0
+          },
+          {
+            "end": 1001000,
+            "start": 101000
+          }
+        ],
+        "corpus_source_first": 0,
+        "count": 1000,
+        "credential_source": "imds_instance_role_only",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+        "dimensions": 1024,
+        "execution": {
+          "mode": "full"
+        },
+        "fetch_parallelism": 64,
+        "generation_prefix": "semantic/flat-v11-20261017-a0001/generations/824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "generation_root_sha256": "824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "k": 10,
+        "max_memory_bytes": 2147483648,
+        "metric": "cosine",
+        "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+        "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+        "phase": "bound_inputs",
+        "producer_authority": {
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+        },
+        "profile": "scale1m",
+        "query_source_first": 100000,
+        "range_scheduler_owner": "library",
+        "requests_bytes": 4096000,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_interval": {
+          "end": 101000,
+          "start": 100000
+        },
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "rows": 1000000,
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_cache": "off",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_split": null,
+        "tie_rule": "corpus_ordinal_ascending",
+        "truth_bytes": 80000,
+        "truth_opened": false,
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      }
+    },
+    "B1": {
+      "reader_config_path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B1.reader-config.json",
+      "reader_config_sha256": "88af50a37ea6932ac9523d8d681f43f9b6ac404fbccef28c384bb4579d76ec43",
+      "input_metadata": {
+        "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B1.jsonl",
+        "sha256": "9764eed40cf6c465653caa730690c0412bd6838a80d6789a752718586fa47d35",
+        "bytes": 37880442
+      },
+      "expected_identity": {
+        "billed_bytes": null,
+        "billed_requests": null,
+        "binary_sha256": "9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3",
+        "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "config_sha256": "29eb0658cea0cdbcd645b22dfba479dc5839ea59e1cb983d76bd84475f4d68f1",
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "fetch_parallelism": 64,
+        "generation_source_sha256": "782c05b1cdbf421b474d1563e72c4adf8aaf54451f46a6971cf6f67b7c9aed33",
+        "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "max_memory_bytes": 2147483648,
+        "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+        "phase": "identity",
+        "physical_s3_measured": false,
+        "range_scheduler_owner": "library",
+        "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+        "router_source_sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8",
+        "runner_source_sha256": "6a31cfbd34db122f20d808cd842acdda97937ada9a58792956370e8a62f6261d",
+        "s3_credential_source": "imds_instance_role_only",
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "schema": "borsuk-cohere-native-baseline-result-v16",
+        "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_capsule_source_sha256": "599e7c0f3f69dcf7a2d7855721379c81d2d4001ab6d4b8d764291978b993ac2e",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_source_sha256": "1af76cc3aea861858477cc75b16c711571908305dba24e4ca5ad121d004e7a78",
+        "sq8_range_split": null,
+        "truth_opened": false,
+        "unread_bytes": null,
+        "wire_bytes": null,
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      },
+      "expected_bound_inputs": {
+        "backend": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "kind": "s3",
+          "physical_prefix": "research/native-library-check/source-capsule-pair-a0001-20261016",
+          "region": "eu-central-1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "corpus_intervals": [
+          {
+            "end": 100000,
+            "start": 0
+          },
+          {
+            "end": 1001000,
+            "start": 101000
+          }
+        ],
+        "corpus_source_first": 0,
+        "count": 1000,
+        "credential_source": "imds_instance_role_only",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+        "dimensions": 1024,
+        "execution": {
+          "mode": "full"
+        },
+        "fetch_parallelism": 64,
+        "generation_prefix": "semantic/flat-v11-20261017-a0001/generations/824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "generation_root_sha256": "824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "k": 10,
+        "max_memory_bytes": 2147483648,
+        "metric": "cosine",
+        "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+        "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+        "phase": "bound_inputs",
+        "producer_authority": {
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+        },
+        "profile": "scale1m",
+        "query_source_first": 100000,
+        "range_scheduler_owner": "library",
+        "requests_bytes": 4096000,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_interval": {
+          "end": 101000,
+          "start": 100000
+        },
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "rows": 1000000,
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_cache": "off",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_split": null,
+        "tie_rule": "corpus_ordinal_ascending",
+        "truth_bytes": 80000,
+        "truth_opened": false,
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      }
+    },
+    "B2": {
+      "reader_config_path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B2.reader-config.json",
+      "reader_config_sha256": "f95fb7db344c5dfcdc3c7c08ac5e394543d99247e19643a47b20b33d1687164c",
+      "input_metadata": {
+        "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/B2.jsonl",
+        "sha256": "f4a1c06adf819ca73b0f6fddee17edee9cfdb91995bfd2cecb6d9f46dbf0d50b",
+        "bytes": 37880450
+      },
+      "expected_identity": {
+        "billed_bytes": null,
+        "billed_requests": null,
+        "binary_sha256": "9a5134dcd9f9e4b6544de501c937a1973c0e6a09b2015af3b7abc764a47deec3",
+        "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "config_sha256": "29eb0658cea0cdbcd645b22dfba479dc5839ea59e1cb983d76bd84475f4d68f1",
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "fetch_parallelism": 64,
+        "generation_source_sha256": "782c05b1cdbf421b474d1563e72c4adf8aaf54451f46a6971cf6f67b7c9aed33",
+        "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "max_memory_bytes": 2147483648,
+        "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+        "phase": "identity",
+        "physical_s3_measured": false,
+        "range_scheduler_owner": "library",
+        "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+        "router_source_sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8",
+        "runner_source_sha256": "6a31cfbd34db122f20d808cd842acdda97937ada9a58792956370e8a62f6261d",
+        "s3_credential_source": "imds_instance_role_only",
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "schema": "borsuk-cohere-native-baseline-result-v16",
+        "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_capsule_source_sha256": "599e7c0f3f69dcf7a2d7855721379c81d2d4001ab6d4b8d764291978b993ac2e",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_source_sha256": "1af76cc3aea861858477cc75b16c711571908305dba24e4ca5ad121d004e7a78",
+        "sq8_range_split": null,
+        "truth_opened": false,
+        "unread_bytes": null,
+        "wire_bytes": null,
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      },
+      "expected_bound_inputs": {
+        "backend": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "kind": "s3",
+          "physical_prefix": "research/native-library-check/source-capsule-pair-a0001-20261016",
+          "region": "eu-central-1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "corpus_intervals": [
+          {
+            "end": 100000,
+            "start": 0
+          },
+          {
+            "end": 1001000,
+            "start": 101000
+          }
+        ],
+        "corpus_source_first": 0,
+        "count": 1000,
+        "credential_source": "imds_instance_role_only",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+        "dimensions": 1024,
+        "execution": {
+          "mode": "full"
+        },
+        "fetch_parallelism": 64,
+        "generation_prefix": "semantic/flat-v11-20261017-a0001/generations/824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "generation_root_sha256": "824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "k": 10,
+        "max_memory_bytes": 2147483648,
+        "metric": "cosine",
+        "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+        "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+        "phase": "bound_inputs",
+        "producer_authority": {
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+        },
+        "profile": "scale1m",
+        "query_source_first": 100000,
+        "range_scheduler_owner": "library",
+        "requests_bytes": 4096000,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_interval": {
+          "end": 101000,
+          "start": 100000
+        },
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "rows": 1000000,
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_cache": "off",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_split": null,
+        "tie_rule": "corpus_ordinal_ascending",
+        "truth_bytes": 80000,
+        "truth_opened": false,
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      }
+    },
+    "A2": {
+      "reader_config_path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A2.reader-config.json",
+      "reader_config_sha256": "597b5fd93022d2ca7d3150f4b2f621abde09e8066125144f56176e1c44cb49ec",
+      "input_metadata": {
+        "path": "/mnt/borsuk-workspace/evidence/source-block32-packed-full1000-abba-a0002/A2.jsonl",
+        "sha256": "a2cb4ceabeb3a04d9e3b3223b08c98445041bcc8d7d5316e88b1d23cabe97fe7",
+        "bytes": 37880967
+      },
+      "expected_identity": {
+        "billed_bytes": null,
+        "billed_requests": null,
+        "binary_sha256": "a3678661701d97541c66632bd4b7bb73d5fa0fcd0d392266c523b3b60d9de415",
+        "codec_source_sha256": "1e50138edad0ca4bace95fa367dce02b83a06f2f7eaea248b40432a8638c108a",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "config_sha256": "29eb0658cea0cdbcd645b22dfba479dc5839ea59e1cb983d76bd84475f4d68f1",
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "fetch_parallelism": 64,
+        "generation_source_sha256": "472be3e27c19490f171eda97195b5f514d67301df2f6c20caf3929029e642a86",
+        "io_measurement": "logical_GET_charges_separate_from_cumulative_process_native_transport",
+        "max_memory_bytes": 2147483648,
+        "native_transport_includes": "S3_and_IMDS_credential_requests_including_PUT",
+        "phase": "identity",
+        "physical_s3_measured": false,
+        "range_scheduler_owner": "library",
+        "returned_source_sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b",
+        "router_source_sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8",
+        "runner_source_sha256": "6a31cfbd34db122f20d808cd842acdda97937ada9a58792956370e8a62f6261d",
+        "s3_credential_source": "imds_instance_role_only",
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "schema": "borsuk-cohere-native-baseline-result-v16",
+        "scope": "AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS",
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_capsule_source_sha256": "599e7c0f3f69dcf7a2d7855721379c81d2d4001ab6d4b8d764291978b993ac2e",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "source_plane_source_sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0",
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_source_sha256": "1af76cc3aea861858477cc75b16c711571908305dba24e4ca5ad121d004e7a78",
+        "sq8_range_split": null,
+        "truth_opened": false,
+        "unread_bytes": null,
+        "wire_bytes": null,
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      },
+      "expected_bound_inputs": {
+        "backend": {
+          "bucket": "borsuk-bench-453182569524-euc1",
+          "kind": "s3",
+          "physical_prefix": "research/native-library-check/source-capsule-pair-a0001-20261016",
+          "region": "eu-central-1",
+          "sq8_etag": "\"4875c438eb819e00fc58ac993227fb2b\"",
+          "sq8_object_key": "semantic/objects/cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+        },
+        "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+        "config_schema": "borsuk-cohere-native-baseline-config-v15",
+        "corpus_intervals": [
+          {
+            "end": 100000,
+            "start": 0
+          },
+          {
+            "end": 1001000,
+            "start": 101000
+          }
+        ],
+        "corpus_source_first": 0,
+        "count": 1000,
+        "credential_source": "imds_instance_role_only",
+        "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+        "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+        "dimensions": 1024,
+        "execution": {
+          "mode": "full"
+        },
+        "fetch_parallelism": 64,
+        "generation_prefix": "semantic/flat-v11-20261017-a0001/generations/824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "generation_root_sha256": "824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+        "k": 10,
+        "max_memory_bytes": 2147483648,
+        "metric": "cosine",
+        "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+        "native_source_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+        "native_sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+        "phase": "bound_inputs",
+        "producer_authority": {
+          "executable_sha256": "4f502be7d15a064dba525816c63ad471c3ad2fe616ede14712b67cdb85e3cf66",
+          "producer_source_sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd",
+          "source_commit": "bc3082a8210c4370ebadae4ba093a7c211072b62",
+          "source_order_source_sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4",
+          "sq8_source_sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+        },
+        "profile": "scale1m",
+        "query_source_first": 100000,
+        "range_scheduler_owner": "library",
+        "requests_bytes": 4096000,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_queries_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_interval": {
+          "end": 101000,
+          "start": 100000
+        },
+        "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+        "rows": 1000000,
+        "s3_read_retry": {
+          "backoff_cap_ms": 100,
+          "backoff_ms": 100,
+          "connect_timeout_ms": 5000,
+          "credentials": "existing_zero_retry_imds",
+          "data_methods": [
+            "GET",
+            "HEAD"
+          ],
+          "every_206": "exact_attempted_range_and_length_before_body",
+          "mutations": "refused_before_reqwest",
+          "physical_submission_bound_scope": "S3_data_only_excludes_zero_retry_IMDS",
+          "physical_submission_upper_bound_per_logical_read": 2,
+          "policy": "one_retry_100ms",
+          "query_get_and_verified_byte_budgets": "unchanged_logical_caps",
+          "request_timeout_ms": 30000,
+          "sdk_max_retries": 1,
+          "sdk_retry_window_is_hard_deadline": false,
+          "sdk_retry_window_ms": 1000,
+          "transport_counters": "cumulative_process_submissions_and_consumed_payload_not_wire_or_billed"
+        },
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "source_byte_budget": 67108864,
+        "source_cache": "off",
+        "source_get_budget": 128,
+        "source_layout": {
+          "layout": "flat_records"
+        },
+        "sq8_byte_budget": 33554432,
+        "sq8_get_budget": 32,
+        "sq8_range_split": null,
+        "tie_rule": "corpus_ordinal_ascending",
+        "truth_bytes": 80000,
+        "truth_opened": false,
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "source_capsule_verification_policy": "directory_page_ranges_original_units_v2"
+      }
+    }
+  },
+  "pooled_descriptive": {
+    "A": {
+      "arm": "A",
+      "repeated_queries": 2000,
+      "p50_ms": 152.130287,
+      "p90_ms": 200.245449,
+      "p95_ms": 217.328068,
+      "p99_ms": 262.551094,
+      "serial_qps": 6.249580573871469
+    },
+    "B": {
+      "arm": "B",
+      "repeated_queries": 2000,
+      "p50_ms": 145.045958,
+      "p90_ms": 192.500856,
+      "p95_ms": 210.009066,
+      "p99_ms": 258.04475,
+      "serial_qps": 6.521704410177755
+    }
+  },
+  "scope": "fixed1000 cohort repeated twice per arm, ABBA A1 B1 B2 A2; not 2000 independent queries",
+  "evidence_method": "Closed metadata only; no JSONL body read or native rerun. Parent already verified exact score bits, results and ALL logical charges. Transport counters are not wire bytes or billed usage.",
+  "modeled_scratch_delta_bytes": 447,
+  "historical_decision": {
+    "path": "docs/research/performance-architecture-20260930/cohere1024/source-block32-packed/decision.md",
+    "unchanged": true,
+    "supersedes": "pending default-adoption status only; original fixed32 evidence remains historical"
+  },
+  "static_verification": {
+    "cpu_quota": "100%",
+    "allowed_cpus": "13",
+    "memory_max_bytes": 268435456,
+    "swap_max_bytes": 0,
+    "pids_max": 128,
+    "runtime_max_seconds": 120,
+    "checks": [
+      "JSON parse",
+      "literal summary SHA-256",
+      "closed metadata assertions",
+      "exact three-file scope",
+      "git diff --check"
+    ]
+  }
+}

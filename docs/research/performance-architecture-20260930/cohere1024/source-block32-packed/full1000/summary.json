@@ -1,0 +1,156 @@
+{
+  "schema": "borsuk-source-block32-packed-summary-v1",
+  "scope": "fixed queries repeated twice per arm; not independent extra queries",
+  "cells": [
+    {
+      "cell": "A1",
+      "queries": 1000,
+      "cpu_ns": 111859967783,
+      "wall_ns": 160867121788,
+      "p50_ms": 152.851536,
+      "p90_ms": 203.77155,
+      "p95_ms": 217.658951,
+      "p99_ms": 261.657969,
+      "qps": 6.216310635046097,
+      "planning_wall_ns": 30106711681,
+      "source_wall_ns": 75915863694,
+      "sq8_wall_ns": 52606073793,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 96550912
+    },
+    {
+      "cell": "B1",
+      "queries": 1000,
+      "cpu_ns": 106286360891,
+      "wall_ns": 152375183260,
+      "p50_ms": 144.939502,
+      "p90_ms": 191.35885,
+      "p95_ms": 204.740873,
+      "p99_ms": 240.466682,
+      "qps": 6.562748464713479,
+      "planning_wall_ns": 24827972895,
+      "source_wall_ns": 74556101189,
+      "sq8_wall_ns": 50936822820,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 94752768
+    },
+    {
+      "cell": "B2",
+      "queries": 1000,
+      "cpu_ns": 106092646461,
+      "wall_ns": 154293116039,
+      "p50_ms": 145.172257,
+      "p90_ms": 194.127893,
+      "p95_ms": 214.569157,
+      "p99_ms": 263.745736,
+      "qps": 6.481170551687052,
+      "planning_wall_ns": 24709218953,
+      "source_wall_ns": 75939546630,
+      "sq8_wall_ns": 51580560090,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 95232000
+    },
+    {
+      "cell": "A2",
+      "queries": 1000,
+      "cpu_ns": 112348599813,
+      "wall_ns": 159154354271,
+      "p50_ms": 151.206792,
+      "p90_ms": 199.059542,
+      "p95_ms": 214.814009,
+      "p99_ms": 262.551094,
+      "qps": 6.283208552982789,
+      "planning_wall_ns": 30422375181,
+      "source_wall_ns": 75545320329,
+      "sq8_wall_ns": 50948612102,
+      "hits": 9783,
+      "denominator": 10000,
+      "recall": 0.9783,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "rss_bytes": 91258880
+    }
+  ],
+  "ratios": {
+    "cpu": 0.9472385896273348,
+    "wall": 0.958274122960616,
+    "source": 0.9936251904391994,
+    "planning": 0.8184030920694314,
+    "forward_wall": 0.9472114722162359,
+    "reverse_wall": 0.9694558263626106,
+    "forward_cpu": 0.9501733551111656,
+    "reverse_cpu": 0.944316588169209
+  }
+}
