@@ -166,3 +166,10 @@ target. Keep aggregate spend monitoring, deliberate concurrency, no duplicate
 runs and immediate cleanup of terminal compute. Do not carry a historical
 arm's tiny cost ceiling into a new prospective experiment as a universal gate.
 Keep historical budgets, scientific thresholds and dispositions immutable.
+
+## Experiment throughput
+
+Assign one bounded end-to-end source, test and evidence packet per hypothesis.
+The root owns heavy execution, qualification and integration. Reuse unchanged
+qualified machinery; avoid routine new consultations and tiny handoff chains.
+Preserve original job handles, scientific validity gates and immutable evidence.
