@@ -14,9 +14,9 @@ use crate::{
         plan_source_shortlist_blocks,
     },
     sq8_s3_range::{
-        InFlightBytes, OneAttemptS3, QueryProfile, RankedSq8, RankedSq8Failure, Sq8RangeSplit,
-        Sq8RangeTrace, Sq8ReadStats, SyncStart, VerifiedRange,
-        fetch_verified_ranges_traced_with_byte_window, rank_verified_sq8_pages_traced_with_split,
+        InFlightBytes, OneAttemptS3, QueryProfile, RankedSq8, RankedSq8Failure, SourceAuthWorkers,
+        SourceAuthentication, Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats, SyncStart, VerifiedRange,
+        fetch_source_ranges_traced, rank_verified_sq8_pages_traced_with_split,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -556,15 +556,15 @@ enum LoadedDiscovery {
     },
 }
 struct RemoteSource {
-    authority: PageAuthority,
+    authority: std::sync::Arc<PageAuthority>,
     location: ObjectPath,
     etag: String,
 }
 
 struct CapsuleSource {
-    directory: crate::source_capsule::Directory,
+    directory: std::sync::Arc<crate::source_capsule::Directory>,
     // Only local serving retains a second binding; remote SOURCE owns its authority.
-    local: Option<(std::path::PathBuf, PageAuthority)>,
+    local: Option<(std::path::PathBuf, std::sync::Arc<PageAuthority>)>,
     query_memory_bytes: usize,
 }
 
@@ -583,6 +583,49 @@ pub(crate) fn authenticate_capsule_response<'p, 'g>(
 > {
     plan.authenticate_span(offset, bytes, query_memory_bytes)
         .map_err(|_| crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn authenticate_capsule_response_offloaded<'p, 'g>(
+    plan: &'p crate::source_capsule::PageRangePlan<'g>,
+    directory: &std::sync::Arc<crate::source_capsule::Directory>,
+    authority: &std::sync::Arc<PageAuthority>,
+    cap: usize,
+    offset: usize,
+    bytes: Vec<u8>,
+    probe: Option<Box<crate::sq8_s3_range::Probe>>,
+    workers: &SourceAuthWorkers,
+) -> (
+    std::result::Result<
+        crate::source_capsule::VerifiedPageSpan<'p, 'g>,
+        crate::sq8_s3_range::RangeFetchError,
+    >,
+    Option<Box<crate::sq8_s3_range::Probe>>,
+) {
+    use crate::sq8_s3_range::RangeFetchError;
+    let binding = match plan.owned_authentication(
+        std::sync::Arc::clone(directory),
+        std::sync::Arc::clone(authority),
+        offset,
+        cap,
+    ) {
+        Ok(binding) => binding,
+        Err(_) => return (Err(RangeFetchError::UnexpectedMetadata), probe),
+    };
+    let (result, probe) = workers
+        .authenticate(probe, move || {
+            binding
+                .authenticate(bytes)
+                .map_err(|_| RangeFetchError::UnexpectedMetadata)
+        })
+        .await;
+    (
+        result.and_then(|token| {
+            plan.bind_authenticated(token)
+                .map_err(|_| RangeFetchError::UnexpectedMetadata)
+        }),
+        probe,
+    )
 }
 
 impl CapsuleSource {
@@ -967,6 +1010,7 @@ pub struct TwoBitGeneration {
     source_cache: Option<std::sync::Mutex<SourceCache>>,
     byte_window: Option<std::sync::Arc<InFlightBytes>>,
     sq8_range_split: Option<Sq8RangeSplit>,
+    source_authentication: SourceAuthentication,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -1564,6 +1608,38 @@ impl TwoBitGeneration {
     }
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
+    }
+
+    /// Select SOURCE authentication before sharing the generation. Inline is the default.
+    /// Worker stacks, bounded jobs and the enlarged drain are admitted before any query I/O.
+    pub fn with_source_authentication(
+        mut self,
+        authentication: SourceAuthentication,
+    ) -> Result<Self> {
+        let bad = TwoBitGenerationError::Invalid;
+        if self.source_authentication != SourceAuthentication::Inline {
+            return Err(bad("SOURCE authentication already configured"));
+        }
+        if authentication == SourceAuthentication::Inline {
+            return Ok(self);
+        }
+        if self.source.is_none() {
+            return Err(bad("SOURCE authentication requires remote source"));
+        }
+        let bytes = authentication
+            .additional_memory_bytes(
+                self.limits.max_parallel_source_gets,
+                self.limits.max_source_gets,
+                self.limits.max_active_queries,
+            )
+            .ok_or(bad("SOURCE authentication memory"))?;
+        self.modeled_memory_bytes = self
+            .modeled_memory_bytes
+            .checked_add(bytes)
+            .filter(|&bytes| bytes <= self.limits.max_memory_bytes)
+            .ok_or(bad("SOURCE authentication memory"))?;
+        self.source_authentication = authentication;
+        Ok(self)
     }
 
     /// Opt in once to transport-only splitting. Reserve all additional per-query
@@ -2256,6 +2332,8 @@ impl TwoBitGeneration {
             .checked_mul(3)
             .and_then(|n| n.checked_add(codec_memory))
             .and_then(|n| n.checked_add(131072))
+            // Shared SOURCE authority/directory allocation headers; payloads are already charged.
+            .and_then(|n| n.checked_add(if paged { 128 } else { 0 }))
             .and_then(|n| n.checked_add(manifest.discovery.graph_memory()?))
             .and_then(|n| {
                 n.checked_add(if manifest.discovery.mode() == DiscoveryMode::Semantic {
@@ -2318,7 +2396,7 @@ impl TwoBitGeneration {
                     return Err(bad("source HEAD geometry"));
                 }
                 Some(RemoteSource {
-                    authority,
+                    authority: std::sync::Arc::new(authority),
                     location,
                     etag,
                 })
@@ -2509,9 +2587,13 @@ impl TwoBitGeneration {
                 .ok_or(bad("capsule query memory"))?;
             drop(encoded);
             Some(CapsuleSource {
-                directory,
-                local: local_capsule_authority
-                    .map(|authority| (root.join("plane/capsules.bin"), authority)),
+                directory: std::sync::Arc::new(directory),
+                local: local_capsule_authority.map(|authority| {
+                    (
+                        root.join("plane/capsules.bin"),
+                        std::sync::Arc::new(authority),
+                    )
+                }),
                 query_memory_bytes: query_memory_bytes
                     .min(router.manifest().profile.allocation_cap()),
             })
@@ -2549,6 +2631,7 @@ impl TwoBitGeneration {
             source_cache: None,
             byte_window: None,
             sq8_range_split: None,
+            source_authentication: SourceAuthentication::Inline,
         })
     }
     /// Authenticated concrete discovery mode.
@@ -2682,7 +2765,7 @@ impl TwoBitGeneration {
             .as_ref()
             .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
         let Some(cache) = &self.source_cache else {
-            return fetch_verified_ranges_traced_with_byte_window(
+            return fetch_source_ranges_traced(
                 store,
                 &source.location,
                 &source.authority,
@@ -2693,6 +2776,7 @@ impl TwoBitGeneration {
                 self.limits.max_parallel_source_gets,
                 trace.as_deref_mut(),
                 self.byte_window.as_ref(),
+                self.source_authentication,
             )
             .await
             .map_err(TwoBitGenerationError::SourceRead);
@@ -2721,7 +2805,7 @@ impl TwoBitGeneration {
         if !misses.is_empty() {
             // The shared fetcher preserves ordered errors and drains every
             // admitted original miss. A failed batch inserts nothing.
-            let fetched = fetch_verified_ranges_traced_with_byte_window(
+            let fetched = fetch_source_ranges_traced(
                 store,
                 &source.location,
                 &source.authority,
@@ -2732,6 +2816,7 @@ impl TwoBitGeneration {
                 self.limits.max_parallel_source_gets,
                 trace.as_deref_mut(),
                 self.byte_window.as_ref(),
+                self.source_authentication,
             )
             .await;
             if let Some(trace) = trace.as_deref_mut() {
@@ -2823,8 +2908,8 @@ impl TwoBitGeneration {
                 let authority = self
                     .source
                     .as_ref()
-                    .map(|s| &s.authority)
-                    .or_else(|| capsules.local.as_ref().map(|(_, a)| a))
+                    .map(|s| s.authority.as_ref())
+                    .or_else(|| capsules.local.as_ref().map(|(_, a)| a.as_ref()))
                     .ok_or(TwoBitGenerationError::Invalid("capsule authority"))?;
                 let request = capsules.request(&ids, units, authority, self.limits)?;
                 let proof_cap = capsules.proof_cap(&request.plan)?;
@@ -2839,23 +2924,65 @@ impl TwoBitGeneration {
                 profile.source.start_phase();
             }
             let result = if let Some(source) = &self.source {
-                crate::sq8_s3_range::fetch_capsule_ranges_traced(
-                    store,
-                    &source.location,
-                    capsules.directory.blob_bytes(),
-                    request.plan.ranges(),
-                    &source.etag,
-                    self.limits.max_source_gets,
-                    self.limits.max_source_bytes,
-                    self.limits.max_parallel_source_gets,
-                    self.byte_window.as_ref(),
-                    profile.as_deref_mut().map(|profile| &mut profile.source),
-                    |offset, bytes| {
-                        authenticate_capsule_response(&request.plan, proof_cap, offset, bytes)
-                    },
-                )
-                .await
-                .map_err(TwoBitGenerationError::SourceRead)
+                if self.source_authentication == SourceAuthentication::Inline {
+                    crate::sq8_s3_range::fetch_capsule_ranges_traced(
+                        store,
+                        &source.location,
+                        capsules.directory.blob_bytes(),
+                        request.plan.ranges(),
+                        &source.etag,
+                        self.limits.max_source_gets,
+                        self.limits.max_source_bytes,
+                        self.limits.max_parallel_source_gets,
+                        self.byte_window.as_ref(),
+                        profile.as_deref_mut().map(|profile| &mut profile.source),
+                        |offset, bytes| {
+                            authenticate_capsule_response(&request.plan, proof_cap, offset, bytes)
+                        },
+                    )
+                    .await
+                    .map_err(TwoBitGenerationError::SourceRead)
+                } else {
+                    match SourceAuthWorkers::new(
+                        self.limits
+                            .max_parallel_source_gets
+                            .min(request.plan.ranges().len()),
+                    ) {
+                        Err(error) => Err(TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                            error,
+                            stats: Sq8ReadStats::default(),
+                        })),
+                        Ok(workers) => {
+                            crate::sq8_s3_range::fetch_capsule_ranges_with_authentication(
+                                store,
+                                &source.location,
+                                capsules.directory.blob_bytes(),
+                                request.plan.ranges(),
+                                &source.etag,
+                                self.limits.max_source_gets,
+                                self.limits.max_source_bytes,
+                                self.limits.max_parallel_source_gets,
+                                self.byte_window.as_ref(),
+                                profile.as_deref_mut().map(|profile| &mut profile.source),
+                                Some(&workers),
+                                |offset, bytes, probe| {
+                                    authenticate_capsule_response_offloaded(
+                                        &request.plan,
+                                        &capsules.directory,
+                                        &source.authority,
+                                        proof_cap,
+                                        offset,
+                                        bytes,
+                                        probe,
+                                        &workers,
+                                    )
+                                },
+                            )
+                            .await
+                            .map_err(TwoBitGenerationError::SourceRead)
+                        }
+                    }
+                }
             } else {
                 capsules
                     .read_local(&request)
@@ -5226,7 +5353,7 @@ mod source_walk_tests {
                 // planner caps instead would allow it to bridge or drop pages.
                 let source = generation.source.as_ref().unwrap();
                 for (location, authority, ranges, bytes) in [
-                    (&source.location, &source.authority, &source_ranges, source_bytes),
+                    (&source.location, source.authority.as_ref(), &source_ranges, source_bytes),
                     (&key, &generation.pages, &sq8_ranges, plan.planned_bytes),
                 ] {
                     for (gets, cap) in [(ranges.len() - 1, bytes), (ranges.len(), bytes - 1)] {
@@ -11059,6 +11186,283 @@ mod source_walk_tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn source_auth_offload_generation_parity_and_admission() {
+        assert_source_auth_offload_generation(false).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn source_auth_offload_capsule_parity_and_failures() {
+        assert_source_auth_offload_generation(true).await;
+    }
+
+    async fn assert_source_auth_offload_generation(capsule: bool) {
+        let dimensions = 24;
+        let tiny = if capsule {
+            capsule_control_fixture(dimensions).await
+        } else {
+            tiny_direct(513, dimensions).await
+        };
+        let root_sha = if capsule {
+            let output = tiny.temp.path().join("offload-capsules");
+            let root_sha = crate::two_bit_build::repackage_source_layout(
+                &tiny.temp.path().join("generation"),
+                &tiny.root_sha,
+                &output,
+                2,
+                SourceLayoutMode::LeafCapsulesV2,
+                tiny.limits,
+            )
+            .unwrap();
+            let manifest: Manifest =
+                serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+            for name in manifest.files(false) {
+                tiny.store
+                    .put(
+                        &metadata_location(&tiny.prefix, name),
+                        fs::read(output.join(name)).unwrap().into(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            root_sha
+        } else {
+            tiny.root_sha.clone()
+        };
+        let query: Vec<_> = (0..dimensions).map(|d| (1 + d % 5) as f32).collect();
+        let mut baseline = None;
+        let mut direct_baseline = None;
+        let mut damage = None;
+        for authentication in [SourceAuthentication::Inline, SourceAuthentication::Offload2] {
+            let mut generation = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            let model = generation.modeled_memory_bytes();
+            let extra = crate::sq8_s3_range::source_authentication_bytes(
+                tiny.limits.max_parallel_source_gets,
+                tiny.limits.max_source_gets,
+            )
+            .unwrap() as u64
+                * tiny.limits.max_active_queries as u64
+                + 256;
+            if authentication == SourceAuthentication::Offload2 {
+                // Exact model and model-minus-one, before any worker, slot or payload read.
+                generation.limits.max_memory_bytes = model + extra - 1;
+                tiny.store.inner.reads.lock().unwrap().clear();
+                let refused = generation
+                    .with_source_authentication(authentication)
+                    .err()
+                    .unwrap();
+                assert!(matches!(
+                    refused,
+                    TwoBitGenerationError::Invalid("SOURCE authentication memory")
+                ));
+                assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+                generation = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &root_sha,
+                    tiny.limits,
+                    tiny.temp.path(),
+                )
+                .await
+                .unwrap();
+                generation.limits.max_memory_bytes = model + extra;
+            }
+            let mut generation = generation
+                .with_source_authentication(authentication)
+                .unwrap();
+            assert_eq!(
+                generation.modeled_memory_bytes(),
+                model
+                    + if authentication == SourceAuthentication::Offload2 {
+                        extra
+                    } else {
+                        0
+                    }
+            );
+            generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
+            // SQ8 splitting uses the unchanged inline authenticator in both arms.
+            let generation = generation
+                .with_sq8_range_split(Sq8RangeSplit {
+                    max_physical_range_bytes: 64 * (dimensions + 12),
+                    max_physical_gets: 128,
+                })
+                .unwrap();
+            let window = InFlightBytes::new(
+                tiny.limits
+                    .max_source_bytes
+                    .max(tiny.limits.max_query_bytes),
+            );
+            let generation = generation.with_shared_byte_window(window.clone()).unwrap();
+            let mut profile = QueryProfile::new(128, 128).unwrap();
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let (result, plan_trace) = generation
+                .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut profile)
+                .await
+                .unwrap();
+            let mut wire: Vec<_> = tiny
+                .store
+                .inner
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| (r.0.clone(), r.1, r.2.start, r.2.end, r.3.clone()))
+                .collect();
+            wire.sort();
+            let logical_spans = |trace: &Sq8RangeTrace| {
+                trace
+                    .ranges()
+                    .iter()
+                    .map(|s| (s.index, s.start_byte, s.end_byte, s.outcome, s.body_bytes))
+                    .collect::<Vec<_>>()
+            };
+            let observed = (
+                result.plan.clone(),
+                ranking_bits(&result),
+                result.source_stats,
+                result.ranked.stats,
+                serde_json::to_value(plan_trace).unwrap(),
+                wire,
+                logical_spans(&profile.source),
+                logical_spans(&profile.sq8),
+                profile.source.cpu.collector_copied_bytes,
+                profile.source.cpu.owned_copied_bytes,
+            );
+            if let Some(expected) = &baseline {
+                assert_eq!(&observed, expected);
+            } else {
+                baseline = Some(observed);
+            }
+            assert!(profile.source.cpu.authentication.is_some());
+            assert_eq!(
+                generation.slots.available_permits(),
+                tiny.limits.max_active_queries
+            );
+            assert_eq!(
+                std::sync::Arc::strong_count(&generation.source.as_ref().unwrap().authority),
+                1
+            );
+            if let Some(capsules) = &generation.capsules {
+                assert_eq!(std::sync::Arc::strong_count(&capsules.directory), 1);
+            }
+            // Direct closure performs zero SOURCE I/O under either selector.
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let (direct, direct_trace) = generation
+                .diagnostic_direct_closure_search_with_store(
+                    &tiny.store,
+                    &query,
+                    10,
+                    DirectClosureLimits {
+                        max_sq8_bytes: 513 * (dimensions + 12),
+                        max_sq8_gets: 32,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(direct.source_stats, Sq8ReadStats::default());
+            assert!(
+                tiny.store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.0 == tiny.key.as_ref())
+            );
+            let direct_observed = (
+                direct.plan.clone(),
+                ranking_bits(&direct),
+                direct.ranked.stats,
+                serde_json::to_value(direct_trace).unwrap(),
+            );
+            if let Some(expected) = &direct_baseline {
+                assert_eq!(&direct_observed, expected);
+            } else {
+                direct_baseline = Some(direct_observed);
+            }
+            damage = Some((
+                generation.source.as_ref().unwrap().location.clone(),
+                profile.source.ranges()[0].start_byte as usize,
+            ));
+        }
+        let (key, offset) = damage.unwrap();
+        let mut body = tiny
+            .store
+            .get(&key)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .to_vec();
+        body[offset] ^= 1;
+        tiny.store.put(&key, body.into()).await.unwrap();
+        let mut failure_baseline = None;
+        for authentication in [SourceAuthentication::Inline, SourceAuthentication::Offload2] {
+            // Reopen pins the current ETag; the original unit authority still rejects corruption.
+            let generation = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap()
+            .with_source_authentication(authentication)
+            .unwrap();
+            let mut profile = QueryProfile::new(128, 32).unwrap();
+            tiny.store.inner.reads.lock().unwrap().clear();
+            let error = generation
+                .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut profile)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.read_stats().1, Sq8ReadStats::default());
+            assert!(error.read_stats().0.failed_gets > 0);
+            assert_eq!(profile.source.outcome, "fetch_failed");
+            assert!(
+                profile
+                    .source
+                    .ranges()
+                    .iter()
+                    .any(|span| span.outcome == "page_auth")
+            );
+            assert_eq!(profile.sq8.planned_ranges, 0);
+            assert!(
+                tiny.store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|r| r.0 != tiny.key.as_ref())
+            );
+            assert_eq!(
+                generation.slots.available_permits(),
+                tiny.limits.max_active_queries
+            );
+            let observed = (
+                error.read_stats(),
+                profile.source.planned_ranges,
+                profile.source.retained_payload_bytes,
+            );
+            if let Some(expected) = &failure_baseline {
+                assert_eq!(&observed, expected);
+            } else {
+                failure_baseline = Some(observed);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn native_scheduler_constructor_charges_phase_max_per_active_query() {
         let tiny = tiny_direct(513, 24).await;
@@ -13099,7 +13503,7 @@ mod source_walk_tests {
             )
             .unwrap();
             let source = CapsuleSource {
-                directory: built.directory,
+                directory: std::sync::Arc::new(built.directory),
                 local: None,
                 query_memory_bytes: 16 * 1024 * 1024,
             };
@@ -13476,7 +13880,7 @@ mod source_walk_tests {
         )
         .unwrap();
         let source = CapsuleSource {
-            directory: built.directory,
+            directory: std::sync::Arc::new(built.directory),
             local: None,
             query_memory_bytes: cap,
         };

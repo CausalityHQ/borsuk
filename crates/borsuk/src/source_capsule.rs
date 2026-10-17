@@ -1378,12 +1378,132 @@ impl Directory {
         })
     }
 }
+/// Owns exactly the immutable generation pins needed by a response authentication job.
+pub(crate) struct OwnedSpanAuthentication {
+    directory: std::sync::Arc<Directory>,
+    authority: std::sync::Arc<PageAuthority>,
+    range: Range<usize>,
+    charge: Charge,
+    cap: usize,
+}
+
+/// Only the shared original-unit verifier can construct this token.
+pub(crate) struct AuthenticatedSpan {
+    binding: OwnedSpanAuthentication,
+    bytes: Vec<u8>,
+}
+
+fn authenticate_span_bytes(
+    directory: &Directory,
+    authority: &PageAuthority,
+    range: &Range<usize>,
+    charge: Charge,
+    cap: usize,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let offset = range.start;
+    require(
+        bytes.len() == range.len(),
+        "capsule planned response length",
+    )?;
+    let mut charge = charge;
+    charge.buffer_bytes = add(charge.buffer_bytes - bytes.len(), bytes.capacity())?;
+    charge.memory(false)?;
+    admit(
+        charge.memory_bytes,
+        cap.min(directory.geometry.profile.allocation_cap()),
+    )?;
+    directory.walk_range(
+        range.clone(),
+        |start, expected| {
+            require(
+                bytes.get(start - offset..add(start - offset, expected.len())?) == Some(expected),
+                "capsule page framing",
+            )
+        },
+        |page, _, extent| {
+            directory.geometry.verify_page(
+                page,
+                &bytes[extent.start - offset..extent.end - offset],
+                authority,
+            )
+        },
+    )?;
+    Ok(bytes)
+}
+
+impl OwnedSpanAuthentication {
+    pub(crate) fn authenticate(self, bytes: Vec<u8>) -> Result<AuthenticatedSpan> {
+        let bytes = authenticate_span_bytes(
+            &self.directory,
+            &self.authority,
+            &self.range,
+            self.charge,
+            self.cap,
+            bytes,
+        )?;
+        Ok(AuthenticatedSpan {
+            binding: self,
+            bytes,
+        })
+    }
+}
+
 impl<'g> PageRangePlan<'g> {
     pub(crate) fn ranges(&self) -> &[Range<usize>] {
         &self.ranges
     }
     pub(crate) fn charge(&self) -> Charge {
         self.charge
+    }
+
+    pub(crate) fn owned_authentication(
+        &self,
+        directory: std::sync::Arc<Directory>,
+        authority: std::sync::Arc<PageAuthority>,
+        offset: usize,
+        cap: usize,
+    ) -> Result<OwnedSpanAuthentication> {
+        require(
+            std::ptr::eq(self.directory, directory.as_ref())
+                && std::ptr::eq(self.authority, authority.as_ref()),
+            "capsule authentication pins",
+        )?;
+        let index = self
+            .ranges
+            .binary_search_by_key(&offset, |range| range.start)
+            .map_err(|_| SourceBuildError::Invalid("capsule unplanned response offset"))?;
+        Ok(OwnedSpanAuthentication {
+            directory,
+            authority,
+            range: self.ranges[index].clone(),
+            charge: self.charge,
+            cap,
+        })
+    }
+
+    pub(crate) fn bind_authenticated<'p>(
+        &'p self,
+        token: AuthenticatedSpan,
+    ) -> Result<VerifiedPageSpan<'p, 'g>> {
+        require(
+            std::ptr::eq(self.directory, token.binding.directory.as_ref())
+                && std::ptr::eq(self.authority, token.binding.authority.as_ref()),
+            "capsule authentication pins",
+        )?;
+        let range_index = self
+            .ranges
+            .binary_search_by_key(&token.binding.range.start, |range| range.start)
+            .map_err(|_| SourceBuildError::Invalid("capsule unplanned response offset"))?;
+        require(
+            self.ranges[range_index] == token.binding.range && self.charge == token.binding.charge,
+            "capsule authentication range/charge",
+        )?;
+        Ok(VerifiedPageSpan {
+            plan: self,
+            range_index,
+            bytes: token.bytes,
+        })
     }
 
     pub(crate) fn authenticate_span<'p>(
@@ -1396,34 +1516,13 @@ impl<'g> PageRangePlan<'g> {
             .ranges
             .binary_search_by_key(&offset, |range| range.start)
             .map_err(|_| SourceBuildError::Invalid("capsule unplanned response offset"))?;
-        let range = &self.ranges[range_index];
-        require(
-            bytes.len() == range.len(),
-            "capsule planned response length",
-        )?;
-        let mut charge = self.charge;
-        charge.buffer_bytes = add(charge.buffer_bytes - bytes.len(), bytes.capacity())?;
-        charge.memory(false)?;
-        admit(
-            charge.memory_bytes,
-            cap.min(self.directory.geometry.profile.allocation_cap()),
-        )?;
-        self.directory.walk_range(
-            range.clone(),
-            |start, expected| {
-                require(
-                    bytes.get(start - offset..add(start - offset, expected.len())?)
-                        == Some(expected),
-                    "capsule page framing",
-                )
-            },
-            |page, _, extent| {
-                self.directory.geometry.verify_page(
-                    page,
-                    &bytes[extent.start - offset..extent.end - offset],
-                    self.authority,
-                )
-            },
+        let bytes = authenticate_span_bytes(
+            self.directory,
+            self.authority,
+            &self.ranges[range_index],
+            self.charge,
+            cap,
+            bytes,
         )?;
         Ok(VerifiedPageSpan {
             plan: self,
@@ -1710,6 +1809,87 @@ mod tests {
             false_directory.validate_router(&router, usize::MAX),
             Err(SourceBuildError::Invalid("capsule router roster"))
         ));
+    }
+
+    #[test]
+    fn owned_span_authentication_preserves_pins_ranges_and_original_unit_checks() {
+        use std::sync::Arc;
+        let g = geometry(513, 24);
+        let (flat, original) = source(g);
+        let original = Arc::new(original);
+        let leaves = [
+            LeafPages {
+                leaf_id: 0,
+                pages: &[0, 2],
+            },
+            LeafPages {
+                leaf_id: 1,
+                pages: &[1],
+            },
+        ];
+        let (built, blob, encoded) = build(g, &leaves, &flat, &original);
+        let directory = Arc::new(built.directory);
+        let other = Arc::new(
+            Directory::open(
+                &encoded,
+                &built.directory_sha256,
+                g,
+                blob.len(),
+                7,
+                usize::MAX,
+            )
+            .unwrap(),
+        );
+        let plan = directory
+            .plan_page_ranges(&[0, 1], &[0, 1, 2], &original, usize::MAX)
+            .unwrap();
+        let other_plan = other
+            .plan_page_ranges(&[0, 1], &[0, 1, 2], &original, usize::MAX)
+            .unwrap();
+        for range in plan.ranges() {
+            let bytes = blob[range.clone()].to_vec();
+            let inline = plan
+                .authenticate_span(range.start, bytes.clone(), usize::MAX)
+                .unwrap();
+            let binding = || {
+                plan.owned_authentication(
+                    directory.clone(),
+                    original.clone(),
+                    range.start,
+                    usize::MAX,
+                )
+                .unwrap()
+            };
+            let owned = plan
+                .bind_authenticated(binding().authenticate(bytes.clone()).unwrap())
+                .unwrap();
+            assert_eq!(inline.bytes(), owned.bytes());
+            assert_eq!(inline.start(), owned.start());
+            assert!(
+                other_plan
+                    .bind_authenticated(binding().authenticate(bytes.clone()).unwrap())
+                    .is_err()
+            );
+            let mut corrupt = bytes;
+            corrupt[0] ^= 1;
+            assert!(binding().authenticate(corrupt).is_err());
+            assert!(
+                plan.owned_authentication(other.clone(), original.clone(), range.start, usize::MAX)
+                    .is_err()
+            );
+            assert!(
+                plan.owned_authentication(directory.clone(), original.clone(), range.start, 0)
+                    .unwrap()
+                    .authenticate(blob[range.clone()].to_vec())
+                    .is_err()
+            );
+        }
+        assert!(
+            plan.owned_authentication(directory.clone(), original.clone(), usize::MAX, usize::MAX)
+                .is_err()
+        );
+        assert_eq!(Arc::strong_count(&directory), 1);
+        assert_eq!(Arc::strong_count(&original), 1);
     }
 
     #[test]

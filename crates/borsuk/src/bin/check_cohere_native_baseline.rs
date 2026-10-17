@@ -331,6 +331,8 @@ struct Config {
     #[serde(default = "default_source_get_budget")]
     source_get_budget: usize,
     #[serde(default)]
+    source_authentication: borsuk::sq8_s3_range::SourceAuthentication,
+    #[serde(default)]
     shared_byte_window: Option<SharedByteWindow>,
     #[serde(deserialize_with = "explicit_sq8_range_split")]
     sq8_range_split: Option<Sq8RangeSplit>,
@@ -1330,6 +1332,11 @@ fn range_scheduler_bytes(c: &Config) -> Result<usize> {
         });
     Ok(pending(c.source_get_budget)?.max(pending(sq8)?))
 }
+fn source_authentication_bytes(c: &Config) -> Result<u64> {
+    c.source_authentication
+        .additional_memory_bytes(c.fetch_parallelism, c.source_get_budget, ACTIVE_QUERIES)
+        .ok_or_else(|| "SOURCE authentication memory".into())
+}
 // Bytes one active diagnostic query holds on top of the production model, charged before
 // any query payload opens: bounded line scratch and its coexisting record tree for every
 // panel; for trace additionally the range trace with its pending-future, outcome and
@@ -2207,6 +2214,8 @@ async fn query_and_seal_with(
         admission_record["range_scheduler_owner"] = json!("library");
         admission_record["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
         admission_record["range_state_both_paths_bytes"] = json!(range_scheduler_bytes(c)?);
+        admission_record["source_authentication_extra_library_bytes"] =
+            json!(source_authentication_bytes(c)?);
         out.emit(&admission_record)?;
     }
     p.stage = "backend";
@@ -2235,7 +2244,7 @@ async fn query_and_seal_with(
     p.transport.finish(&reader);
     out.emit(&json!({"phase":"generation_open","transport":p.transport,
         "success":generation.is_ok(),"truth_opened":false}))?;
-    let generation = generation?;
+    let generation = generation?.with_source_authentication(c.source_authentication)?;
     let generation = match c.shared_byte_window {
         Some(window) => generation.with_byte_window_limits(
             window.max_bytes,
@@ -2261,6 +2270,7 @@ async fn query_and_seal_with(
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
     startup["source_layout"] = json!(c.source_layout);
     startup["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
+    startup["source_authentication_extra_library_bytes"] = json!(source_authentication_bytes(c)?);
     if let Some(bytes) = generation.byte_window_state_bytes() {
         startup["shared_byte_window_state_bytes"] = json!(bytes);
     }
@@ -2808,6 +2818,8 @@ fn execute_paths_status(
             json!(hash(include_bytes!("../source_capsule.rs")));
         identity["config_schema"] = json!(CONFIG_SCHEMA);
         identity["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+        identity["source_authentication"] =
+            json!(configured.as_ref().ok().map(|c| c.source_authentication));
         identity["source_layout"] = json!(configured.as_ref().ok().map(|c| &c.source_layout));
         identity["source_byte_budget"] =
             json!(configured.as_ref().ok().map(|c| c.source_byte_budget));
@@ -2851,6 +2863,7 @@ fn execute_paths_status(
         bound["producer_authority"] = json!(c.producer_authority);
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
         bound["source_byte_budget"] = json!(c.source_byte_budget);
+        bound["source_authentication"] = json!(c.source_authentication);
         bound["source_layout"] = json!(c.source_layout);
         bound["config_schema"] = json!(CONFIG_SCHEMA);
         bound["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
@@ -3493,6 +3506,50 @@ mod tests {
                     "unapproved SOURCE budget"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn source_authentication_selector_is_strict() {
+        use borsuk::sq8_s3_range::SourceAuthentication;
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        let default: Config = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(default.source_authentication, SourceAuthentication::Inline);
+        assert_eq!(source_authentication_bytes(&default).unwrap(), 0);
+        assert!(
+            SourceAuthentication::Offload2
+                .additional_memory_bytes(usize::MAX, 128, 1)
+                .is_none()
+        );
+        for (selector, expected) in [
+            ("inline", SourceAuthentication::Inline),
+            ("offload2", SourceAuthentication::Offload2),
+        ] {
+            value["source_authentication"] = json!(selector);
+            value["fetch_parallelism"] = json!(64);
+            let config: Config = serde_json::from_value(value.clone()).unwrap();
+            validate_config(&config, shape).unwrap();
+            assert_eq!(config.source_authentication, expected);
+            assert_eq!(
+                source_authentication_bytes(&config).unwrap() > 0,
+                expected == SourceAuthentication::Offload2
+            );
+            assert_eq!(limits(&config).unwrap().max_parallel_source_gets, 64);
+            assert_eq!(serde_json::to_value(expected).unwrap(), json!(selector));
+        }
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!(2),
+            json!("offload"),
+            json!("offload_2"),
+            json!("INLINE"),
+            json!({"workers":2}),
+        ] {
+            value["source_authentication"] = invalid;
+            assert!(serde_json::from_value::<Config>(value.clone()).is_err());
         }
     }
 

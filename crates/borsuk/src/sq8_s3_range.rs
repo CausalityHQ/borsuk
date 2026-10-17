@@ -19,6 +19,153 @@ use object_store::{
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
+/// SOURCE response authentication policy; SQ8 authentication stays inline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceAuthentication {
+    /// Production control, with no worker allocation.
+    #[default]
+    Inline,
+    /// Experimental two-worker compute bound, independent of download concurrency.
+    Offload2,
+}
+
+impl SourceAuthentication {
+    /// Extra library reservation for all active queries: worker stacks, jobs and scheduler
+    /// state. Existing full payload and ordinary range-state reservations stay charged.
+    pub fn additional_memory_bytes(
+        self,
+        downloads: usize,
+        ranges: usize,
+        active_queries: usize,
+    ) -> Option<u64> {
+        if self == Self::Inline {
+            return Some(0);
+        }
+        u64::try_from(source_authentication_bytes(downloads, ranges)?)
+            .ok()?
+            .checked_mul(u64::try_from(active_queries).ok()?)?
+            .checked_add(256)
+    }
+}
+
+const SOURCE_AUTH_WORKERS: usize = 2;
+const SOURCE_AUTH_STACK_BYTES: usize = 1024 * 1024;
+const SOURCE_AUTH_FUTURE_BYTES: usize = 4096;
+
+/// Extra per-query state; payloads move into jobs and remain in the existing full-body budget.
+pub(crate) fn source_authentication_bytes(downloads: usize, ranges: usize) -> Option<usize> {
+    let pending = ranges.min(downloads.checked_add(SOURCE_AUTH_WORKERS)?);
+    pending
+        .checked_mul(SOURCE_AUTH_FUTURE_BYTES)?
+        .checked_add(SOURCE_AUTH_WORKERS * (SOURCE_AUTH_STACK_BYTES + 4096))?
+        .checked_add(4096)
+}
+
+pub(crate) fn authenticate_inline<T>(
+    mut probe: Option<Box<Probe>>,
+    authenticate: impl FnOnce() -> Result<T, RangeFetchError>,
+) -> (Result<T, RangeFetchError>, Option<Box<Probe>>) {
+    let result = measured_auth(&mut probe.as_deref_mut(), authenticate);
+    (result, probe)
+}
+
+type SourceAuthJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// Query-owned SOURCE workers. Dropping the query joins every owned job before releasing pins.
+pub(crate) struct SourceAuthWorkers {
+    sender: Option<std::sync::mpsc::SyncSender<SourceAuthJob>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+    slots: tokio::sync::Semaphore,
+    downloads: tokio::sync::Semaphore,
+    #[cfg(test)]
+    lifetime: Arc<()>,
+}
+
+impl SourceAuthWorkers {
+    pub(crate) fn new(downloads: usize) -> Result<Self, RangeFetchError> {
+        if downloads == 0 || downloads > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(RangeFetchError::UnexpectedMetadata);
+        }
+        let (sender, receiver) =
+            std::sync::mpsc::sync_channel::<SourceAuthJob>(SOURCE_AUTH_WORKERS);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut owner = Self {
+            sender: Some(sender),
+            workers: Vec::with_capacity(SOURCE_AUTH_WORKERS),
+            slots: tokio::sync::Semaphore::new(SOURCE_AUTH_WORKERS),
+            downloads: tokio::sync::Semaphore::new(downloads),
+            #[cfg(test)]
+            lifetime: Arc::new(()),
+        };
+        for _ in 0..SOURCE_AUTH_WORKERS {
+            let receiver = Arc::clone(&receiver);
+            #[cfg(test)]
+            let lifetime = Arc::clone(&owner.lifetime);
+            let worker = std::thread::Builder::new()
+                .name("borsuk-source-auth".into())
+                .stack_size(SOURCE_AUTH_STACK_BYTES)
+                .spawn(move || {
+                    #[cfg(test)]
+                    let _lifetime = lifetime;
+                    loop {
+                        let next = receiver
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .recv();
+                        let Ok(job) = next else { break };
+                        job();
+                    }
+                })
+                .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
+            owner.workers.push(worker);
+        }
+        Ok(owner)
+    }
+
+    pub(crate) async fn authenticate<T: Send + 'static>(
+        &self,
+        mut probe: Option<Box<Probe>>,
+        authenticate: impl FnOnce() -> Result<T, RangeFetchError> + Send + 'static,
+    ) -> (Result<T, RangeFetchError>, Option<Box<Probe>>) {
+        let _slot = self
+            .slots
+            .acquire()
+            .await
+            .expect("SOURCE worker slots stay open");
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let job = Box::new(move || {
+            // A verifier panic must not kill a worker and strand the remaining full drain.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                measured_auth(&mut probe.as_deref_mut(), authenticate)
+            }))
+            .unwrap_or(Err(RangeFetchError::UnexpectedMetadata));
+            let _ = send.send((result, probe));
+        });
+        if self
+            .sender
+            .as_ref()
+            .expect("live SOURCE workers")
+            .try_send(job)
+            .is_err()
+        {
+            return (Err(RangeFetchError::UnexpectedMetadata), None);
+        }
+        receive
+            .await
+            .unwrap_or((Err(RangeFetchError::UnexpectedMetadata), None))
+    }
+}
+
+impl Drop for SourceAuthWorkers {
+    fn drop(&mut self) {
+        self.sender.take();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Shared FIFO admission for bytes being downloaded and authenticated.
 /// Completed payloads remain subject to the caller's separate resident-byte cap.
 pub struct InFlightBytes {
@@ -1400,8 +1547,68 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
     max_gets: usize,
     max_bytes: usize,
     max_parallel: usize,
+    trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_verified_ranges_with_authentication(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        trace,
+        budget,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_source_ranges_traced(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &Arc<PageAuthority>,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
+    authentication: SourceAuthentication,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_verified_ranges_with_authentication(
+        store,
+        location,
+        authority,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        trace,
+        budget,
+        (authentication == SourceAuthentication::Offload2).then_some(authority),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_ranges_with_authentication(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &PageAuthority,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
     mut trace: Option<&mut Sq8RangeTrace>,
     budget: Option<&Arc<InFlightBytes>>,
+    offload_authority: Option<&Arc<PageAuthority>>,
 ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
@@ -1441,6 +1648,15 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
         }
         previous_last = Some(last);
     }
+    let workers = offload_authority
+        .map(|_| SourceAuthWorkers::new(max_parallel.min(ranges.len())))
+        .transpose()
+        .map_err(fail)?;
+    let scheduled = max_parallel.saturating_add(if workers.is_some() {
+        SOURCE_AUTH_WORKERS
+    } else {
+        0
+    });
     let origin = trace.as_deref_mut().map(|trace| {
         trace.outcome = "fetching";
         trace.planned_ranges = u32::try_from(ranges.len()).unwrap_or(u32::MAX);
@@ -1451,20 +1667,46 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
     });
     // The indexed future has a named type-producing function so the layout test measures
     // the actual scheduler element, including its plan index.
-    let outcomes = drain_ordered(
-        ranges
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, (first, last))| {
-                fetch_verified_pages_admitted_indexed(
-                    store, location, authority, first, last, etag, max_bytes, index, origin, budget,
-                )
-            }),
-        max_parallel.min(ranges.len()),
-        |(index, _, _)| *index,
-    )
-    .await;
+    let outcomes = if let (Some(workers), Some(authority)) = (workers.as_ref(), offload_authority) {
+        drain_ordered(
+            ranges
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, (first, last))| {
+                    let future = fetch_source_pages_offloaded(
+                        store, location, authority, first, last, etag, max_bytes, index, origin,
+                        budget, workers,
+                    );
+                    debug_assert!(
+                        std::mem::size_of_val(&future)
+                            + BUFFERED_NODE_ALLOWANCE_BYTES
+                            + ALLOCATION_ALLOWANCE_BYTES
+                            <= SOURCE_AUTH_FUTURE_BYTES
+                    );
+                    future
+                }),
+            scheduled.min(ranges.len()),
+            |(index, _, _)| *index,
+        )
+        .await
+    } else {
+        drain_ordered(
+            ranges
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, (first, last))| {
+                    fetch_verified_pages_admitted_indexed(
+                        store, location, authority, first, last, etag, max_bytes, index, origin,
+                        budget,
+                    )
+                }),
+            max_parallel.min(ranges.len()),
+            |(index, _, _)| *index,
+        )
+        .await
+    };
     if let Some(trace) = trace.as_deref_mut() {
         trace.all_ranges_complete_ns = Some(trace.now_ns());
     }
@@ -1499,6 +1741,86 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
         return Err(RankedSq8Failure { error, stats });
     }
     Ok((verified, stats))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_source_pages_offloaded(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &Arc<PageAuthority>,
+    first: usize,
+    last: usize,
+    etag: &str,
+    max_bytes: usize,
+    index: usize,
+    origin: Option<Instant>,
+    budget: Option<&Arc<InFlightBytes>>,
+    workers: &SourceAuthWorkers,
+) -> IndexedRangeOutcome {
+    let expected = match authority.byte_range(first, last) {
+        Ok(range) => range,
+        Err(error) => return (index, false, (Err(RangeFetchError::Page(error)), None)),
+    };
+    let _bytes = if let Some(budget) = budget {
+        match budget.reserve(expected.len()).await {
+            Some(permit) => Some(permit),
+            None => {
+                return (
+                    index,
+                    false,
+                    (Err(RangeFetchError::UnexpectedMetadata), None),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let mut probe = origin.map(|origin| {
+        Box::new(Probe {
+            origin,
+            cpu: RangeCpu::default(),
+            span: RangeSpan::new(index, first, last, Some(expected.clone())),
+        })
+    });
+    let download = workers
+        .downloads
+        .acquire()
+        .await
+        .expect("SOURCE downloads stay open");
+    let body = fetch_exact_range_core(
+        store,
+        location,
+        expected.clone(),
+        authority.object_bytes(),
+        etag,
+        max_bytes,
+        probe.as_deref_mut(),
+    )
+    .await;
+    drop(download);
+    let result = match body {
+        Ok(bytes) => {
+            let authority = Arc::clone(authority);
+            let (result, returned_probe) = workers
+                .authenticate(probe, move || {
+                    authority
+                        .verify_payload(first, last, &bytes)
+                        .map_err(RangeFetchError::Page)?;
+                    Ok(VerifiedRange {
+                        start: expected.start,
+                        bytes,
+                    })
+                })
+                .await;
+            probe = returned_probe;
+            result
+        }
+        Err(error) => Err(error),
+    };
+    if let Some(probe) = probe.as_deref_mut() {
+        probe.span.complete_ns = Some(probe.now_ns());
+    }
+    (index, true, (result, probe))
 }
 
 /// Fetch one inclusive S3 byte range through `object_store`'s HTTP client.
@@ -1785,11 +2107,12 @@ struct CapsuleRangeReader<'a, A> {
     max_bytes: usize,
     budget: Option<&'a Arc<InFlightBytes>>,
     authenticate: &'a A,
+    workers: Option<&'a SourceAuthWorkers>,
     origin: Option<Instant>,
 }
 
 impl<A: Sync> CapsuleRangeReader<'_, A> {
-    async fn fetch_range<T>(
+    async fn fetch_range<T, F>(
         &self,
         index: usize,
         range: &std::ops::Range<usize>,
@@ -1799,7 +2122,8 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
         (Result<T, RangeFetchError>, Option<Box<Probe>>),
     )
     where
-        A: Fn(usize, Vec<u8>) -> Result<T, RangeFetchError>,
+        A: Fn(usize, Vec<u8>, Option<Box<Probe>>) -> F,
+        F: std::future::Future<Output = (Result<T, RangeFetchError>, Option<Box<Probe>>)>,
     {
         let _permit = if let Some(budget) = self.budget {
             match budget.reserve(range.len()).await {
@@ -1824,6 +2148,17 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
             })
         });
         let result = async {
+            let download = if let Some(workers) = self.workers {
+                Some(
+                    workers
+                        .downloads
+                        .acquire()
+                        .await
+                        .expect("SOURCE downloads stay open"),
+                )
+            } else {
+                None
+            };
             let body = fetch_exact_range_core(
                 self.store,
                 self.location,
@@ -1834,6 +2169,7 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
                 probe.as_deref_mut(),
             )
             .await?;
+            drop(download);
             if body.len() != range.len() {
                 return Err(RangeFetchError::UnexpectedMetadata);
             }
@@ -1855,9 +2191,10 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
                 probe.cpu.owned_copied_bytes = body.len() as u64;
             }
             drop(body);
-            measured_auth(&mut probe.as_deref_mut(), || {
-                (self.authenticate)(range.start, bytes)
-            })
+            let (result, returned_probe) =
+                (self.authenticate)(range.start, bytes, probe.take()).await;
+            probe = returned_probe;
+            result
         }
         .await;
         if let Some(probe) = probe.as_deref_mut() {
@@ -1922,9 +2259,46 @@ pub(crate) async fn fetch_capsule_ranges_traced<T>(
     max_bytes: usize,
     max_parallel: usize,
     budget: Option<&Arc<InFlightBytes>>,
-    mut trace: Option<&mut Sq8RangeTrace>,
+    trace: Option<&mut Sq8RangeTrace>,
     authenticate: impl Fn(usize, Vec<u8>) -> Result<T, RangeFetchError> + Sync,
 ) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_capsule_ranges_with_authentication(
+        store,
+        location,
+        object_bytes,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        budget,
+        trace,
+        None,
+        |offset, bytes, probe| {
+            std::future::ready(authenticate_inline(probe, || authenticate(offset, bytes)))
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_capsule_ranges_with_authentication<T, F>(
+    store: &dyn ObjectStore,
+    location: &Path,
+    object_bytes: usize,
+    ranges: &[std::ops::Range<usize>],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    budget: Option<&Arc<InFlightBytes>>,
+    mut trace: Option<&mut Sq8RangeTrace>,
+    workers: Option<&SourceAuthWorkers>,
+    authenticate: impl Fn(usize, Vec<u8>, Option<Box<Probe>>) -> F + Sync,
+) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure>
+where
+    F: std::future::Future<Output = (Result<T, RangeFetchError>, Option<Box<Probe>>)>,
+{
     let fail = || RankedSq8Failure {
         error: RangeFetchError::UnexpectedMetadata,
         stats: Sq8ReadStats::default(),
@@ -1979,12 +2353,33 @@ pub(crate) async fn fetch_capsule_ranges_traced<T>(
         max_bytes,
         budget,
         authenticate: &authenticate,
+        workers,
         origin,
     };
     let outcomes = drain_ordered(
         // Keep borrowed range lifetimes out of the future factory's input.
-        (0..ranges.len()).map(|index| reader.fetch_range(index, &ranges[index])),
-        max_parallel.min(ranges.len()),
+        (0..ranges.len()).map(|index| {
+            let future = reader.fetch_range(index, &ranges[index]);
+            let allowance = if workers.is_some() {
+                SOURCE_AUTH_FUTURE_BYTES
+            } else {
+                RANGE_FUTURE_ALLOWANCE_BYTES
+            };
+            debug_assert!(
+                std::mem::size_of_val(&future)
+                    + BUFFERED_NODE_ALLOWANCE_BYTES
+                    + ALLOCATION_ALLOWANCE_BYTES
+                    <= allowance
+            );
+            future
+        }),
+        max_parallel
+            .saturating_add(if workers.is_some() {
+                SOURCE_AUTH_WORKERS
+            } else {
+                0
+            })
+            .min(ranges.len()),
         |(index, _, _)| *index,
     )
     .await;
@@ -2260,7 +2655,7 @@ pub struct SourceRangeSummary<'a> {
 }
 
 /// A range's diagnostic state while its future runs: private to that future.
-struct Probe {
+pub(crate) struct Probe {
     origin: Instant,
     span: RangeSpan,
     cpu: RangeCpu,
@@ -3227,6 +3622,470 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.stats.submitted_gets, 0);
         assert!(matches!(failure.error, RangeFetchError::UnexpectedMetadata));
+    }
+
+    fn offload_authority() -> (PageAuthority, Vec<u8>) {
+        let object = vec![7u8; (8 * 32 + 1) * 10];
+        let sidecar = object
+            .chunks(320)
+            .flat_map(|page| Sha256::digest(page).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-two-bit-plane-v3", "rows":8 * 32 + 1, "dimensions":5,
+            "seed":20260923, "record_bytes":10, "page_rows":32,
+            "source_sha256":"0".repeat(64), "sq8_sha256":"1".repeat(64),
+            "source_order_sha256":"2".repeat(64), "mean_sha256":"3".repeat(64),
+            "records_sha256":format!("{:x}", Sha256::digest(&object)),
+            "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+            "query_or_truth_used":false,
+        }))
+        .unwrap();
+        let authority = PageAuthority::load_two_bit(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            9,
+            &sidecar,
+        )
+        .unwrap();
+        (authority, object)
+    }
+
+    #[derive(Debug)]
+    struct OffloadState {
+        requested: Mutex<Vec<usize>>,
+        polled: std::sync::atomic::AtomicUsize,
+        completed: std::sync::atomic::AtomicUsize,
+        active: std::sync::atomic::AtomicUsize,
+        bodies: tokio::sync::Semaphore,
+    }
+    #[derive(Debug)]
+    struct OffloadStore {
+        inner: InMemory,
+        state: Arc<OffloadState>,
+        hold_bodies: bool,
+        corrupt: Option<usize>,
+        transport_error: Option<usize>,
+    }
+    impl std::fmt::Display for OffloadStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("SOURCE offload fixture")
+        }
+    }
+    struct BodyActive(Arc<OffloadState>);
+    impl Drop for BodyActive {
+        fn drop(&mut self) {
+            self.0
+                .active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    #[async_trait::async_trait]
+    impl ObjectStore for OffloadStore {
+        async fn get_opts(
+            &self,
+            path: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            let head = options.head;
+            let mut result = self.inner.get_opts(path, options).await?;
+            if head {
+                return Ok(result);
+            }
+            let index = result.range.start as usize / 320;
+            self.state.requested.lock().unwrap().push(index);
+            let mut body = match result.payload {
+                GetResultPayload::Stream(stream) => {
+                    use futures_util::TryStreamExt;
+                    let chunks: Vec<Bytes> = stream.try_collect().await?;
+                    chunks.concat()
+                }
+                _ => panic!("in-memory fixture must stream"),
+            };
+            if self.corrupt == Some(index) {
+                body[0] ^= 1;
+            }
+            let fail = self.transport_error == Some(index);
+            let hold = self.hold_bodies && index >= 2;
+            let state = Arc::clone(&self.state);
+            result.payload = GetResultPayload::Stream(
+                stream::once(async move {
+                    state
+                        .polled
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    state
+                        .active
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _active = BodyActive(Arc::clone(&state));
+                    let _held = if hold {
+                        Some(state.bodies.acquire().await.unwrap())
+                    } else {
+                        None
+                    };
+                    state
+                        .completed
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if fail {
+                        Err(object_store::Error::Generic {
+                            store: "SOURCE offload fixture",
+                            source: std::io::Error::other("ordered transport fault").into(),
+                        })
+                    } else {
+                        Ok(Bytes::from(body))
+                    }
+                })
+                .boxed(),
+            );
+            Ok(result)
+        }
+        async fn put_opts(
+            &self,
+            path: &Path,
+            body: PutPayload,
+            options: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(path, body, options).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            path: &Path,
+            options: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(path, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            paths: stream::BoxStream<'static, object_store::Result<Path>>,
+        ) -> stream::BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(paths)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    async fn offload_store(
+        hold_bodies: bool,
+        corrupt: Option<usize>,
+        transport_error: Option<usize>,
+    ) -> (OffloadStore, Arc<PageAuthority>, Path, String, usize) {
+        let (authority, body) = offload_authority();
+        let bytes = body.len();
+        let location = Path::from("source.bin");
+        let inner = InMemory::new();
+        inner.put(&location, PutPayload::from(body)).await.unwrap();
+        let etag = inner.head(&location).await.unwrap().e_tag.unwrap();
+        let store = OffloadStore {
+            inner,
+            hold_bodies,
+            corrupt,
+            transport_error,
+            state: Arc::new(OffloadState {
+                requested: Mutex::new(Vec::new()),
+                polled: 0.into(),
+                completed: 0.into(),
+                active: 0.into(),
+                bodies: tokio::sync::Semaphore::new(0),
+            }),
+        };
+        (store, Arc::new(authority), location, etag, bytes)
+    }
+
+    #[derive(Default)]
+    struct ComputeGate {
+        active: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        entered: std::sync::atomic::AtomicUsize,
+        released: Mutex<bool>,
+        changed: std::sync::Condvar,
+    }
+    impl ComputeGate {
+        fn hold(&self) {
+            use std::sync::atomic::Ordering::SeqCst;
+            let active = self.active.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(active, SeqCst);
+            self.entered.fetch_add(1, SeqCst);
+            let (released, deadline) = self
+                .changed
+                .wait_timeout_while(
+                    self.released.lock().unwrap(),
+                    std::time::Duration::from_secs(5),
+                    |released| !*released,
+                )
+                .unwrap();
+            self.active.fetch_sub(1, SeqCst);
+            assert!(
+                *released && !deadline.timed_out(),
+                "held compute fixture deadline"
+            );
+        }
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    #[tokio::test]
+    async fn source_auth_offload_parity_and_ordered_errors() {
+        for (corrupt, transport) in [(None, None), (Some(0), Some(1)), (Some(1), Some(0))] {
+            let mut control = None;
+            for mode in [SourceAuthentication::Inline, SourceAuthentication::Offload2] {
+                let (store, authority, location, etag, bytes) =
+                    offload_store(false, corrupt, transport).await;
+                let ranges: Vec<_> = (0..9).map(|page| (page, page)).collect();
+                let window = InFlightBytes::new(bytes);
+                let mut trace = Sq8RangeTrace::new(9).unwrap();
+                trace.begin(Instant::now());
+                let result = fetch_source_ranges_traced(
+                    &store,
+                    &location,
+                    &authority,
+                    &ranges,
+                    &etag,
+                    9,
+                    bytes,
+                    2,
+                    Some(&mut trace),
+                    Some(&window),
+                    mode,
+                )
+                .await;
+                let (payloads, stats, error) = match result {
+                    Ok((ranges, stats)) => (
+                        ranges
+                            .into_iter()
+                            .map(|r| (r.start, r.bytes))
+                            .collect::<Vec<_>>(),
+                        stats,
+                        "ok",
+                    ),
+                    Err(failure) => {
+                        let error = match failure.error {
+                            RangeFetchError::Page(PageError::HashMismatch) => "auth",
+                            RangeFetchError::Store(_) => "transport",
+                            other => panic!("unexpected error {other:?}"),
+                        };
+                        (Vec::new(), failure.stats, error)
+                    }
+                };
+                assert_eq!(stats.submitted_gets, 9);
+                assert_eq!(stats.failed_gets, if corrupt.is_some() { 2 } else { 0 });
+                assert_eq!(
+                    stats.verified_bytes,
+                    bytes - if corrupt.is_some() { 640 } else { 0 }
+                );
+                assert_eq!(
+                    error,
+                    if corrupt == Some(0) {
+                        "auth"
+                    } else if transport == Some(0) {
+                        "transport"
+                    } else {
+                        "ok"
+                    }
+                );
+                assert_eq!(
+                    store
+                        .state
+                        .completed
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    9
+                );
+                let mut requests = store.state.requested.lock().unwrap().clone();
+                requests.sort_unstable();
+                assert_eq!(requests, (0..9).collect::<Vec<_>>());
+                assert_eq!(*window.available.lock().unwrap(), bytes);
+                assert_eq!(Arc::strong_count(&authority), 1);
+                let spans: Vec<_> = trace
+                    .ranges()
+                    .iter()
+                    .map(|span| {
+                        assert_body_boundaries(span);
+                        (
+                            span.index,
+                            span.start_byte,
+                            span.end_byte,
+                            span.outcome,
+                            span.body_bytes,
+                        )
+                    })
+                    .collect();
+                let observed = (
+                    payloads,
+                    stats,
+                    error,
+                    spans,
+                    trace.outcome,
+                    trace.retained_payload_bytes,
+                );
+                if let Some(control) = &control {
+                    assert_eq!(&observed, control);
+                } else {
+                    control = Some(observed);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn source_auth_offload_polls_downloads_and_bounds_compute() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
+        let ranges: Vec<_> = (0..9)
+            .map(|page| authority.byte_range(page, page).unwrap())
+            .collect();
+        let workers = SourceAuthWorkers::new(4).unwrap();
+        let lifetime = Arc::clone(&workers.lifetime);
+        let gate = Arc::new(ComputeGate::default());
+        let window = InFlightBytes::new(bytes);
+        let work = fetch_capsule_ranges_with_authentication(
+            &store,
+            &location,
+            bytes,
+            &ranges,
+            &etag,
+            9,
+            bytes,
+            4,
+            Some(&window),
+            None,
+            Some(&workers),
+            |offset, bytes, probe| {
+                let gate = Arc::clone(&gate);
+                let authority = Arc::clone(&authority);
+                workers.authenticate(probe, move || {
+                    gate.hold();
+                    authority
+                        .verify_payload(offset / 320, offset / 320, &bytes)
+                        .map_err(RangeFetchError::Page)?;
+                    Ok(bytes)
+                })
+            },
+        );
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            tokio::join!(work, async {
+                while gate.entered.load(SeqCst) < 2 || store.state.polled.load(SeqCst) < 6 {
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(gate.active.load(SeqCst), 2);
+                assert_eq!(store.state.active.load(SeqCst), 4);
+                store.state.bodies.add_permits(4);
+                while store.state.completed.load(SeqCst) < 6 {
+                    tokio::task::yield_now().await;
+                }
+                // Bodies completed while both compute workers were held; no unbounded refill.
+                assert_eq!(gate.entered.load(SeqCst), 2);
+                assert_eq!(store.state.requested.lock().unwrap().len(), 6);
+                gate.release();
+            })
+        })
+        .await
+        .expect("offload polling deadline");
+        let (_, stats) = result.unwrap();
+        assert_eq!(stats.submitted_gets, 9);
+        assert_eq!(stats.verified_bytes, bytes);
+        assert_eq!(gate.peak.load(SeqCst), 2);
+        assert_eq!(gate.entered.load(SeqCst), 9);
+        assert_eq!(*window.available.lock().unwrap(), bytes);
+        drop(workers);
+        assert_eq!(
+            Arc::strong_count(&lifetime),
+            1,
+            "zero worker threads on return"
+        );
+        assert_eq!(Arc::strong_count(&authority), 1);
+    }
+
+    #[tokio::test]
+    async fn source_auth_offload_cancellation_joins_workers() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, authority, location, etag, bytes) = offload_store(true, None, None).await;
+        let ranges: Vec<_> = (0..9)
+            .map(|page| authority.byte_range(page, page).unwrap())
+            .collect();
+        let workers = SourceAuthWorkers::new(4).unwrap();
+        let lifetime = Arc::clone(&workers.lifetime);
+        let gate = Arc::new(ComputeGate::default());
+        let window = InFlightBytes::new(bytes);
+        let mut work = Box::pin(async {
+            let workers = workers;
+            fetch_capsule_ranges_with_authentication(
+                &store,
+                &location,
+                bytes,
+                &ranges,
+                &etag,
+                9,
+                bytes,
+                4,
+                Some(&window),
+                None,
+                Some(&workers),
+                |offset, bytes, probe| {
+                    let gate = Arc::clone(&gate);
+                    let authority = Arc::clone(&authority);
+                    workers.authenticate(probe, move || {
+                        gate.hold();
+                        authority
+                            .verify_payload(offset / 320, offset / 320, &bytes)
+                            .map_err(RangeFetchError::Page)?;
+                        Ok(bytes)
+                    })
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    result = &mut work => panic!("held work finished: {result:?}"),
+                    () = tokio::task::yield_now() => {
+                        if gate.active.load(SeqCst) == 2 && store.state.active.load(SeqCst) == 4 { break; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        let release = Arc::clone(&gate);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            release.release();
+        });
+        drop(work);
+        assert!(
+            *gate.released.lock().unwrap(),
+            "cancellation waited for the bounded owned work"
+        );
+        assert_eq!(gate.active.load(SeqCst), 0);
+        assert_eq!(store.state.active.load(SeqCst), 0);
+        assert_eq!(*window.available.lock().unwrap(), bytes);
+        assert_eq!(
+            Arc::strong_count(&lifetime),
+            1,
+            "zero worker threads after cancellation"
+        );
+        assert_eq!(Arc::strong_count(&authority), 1, "generation pins returned");
+        releaser.join().unwrap();
     }
 
     fn source_tail_authority() -> (PageAuthority, Vec<u8>) {
@@ -7786,6 +8645,9 @@ mod tests {
         {
             Err(RangeFetchError::UnexpectedMetadata)
         }
+        let authenticate_async = |offset, bytes, probe| {
+            std::future::ready(authenticate_inline(probe, || authenticate(offset, bytes)))
+        };
         let reader = CapsuleRangeReader {
             store: &store,
             location: &location,
@@ -7793,7 +8655,8 @@ mod tests {
             etag: "etag",
             max_bytes: 16,
             budget: Some(&window),
-            authenticate: &authenticate,
+            authenticate: &authenticate_async,
+            workers: None,
             origin: None,
         };
         let range = 0..16;
