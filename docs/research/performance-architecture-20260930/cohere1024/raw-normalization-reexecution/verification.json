@@ -4,7 +4,8 @@
   "documentation_base_commit": "f58a4e6a48fc5ae3d3241816b89ba16e36eb8478",
   "evidence_host": {
     "instance": "i-0f168289eda791b07",
-    "region": "eu-central-1"
+    "region": "eu-central-1",
+    "role": "retained_EBS_metadata_documentation_only"
   },
   "native_source_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
   "native_source_parent_prefix": "a666",
@@ -86,5 +87,16 @@
     "scope": "two documents only; closed metadata read; JSON parse and static Git diff check",
     "native_or_build_or_tests_run": false,
     "payloads_read": false
+  },
+  "native_execution_host": {
+    "instance": "i-0bbe0101f1825806e",
+    "region": "eu-central-1",
+    "launch_ssm": "75313a64-78e8-4ccd-8890-84a5605b89ec",
+    "unit_invocation": "761d7d1e806b4b6b9ddd77f081de4711"
+  },
+  "followup_verification_host": {
+    "instance": "i-0bbe0101f1825806e",
+    "region": "eu-central-1",
+    "ssm": "50e5996c-f219-46b7-8eb7-9b714fba43e9"
   }
 }

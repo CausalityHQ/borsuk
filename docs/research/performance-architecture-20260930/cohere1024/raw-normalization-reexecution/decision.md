@@ -4,7 +4,7 @@ The raw-to-normalized positional mapping link is closed by a fresh source-bound 
 
 ## Exact evidence
 
-On Causality EC2 `i-0f168289eda791b07` in `eu-central-1`, the qualified producer from commit `7acbbb82d48078f46c0a163614db39eeee15afc7` (parent prefix `a666`) has ELF SHA-256 `d1b001f2aadffb2e36b10f081e47ff03dce6f66f290df9aaa48c8d441ff5f074`. Release evidence is `evidence/source-block32-packed-release-a0001`.
+Release qualification, native normalization and follow-up verification ran on Causality EC2 `i-0bbe0101f1825806e` in `eu-central-1`. The retained EBS metadata was later documented on `i-0f168289eda791b07`; that second instance did not rerun normalization. The qualified producer from commit `7acbbb82d48078f46c0a163614db39eeee15afc7` (parent prefix `a666`) has ELF SHA-256 `d1b001f2aadffb2e36b10f081e47ff03dce6f66f290df9aaa48c8d441ff5f074`. Release evidence is `evidence/source-block32-packed-release-a0001`.
 
 The API source is unchanged: `crates/borsuk/examples/build_sq8_source.rs` SHA-256 `a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd`; `crates/borsuk/src/sq8_source.rs` SHA-256 `16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795`.
 
