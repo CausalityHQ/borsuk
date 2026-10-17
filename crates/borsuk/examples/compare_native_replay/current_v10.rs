@@ -122,6 +122,25 @@ fn split_option(header: &Value) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
+    let Some(value) = header.get("semantic_leaf_limit") else {
+        return Ok(None);
+    };
+    let limit = usize::try_from(number(value)?)?;
+    require(
+        cpu_profile_config(header)
+            && header["range_scheduler_owner"] == "library"
+            && (1..=48).contains(&limit)
+            && match header["phase"].as_str() {
+                Some("identity") => header["schema"] == CPU_PROFILE_RESULT_SCHEMA,
+                Some("bound_inputs") => header["profile"] == "scale1m",
+                _ => false,
+            },
+        "semantic leaf limit requires current Scale1m and integer 1..=48",
+    )?;
+    Ok(Some(limit))
+}
+
 fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
     use borsuk::sq8_s3_range::SourceAuthentication;
     let Some(value) = inputs.get("source_authentication") else {
@@ -312,6 +331,9 @@ pub(super) fn validate_row_envelope(
         )?;
         number(&raw["source_authentication_extra_library_bytes"])?;
         roster.push_str(" source_authentication_extra_library_bytes");
+    }
+    if matches!(phase, "identity" | "bound_inputs") && semantic_leaf_limit(&raw)?.is_some() {
+        roster.push_str(" semantic_leaf_limit");
     }
     fields(&raw, &roster)?;
     if retry {
@@ -516,6 +538,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "source_byte_budget",
         "source_capsule_verification_policy",
         "source_authentication",
+        "semantic_leaf_limit",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }
@@ -574,6 +597,15 @@ pub(super) fn returned_ordinals(raw: &Value, rows: u64, width: u64) -> Result<Ve
 
 // Independent canonical cover oracle; this never invokes the serving planner.
 pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
+    if let Some(limit) = semantic_leaf_limit(inputs)? {
+        let leaves = raw["trace"]["semantic_leaves"]
+            .as_array()
+            .ok_or("semantic leaf prefix trace")?;
+        require(
+            !leaves.is_empty() && leaves.len() <= limit,
+            "semantic leaf prefix trace limit",
+        )?;
+    }
     let rows = number(&inputs["rows"])?;
     let dimensions = number(&inputs["dimensions"])?;
     let max_gets = number(&inputs["sq8_get_budget"])?;
@@ -2590,6 +2622,114 @@ mod tests {
             },
             expected_identity: rows[0].clone(),
             expected_bound_inputs: rows[1].clone(),
+        }
+    }
+
+    #[test]
+    fn semantic_leaf_limit_headers_are_strict_and_agree() {
+        let (dir, path) =
+            super::super::scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
+        let rows = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let original = handoff_fixture_pin(dir.path(), "leaf-default.jsonl", rows.clone());
+        validate_completed(&original).unwrap();
+        let identity: super::super::Identity =
+            serde_json::from_value(original.expected_identity.clone()).unwrap();
+        let inputs: super::super::Inputs =
+            serde_json::from_value(original.expected_bound_inputs.clone()).unwrap();
+        assert!(
+            serde_json::to_value(identity)
+                .unwrap()
+                .get("semantic_leaf_limit")
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(inputs)
+                .unwrap()
+                .get("semantic_leaf_limit")
+                .is_none()
+        );
+        for limit in [1, 40, 48] {
+            let mut selected = rows.clone();
+            for header in &mut selected[..2] {
+                header["semantic_leaf_limit"] = json!(limit);
+            }
+            let pin = handoff_fixture_pin(dir.path(), &format!("leaf-{limit}.jsonl"), selected);
+            validate_completed(&pin).unwrap();
+            super::super::read_run_with(&pin.input.path, &pin.input.sha256, Some(&pin)).unwrap();
+            let identity: super::super::Identity =
+                serde_json::from_value(pin.expected_identity.clone()).unwrap();
+            let inputs: super::super::Inputs =
+                serde_json::from_value(pin.expected_bound_inputs.clone()).unwrap();
+            assert_eq!(identity.semantic_leaf_limit, Some(limit));
+            assert_eq!(inputs.semantic_leaf_limit, Some(limit));
+            let mut mismatch = pin;
+            mismatch.expected_bound_inputs["semantic_leaf_limit"] =
+                json!(if limit == 40 { 48 } else { 40 });
+            assert!(validate_completed(&mismatch).is_err());
+            mismatch
+                .expected_bound_inputs
+                .as_object_mut()
+                .unwrap()
+                .remove("semantic_leaf_limit");
+            assert!(validate_completed(&mismatch).is_err());
+        }
+        let mut header = original.expected_bound_inputs.clone();
+        for invalid in [
+            Value::Null,
+            json!(0),
+            json!(49),
+            json!(usize::MAX),
+            json!("40"),
+            json!(40.0),
+            json!(true),
+            json!(-1),
+            json!({}),
+            json!([]),
+        ] {
+            header["semantic_leaf_limit"] = invalid;
+            assert!(semantic_leaf_limit(&header).is_err());
+        }
+        header["semantic_leaf_limit"] = json!(40);
+        for profile in ["native100k", "fresh1m", "graph"] {
+            header["profile"] = json!(profile);
+            assert!(semantic_leaf_limit(&header).is_err());
+        }
+        header["profile"] = json!("scale1m");
+        for schema in [
+            SOURCE_LAYOUT_CONFIG_SCHEMA,
+            ONEPASS_CONFIG_SCHEMA,
+            PAGE_RANGE_CONFIG_SCHEMA,
+        ] {
+            header["config_schema"] = json!(schema);
+            assert!(semantic_leaf_limit(&header).is_err());
+            header
+                .as_object_mut()
+                .unwrap()
+                .remove("semantic_leaf_limit");
+            assert_eq!(semantic_leaf_limit(&header).unwrap(), None);
+            header["semantic_leaf_limit"] = json!(40);
+        }
+    }
+
+    #[test]
+    fn semantic_leaf_limit_trace_uses_unchanged_geometry_model() {
+        let (mut query, mut inputs) = geometry();
+        validate_geometry(&query, &inputs).unwrap();
+        inputs["phase"] = json!("bound_inputs");
+        inputs["config_schema"] = json!(CPU_PROFILE_CONFIG_SCHEMA);
+        inputs["max_memory_bytes"] = json!(MEMORY_CAP);
+        inputs["profile"] = json!("scale1m");
+        inputs["range_scheduler_owner"] = json!("library");
+        inputs["semantic_leaf_limit"] = json!(1);
+        query["trace"] = json!({"semantic_leaves":[0]});
+        validate_geometry(&query, &inputs).unwrap();
+        for leaves in [json!([]), json!([0, 1]), Value::Null] {
+            query["trace"]["semantic_leaves"] = leaves;
+            assert!(validate_geometry(&query, &inputs).is_err());
         }
     }
 

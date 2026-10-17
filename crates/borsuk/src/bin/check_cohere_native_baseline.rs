@@ -311,6 +311,8 @@ struct Config {
     count: usize,
     k: usize,
     profile: SemanticProfile,
+    #[serde(default, deserialize_with = "explicit_semantic_leaf_limit")]
+    semantic_leaf_limit: Option<usize>,
     backend: Backend,
     #[serde(default)]
     s3_read_retry: Option<S3ReadRetryPolicy>,
@@ -338,6 +340,11 @@ struct Config {
     sq8_range_split: Option<Sq8RangeSplit>,
     serving: Serving,
     execution: Execution,
+}
+fn explicit_semantic_leaf_limit<'de, T: serde::Deserializer<'de>>(
+    deserializer: T,
+) -> std::result::Result<Option<usize>, T::Error> {
+    usize::deserialize(deserializer).map(Some)
 }
 fn explicit_sq8_range_split<'de, T: serde::Deserializer<'de>>(
     deserializer: T,
@@ -757,6 +764,12 @@ fn bounded_path(path: &Path) -> Result<()> {
     )
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    if let Some(limit) = c.semantic_leaf_limit {
+        require(
+            c.profile == SemanticProfile::Scale1m && (1..=48).contains(&limit),
+            "semantic leaf limit requires Scale1m and integer 1..=48",
+        )?;
+    }
     validate_population(c)?;
     require(
         c.max_memory_bytes > 0
@@ -2244,7 +2257,12 @@ async fn query_and_seal_with(
     p.transport.finish(&reader);
     out.emit(&json!({"phase":"generation_open","transport":p.transport,
         "success":generation.is_ok(),"truth_opened":false}))?;
-    let generation = generation?.with_source_authentication(c.source_authentication)?;
+    let generation = generation?;
+    let generation = match c.semantic_leaf_limit {
+        Some(limit) => generation.with_semantic_leaf_limit(limit)?,
+        None => generation,
+    };
+    let generation = generation.with_source_authentication(c.source_authentication)?;
     let generation = match c.shared_byte_window {
         Some(window) => generation.with_byte_window_limits(
             window.max_bytes,
@@ -2836,6 +2854,9 @@ fn execute_paths_status(
         if let Some(policy) = configured.as_ref().ok().and_then(|c| c.s3_read_retry) {
             identity["s3_read_retry"] = read_retry_identity(policy);
         }
+        if let Some(limit) = configured.as_ref().ok().and_then(|c| c.semantic_leaf_limit) {
+            identity["semantic_leaf_limit"] = json!(limit);
+        }
         out.emit(&identity)?;
         let c = configured?;
         let shape = population(&c, shape);
@@ -2864,6 +2885,9 @@ fn execute_paths_status(
         bound["max_memory_bytes"] = json!(c.max_memory_bytes);
         bound["source_byte_budget"] = json!(c.source_byte_budget);
         bound["source_authentication"] = json!(c.source_authentication);
+        if let Some(limit) = c.semantic_leaf_limit {
+            bound["semantic_leaf_limit"] = json!(limit);
+        }
         bound["source_layout"] = json!(c.source_layout);
         bound["config_schema"] = json!(CONFIG_SCHEMA);
         bound["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
@@ -3506,6 +3530,96 @@ mod tests {
                     "unapproved SOURCE budget"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn semantic_leaf_limit_config_strict_and_bound_before_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut value = config_value(dir.path(), shape);
+        value["profile"] = json!("scale1m");
+        let default: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&default, shape).unwrap();
+        assert_eq!(default.semantic_leaf_limit, None);
+        let pinned = pinned_bytes(&default).unwrap();
+        for limit in [None, Some(1), Some(40), Some(48)] {
+            let mut selected = value.clone();
+            if let Some(limit) = limit {
+                selected["semantic_leaf_limit"] = json!(limit);
+            }
+            let config: Config = serde_json::from_value(selected.clone()).unwrap();
+            validate_config(&config, shape).unwrap();
+            assert_eq!(config.semantic_leaf_limit, limit);
+            assert_eq!(pinned_bytes(&config).unwrap(), pinned);
+            let (path, sha) = write_config(dir.path(), &selected);
+            let output = dir.path().join(format!("leaf-limit-{limit:?}.jsonl"));
+            assert!(
+                !execute_paths_with(&path, &sha, &output, shape, |_, _, _, _| {
+                    Err("header-only semantic leaf limit fixture".into())
+                })
+                .unwrap()
+            );
+            let rows = records(&output);
+            for row in &rows[..2] {
+                assert_eq!(
+                    row.get("semantic_leaf_limit"),
+                    limit.map(|n| json!(n)).as_ref()
+                );
+            }
+        }
+        for invalid in [
+            Value::Null,
+            json!(true),
+            json!("40"),
+            json!(40.0),
+            json!(-1),
+            json!({}),
+            json!([]),
+            json!(u64::MAX.to_string()),
+        ] {
+            let mut bad = value.clone();
+            bad["semantic_leaf_limit"] = invalid;
+            assert!(serde_json::from_value::<Config>(bad).is_err());
+        }
+        let runtime = query_runtime(16).unwrap();
+        for (profile, limit) in [
+            ("scale1m", 0),
+            ("scale1m", 49),
+            ("scale1m", usize::MAX),
+            ("native100k", 1),
+            ("native100k", 40),
+            ("fresh1m", 48),
+        ] {
+            let mut bad = value.clone();
+            bad["profile"] = json!(profile);
+            bad["semantic_leaf_limit"] = json!(limit);
+            let mut config: Config = serde_json::from_value(bad).unwrap();
+            // Missing receipts/requests/truth would fail if admission reached input I/O.
+            config.cohort_receipt.path = dir.path().join("unopened-cohort");
+            config.derivation_receipt.path = dir.path().join("unopened-derivation");
+            config.requests.path = dir.path().join("unopened-requests");
+            config.truth.path = dir.path().join("unopened-truth");
+            let output = dir.path().join(format!("invalid-{profile}-{limit}.jsonl"));
+            let mut out = Output::create(&output).unwrap();
+            let mut progress = Progress::default();
+            let error = runtime
+                .block_on(query_and_seal_with(
+                    &config,
+                    shape,
+                    &mut out,
+                    &mut progress,
+                    || panic!("invalid semantic leaf policy opened the object store"),
+                ))
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.to_string(),
+                "semantic leaf limit requires Scale1m and integer 1..=48"
+            );
+            assert!(!progress.truth_opened);
+            assert_eq!(progress.completed, 0);
+            assert!(records(&output).is_empty());
         }
     }
 

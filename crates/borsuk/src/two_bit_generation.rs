@@ -996,6 +996,22 @@ pub struct RemoteOpenStats {
     pub router_head_wall_ns: u128,
 }
 
+#[derive(Clone, Copy)]
+struct SemanticLeafLimit(usize);
+
+impl SemanticLeafLimit {
+    fn new(limit: usize, profile: Option<SemanticProfile>) -> Result<Self> {
+        if !(1..=SemanticProfile::Scale1m.selected_leaf_limit()).contains(&limit)
+            || profile != Some(SemanticProfile::Scale1m)
+        {
+            return Err(TwoBitGenerationError::Invalid(
+                "semantic leaf limit requires Scale1m and 1..=48",
+            ));
+        }
+        Ok(Self(limit))
+    }
+}
+
 /// Immutable metadata; SQ8 rows are fetched conditionally and never cached here.
 pub struct TwoBitGeneration {
     root_sha256: String,
@@ -1013,6 +1029,7 @@ pub struct TwoBitGeneration {
     byte_window: Option<std::sync::Arc<InFlightBytes>>,
     sq8_range_split: Option<Sq8RangeSplit>,
     source_authentication: SourceAuthentication,
+    semantic_leaf_limit: Option<SemanticLeafLimit>,
 }
 
 /// One generation-pinned base fetch merged with a bounded immutable delta.
@@ -1608,6 +1625,15 @@ impl TwoBitGeneration {
     pub fn semantic_profile(&self) -> Option<SemanticProfile> {
         self.manifest.discovery.semantic_profile()
     }
+    /// Limit frozen squared-Euclidean leaf selection to an ordered prefix.
+    /// Only authenticated Scale1m semantic generations admit explicit limits 1..=48.
+    /// Omission retains the profile default; admission reserves remain unchanged.
+    pub fn with_semantic_leaf_limit(mut self, limit: usize) -> Result<Self> {
+        let limit = SemanticLeafLimit::new(limit, self.semantic_profile())?;
+        self.semantic_leaf_limit = Some(limit);
+        Ok(self)
+    }
+
     pub(crate) fn modeled_memory_bytes(&self) -> u64 {
         self.modeled_memory_bytes
     }
@@ -2634,6 +2660,7 @@ impl TwoBitGeneration {
             byte_window: None,
             sq8_range_split: None,
             source_authentication: SourceAuthentication::Inline,
+            semantic_leaf_limit: None,
         })
     }
     /// Authenticated concrete discovery mode.
@@ -2675,9 +2702,12 @@ impl TwoBitGeneration {
                 .discover_walks(normalized, trace)
                 .map(|walks| (walks, Vec::new()));
         };
-        let ids = router
+        let mut ids = router
             .select_leaves(normalized)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
+        if let Some(SemanticLeafLimit(limit)) = self.semantic_leaf_limit {
+            ids.truncate(limit);
+        }
         Ok((Self::semantic_walks(router, &ids, trace)?, ids))
     }
     fn plan_inner<'a>(
@@ -11096,6 +11126,14 @@ mod source_walk_tests {
     // low/step, nonzero codes, rows r, r+97, ... with identical codes and norm (exact
     // score ties whose ID order differs from ordinal order), and one tail row.
     async fn tiny_direct(rows: usize, dimensions: usize) -> TinyDirect {
+        tiny_direct_with_profile(rows, dimensions, SemanticProfile::Native100k).await
+    }
+
+    async fn tiny_direct_with_profile(
+        rows: usize,
+        dimensions: usize,
+        profile: SemanticProfile,
+    ) -> TinyDirect {
         use crate::two_bit_build::TwoBitGenerationBuilder;
         use crate::two_bit_source::TwoBitSource;
         use sha2::{Digest, Sha256};
@@ -11110,7 +11148,12 @@ mod source_walk_tests {
         let mut raw = Vec::new();
         let mut sq8 = Vec::new();
         for row in 0..rows {
-            let class = row % 97;
+            // Constant Scale1m vectors tie every authenticated leaf prototype.
+            let class = if profile == SemanticProfile::Scale1m {
+                0
+            } else {
+                row % 97
+            };
             let id = 5_000 - ((row * 7 + 3) % rows) as i64;
             let mut squared = 0_f64;
             let mut codes = Vec::with_capacity(dimensions);
@@ -11152,7 +11195,7 @@ mod source_walk_tests {
             sq8_object_key: key.as_ref(),
             sq8_etag: &etag,
         }
-        .build_with_discovery(Some(&order), DiscoveryMode::Semantic, &root, 128_000_000)
+        .build_with_semantic_profile(Some(&order), profile, &root, 128_000_000)
         .unwrap();
         let limits = TwoBitGenerationLimits {
             max_memory_bytes: 512 * 1024 * 1024,
@@ -11191,6 +11234,153 @@ mod source_walk_tests {
             low,
             step,
             limits,
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_leaf_prefix_tied_scale1m_default48_and_prefix40_parity() {
+        for dimensions in [2, 3] {
+            let tiny =
+                tiny_direct_with_profile(100_353, dimensions, SemanticProfile::Scale1m).await;
+            let query = vec![1.; dimensions];
+            let normalized = crate::sq8_source::cosine_vector(&query).unwrap();
+            let mut local_baseline = None;
+            for paged in [false, true] {
+                let mut baseline = None;
+                let mut prefix_baseline = None;
+                for limit in [None, Some(48), Some(40), Some(40), Some(1)] {
+                    let generation = if paged {
+                        TwoBitGeneration::open_remote(
+                            &tiny.store,
+                            &tiny.prefix,
+                            &tiny.root_sha,
+                            tiny.limits,
+                            tiny.temp.path(),
+                        )
+                        .await
+                        .unwrap()
+                    } else {
+                        TwoBitGeneration::open(
+                            &tiny.temp.path().join("generation"),
+                            &tiny.root_sha,
+                            tiny.limits,
+                        )
+                        .unwrap()
+                    };
+                    let model = generation.modeled_memory_bytes();
+                    let generation = match limit {
+                        Some(limit) => generation.with_semantic_leaf_limit(limit).unwrap(),
+                        None => generation,
+                    };
+                    assert_eq!(generation.modeled_memory_bytes(), model);
+                    let LoadedDiscovery::Semantic { router } = &generation.discovery else {
+                        panic!("semantic fixture");
+                    };
+                    assert!(router.manifest().leaves.len() >= 49);
+                    assert!(
+                        router
+                            .manifest()
+                            .leaves
+                            .iter()
+                            .all(|leaf| leaf.prototype == router.manifest().leaves[0].prototype)
+                    );
+                    // All squared-Euclidean distances tie: frozen rank_leaves orders by ID.
+                    let incumbent = router.select_leaves(&normalized).unwrap();
+                    assert_eq!(incumbent, (0..48).collect::<Vec<_>>());
+                    let expected_ids = &incumbent[..limit.unwrap_or(48)];
+                    let expected = router.nominate_selected(expected_ids).unwrap();
+                    let mut trace = TwoBitPlanTrace::default();
+                    let (walks, ids) = generation
+                        .source_walks(&normalized, Some(&mut trace))
+                        .unwrap();
+                    assert_eq!(ids, expected_ids);
+                    assert_eq!(walks, vec![(expected.seed_page, expected.walk_units)]);
+                    assert_eq!(trace.semantic_leaves, expected_ids);
+                    assert_eq!(
+                        trace.semantic_units,
+                        expected.units.into_iter().collect::<Vec<_>>()
+                    );
+                    assert_eq!(trace.semantic_seed_additions, expected.seed_additions);
+                    tiny.store.inner.reads.lock().unwrap().clear();
+                    let (result, trace) = generation
+                        .diagnostic_search_with_store(&tiny.store, &query, 10)
+                        .await
+                        .unwrap();
+                    let serving = (
+                        result.plan.clone(),
+                        ranking_bits(&result),
+                        serde_json::to_value(&trace).unwrap(),
+                    );
+                    let mut reads = tiny
+                        .store
+                        .inner
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .map(|r| (r.0.clone(), r.1, r.2.start, r.2.end, r.3.clone()))
+                        .collect::<Vec<_>>();
+                    reads.sort();
+                    let observed = (
+                        serving.clone(),
+                        result.source_stats,
+                        result.router_stats,
+                        result.ranked.stats,
+                        reads,
+                    );
+                    match limit {
+                        None => {
+                            if paged {
+                                assert_eq!(Some(&serving), local_baseline.as_ref());
+                            } else {
+                                local_baseline = Some(serving);
+                            }
+                            baseline = Some(observed);
+                        }
+                        Some(48) => assert_eq!(Some(&observed), baseline.as_ref()),
+                        Some(40) => {
+                            if let Some(expected) = &prefix_baseline {
+                                assert_eq!(&observed, expected);
+                            } else {
+                                prefix_baseline = Some(observed);
+                            }
+                        }
+                        Some(1) => assert_eq!(trace.semantic_leaves, vec![0]),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_leaf_limit_invalid_policies_do_no_io() {
+        for profile in [SemanticProfile::Native100k, SemanticProfile::Fresh1m] {
+            // Test the exact profile admission without a million-row Fresh1m payload.
+            for limit in [1, 40, 48] {
+                assert!(SemanticLeafLimit::new(limit, Some(profile)).is_err());
+            }
+        }
+        assert!(SemanticLeafLimit::new(40, None).is_err());
+        for profile in [SemanticProfile::Native100k, SemanticProfile::Scale1m] {
+            let tiny = tiny_direct_with_profile(513, 2, profile).await;
+            for limit in [0, 49, usize::MAX, 40] {
+                let generation = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &tiny.root_sha,
+                    tiny.limits,
+                    tiny.temp.path(),
+                )
+                .await
+                .unwrap();
+                tiny.store.inner.reads.lock().unwrap().clear();
+                assert_eq!(
+                    generation.with_semantic_leaf_limit(limit).is_ok(),
+                    profile == SemanticProfile::Scale1m && limit == 40,
+                );
+                assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            }
         }
     }
 
@@ -12875,6 +13065,10 @@ mod source_walk_tests {
             TwoBitGenerationError::Invalid("direct closure requires semantic discovery")
         ));
         assert_eq!(error.direct_resource_rejection(), None);
+        for limit in [1, 40, 48] {
+            let generation = TwoBitGeneration::open(&root, &root_sha, limits).unwrap();
+            assert!(generation.with_semantic_leaf_limit(limit).is_err());
+        }
     }
     // Small source-only fixture; publication is deliberately manual until the
     // separate store/GC owner adopts Manifest::files for v10.

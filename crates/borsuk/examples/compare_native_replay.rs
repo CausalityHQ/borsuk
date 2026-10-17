@@ -1178,6 +1178,8 @@ struct Identity {
     router_source_sha256: String,
     codec_source_sha256: String,
     source_plane_source_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    semantic_leaf_limit: Option<usize>,
     scope: String,
     physical_s3_measured: bool,
     io_measurement: String,
@@ -1239,6 +1241,8 @@ struct Inputs {
     truth_opened: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_get_budget: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    semantic_leaf_limit: Option<usize>,
 }
 
 impl Inputs {
