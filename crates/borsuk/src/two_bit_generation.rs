@@ -14,9 +14,9 @@ use crate::{
         plan_source_shortlist_blocks,
     },
     sq8_s3_range::{
-        InFlightBytes, OneAttemptS3, RankedSq8, RankedSq8Failure, Sq8RangeSplit, Sq8RangeTrace,
-        Sq8ReadStats, VerifiedRange, fetch_verified_ranges_traced_with_byte_window,
-        rank_verified_sq8_pages_traced_with_split,
+        InFlightBytes, OneAttemptS3, QueryProfile, RankedSq8, RankedSq8Failure, Sq8RangeSplit,
+        Sq8RangeTrace, Sq8ReadStats, SyncStart, VerifiedRange,
+        fetch_verified_ranges_traced_with_byte_window, rank_verified_sq8_pages_traced_with_split,
     },
     two_bit_mutations::{TwoBitMutationHit, TwoBitMutationSnapshot},
     two_bit_source::{SourceBuildError, SourcePlaneReceipt, TwoBitPlane, read_authenticated},
@@ -2582,14 +2582,25 @@ impl TwoBitGeneration {
             trace,
             &mut QueryStages::default(),
             std::time::Instant::now(),
+            None,
         )
         .await
     }
 
+    #[cfg(test)]
     async fn fetch_source_ranges(
         &self,
         store: &dyn ObjectStore,
         ranges: &[(usize, usize)],
+    ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats)> {
+        self.fetch_source_ranges_traced(store, ranges, None).await
+    }
+
+    async fn fetch_source_ranges_traced(
+        &self,
+        store: &dyn ObjectStore,
+        ranges: &[(usize, usize)],
+        mut trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats)> {
         let source = self
             .source
@@ -2605,7 +2616,7 @@ impl TwoBitGeneration {
                 self.limits.max_source_gets,
                 self.limits.max_source_bytes,
                 self.limits.max_parallel_source_gets,
-                None,
+                trace.as_deref_mut(),
                 self.byte_window.as_ref(),
             )
             .await
@@ -2644,7 +2655,7 @@ impl TwoBitGeneration {
                 self.limits.max_source_gets,
                 self.limits.max_source_bytes,
                 self.limits.max_parallel_source_gets,
-                None,
+                trace.as_deref_mut(),
                 self.byte_window.as_ref(),
             )
             .await
@@ -2689,43 +2700,62 @@ impl TwoBitGeneration {
         mut trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
+        mut profile: Option<&mut QueryProfile>,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
         if self.source.is_none() && self.capsules.is_none() {
             return Err(TwoBitGenerationError::Invalid("source binding"));
         }
-        let trace_bytes = if trace.is_some() {
-            TwoBitPlanTrace::scratch_bytes(self.rows())
-        } else {
-            0
-        };
-        let scratch = self
-            .limits
-            .max_query_scratch_bytes
-            .checked_sub(trace_bytes)
-            .ok_or(TwoBitGenerationError::Invalid("diagnostic scratch"))?;
-        let prepared = self
-            .plane
-            .prepare_query(query, scratch)
-            .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
-        let normalized = normalize_two_bit_diagnostic_query(query)?;
-        let result = self.source_walks(normalized.as_ref(), trace.as_deref_mut());
+        let discovery_cpu = profile.as_deref().map(|_| SyncStart::now());
+        let discovered: Result<_> = (|| {
+            let trace_bytes = if trace.is_some() {
+                TwoBitPlanTrace::scratch_bytes(self.rows())
+            } else {
+                0
+            };
+            let scratch = self
+                .limits
+                .max_query_scratch_bytes
+                .checked_sub(trace_bytes)
+                .ok_or(TwoBitGenerationError::Invalid("diagnostic scratch"))?;
+            let prepared = self
+                .plane
+                .prepare_query(query, scratch)
+                .map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(e)))?;
+            let normalized = normalize_two_bit_diagnostic_query(query)?;
+            let (walks, ids) = self.source_walks(normalized.as_ref(), trace.as_deref_mut())?;
+            Ok((prepared, normalized, walks, ids))
+        })();
+        if let (Some(profile), Some(cpu)) = (profile.as_deref_mut(), discovery_cpu) {
+            cpu.finish(&mut profile.discovery);
+        }
         stages.discovery.end_ns = started.elapsed().as_nanos();
-        let (walks, ids) = result?;
+        let (prepared, normalized, walks, ids) = discovered?;
         let router_stats = Sq8ReadStats::default();
         if let Some(capsules) = &self.capsules {
-            let units = admit_source_walks(self.rows(), &walks, self.semantic_profile())?;
-            let authority = self
-                .source
-                .as_ref()
-                .map(|s| &s.authority)
-                .or_else(|| capsules.local.as_ref().map(|(_, a)| a))
-                .ok_or(TwoBitGenerationError::Invalid("capsule authority"))?;
-            let request = capsules.request(&ids, units, authority, self.limits)?;
-            let proof_cap = capsules.proof_cap(&request.plan)?;
+            let cover_cpu = profile.as_deref().map(|_| SyncStart::now());
+            let cover: Result<_> = (|| {
+                let units = admit_source_walks(self.rows(), &walks, self.semantic_profile())?;
+                let authority = self
+                    .source
+                    .as_ref()
+                    .map(|s| &s.authority)
+                    .or_else(|| capsules.local.as_ref().map(|(_, a)| a))
+                    .ok_or(TwoBitGenerationError::Invalid("capsule authority"))?;
+                let request = capsules.request(&ids, units, authority, self.limits)?;
+                let proof_cap = capsules.proof_cap(&request.plan)?;
+                Ok((request, proof_cap))
+            })();
+            if let (Some(profile), Some(cpu)) = (profile.as_deref_mut(), cover_cpu) {
+                cpu.finish(&mut profile.cover);
+            }
+            let (request, proof_cap) = cover?;
             stages.source.start_ns = started.elapsed().as_nanos().max(1);
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.start_phase();
+            }
             let result = if let Some(source) = &self.source {
-                crate::sq8_s3_range::fetch_capsule_ranges(
+                crate::sq8_s3_range::fetch_capsule_ranges_traced(
                     store,
                     &source.location,
                     capsules.directory.blob_bytes(),
@@ -2735,6 +2765,7 @@ impl TwoBitGeneration {
                     self.limits.max_source_bytes,
                     self.limits.max_parallel_source_gets,
                     self.byte_window.as_ref(),
+                    profile.as_deref_mut().map(|profile| &mut profile.source),
                     |offset, bytes| {
                         authenticate_capsule_response(&request.plan, proof_cap, offset, bytes)
                     },
@@ -2746,9 +2777,24 @@ impl TwoBitGeneration {
                     .read_local(&request)
                     .map(|ranges| (ranges, Sq8ReadStats::default()))
             };
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.finish_phase();
+                if self.source.is_none() {
+                    profile.source.outcome = if result.is_ok() {
+                        "local_uninstrumented"
+                    } else {
+                        "local_failed"
+                    };
+                    if result.is_ok() {
+                        profile.source.retained_payload_bytes =
+                            Some(request.plan.charge().physical_bytes as u64);
+                    }
+                }
+            }
             stages.source.end_ns = started.elapsed().as_nanos();
             let (fetched, stats) = result?;
             stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+            let planning_cpu = profile.as_deref().map(|_| SyncStart::now());
             let plan = self
                 .plan_capsules(
                     capsules, &request, &fetched, &walks, &prepared, trace, stages,
@@ -2757,37 +2803,72 @@ impl TwoBitGeneration {
                     stats,
                     error: Box::new(error),
                 });
+            if let (Some(profile), Some(cpu)) = (profile.as_deref_mut(), planning_cpu) {
+                cpu.finish(&mut profile.planning);
+            }
             stages.planning.end_ns = started.elapsed().as_nanos();
-            let plan = plan?;
             drop(fetched);
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.released();
+            }
+            let plan = plan?;
             return Ok((plan, normalized, stats, router_stats));
         }
         async {
-            // Validate the same explicit discovery bounds before SOURCE cover/I/O.
-            let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
-                .into_iter()
-                .map(|unit| unit / 8)
-                .collect::<BTreeSet<_>>();
-            let width = self.plane.receipt().record_bytes;
-            let (cover, _) = plan_two_bit_source_cover(
-                &closure,
-                self.rows(),
-                width,
-                self.limits.max_source_gets,
-                self.limits.max_source_bytes,
-            )?;
-            let unit_bytes = width
-                .checked_mul(32)
-                .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
-            let ranges = cover
-                .iter()
-                .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
-                .collect::<Vec<_>>();
+            let cover_cpu = profile.as_deref().map(|_| SyncStart::now());
+            let covered: Result<_> = (|| {
+                // Validate the same explicit discovery bounds before SOURCE cover/I/O.
+                let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
+                    .into_iter()
+                    .map(|unit| unit / 8)
+                    .collect::<BTreeSet<_>>();
+                let width = self.plane.receipt().record_bytes;
+                let (cover, _) = plan_two_bit_source_cover(
+                    &closure,
+                    self.rows(),
+                    width,
+                    self.limits.max_source_gets,
+                    self.limits.max_source_bytes,
+                )?;
+                let unit_bytes = width
+                    .checked_mul(32)
+                    .ok_or(TwoBitGenerationError::Invalid("source unit geometry"))?;
+                let ranges = cover
+                    .iter()
+                    .map(|r| (r.start / unit_bytes, (r.end - 1) / unit_bytes))
+                    .collect::<Vec<_>>();
+                Ok(ranges)
+            })();
+            if let (Some(profile), Some(cpu)) = (profile.as_deref_mut(), cover_cpu) {
+                cpu.finish(&mut profile.cover);
+            }
+            let ranges = covered?;
             stages.source.start_ns = started.elapsed().as_nanos().max(1);
-            let fetched = self.fetch_source_ranges(store, &ranges).await;
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.start_phase();
+            }
+            let fetched = self
+                .fetch_source_ranges_traced(
+                    store,
+                    &ranges,
+                    profile.as_deref_mut().map(|profile| &mut profile.source),
+                )
+                .await;
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.finish_phase();
+            }
             stages.source.end_ns = started.elapsed().as_nanos();
             let (verified, stats) = fetched?;
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.retained_payload_bytes =
+                    Some(verified.iter().map(|range| range.bytes.len() as u64).sum());
+                if profile.source.outcome == "started" {
+                    profile.source.outcome = "cache_hit";
+                }
+            }
+            let width = self.plane.receipt().record_bytes;
             stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+            let planning_cpu = profile.as_deref().map(|_| SyncStart::now());
             let plan = self
                 .plan_walks(
                     &walks,
@@ -2808,9 +2889,15 @@ impl TwoBitGeneration {
                     stats,
                     error: Box::new(error),
                 });
+            if let (Some(profile), Some(cpu)) = (profile.as_deref_mut(), planning_cpu) {
+                cpu.finish(&mut profile.planning);
+            }
             stages.planning.end_ns = started.elapsed().as_nanos();
-            let plan = plan?;
             drop(verified);
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.source.released();
+            }
+            let plan = plan?;
             Ok((plan, normalized, stats, router_stats))
         }
         .await
@@ -3229,7 +3316,7 @@ impl TwoBitGeneration {
         store: &dyn ObjectStore,
         query: &[f32],
         top_k: usize,
-        range_trace: &mut Sq8RangeTrace,
+        range_trace: &mut QueryProfile,
     ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
         // Before every early return: a reused trace must not show a previous query as this one.
         range_trace.refuse();
@@ -3240,6 +3327,7 @@ impl TwoBitGeneration {
             range_trace,
             self.physical_sq8_cap(self.limits.max_query_gets),
             self.modeled_memory_bytes,
+            self.limits.max_source_gets,
         )?;
         let _permit = self
             .slots
@@ -3267,21 +3355,19 @@ impl TwoBitGeneration {
     // Callers pin only their own buffers, not this library-owned diagnostic state.
     fn admit_range_trace(
         &self,
-        trace: &Sq8RangeTrace,
+        trace: &QueryProfile,
         max_gets: usize,
         admitted_total: u64,
+        max_source_gets: usize,
     ) -> Result<()> {
         let bad = TwoBitGenerationError::Invalid;
-        if trace.capacity() < max_gets {
+        if trace.sq8.capacity() < max_gets || trace.source.capacity() < max_source_gets {
             return Err(bad("diagnostic range capacity"));
         }
-        let diagnostic = trace
-            .reserved_bytes(self.limits.max_parallel_gets)
-            .checked_sub(Sq8RangeTrace::pending_futures_bytes(
-                trace.capacity(),
-                self.limits.max_parallel_gets,
-            ))
-            .ok_or(bad("diagnostic memory"))?;
+        // Ordinary admission already owns the scheduler. Both buffers stay retained;
+        // only the larger of the two phase-specific probe rosters can coexist.
+        let diagnostic =
+            QueryProfile::additional_bytes(trace.source.capacity(), trace.sq8.capacity());
         let bytes = (diagnostic as u64)
             .checked_mul(self.limits.max_active_queries as u64)
             .and_then(|n| n.checked_add(admitted_total))
@@ -3299,7 +3385,7 @@ impl TwoBitGeneration {
         top_k: usize,
         excluded_ids: Option<&[i64]>,
         trace: Option<&mut TwoBitPlanTrace>,
-        mut range_trace: Option<&mut Sq8RangeTrace>,
+        mut range_trace: Option<&mut QueryProfile>,
     ) -> Result<TwoBitSearchResult> {
         let started = std::time::Instant::now();
         if let Some(range_trace) = range_trace.as_deref_mut() {
@@ -3340,7 +3426,7 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
-        range_trace: Option<&mut Sq8RangeTrace>,
+        mut range_trace: Option<&mut QueryProfile>,
     ) -> Result<TwoBitSearchResult> {
         let row_bytes = self.pages.dimensions() + 12;
         // Plain search promises k rows. Refuse an impossible physical budget
@@ -3352,11 +3438,22 @@ impl TwoBitGeneration {
         }
         let (plan, normalized, source_stats, router_stats) =
             if self.source.is_some() || self.capsules.is_some() {
-                self.plan_paged_measured(store, query, trace, stages, started)
-                    .await?
+                self.plan_paged_measured(
+                    store,
+                    query,
+                    trace,
+                    stages,
+                    started,
+                    range_trace.as_deref_mut(),
+                )
+                .await?
             } else {
                 stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
+                let cpu = range_trace.as_deref().map(|_| SyncStart::now());
                 let result = self.plan_inner(query, trace);
+                if let (Some(profile), Some(cpu)) = (range_trace.as_deref_mut(), cpu) {
+                    cpu.finish(&mut profile.discovery);
+                }
                 stages.discovery.end_ns = started.elapsed().as_nanos();
                 let (plan, normalized) = result?;
                 (
@@ -3386,6 +3483,9 @@ impl TwoBitGeneration {
             .map(|r| (r.start / page_bytes, (r.end - 1) / page_bytes))
             .collect::<Vec<_>>();
         stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
+        if let Some(profile) = range_trace.as_deref_mut() {
+            profile.sq8.start_phase();
+        }
         let ranked = rank_verified_sq8_pages_traced_with_split(
             store,
             &ObjectPath::from(self.manifest.sq8_object_key.clone()),
@@ -3400,11 +3500,14 @@ impl TwoBitGeneration {
             self.limits.max_query_bytes,
             self.limits.max_parallel_gets,
             excluded_ids.unwrap_or(&[]),
-            range_trace,
+            range_trace.as_deref_mut().map(|profile| &mut profile.sq8),
             self.byte_window.as_ref(),
             self.sq8_range_split,
         )
         .await;
+        if let Some(profile) = range_trace.as_deref_mut() {
+            profile.sq8.finish_phase();
+        }
         stages.sq8.end_ns = started.elapsed().as_nanos();
         let ranked = ranked.map_err(|sq8| {
             TwoBitGenerationError::charged_read(source_stats, sq8).with_router(router_stats)
@@ -3521,7 +3624,7 @@ impl TwoBitGeneration {
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
         traced: bool,
-        range_trace: Option<&Sq8RangeTrace>,
+        range_trace: Option<&QueryProfile>,
     ) -> Result<()> {
         let bad = TwoBitGenerationError::Invalid;
         if query.len() != self.pages.dimensions() {
@@ -3570,6 +3673,7 @@ impl TwoBitGeneration {
                 range_trace,
                 self.physical_sq8_cap(limits.max_sq8_gets),
                 memory.total_bytes,
+                0,
             )?;
         }
         Ok(())
@@ -3681,20 +3785,31 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
         started: std::time::Instant,
-        range_trace: Option<&mut Sq8RangeTrace>,
+        mut range_trace: Option<&mut QueryProfile>,
     ) -> Result<TwoBitSearchResult> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
+        let cpu = range_trace.as_deref().map(|_| SyncStart::now());
         let discovered = normalize_two_bit_diagnostic_query(query).and_then(|normalized| {
             let walks = self.local_walks(normalized.as_ref(), trace)?;
             Ok((normalized, walks))
         });
+        if let (Some(profile), Some(cpu)) = (range_trace.as_deref_mut(), cpu) {
+            cpu.finish(&mut profile.discovery);
+        }
         stages.discovery.end_ns = started.elapsed().as_nanos();
         let (normalized, walks) = discovered?;
         stages.planning.start_ns = started.elapsed().as_nanos().max(1);
+        let cpu = range_trace.as_deref().map(|_| SyncStart::now());
         let plan = self.direct_closure_plan(&walks, limits);
+        if let (Some(profile), Some(cpu)) = (range_trace.as_deref_mut(), cpu) {
+            cpu.finish(&mut profile.cover);
+        }
         stages.planning.end_ns = started.elapsed().as_nanos();
         let plan = plan?;
         stages.sq8.start_ns = started.elapsed().as_nanos().max(1);
+        if let Some(profile) = range_trace.as_deref_mut() {
+            profile.sq8.start_phase();
+        }
         let ranked = self
             .direct_closure_rank(
                 store,
@@ -3703,9 +3818,12 @@ impl TwoBitGeneration {
                 top_k,
                 excluded_ids,
                 limits,
-                range_trace,
+                range_trace.as_deref_mut().map(|profile| &mut profile.sq8),
             )
             .await;
+        if let Some(profile) = range_trace.as_deref_mut() {
+            profile.sq8.finish_phase();
+        }
         stages.sq8.end_ns = started.elapsed().as_nanos();
         Ok(TwoBitSearchResult {
             plan,
@@ -3726,7 +3844,7 @@ impl TwoBitGeneration {
         excluded_ids: Option<&[i64]>,
         limits: DirectClosureLimits,
         trace: Option<&mut TwoBitPlanTrace>,
-        mut range_trace: Option<&mut Sq8RangeTrace>,
+        mut range_trace: Option<&mut QueryProfile>,
     ) -> Result<TwoBitSearchResult> {
         self.admit_direct_closure(
             query,
@@ -3826,7 +3944,7 @@ impl TwoBitGeneration {
         query: &[f32],
         top_k: usize,
         limits: DirectClosureLimits,
-        range_trace: &mut Sq8RangeTrace,
+        range_trace: &mut QueryProfile,
     ) -> Result<(TwoBitSearchResult, TwoBitPlanTrace)> {
         // Before every early return inside admission, for the same reason as the baseline entry.
         range_trace.refuse();
@@ -4734,7 +4852,7 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
-    async fn native_cold_fetch_parallelism_parity_and_drain() {
+    async fn cpu_profile_failure_drain_and_slot_parity() {
         use crate::sq8_s3_range::{
             RangeFetchError,
             cold_http_fixture::{ETAG, Fixture, Request},
@@ -4929,10 +5047,19 @@ mod source_walk_tests {
                 // delayed truncated stream, while ordinal 2 is a held valid
                 // sibling. SOURCE also has queued requests beyond ordinal 32.
                 for (stage, cover) in [(0, &source_cover), (1, &plan.ranges)] {
+                    for tracing in [false, true] {
+                    let mut profile = QueryProfile::new(128, 32).unwrap();
                     let starts = [cover[0].start, cover[1].start, cover[2].start];
                     fixture.arm(Some((stage, starts)));
                     let before = fixture.reader.transport_stats();
-                    let mut query_future = Box::pin(generation.diagnostic_search_with_store(fixture.reader.store(), &query, 10));
+                    crate::sq8_s3_range::PROFILE_CLOCK_READS.with(|reads| reads.set(0));
+                    let mut query_future = Box::pin(async {
+                        if tracing {
+                            generation.diagnostic_search_with_store_traced(fixture.reader.store(), &query, 10, &mut profile).await
+                        } else {
+                            generation.diagnostic_search_with_store(fixture.reader.store(), &query, 10).await
+                        }
+                    });
                     tokio::select! {
                         _ = &mut query_future => panic!("returned before earlier stream error was released"),
                         () = fixture.wait(|s| s.finished[stage].contains(&starts[1]) && s.active[stage] >= 2) => {}
@@ -4950,6 +5077,22 @@ mod source_walk_tests {
                     }
                     fixture.release_sibling();
                     let error = query_future.await.err().unwrap();
+                    let clocks = crate::sq8_s3_range::PROFILE_CLOCK_READS.with(|reads| reads.get());
+                    if tracing {
+                        assert!(clocks > 0);
+                        let failed_trace = if stage == 0 { &profile.source } else { &profile.sq8 };
+                        assert_eq!(failed_trace.outcome, "fetch_failed");
+                        assert_eq!(failed_trace.ranges().len(), cover.len());
+                        assert!(failed_trace.cpu.authentication.is_some());
+                        assert_eq!(failed_trace.rank_thread_cpu_ns, None);
+                        assert!(failed_trace.unattributed_process_cpu_ns.is_some());
+                        if stage == 0 {
+                            assert_eq!(profile.sq8.planned_ranges, 0);
+                            assert_eq!(profile.sq8.phase_process_cpu_ns, None);
+                            assert_eq!(profile.planning, None);
+                        }
+                    } else { assert_eq!(clocks, 0); }
+
                     fn first_error(error: &TwoBitGenerationError) -> &RangeFetchError {
                         match error {
                             TwoBitGenerationError::Query { error, .. } | TwoBitGenerationError::RouterCharged { error, .. } => first_error(error),
@@ -4979,6 +5122,7 @@ mod source_walk_tests {
                     assert_eq!(after.stream_failures - before.stream_failures, 1);
                     let charged = source_bytes + if stage == 1 { plan.planned_bytes } else { 0 };
                     assert_eq!(after.consumed_payload_bytes - before.consumed_payload_bytes, (charged - 1) as u64);
+                    }
                 }
             }
             fixture.finish();
@@ -9028,7 +9172,7 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
-    async fn generation_sq8_split_admission_and_serving_parity() {
+    async fn cpu_profile_success_parity_split() {
         let ClassFixture {
             temp,
             root_sha,
@@ -9099,7 +9243,7 @@ mod source_walk_tests {
                 .map(|hit| (hit.ordinal, hit.id, hit.score.to_bits()))
                 .collect::<Vec<_>>()
         };
-        let mut narrow = Sq8RangeTrace::new(limits.max_query_gets).unwrap();
+        let mut narrow = QueryProfile::new(128, limits.max_query_gets).unwrap();
         fixture.arm(None);
         assert!(
             generation
@@ -9113,7 +9257,7 @@ mod source_walk_tests {
                 .is_err()
         );
         assert!(fixture.snapshot().requests.is_empty());
-        let mut trace = Sq8RangeTrace::new(split.max_physical_gets).unwrap();
+        let mut trace = QueryProfile::new(128, split.max_physical_gets).unwrap();
         let (ranked, _) = run_source_and_sq8_http(
             &fixture,
             generation.diagnostic_search_with_store_traced(
@@ -9132,7 +9276,10 @@ mod source_walk_tests {
             ranked.ranked.stats.verified_bytes
         );
         assert_eq!(plain.source_stats, ranked.source_stats);
-        assert_eq!(ranked.ranked.stats.submitted_gets, trace.ranges().len());
+        assert_eq!(ranked.ranked.stats.submitted_gets, trace.sq8.ranges().len());
+        assert!(trace.sq8.regroup.is_some() && trace.sq8.rank_thread_cpu_ns.is_some());
+        assert!(trace.source.cpu.authentication.is_some());
+
         assert!(
             fixture
                 .snapshot()
@@ -10506,9 +10653,10 @@ mod source_walk_tests {
             .await
             .unwrap();
         assert_eq!(generation.slots.available_permits(), 2);
-        let mut trace = Sq8RangeTrace::new(128).unwrap();
-        let trace_bytes =
-            2 * (trace.reserved_bytes(16) - Sq8RangeTrace::pending_futures_bytes(128, 16)) as u64;
+        let mut trace = QueryProfile::new(128, 128).unwrap();
+        let trace_bytes = 2
+            * (QueryProfile::additional_bytes(trace.source.capacity(), trace.sq8.capacity()))
+                as u64;
         generation.limits.max_memory_bytes = memory.total_bytes + trace_bytes - 1;
         tiny.store.inner.reads.lock().unwrap().clear();
         {
@@ -10531,7 +10679,7 @@ mod source_walk_tests {
             ));
         }
         assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
-        assert_eq!(trace.outcome, "admission_refused");
+        assert_eq!(trace.sq8.outcome, "admission_refused");
         generation.limits.max_memory_bytes = memory.total_bytes + trace_bytes;
         generation
             .diagnostic_direct_closure_search_with_store_traced(
@@ -10543,7 +10691,7 @@ mod source_walk_tests {
             )
             .await
             .unwrap();
-        assert_eq!(trace.outcome, "ranked");
+        assert_eq!(trace.sq8.outcome, "ranked");
         assert_eq!(generation.slots.available_permits(), 2);
         assert!(
             range_scheduler_memory(
@@ -10975,7 +11123,7 @@ mod source_walk_tests {
     }
 
     #[tokio::test]
-    async fn native_sq8_range_trace_parity_overlap_and_critical_path_for_baseline_and_direct() {
+    async fn cpu_profile_success_parity_flat_and_direct() {
         let deadline = Instant::now() + Duration::from_secs(90);
         tokio::time::timeout(Duration::from_secs(90), async {
             let ClassFixture {
@@ -11019,7 +11167,7 @@ mod source_walk_tests {
             .await
             .unwrap();
             let plain_wire = wire(&fixture);
-            let mut trace = Sq8RangeTrace::new(32).unwrap();
+            let mut trace = QueryProfile::new(128, 32).unwrap();
             let (traced, traced_plan) = run_source_and_sq8_http(
                 &fixture,
                 generation.diagnostic_search_with_store_traced(store, &query, 10, &mut trace),
@@ -11035,20 +11183,44 @@ mod source_walk_tests {
                 serde_json::to_value(&traced_plan).unwrap(),
                 serde_json::to_value(&plain_plan).unwrap()
             );
-            // Only the SQ8 wave is traced; SOURCE reads stay untraced and unchanged.
-            assert_eq!(trace.ranges().len(), traced.plan.ranges.len());
-            for (span, range) in trace.ranges().iter().zip(&traced.plan.ranges) {
+            // Both waves are observed, without changing physical reads or retained payload order.
+            assert_eq!(
+                trace.source.ranges().len(),
+                traced.source_stats.submitted_gets
+            );
+            assert_eq!(
+                trace.source.cpu.collector_copied_bytes,
+                traced.source_stats.verified_bytes as u64
+            );
+            assert_eq!(trace.source.cpu.owned_copied_bytes, 0);
+            assert!(trace.source.cpu.authentication.is_some());
+            assert!(
+                trace.source.release_end_ns.unwrap()
+                    >= trace.source.all_ranges_complete_ns.unwrap()
+            );
+            assert!(trace.discovery.is_some() && trace.cover.is_some() && trace.planning.is_some());
+            assert!(
+                trace.source.phase_process_cpu_ns.is_some()
+                    && trace.sq8.phase_process_cpu_ns.is_some()
+            );
+            assert!(trace.sq8.rank_thread_cpu_ns.is_some());
+            assert_eq!(trace.acquisition_poll_cpu, "unresolved_not_instrumented");
+            let source_json = serde_json::to_value(trace.source_summary()).unwrap();
+            assert!(source_json.get("ranges").is_none());
+            assert!(source_json["last_completing_range"].is_array());
+            assert_eq!(trace.sq8.ranges().len(), traced.plan.ranges.len());
+            for (span, range) in trace.sq8.ranges().iter().zip(&traced.plan.ranges) {
                 assert_eq!(
                     (span.start_byte, span.end_byte),
                     (range.start as u64, range.end as u64)
                 );
                 assert_eq!(span.outcome, "ok");
             }
-            assert_eq!(trace.outcome, "ranked");
+            assert_eq!(trace.sq8.outcome, "ranked");
             assert_eq!(generation.slots.available_permits(), 1);
 
             // Direct: two bodies are held in flight at once, then released.
-            let mut direct_trace = Sq8RangeTrace::new(32).unwrap();
+            let mut direct_trace = QueryProfile::new(128, 32).unwrap();
             fixture.arm(None);
             let work = generation.diagnostic_direct_closure_search_with_store_traced(
                 store,
@@ -11079,14 +11251,26 @@ mod source_walk_tests {
             assert_eq!(ranking_bits(&direct), ranking_bits(&plain_direct));
             assert_eq!(direct.source_stats, plain_direct.source_stats);
             assert!(direct.source_nomination_skipped);
+            assert!(direct_trace.source.ranges().is_empty());
+            assert_eq!(
+                direct_trace.source.cpu,
+                crate::sq8_s3_range::RangeCpu::default()
+            );
+            assert_eq!(direct_trace.source.phase_process_cpu_ns, None);
+            assert!(direct_trace.discovery.is_some() && direct_trace.cover.is_some());
+            assert_eq!(direct_trace.planning, None);
+            assert!(direct_trace.sq8.rank_thread_cpu_ns.is_some());
 
             let cover = &direct.plan.ranges;
             assert!(cover.len() > 2);
-            assert_eq!(direct_trace.outcome, "ranked");
-            assert_eq!(direct_trace.planned_ranges as usize, cover.len());
-            assert_eq!(direct_trace.planned_bytes, direct.plan.planned_bytes as u64);
-            assert_eq!(direct_trace.dropped_ranges, 0);
-            let spans = direct_trace.ranges();
+            assert_eq!(direct_trace.sq8.outcome, "ranked");
+            assert_eq!(direct_trace.sq8.planned_ranges as usize, cover.len());
+            assert_eq!(
+                direct_trace.sq8.planned_bytes,
+                direct.plan.planned_bytes as u64
+            );
+            assert_eq!(direct_trace.sq8.dropped_ranges, 0);
+            let spans = direct_trace.sq8.ranges();
             assert_eq!(spans.len(), cover.len());
             for (span, range) in spans.iter().zip(cover) {
                 assert_eq!(
@@ -11119,17 +11303,17 @@ mod source_walk_tests {
                 })
             }));
             // Authentication of every range precedes the barrier, and ranking follows it.
-            let all = direct_trace.all_ranges_complete_ns.unwrap();
+            let all = direct_trace.sq8.all_ranges_complete_ns.unwrap();
             assert!(spans.iter().all(|span| span.complete_ns.unwrap() <= all));
             let (rank_start, rank_end) = (
-                direct_trace.rank_start_ns.unwrap(),
-                direct_trace.rank_end_ns.unwrap(),
+                direct_trace.sq8.rank_start_ns.unwrap(),
+                direct_trace.sq8.rank_end_ns.unwrap(),
             );
             assert!(all <= rank_start && rank_start <= rank_end);
             // The payload is released after ranking, still inside the SQ8 stage.
-            let release_end = direct_trace.release_end_ns.unwrap();
+            let release_end = direct_trace.sq8.release_end_ns.unwrap();
             assert!(rank_end <= release_end);
-            let phases = direct_trace.rank.unwrap();
+            let phases = direct_trace.sq8.rank.unwrap();
             assert_eq!(phases.ranges as usize, cover.len());
             assert_eq!(
                 phases.rows as usize,
@@ -11137,7 +11321,7 @@ mod source_walk_tests {
             );
             // The trace shares the stage origin: it sits inside the SQ8 stage.
             let stage = direct.stages.sq8;
-            assert!(stage.start_ns <= u128::from(direct_trace.fetch_start_ns.unwrap()));
+            assert!(stage.start_ns <= u128::from(direct_trace.sq8.fetch_start_ns.unwrap()));
             assert!(u128::from(release_end) <= stage.end_ns);
             fixture.finish();
         })
@@ -11165,13 +11349,9 @@ mod source_walk_tests {
             max_sq8_gets: 1,
         };
         let query = tiny_query(dimensions);
-        let mut trace = Sq8RangeTrace::new(1).unwrap();
-        let charge = |trace: &Sq8RangeTrace, generation: &TwoBitGeneration| {
-            (trace.reserved_bytes(generation.limits.max_parallel_gets)
-                - Sq8RangeTrace::pending_futures_bytes(
-                    trace.capacity(),
-                    generation.limits.max_parallel_gets,
-                )) as u64
+        let mut trace = QueryProfile::new(128, 1).unwrap();
+        let charge = |trace: &QueryProfile, generation: &TwoBitGeneration| {
+            (QueryProfile::additional_bytes(trace.source.capacity(), trace.sq8.capacity())) as u64
                 * generation.limits.max_active_queries as u64
         };
         let direct_charge = charge(&trace, &generation);
@@ -11198,7 +11378,7 @@ mod source_walk_tests {
         assert!(error.stages().is_none());
         assert!(reads.lock().unwrap().is_empty());
         assert_eq!(generation.slots.available_permits(), 1);
-        assert_eq!(trace.outcome, "admission_refused");
+        assert_eq!(trace.sq8.outcome, "admission_refused");
         // The direct model itself is unchanged: the same cap still admits untraced search.
         generation
             .direct_closure_search_with_store(&tiny.store, &query, 10, None, dlimits)
@@ -11218,10 +11398,10 @@ mod source_walk_tests {
             .await
             .unwrap();
         assert_eq!(result.ranked.stats.submitted_gets, 1);
-        assert_eq!((trace.outcome, trace.ranges().len()), ("ranked", 1));
+        assert_eq!((trace.sq8.outcome, trace.sq8.ranges().len()), ("ranked", 1));
         // A buffer smaller than the GET cap is refused first, before any request.
         reads.lock().unwrap().clear();
-        let mut narrow = Sq8RangeTrace::new(1).unwrap();
+        let mut narrow = QueryProfile::new(128, 1).unwrap();
         let wide = DirectClosureLimits {
             max_sq8_gets: 2,
             ..dlimits
@@ -11262,7 +11442,7 @@ mod source_walk_tests {
         assert!(reads.lock().unwrap().is_empty());
         // Baseline traced search has the same two refusals, ahead of the slot.
         generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
-        let mut one = Sq8RangeTrace::new(1).unwrap();
+        let mut one = QueryProfile::new(128, 1).unwrap();
         let error = generation
             .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut one)
             .await
@@ -11272,7 +11452,26 @@ mod source_walk_tests {
             error,
             TwoBitGenerationError::Invalid("diagnostic range capacity")
         ));
-        let mut full = Sq8RangeTrace::new(32).unwrap();
+        if generation.limits.max_source_gets > 1 {
+            let mut short_source =
+                QueryProfile::new(generation.limits.max_source_gets - 1, 32).unwrap();
+            let _held = generation.slots.try_acquire().unwrap();
+            let mut refused = std::pin::pin!(generation.diagnostic_search_with_store_traced(
+                &tiny.store,
+                &query,
+                10,
+                &mut short_source
+            ));
+            let std::task::Poll::Ready(Err(error)) = futures_util::poll!(refused.as_mut()) else {
+                panic!("SOURCE trace capacity refusal must precede a held query slot");
+            };
+            assert!(matches!(
+                error,
+                TwoBitGenerationError::Invalid("diagnostic range capacity")
+            ));
+            assert!(reads.lock().unwrap().is_empty());
+        }
+        let mut full = QueryProfile::new(128, 32).unwrap();
         generation.limits.max_memory_bytes =
             generation.modeled_memory_bytes() + charge(&full, &generation) - 1;
         let error = generation
@@ -11284,7 +11483,7 @@ mod source_walk_tests {
             error,
             TwoBitGenerationError::Invalid("diagnostic memory")
         ));
-        assert_eq!(full.outcome, "admission_refused");
+        assert_eq!(full.sq8.outcome, "admission_refused");
         assert!(reads.lock().unwrap().is_empty());
         assert_eq!(generation.slots.available_permits(), 1);
     }
@@ -11316,50 +11515,47 @@ mod source_walk_tests {
             store: &SqFaultStore,
             query: &[f32],
             limits: DirectClosureLimits,
-            trace: &mut Sq8RangeTrace,
+            trace: &mut QueryProfile,
         ) {
             generation
                 .diagnostic_direct_closure_search_with_store_traced(store, query, 10, limits, trace)
                 .await
                 .unwrap();
-            assert_eq!((trace.outcome, trace.ranges().len()), ("ranked", 1));
-            assert!(trace.rank.is_some() && trace.all_ranges_complete_ns.is_some());
+            assert_eq!((trace.sq8.outcome, trace.sq8.ranges().len()), ("ranked", 1));
+            assert!(trace.sq8.rank.is_some() && trace.sq8.all_ranges_complete_ns.is_some());
         }
-        let pristine = |trace: &Sq8RangeTrace, outcome: &str, case: &str| {
-            assert_eq!(trace.outcome, outcome, "{case}");
-            assert!(trace.ranges().is_empty(), "{case}");
+        let pristine = |trace: &QueryProfile, outcome: &str, case: &str| {
+            assert_eq!(trace.sq8.outcome, outcome, "{case}");
+            assert!(trace.sq8.ranges().is_empty(), "{case}");
             assert_eq!(
                 (
-                    trace.planned_ranges,
-                    trace.planned_bytes,
-                    trace.max_parallel,
-                    trace.dropped_ranges
+                    trace.sq8.planned_ranges,
+                    trace.sq8.planned_bytes,
+                    trace.sq8.max_parallel,
+                    trace.sq8.dropped_ranges
                 ),
                 (0, 0, 0, 0),
                 "{case}"
             );
             assert_eq!(
                 (
-                    trace.fetch_start_ns,
-                    trace.all_ranges_complete_ns,
-                    trace.rank_start_ns,
-                    trace.rank_end_ns
+                    trace.sq8.fetch_start_ns,
+                    trace.sq8.all_ranges_complete_ns,
+                    trace.sq8.rank_start_ns,
+                    trace.sq8.rank_end_ns
                 ),
                 (None, None, None, None),
                 "{case}"
             );
-            assert_eq!(trace.release_end_ns, None, "{case}");
-            assert_eq!(trace.rank, None, "{case}");
+            assert_eq!(trace.sq8.release_end_ns, None, "{case}");
+            assert_eq!(trace.sq8.rank, None, "{case}");
         };
-        let mut trace = Sq8RangeTrace::new(32).unwrap();
-        let mut narrow = Sq8RangeTrace::new(1).unwrap();
+        let mut trace = QueryProfile::new(128, 32).unwrap();
+        let mut narrow = QueryProfile::new(128, 1).unwrap();
         let memory = generation.direct_closure_memory(dlimits).unwrap();
-        let direct_charge = (trace.reserved_bytes(generation.limits.max_parallel_gets)
-            - Sq8RangeTrace::pending_futures_bytes(
-                trace.capacity(),
-                generation.limits.max_parallel_gets,
-            )) as u64
-            * generation.limits.max_active_queries as u64;
+        let direct_charge =
+            (QueryProfile::additional_bytes(trace.source.capacity(), trace.sq8.capacity())) as u64
+                * generation.limits.max_active_queries as u64;
         let wide = DirectClosureLimits {
             max_sq8_gets: 2,
             ..dlimits
@@ -11449,12 +11645,9 @@ mod source_walk_tests {
         pristine(&trace, "started", "direct planned bytes");
 
         // Baseline entry: the same guarantee for its three early refusals.
-        let baseline_charge = (trace.reserved_bytes(generation.limits.max_parallel_gets)
-            - Sq8RangeTrace::pending_futures_bytes(
-                trace.capacity(),
-                generation.limits.max_parallel_gets,
-            )) as u64
-            * generation.limits.max_active_queries as u64;
+        let baseline_charge =
+            (QueryProfile::additional_bytes(trace.source.capacity(), trace.sq8.capacity())) as u64
+                * generation.limits.max_active_queries as u64;
         let cases: [(&str, bool, usize, bool); 3] = [
             ("baseline top_k zero", false, 0, false),
             ("baseline narrow capacity", true, 10, false),
@@ -11510,7 +11703,7 @@ mod source_walk_tests {
             max_sq8_gets: 1,
         };
         let query = tiny_query(dimensions);
-        let mut trace = Sq8RangeTrace::new(1).unwrap();
+        let mut trace = QueryProfile::new(128, 1).unwrap();
         let failed = Sq8ReadStats {
             submitted_gets: 1,
             verified_bytes: 0,
@@ -11564,9 +11757,9 @@ mod source_walk_tests {
                 .unwrap();
             assert_eq!(error.read_stats().1, failed, "{fault}");
             assert_eq!(generation.slots.available_permits(), 1, "{fault}");
-            assert_eq!(trace.outcome, "fetch_failed", "{fault}");
-            assert_eq!(trace.ranges().len(), 1, "{fault}");
-            let span = trace.ranges()[0];
+            assert_eq!(trace.sq8.outcome, "fetch_failed", "{fault}");
+            assert_eq!(trace.sq8.ranges().len(), 1, "{fault}");
+            let span = trace.sq8.ranges()[0];
             assert_eq!(span.outcome, outcome, "{fault}");
             assert_eq!(
                 (span.start_byte, span.end_byte),
@@ -11585,12 +11778,16 @@ mod source_walk_tests {
             assert_eq!(span.auth_end_ns.is_some(), auth, "{fault}");
             assert_eq!(span.body_bytes, body as u64, "{fault}");
             // The drain completed before the failure was reported; ranking never started.
-            assert!(trace.all_ranges_complete_ns.is_some(), "{fault}");
+            assert!(trace.sq8.all_ranges_complete_ns.is_some(), "{fault}");
             assert_eq!(
-                (trace.rank_start_ns, trace.rank_end_ns, trace.release_end_ns),
+                (
+                    trace.sq8.rank_start_ns,
+                    trace.sq8.rank_end_ns,
+                    trace.sq8.release_end_ns
+                ),
                 (None, None, None)
             );
-            assert_eq!(trace.rank, None);
+            assert_eq!(trace.sq8.rank, None);
         }
         *tiny.store.fault.lock().unwrap() = "ok";
         let (traced, _) = generation
@@ -11610,7 +11807,10 @@ mod source_walk_tests {
         assert_eq!(traced.plan, plain.plan);
         assert_eq!(traced.ranked.stats, plain.ranked.stats);
         assert_eq!(ranking_bits(&traced), ranking_bits(&plain));
-        assert_eq!((trace.outcome, trace.ranges()[0].outcome), ("ranked", "ok"));
+        assert_eq!(
+            (trace.sq8.outcome, trace.sq8.ranges()[0].outcome),
+            ("ranked", "ok")
+        );
         assert_eq!(generation.slots.available_permits(), 1);
     }
 
@@ -11790,7 +11990,7 @@ mod source_walk_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn page_range_v2_rank_plan_parity_admission_and_no_sq8_after_failure() {
+    async fn cpu_profile_success_parity_capsule_and_no_sq8_after_failure() {
         use crate::two_bit_build::{TwoBitGenerationBuilder, repackage_source_layout};
         use crate::two_bit_source::TwoBitSource;
         use sha2::{Digest, Sha256};
@@ -11890,11 +12090,13 @@ mod source_walk_tests {
                 .unwrap();
             for generation in [&local, &remote] {
                 crate::source_capsule::reset_hash_bytes();
+                tiny.store.inner.reads.lock().unwrap().clear();
                 let (actual, trace) = generation
                     .diagnostic_search_with_store(&tiny.store, &query, 10)
                     .await
                     .unwrap();
                 let hashed_bytes = crate::source_capsule::hash_bytes();
+                let plain_reads = tiny.store.inner.reads.lock().unwrap().clone();
                 assert_eq!(actual.plan, baseline.plan);
                 assert_eq!(ranking_bits(&actual), ranking_bits(&baseline));
                 assert_eq!(
@@ -11922,6 +12124,34 @@ mod source_walk_tests {
                     capsule_stats.physical_bytes - capsule_stats.framing_bytes
                 );
                 assert!(actual.stages.sq8.start_ns >= actual.stages.source.end_ns);
+                let mut profile = QueryProfile::new(128, 32).unwrap();
+                tiny.store.inner.reads.lock().unwrap().clear();
+                let (profiled, profiled_plan) = generation
+                    .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut profile)
+                    .await
+                    .unwrap();
+                assert_eq!(*tiny.store.inner.reads.lock().unwrap(), plain_reads);
+                assert_eq!(profiled.plan, actual.plan);
+                assert_eq!(ranking_bits(&profiled), ranking_bits(&actual));
+                assert_eq!(profiled.source_stats, actual.source_stats);
+                assert_eq!(profiled.ranked.stats, actual.ranked.stats);
+                assert_eq!(
+                    serde_json::to_value(&profiled_plan).unwrap(),
+                    serde_json::to_value(&trace).unwrap()
+                );
+                if generation.source.is_some() {
+                    assert_eq!(
+                        profile.source.cpu.collector_copied_bytes,
+                        actual.source_stats.verified_bytes as u64
+                    );
+                    assert_eq!(
+                        profile.source.cpu.owned_copied_bytes,
+                        actual.source_stats.verified_bytes as u64
+                    );
+                    assert!(profile.source.cpu.authentication.is_some());
+                    assert!(profile.source.cpu.owned_allocation.is_some());
+                    assert!(profile.source.release_end_ns.is_some());
+                }
                 crate::source_capsule::reset_hash_bytes();
                 let ordinary = generation
                     .search_with_store(&tiny.store, &query, 10, None)
@@ -12104,6 +12334,16 @@ mod source_walk_tests {
                     .await
                     .err()
                     .unwrap();
+                let mut profile = QueryProfile::new(128, 32).unwrap();
+                let profiled_error = generation
+                    .diagnostic_search_with_store_traced(&tiny.store, &query, 10, &mut profile)
+                    .await
+                    .err()
+                    .unwrap();
+                assert_eq!(profiled_error.read_stats(), error.read_stats());
+                assert_eq!(profile.source.outcome, "fetch_failed");
+                assert_eq!(profile.sq8.rank_thread_cpu_ns, None);
+                assert_eq!(profile.sq8.planned_ranges, 0);
                 assert_eq!(error.read_stats().0.submitted_gets, 1);
                 assert_eq!(error.read_stats().1, Sq8ReadStats::default());
                 assert!(

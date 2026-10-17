@@ -1218,6 +1218,10 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_split(
         budget,
     )
     .await?;
+    let regroup = trace
+        .as_deref()
+        .filter(|_| split.is_some())
+        .map(|_| SyncStart::now());
     if split.is_some() {
         // Preserve the exact original scoring groups, including kernel tail behavior.
         let mut pieces = verified.into_iter();
@@ -1242,9 +1246,14 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_split(
         }
         assert!(pieces.next().is_none());
     }
+    if let (Some(trace), Some(regroup)) = (trace.as_deref_mut(), regroup) {
+        regroup.finish(&mut trace.regroup);
+        trace.regroup_copied_bytes = stats.verified_bytes as u64;
+    }
     if let Some(trace) = trace.as_deref_mut() {
         trace.rank_start_ns = Some(trace.now_ns());
     }
+    let rank_cpu = trace.as_deref().map(|_| thread_cpu_ns());
     let returned = verified
         .iter()
         .map(|range| ReturnedRange {
@@ -1267,7 +1276,10 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_split(
         excluded_ids,
         phases.as_mut(),
     );
+    let rank_cpu = rank_cpu.map(|start| thread_cpu_ns().saturating_sub(start));
     if let Some(trace) = trace.as_deref_mut() {
+        trace.rank_thread_cpu_ns = rank_cpu;
+        trace.rank_clock_reads = 2;
         trace.rank_end_ns = Some(trace.now_ns());
     }
     // The payload is freed here, in the order the end of the function always freed it (the
@@ -1462,7 +1474,7 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
     for (_, submitted, (outcome, probe)) in outcomes {
         stats.submitted_gets += usize::from(submitted);
         if let (Some(trace), Some(probe)) = (trace.as_deref_mut(), probe) {
-            trace.push(probe.span);
+            trace.push_probe(*probe);
         }
         match outcome {
             Ok(value) => {
@@ -1476,6 +1488,7 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
         }
     }
     if let Some(trace) = trace.as_deref_mut() {
+        trace.retained_payload_bytes = Some(stats.verified_bytes as u64);
         trace.outcome = if first_error.is_some() {
             "fetch_failed"
         } else {
@@ -1525,6 +1538,7 @@ async fn fetch_verified_pages_traced(
     let mut probe = probe.map(|(origin, index)| {
         Box::new(Probe {
             origin,
+            cpu: RangeCpu::default(),
             span: RangeSpan::new(
                 index,
                 first_page,
@@ -1642,16 +1656,8 @@ async fn fetch_verified_pages_core(
         probe.as_deref_mut(),
     )
     .await?;
-    stamp(&mut probe, |span, ns| {
-        span.auth_start_ns = Some(ns);
-        span.outcome = "page_auth";
-    });
-    let authenticated = authority.verify_payload(first_page, last_page, &bytes);
-    stamp(&mut probe, |span, ns| {
-        span.auth_end_ns = Some(ns);
-        if authenticated.is_ok() {
-            span.outcome = "ok";
-        }
+    let authenticated = measured_auth(&mut probe, || {
+        authority.verify_payload(first_page, last_page, &bytes)
     });
     authenticated.map_err(RangeFetchError::Page)?;
     Ok(VerifiedRange {
@@ -1711,7 +1717,11 @@ async fn fetch_exact_range_core(
         span.metadata_ns = Some(ns);
         span.outcome = "store_body";
     });
+    let allocation = probe.as_deref().map(|_| SyncStart::now());
     let mut collected = BytesMut::with_capacity(expected_len);
+    if let (Some(probe), Some(allocation)) = (probe.as_deref_mut(), allocation) {
+        allocation.finish(&mut probe.cpu.collector_allocation);
+    }
     let mut mark = probe.as_deref().map(Probe::now_ns);
     loop {
         let next = stream.next().await;
@@ -1737,7 +1747,15 @@ async fn fetch_exact_range_core(
             stamp(&mut probe, |span, _| span.outcome = "overlong");
             return Err(RangeFetchError::UnexpectedMetadata);
         }
+        let copy = probe.as_deref().map(|_| SyncStart::now());
         collected.extend_from_slice(&chunk);
+        if let (Some(probe), Some(copy)) = (probe.as_deref_mut(), copy) {
+            copy.finish(&mut probe.cpu.collector_copy);
+            probe.cpu.collector_copied_bytes = probe
+                .cpu
+                .collector_copied_bytes
+                .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        }
         mark = probe.as_deref().map(Probe::now_ns);
         if let (Some(probe), Some(from), Some(to)) = (probe.as_deref_mut(), arrived, mark) {
             probe.span.note_copy(from, to);
@@ -1749,10 +1767,14 @@ async fn fetch_exact_range_core(
 
 // Include both the growing ordered-outcome vector and the retained result vector.
 pub(crate) fn capsule_fetch_descriptor_bytes<T>(ranges: usize) -> Option<usize> {
-    std::mem::size_of::<(usize, bool, Result<T, RangeFetchError>)>()
-        .checked_mul(OUTCOME_VECTOR_GROWTH_FACTOR)?
-        .checked_add(std::mem::size_of::<T>())?
-        .checked_mul(ranges)
+    std::mem::size_of::<(
+        usize,
+        bool,
+        (Result<T, RangeFetchError>, Option<Box<Probe>>),
+    )>()
+    .checked_mul(OUTCOME_VECTOR_GROWTH_FACTOR)?
+    .checked_add(std::mem::size_of::<T>())?
+    .checked_mul(ranges)
 }
 
 struct CapsuleRangeReader<'a, A> {
@@ -1763,6 +1785,7 @@ struct CapsuleRangeReader<'a, A> {
     max_bytes: usize,
     budget: Option<&'a Arc<InFlightBytes>>,
     authenticate: &'a A,
+    origin: Option<Instant>,
 }
 
 impl<A: Sync> CapsuleRangeReader<'_, A> {
@@ -1770,18 +1793,36 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
         &self,
         index: usize,
         range: &std::ops::Range<usize>,
-    ) -> (usize, bool, Result<T, RangeFetchError>)
+    ) -> (
+        usize,
+        bool,
+        (Result<T, RangeFetchError>, Option<Box<Probe>>),
+    )
     where
         A: Fn(usize, Vec<u8>) -> Result<T, RangeFetchError>,
     {
         let _permit = if let Some(budget) = self.budget {
             match budget.reserve(range.len()).await {
                 Some(permit) => Some(permit),
-                None => return (index, false, Err(RangeFetchError::UnexpectedMetadata)),
+                None => {
+                    return (
+                        index,
+                        false,
+                        (Err(RangeFetchError::UnexpectedMetadata), None),
+                    );
+                }
             }
         } else {
             None
         };
+        let mut probe = self.origin.map(|origin| {
+            Box::new(Probe {
+                origin,
+                // Physical capsule covers do not have one logical page interval.
+                span: RangeSpan::new(index, usize::MAX, usize::MAX, Some(range.clone())),
+                cpu: RangeCpu::default(),
+            })
+        });
         let result = async {
             let body = fetch_exact_range_core(
                 self.store,
@@ -1790,26 +1831,39 @@ impl<A: Sync> CapsuleRangeReader<'_, A> {
                 self.object_bytes,
                 self.etag,
                 self.max_bytes,
-                None,
+                probe.as_deref_mut(),
             )
             .await?;
             if body.len() != range.len() {
                 return Err(RangeFetchError::UnexpectedMetadata);
             }
+            let allocation = probe.as_deref().map(|_| SyncStart::now());
             let mut bytes = Vec::new();
-            bytes
-                .try_reserve_exact(body.len())
-                .map_err(|_| RangeFetchError::UnexpectedMetadata)?;
+            let allocated = bytes.try_reserve_exact(body.len());
+            if let (Some(probe), Some(allocation)) = (probe.as_deref_mut(), allocation) {
+                allocation.finish(&mut probe.cpu.owned_allocation);
+            }
+            allocated.map_err(|_| RangeFetchError::UnexpectedMetadata)?;
             // The generation admits two full framed copies; reject excess capacity.
             if bytes.capacity() > range.len() {
                 return Err(RangeFetchError::UnexpectedMetadata);
             }
+            let copy = probe.as_deref().map(|_| SyncStart::now());
             bytes.extend_from_slice(&body);
+            if let (Some(probe), Some(copy)) = (probe.as_deref_mut(), copy) {
+                copy.finish(&mut probe.cpu.owned_copy);
+                probe.cpu.owned_copied_bytes = body.len() as u64;
+            }
             drop(body);
-            (self.authenticate)(range.start, bytes)
+            measured_auth(&mut probe.as_deref_mut(), || {
+                (self.authenticate)(range.start, bytes)
+            })
         }
         .await;
-        (index, true, result)
+        if let Some(probe) = probe.as_deref_mut() {
+            probe.span.complete_ns = Some(probe.now_ns());
+        }
+        (index, true, (result, probe))
     }
 }
 
@@ -1827,6 +1881,7 @@ async fn drain_ordered<F: std::future::Future>(
     outcomes
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_capsule_ranges<T>(
     store: &dyn ObjectStore,
@@ -1840,10 +1895,49 @@ pub(crate) async fn fetch_capsule_ranges<T>(
     budget: Option<&Arc<InFlightBytes>>,
     authenticate: impl Fn(usize, Vec<u8>) -> Result<T, RangeFetchError> + Sync,
 ) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_capsule_ranges_traced(
+        store,
+        location,
+        object_bytes,
+        ranges,
+        etag,
+        max_gets,
+        max_bytes,
+        max_parallel,
+        budget,
+        None,
+        authenticate,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_capsule_ranges_traced<T>(
+    store: &dyn ObjectStore,
+    location: &Path,
+    object_bytes: usize,
+    ranges: &[std::ops::Range<usize>],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    budget: Option<&Arc<InFlightBytes>>,
+    mut trace: Option<&mut Sq8RangeTrace>,
+    authenticate: impl Fn(usize, Vec<u8>) -> Result<T, RangeFetchError> + Sync,
+) -> Result<(Vec<T>, Sq8ReadStats), RankedSq8Failure> {
     let fail = || RankedSq8Failure {
         error: RangeFetchError::UnexpectedMetadata,
         stats: Sq8ReadStats::default(),
     };
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.outcome = "rejected_before_io";
+    }
+    if trace
+        .as_deref()
+        .is_some_and(|trace| ranges.len() > trace.capacity())
+    {
+        return Err(fail());
+    }
     if ranges.is_empty()
         || ranges.len() > max_gets
         || max_parallel == 0
@@ -1869,6 +1963,14 @@ pub(crate) async fn fetch_capsule_ranges<T>(
             .ok_or_else(fail)?;
         previous = range.end;
     }
+    let origin = trace.as_deref_mut().map(|trace| {
+        trace.outcome = "fetching";
+        trace.planned_ranges = u32::try_from(ranges.len()).unwrap_or(u32::MAX);
+        trace.planned_bytes = bytes as u64;
+        trace.max_parallel = u32::try_from(max_parallel.min(ranges.len())).unwrap_or(u32::MAX);
+        trace.fetch_start_ns = Some(trace.now_ns());
+        trace.origin
+    });
     let reader = CapsuleRangeReader {
         store,
         location,
@@ -1877,6 +1979,7 @@ pub(crate) async fn fetch_capsule_ranges<T>(
         max_bytes,
         budget,
         authenticate: &authenticate,
+        origin,
     };
     let outcomes = drain_ordered(
         // Keep borrowed range lifetimes out of the future factory's input.
@@ -1885,10 +1988,16 @@ pub(crate) async fn fetch_capsule_ranges<T>(
         |(index, _, _)| *index,
     )
     .await;
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.all_ranges_complete_ns = Some(trace.now_ns());
+    }
     let mut stats = Sq8ReadStats::default();
     let mut fetched = Vec::with_capacity(ranges.len());
     let mut first_error = None;
-    for (index, submitted, outcome) in outcomes {
+    for (index, submitted, (outcome, probe)) in outcomes {
+        if let (Some(trace), Some(probe)) = (trace.as_deref_mut(), probe) {
+            trace.push_probe(*probe);
+        }
         stats.submitted_gets += usize::from(submitted);
         match outcome {
             Ok(range) => {
@@ -1901,16 +2010,255 @@ pub(crate) async fn fetch_capsule_ranges<T>(
             }
         }
     }
+    if let Some(trace) = trace.as_deref_mut() {
+        trace.retained_payload_bytes = Some(stats.verified_bytes as u64);
+        trace.outcome = if first_error.is_some() {
+            "fetch_failed"
+        } else {
+            "fetched"
+        };
+    }
     if let Some(error) = first_error {
         return Err(RankedSq8Failure { error, stats });
     }
     Ok((fetched, stats))
 }
 
+/// CPU on the calling thread for one synchronous scope; wall includes descheduling.
+/// Clock reads count only the added profile clocks, not pre-existing range stamps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CpuWall {
+    pub thread_cpu_ns: u64,
+    pub wall_ns: u64,
+    pub clock_reads: u64,
+}
+
+impl CpuWall {
+    fn add_to(self, total: &mut Option<Self>) {
+        let total = total.get_or_insert_with(Self::default);
+        total.thread_cpu_ns = total.thread_cpu_ns.saturating_add(self.thread_cpu_ns);
+        total.wall_ns = total.wall_ns.saturating_add(self.wall_ns);
+        total.clock_reads = total.clock_reads.saturating_add(self.clock_reads);
+    }
+}
+
+/// Never retain this across an await: the two thread clocks must run in one poll.
+pub(crate) struct SyncStart {
+    wall: Instant,
+    cpu: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PROFILE_CLOCK_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn profile_clock_read() {
+    #[cfg(test)]
+    PROFILE_CLOCK_READS.with(|reads| reads.set(reads.get() + 1));
+}
+
+fn cpu_ns(clock: rustix::time::ClockId) -> u64 {
+    profile_clock_read();
+    let time = rustix::time::clock_gettime(clock);
+    u64::try_from(time.tv_sec)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::try_from(time.tv_nsec).unwrap_or(u64::MAX))
+}
+
+fn thread_cpu_ns() -> u64 {
+    cpu_ns(rustix::time::ClockId::ThreadCPUTime)
+}
+
+impl SyncStart {
+    pub(crate) fn now() -> Self {
+        profile_clock_read();
+        Self {
+            wall: Instant::now(),
+            cpu: thread_cpu_ns(),
+        }
+    }
+
+    pub(crate) fn finish(self, total: &mut Option<CpuWall>) {
+        let cpu = thread_cpu_ns().saturating_sub(self.cpu);
+        profile_clock_read();
+        CpuWall {
+            thread_cpu_ns: cpu,
+            wall_ns: ns_since(self.wall),
+            clock_reads: 4,
+        }
+        .add_to(total);
+    }
+}
+
+/// Fixed aggregates, never events or per-vector-element clocks. Unreached scopes are null.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RangeCpu {
+    pub collector_allocation: Option<CpuWall>,
+    pub collector_copy: Option<CpuWall>,
+    pub owned_allocation: Option<CpuWall>,
+    pub owned_copy: Option<CpuWall>,
+    pub authentication: Option<CpuWall>,
+    pub collector_copied_bytes: u64,
+    pub owned_copied_bytes: u64,
+}
+
+impl RangeCpu {
+    fn add(&mut self, other: Self) {
+        for (from, to) in [
+            (other.collector_allocation, &mut self.collector_allocation),
+            (other.collector_copy, &mut self.collector_copy),
+            (other.owned_allocation, &mut self.owned_allocation),
+            (other.owned_copy, &mut self.owned_copy),
+            (other.authentication, &mut self.authentication),
+        ] {
+            if let Some(from) = from {
+                from.add_to(to);
+            }
+        }
+        self.collector_copied_bytes = self
+            .collector_copied_bytes
+            .saturating_add(other.collector_copied_bytes);
+        self.owned_copied_bytes = self
+            .owned_copied_bytes
+            .saturating_add(other.owned_copied_bytes);
+    }
+
+    fn thread_cpu_ns(&self) -> u64 {
+        [
+            self.collector_allocation,
+            self.collector_copy,
+            self.owned_allocation,
+            self.owned_copy,
+            self.authentication,
+        ]
+        .into_iter()
+        .flatten()
+        .fold(0u64, |sum, scope| sum.saturating_add(scope.thread_cpu_ns))
+    }
+}
+
+/// One opt-in query owns both reservations; SOURCE emits only its aggregate and last span.
+#[derive(Debug, serde::Serialize)]
+pub struct QueryProfile {
+    #[serde(skip)]
+    pub source: Sq8RangeTrace,
+    #[serde(skip)]
+    pub sq8: Sq8RangeTrace,
+    pub discovery: Option<CpuWall>,
+    pub cover: Option<CpuWall>,
+    pub planning: Option<CpuWall>,
+    /// shortcut: consumer polls are not instrumented, add only with forwarding/layout proof.
+    pub acquisition_poll_cpu: &'static str,
+}
+
+impl QueryProfile {
+    pub fn new(source_ranges: usize, sq8_ranges: usize) -> Result<Self, &'static str> {
+        if Self::modeled_bytes(source_ranges, sq8_ranges, source_ranges, sq8_ranges)
+            > SQ8_TRACE_MAX_BYTES
+        {
+            return Err("query profile capacity");
+        }
+        Ok(Self {
+            source: Sq8RangeTrace::new(source_ranges)?,
+            sq8: Sq8RangeTrace::new(sq8_ranges)?,
+            discovery: None,
+            cover: None,
+            planning: None,
+            acquisition_poll_cpu: "unresolved_not_instrumented",
+        })
+    }
+
+    pub fn retained_bytes(source_ranges: usize, sq8_ranges: usize) -> usize {
+        std::mem::size_of::<Self>().saturating_add(
+            source_ranges
+                .saturating_add(sq8_ranges)
+                .saturating_mul(std::mem::size_of::<RangeSpan>()),
+        )
+    }
+
+    /// Both buffers survive both phases. Only one phase has probes/futures at a time.
+    /// Separate maxima conservatively cover different SOURCE/SQ8 parallel limits.
+    pub fn additional_bytes(source_ranges: usize, sq8_ranges: usize) -> usize {
+        Self::retained_bytes(source_ranges, sq8_ranges).saturating_add(
+            source_ranges.max(sq8_ranges).saturating_mul(
+                std::mem::size_of::<Probe>().saturating_add(ALLOCATION_ALLOWANCE_BYTES),
+            ),
+        )
+    }
+
+    pub fn modeled_bytes(
+        source_ranges: usize,
+        sq8_ranges: usize,
+        source_parallel: usize,
+        sq8_parallel: usize,
+    ) -> usize {
+        Self::additional_bytes(source_ranges, sq8_ranges).saturating_add(
+            Sq8RangeTrace::pending_futures_bytes(source_ranges, source_parallel).max(
+                Sq8RangeTrace::pending_futures_bytes(sq8_ranges, sq8_parallel),
+            ),
+        )
+    }
+
+    pub fn begin(&mut self, origin: Instant) {
+        self.source.begin(origin);
+        self.sq8.begin(origin);
+        self.discovery = None;
+        self.cover = None;
+        self.planning = None;
+    }
+
+    pub fn refuse(&mut self) {
+        self.source.refuse();
+        self.sq8.refuse();
+        self.discovery = None;
+        self.cover = None;
+        self.planning = None;
+    }
+
+    pub fn source_summary(&self) -> SourceRangeSummary<'_> {
+        let source = &self.source;
+        SourceRangeSummary {
+            outcome: source.outcome,
+            planned_ranges: source.planned_ranges,
+            planned_bytes: source.planned_bytes,
+            max_parallel: source.max_parallel,
+            fetch_start_ns: source.fetch_start_ns,
+            all_ranges_complete_ns: source.all_ranges_complete_ns,
+            release_end_ns: source.release_end_ns,
+            retained_payload_bytes: source.retained_payload_bytes,
+            cpu: &source.cpu,
+            phase_process_cpu_ns: source.phase_process_cpu_ns,
+            unattributed_process_cpu_ns: source.unattributed_process_cpu_ns(),
+            phase_clock_reads: source.phase_clock_reads,
+            last_completing_range: source.ranges.iter().max_by_key(|span| span.complete_ns),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct SourceRangeSummary<'a> {
+    outcome: &'static str,
+    planned_ranges: u32,
+    planned_bytes: u64,
+    max_parallel: u32,
+    fetch_start_ns: Option<u64>,
+    all_ranges_complete_ns: Option<u64>,
+    release_end_ns: Option<u64>,
+    retained_payload_bytes: Option<u64>,
+    cpu: &'a RangeCpu,
+    phase_process_cpu_ns: Option<u64>,
+    unattributed_process_cpu_ns: Option<u64>,
+    phase_clock_reads: u64,
+    last_completing_range: Option<&'a RangeSpan>,
+}
+
 /// A range's diagnostic state while its future runs: private to that future.
 struct Probe {
     origin: Instant,
     span: RangeSpan,
+    cpu: RangeCpu,
 }
 
 // Keep test instrumentation outside the async frame and its admission model.
@@ -1937,6 +2285,39 @@ fn stamp(probe: &mut Option<&mut Probe>, set: impl FnOnce(&mut RangeSpan, u64)) 
         let ns = probe.now_ns();
         set(&mut probe.span, ns);
     }
+}
+
+// The CPU pair brackets only authentication; wall reuses the existing auth stamps.
+fn measured_auth<T, E>(
+    probe: &mut Option<&mut Probe>,
+    authenticate: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    stamp(probe, |span, ns| {
+        span.auth_start_ns = Some(ns);
+        span.outcome = "page_auth";
+    });
+    let cpu = probe.as_deref().map(|_| thread_cpu_ns());
+    let result = authenticate();
+    let cpu = cpu.map(|start| thread_cpu_ns().saturating_sub(start));
+    stamp(probe, |span, ns| {
+        span.auth_end_ns = Some(ns);
+        if result.is_ok() {
+            span.outcome = "ok";
+        }
+    });
+    if let (Some(probe), Some(cpu)) = (probe.as_deref_mut(), cpu) {
+        CpuWall {
+            thread_cpu_ns: cpu,
+            wall_ns: probe
+                .span
+                .auth_end_ns
+                .unwrap()
+                .saturating_sub(probe.span.auth_start_ns.unwrap()),
+            clock_reads: 2,
+        }
+        .add_to(&mut probe.cpu.authentication);
+    }
+    result
 }
 
 /// Upper bounds for one query's opt-in range diagnostics.
@@ -2151,6 +2532,20 @@ pub struct Sq8RangeTrace {
     /// last boundary of the SQ8 stage. None whenever ranking was never reached.
     pub release_end_ns: Option<u64>,
     pub rank: Option<RankPhases>,
+    pub cpu: RangeCpu,
+    pub regroup: Option<CpuWall>,
+    pub regroup_copied_bytes: u64,
+    pub rank_thread_cpu_ns: Option<u64>,
+    pub rank_clock_reads: u64,
+    /// Verified body bytes retained after the drain, before planning/ranking.
+    /// This is not the SDK/TLS heap and can be nonzero in a failed, discarded batch.
+    pub retained_payload_bytes: Option<u64>,
+    /// Coarse process CPU includes sibling/connection work; residual is never TLS CPU.
+    pub phase_process_cpu_ns: Option<u64>,
+    pub unattributed_process_cpu_ns: Option<u64>,
+    pub phase_clock_reads: u64,
+    #[serde(skip)]
+    phase_cpu_start: Option<u64>,
     /// Private so the reservation made by `new` cannot be swapped out; read through `ranges()`.
     ranges: Vec<RangeSpan>,
 }
@@ -2181,6 +2576,16 @@ impl Sq8RangeTrace {
             rank_end_ns: None,
             release_end_ns: None,
             rank: None,
+            cpu: RangeCpu::default(),
+            regroup: None,
+            regroup_copied_bytes: 0,
+            rank_thread_cpu_ns: None,
+            rank_clock_reads: 0,
+            retained_payload_bytes: None,
+            phase_process_cpu_ns: None,
+            unattributed_process_cpu_ns: None,
+            phase_clock_reads: 0,
+            phase_cpu_start: None,
             ranges: Vec::with_capacity(capacity),
         })
     }
@@ -2275,11 +2680,54 @@ impl Sq8RangeTrace {
         self.rank_end_ns = None;
         self.release_end_ns = None;
         self.rank = None;
+        self.cpu = RangeCpu::default();
+        self.regroup = None;
+        self.regroup_copied_bytes = 0;
+        self.rank_thread_cpu_ns = None;
+        self.rank_clock_reads = 0;
+        self.retained_payload_bytes = None;
+        self.phase_cpu_start = None;
+        self.phase_process_cpu_ns = None;
+        self.unattributed_process_cpu_ns = None;
+        self.phase_clock_reads = 0;
         self.ranges.clear();
     }
 
     fn now_ns(&self) -> u64 {
         ns_since(self.origin)
+    }
+
+    pub(crate) fn start_phase(&mut self) {
+        self.phase_cpu_start = Some(cpu_ns(rustix::time::ClockId::ProcessCPUTime));
+        self.phase_clock_reads = self.phase_clock_reads.saturating_add(1);
+    }
+
+    pub(crate) fn finish_phase(&mut self) {
+        if let Some(start) = self.phase_cpu_start.take() {
+            self.phase_process_cpu_ns =
+                Some(cpu_ns(rustix::time::ClockId::ProcessCPUTime).saturating_sub(start));
+            self.phase_clock_reads = self.phase_clock_reads.saturating_add(1);
+            self.unattributed_process_cpu_ns = self.unattributed_process_cpu_ns();
+        }
+    }
+
+    fn unattributed_process_cpu_ns(&self) -> Option<u64> {
+        let measured = self
+            .cpu
+            .thread_cpu_ns()
+            .saturating_add(self.regroup.map_or(0, |scope| scope.thread_cpu_ns))
+            .saturating_add(self.rank_thread_cpu_ns.unwrap_or(0));
+        self.phase_process_cpu_ns
+            .map(|cpu| cpu.saturating_sub(measured))
+    }
+
+    pub(crate) fn released(&mut self) {
+        self.release_end_ns = Some(self.now_ns());
+    }
+
+    fn push_probe(&mut self, probe: Probe) {
+        self.cpu.add(probe.cpu);
+        self.push(probe.span);
     }
 
     fn push(&mut self, span: RangeSpan) {
@@ -3067,6 +3515,7 @@ mod tests {
                 .unwrap();
             for tracing in [false, true] {
                 PROBE_CLOCK_READS.with(|reads| reads.set(0));
+                PROFILE_CLOCK_READS.with(|reads| reads.set(0));
                 let (result, probe) = fetch_verified_pages_traced(
                     &store,
                     &location,
@@ -3082,6 +3531,16 @@ mod tests {
                 assert_eq!(
                     PROBE_CLOCK_READS.with(|reads| reads.get()),
                     if tracing { clock_count } else { 0 },
+                    "{name}"
+                );
+                let measured_auth = !matches!(name, "eof-error" | "overlong");
+                assert_eq!(
+                    PROFILE_CLOCK_READS.with(|reads| reads.get()),
+                    if tracing {
+                        4 + 4 * u64::from(copy_count) + 2 * u64::from(measured_auth)
+                    } else {
+                        0
+                    },
                     "{name}"
                 );
                 if let Ok(verified) = result.as_ref() {
@@ -3119,6 +3578,13 @@ mod tests {
                     assert_eq!(span.first_chunk_ns.is_some(), chunk_count > 0);
                     assert_eq!(span.last_chunk_ns.is_some(), chunk_count > 0);
                     assert!(span.complete_ns.is_some());
+                    assert_eq!(probe.cpu.collector_allocation.unwrap().clock_reads, 4);
+                    assert_eq!(probe.cpu.collector_copy.is_some(), copy_count > 0);
+                    assert_eq!(probe.cpu.authentication.is_some(), measured_auth);
+                    assert_eq!(
+                        probe.cpu.collector_copied_bytes,
+                        if copy_count == 0 { 0 } else { span.body_bytes }
+                    );
                     assert_body_boundaries(span);
                     if outcome == "ok" {
                         // Four pre-body boundaries + initial mark + EOF + auth pair + completion.
@@ -5528,6 +5994,83 @@ mod tests {
     }
 
     #[test]
+    fn cpu_profile_observer_reuse_layout_and_admission() {
+        use std::mem::size_of;
+        let mut profile = QueryProfile::new(128, 128).unwrap();
+        let retained = QueryProfile::retained_bytes(128, 128);
+        assert_eq!(
+            retained,
+            size_of::<QueryProfile>() + 256 * size_of::<RangeSpan>()
+        );
+        let extra = QueryProfile::additional_bytes(128, 128);
+        assert_eq!(
+            extra,
+            retained + 128 * (size_of::<Probe>() + ALLOCATION_ALLOWANCE_BYTES)
+        );
+        assert_eq!(
+            QueryProfile::modeled_bytes(128, 128, 64, 16),
+            extra + Sq8RangeTrace::pending_futures_bytes(128, 64)
+        );
+        assert!(QueryProfile::modeled_bytes(128, 128, 128, 128) <= SQ8_TRACE_MAX_BYTES);
+        assert!(QueryProfile::new(0, 1).is_err());
+        assert!(QueryProfile::new(1, 129).is_err());
+        assert!(QueryProfile::new(usize::MAX, 1).is_err());
+        let origin = Instant::now();
+        profile.begin(origin);
+        for (index, complete_ns) in [(0, 9), (1, 7)] {
+            let mut span = RangeSpan::new(index, index, index, Some(index..index + 1));
+            span.complete_ns = Some(complete_ns);
+            profile.source.push_probe(Probe {
+                origin,
+                span,
+                cpu: RangeCpu {
+                    collector_copy: Some(CpuWall {
+                        thread_cpu_ns: 2,
+                        wall_ns: 3,
+                        clock_reads: 4,
+                    }),
+                    collector_copied_bytes: 1,
+                    ..RangeCpu::default()
+                },
+            });
+        }
+        assert_eq!(profile.source.cpu.collector_copy.unwrap().thread_cpu_ns, 4);
+        assert_eq!(profile.source.cpu.collector_copy.unwrap().clock_reads, 8);
+        let summary = serde_json::to_value(profile.source_summary()).unwrap();
+        assert!(summary.get("ranges").is_none());
+        assert_eq!(summary["last_completing_range"][0], 0);
+        assert!(summary["phase_process_cpu_ns"].is_null());
+        assert_eq!(profile.acquisition_poll_cpu, "unresolved_not_instrumented");
+        let pointers = (profile.source.ranges.as_ptr(), profile.sq8.ranges.as_ptr());
+        profile.discovery = Some(CpuWall::default());
+        profile.source.phase_cpu_start = Some(1);
+        profile.source.phase_process_cpu_ns = Some(2);
+        profile.sq8.rank_thread_cpu_ns = Some(3);
+        PROFILE_CLOCK_READS.with(|reads| reads.set(0));
+        profile.refuse();
+        assert_eq!(PROFILE_CLOCK_READS.with(|reads| reads.get()), 0);
+        for trace in [&profile.source, &profile.sq8] {
+            assert_eq!(trace.outcome, "admission_refused");
+            assert_eq!(trace.cpu, RangeCpu::default());
+            assert_eq!(trace.phase_process_cpu_ns, None);
+            assert_eq!(trace.unattributed_process_cpu_ns, None);
+            assert_eq!(trace.rank_thread_cpu_ns, None);
+            assert_eq!(trace.phase_cpu_start, None);
+            assert!(trace.ranges().is_empty());
+        }
+        assert_eq!(profile.discovery, None);
+        profile.begin(origin);
+        assert_eq!(PROFILE_CLOCK_READS.with(|reads| reads.get()), 0);
+        assert_eq!(
+            pointers,
+            (profile.source.ranges.as_ptr(), profile.sq8.ranges.as_ptr())
+        );
+        assert_eq!(profile.source.outcome, "started");
+        assert_eq!(profile.cover, None);
+        assert_eq!(profile.planning, None);
+    }
+
+    #[test]
     fn refused_trace_clears_every_stamp_without_reallocating_or_reading_a_clock() {
         let mut trace = Sq8RangeTrace::new(4).unwrap();
         trace.begin(Instant::now());
@@ -7065,6 +7608,7 @@ mod tests {
             max_bytes: 16,
             budget: Some(&window),
             authenticate: &authenticate,
+            origin: None,
         };
         let range = 0..16;
         // This unboxed future is the exact element held by buffer_unordered.

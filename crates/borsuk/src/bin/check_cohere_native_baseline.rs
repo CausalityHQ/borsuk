@@ -3,8 +3,8 @@ use borsuk::{
     exact_sq8_nominee::ScoredNominee,
     semantic_unit_router::SemanticProfile,
     sq8_s3_range::{
-        BoundedReadS3, InFlightBytes, NativeTransportStats, OneAttemptS3, S3ReadRetryPolicy,
-        Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats,
+        BoundedReadS3, InFlightBytes, NativeTransportStats, OneAttemptS3, QueryProfile,
+        S3ReadRetryPolicy, SourceRangeSummary, Sq8RangeSplit, Sq8RangeTrace, Sq8ReadStats,
     },
     two_bit_generation::{
         DirectClosureLimits, DirectClosureMemory, DirectClosureRejection, DiscoveryMode,
@@ -49,7 +49,7 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v14";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v15";
 const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
-const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v4";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
@@ -1310,6 +1310,13 @@ fn trace_ranges(c: &Config) -> usize {
         .direct()
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
+fn source_trace_ranges(c: &Config) -> usize {
+    if c.serving.direct().is_some() {
+        1
+    } else {
+        c.source_get_budget
+    }
+}
 // The library retains the ordinary bound even for direct queries; direct adds only excess.
 fn range_scheduler_bytes(c: &Config) -> Result<usize> {
     let pending = |ranges| {
@@ -1356,15 +1363,19 @@ fn diagnostic_bytes(c: &Config) -> Result<usize> {
 // in the library model; only retained spans and probes are added at traced admission.
 fn trace_peak_bytes(c: &Config) -> usize {
     if c.execution.trace() {
-        Sq8RangeTrace::modeled_bytes(trace_ranges(c), c.fetch_parallelism)
+        QueryProfile::modeled_bytes(
+            source_trace_ranges(c),
+            trace_ranges(c),
+            c.fetch_parallelism,
+            c.fetch_parallelism,
+        )
     } else {
         0
     }
 }
 fn library_trace_bytes(c: &Config) -> usize {
     if c.execution.trace() {
-        trace_peak_bytes(c)
-            - Sq8RangeTrace::pending_futures_bytes(trace_ranges(c), c.fetch_parallelism)
+        QueryProfile::additional_bytes(source_trace_ranges(c), trace_ranges(c))
     } else {
         0
     }
@@ -1712,7 +1723,7 @@ fn host_window(before: &HostSnapshot, after: &HostSnapshot) -> HostWindow {
 
 /// Opt-in per-query diagnostics, allocated once after admission and before any payload opens.
 struct Diag {
-    trace: Sq8RangeTrace,
+    trace: QueryProfile,
     sampler: HostSampler,
 }
 #[derive(Clone, Copy)]
@@ -1731,12 +1742,14 @@ struct QueryDiagnostic<'a> {
     process_cpu_start_ns: i128,
     process_cpu_end_ns: i128,
     sq8_range_trace: &'a Sq8RangeTrace,
+    source_range_trace: SourceRangeSummary<'a>,
+    cpu_profile: &'a QueryProfile,
     host: HostWindow,
 }
 impl Diag {
     fn new(c: &Config) -> Result<Self> {
         Ok(Self {
-            trace: Sq8RangeTrace::new(trace_ranges(c))?,
+            trace: QueryProfile::new(source_trace_ranges(c), trace_ranges(c))?,
             sampler: HostSampler::new(),
         })
     }
@@ -1747,7 +1760,9 @@ impl Diag {
             query_monotonic_end_ns: anchors.monotonic_end_ns,
             process_cpu_start_ns: anchors.process_cpu_start_ns,
             process_cpu_end_ns: anchors.process_cpu_end_ns,
-            sq8_range_trace: &self.trace,
+            sq8_range_trace: &self.trace.sq8,
+            source_range_trace: self.trace.source_summary(),
+            cpu_profile: &self.trace,
             host: host_window(&self.sampler.before, &self.sampler.after),
         }
     }
@@ -2168,9 +2183,12 @@ async fn query_and_seal_with(
             "diagnostic_cap_bytes":DIAGNOSTIC_CAP,"max_active_queries":admission.max_active_queries,
             "charged_in_caller_pinned_bytes":true,"caller_pinned_bytes":admission.already_pinned_bytes,
             "panel_line_cap_bytes":out.panel_cap,"host_read_cap_bytes":HOST_READ_CAP,
-            "trace_ranges":trace_ranges(c),
+            "trace_ranges":trace_ranges(c),"source_trace_ranges":source_trace_ranges(c),
             "population_percentiles_valid":false,"full_cohort_qualification":false,
             "semantics":{
+                "cpu_residual":"unattributed_process_cpu_not_tls_or_network_cpu",
+                "poll_cpu":"unresolved_not_instrumented",
+                "capsule_page_bounds":"u64_max_means_no_single_logical_page_interval",
                 "headers_interval":"get_opts_client_queue_connect_tls_server_combined",
                 "body_gaps":"application_observed_poll_gaps_not_packet_arrival",
                 "ranges":"overlap_in_time_never_sum_intervals",
@@ -2180,9 +2198,9 @@ async fn query_and_seal_with(
         // Three different figures, never interchangeable: what the trace RETAINS between queries,
         // the cumulative PEAK while one drains, and the range state both modes carry.
         let traced = c.execution.trace().then(|| trace_ranges(c));
-        admission_record["trace_retained_bytes"] = json!(traced.map(Sq8RangeTrace::retained_bytes));
-        admission_record["trace_peak_bytes"] =
-            json!(traced.map(|n| Sq8RangeTrace::modeled_bytes(n, c.fetch_parallelism)));
+        admission_record["trace_retained_bytes"] =
+            json!(traced.map(|n| QueryProfile::retained_bytes(source_trace_ranges(c), n)));
+        admission_record["trace_peak_bytes"] = json!(traced.map(|_| trace_peak_bytes(c)));
         admission_record["diagnostic_pinned_bytes"] = json!(diagnostic_pinned_bytes(c)?);
         admission_record["trace_additional_bytes_charged_by_library"] =
             json!(library_trace_bytes(c));
@@ -4779,7 +4797,7 @@ mod tests {
                         assert_eq!(row["plan"]["logical_range_count"], 1);
                         assert_eq!(row["plan"]["planned_bytes"], object_bytes);
                         let diag = &row["diagnostic"];
-                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v3");
+                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v4");
                         let trace = &diag["sq8_range_trace"];
                         let fields = trace["range_fields"].as_array().unwrap();
                         let at = |name: &str| fields.iter().position(|f| f == name).unwrap();
@@ -6362,7 +6380,12 @@ mod tests {
                 assert_eq!(
                     bytes,
                     lines
-                        + Sq8RangeTrace::modeled_bytes(ranges, parallelism)
+                        + QueryProfile::modeled_bytes(
+                            source_trace_ranges(&c),
+                            ranges,
+                            parallelism,
+                            parallelism
+                        )
                         + size_of::<HostSampler>()
                         + HOST_READ_CAP
                         + 1
@@ -6375,7 +6398,12 @@ mod tests {
             // The runner pins its own buffers; the library holds scheduler state at open
             // and adds retained spans/probes only when a traced query is admitted.
             let peak = if trace {
-                Sq8RangeTrace::modeled_bytes(trace_ranges(&c), parallelism)
+                QueryProfile::modeled_bytes(
+                    source_trace_ranges(&c),
+                    trace_ranges(&c),
+                    parallelism,
+                    parallelism,
+                )
             } else {
                 0
             };
@@ -6449,13 +6477,44 @@ mod tests {
         };
         // The trace's span buffer is private and read-only, so the object is measured as
         // its span-free envelope plus n worst-case rows (and the n - 1 commas between them).
-        assert!(diag.trace.ranges().is_empty());
+        assert!(diag.trace.sq8.ranges().is_empty());
+        let scope = Some(borsuk::sq8_s3_range::CpuWall {
+            thread_cpu_ns: u64::MAX,
+            wall_ns: u64::MAX,
+            clock_reads: u64::MAX,
+        });
+        diag.trace.discovery = scope;
+        diag.trace.cover = scope;
+        diag.trace.planning = scope;
+        for trace in [&mut diag.trace.source, &mut diag.trace.sq8] {
+            trace.cpu = borsuk::sq8_s3_range::RangeCpu {
+                collector_allocation: scope,
+                collector_copy: scope,
+                owned_allocation: scope,
+                owned_copy: scope,
+                authentication: scope,
+                collector_copied_bytes: u64::MAX,
+                owned_copied_bytes: u64::MAX,
+            };
+            trace.regroup = scope;
+            trace.regroup_copied_bytes = u64::MAX;
+            trace.rank_thread_cpu_ns = max;
+            trace.rank_clock_reads = u64::MAX;
+            trace.retained_payload_bytes = max;
+            trace.phase_process_cpu_ns = max;
+            trace.unattributed_process_cpu_ns = max;
+            trace.phase_clock_reads = u64::MAX;
+            trace.fetch_start_ns = max;
+            trace.all_ranges_complete_ns = max;
+            trace.release_end_ns = max;
+        }
         let envelope = serde_json::to_vec(&diag.query(&anchors)).unwrap().len();
         let row = serde_json::to_vec(&span).unwrap().len();
         assert!(row <= 22 * 21 + 2, "{row}");
-        let worst = envelope + 128 * row + 127;
+        // One extra worst-case row replaces SOURCE's null last-completing span.
+        let worst = envelope + 129 * row + 127;
         assert!(worst < PANEL_LINE_CAP, "{worst}");
-        let typical = envelope + 32 * row + 31;
+        let typical = envelope + 33 * row + 31;
         assert!(typical < PANEL_LINE_CAP / 2, "{typical}");
     }
 
@@ -6643,11 +6702,11 @@ mod tests {
             if trace {
                 assert_eq!(
                     admission["trace_retained_bytes"],
-                    Sq8RangeTrace::retained_bytes(BASELINE_QUERY_GETS)
+                    QueryProfile::retained_bytes(BASELINE_SOURCE_GETS, BASELINE_QUERY_GETS)
                 );
                 assert_eq!(
                     admission["trace_peak_bytes"],
-                    Sq8RangeTrace::modeled_bytes(BASELINE_QUERY_GETS, 16)
+                    QueryProfile::modeled_bytes(BASELINE_SOURCE_GETS, BASELINE_QUERY_GETS, 16, 16)
                 );
             } else {
                 assert!(admission["trace_retained_bytes"].is_null());
@@ -6804,7 +6863,23 @@ mod tests {
             for query in &on {
                 let diag = &query["diagnostic"];
                 assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
-                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v3");
+                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v4");
+                assert_eq!(
+                    diag["cpu_profile"]["acquisition_poll_cpu"],
+                    "unresolved_not_instrumented"
+                );
+                assert!(diag["source_range_trace"].get("ranges").is_none());
+                assert!(diag["cpu_profile"]["discovery"].is_object());
+                assert!(diag["cpu_profile"]["cover"].is_object());
+                if mode == "direct" {
+                    assert!(diag["source_range_trace"]["last_completing_range"].is_null());
+                    assert!(diag["source_range_trace"]["phase_process_cpu_ns"].is_null());
+                    assert!(diag["cpu_profile"]["planning"].is_null());
+                } else {
+                    assert!(diag["source_range_trace"]["last_completing_range"].is_array());
+                    assert!(diag["source_range_trace"]["cpu"]["authentication"].is_object());
+                    assert!(diag["cpu_profile"]["planning"].is_object());
+                }
                 let trace = &diag["sq8_range_trace"];
                 let fields = trace["range_fields"].as_array().unwrap();
                 assert_eq!(fields.len(), 22);
