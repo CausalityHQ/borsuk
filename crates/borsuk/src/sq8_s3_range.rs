@@ -2171,11 +2171,13 @@ impl QueryProfile {
     }
 
     pub fn retained_bytes(source_ranges: usize, sq8_ranges: usize) -> usize {
-        std::mem::size_of::<Self>().saturating_add(
-            source_ranges
-                .saturating_add(sq8_ranges)
-                .saturating_mul(std::mem::size_of::<RangeSpan>()),
-        )
+        std::mem::size_of::<Self>()
+            .saturating_add(2 * ALLOCATION_ALLOWANCE_BYTES)
+            .saturating_add(
+                source_ranges
+                    .saturating_add(sq8_ranges)
+                    .saturating_mul(std::mem::size_of::<RangeSpan>()),
+            )
     }
 
     /// Both buffers survive both phases. Only one phase has probes/futures at a time.
@@ -2513,7 +2515,7 @@ pub struct Sq8RangeTrace {
     /// Column names of every row in `ranges`.
     pub range_fields: &'static [&'static str],
     /// not_started, admission_refused, started, rejected_before_io, fetching, fetch_failed,
-    /// fetched, rank_failed or ranked.
+    /// fetched, rank_failed, ranked, cache_hit, local_uninstrumented or local_failed.
     pub outcome: &'static str,
     pub planned_ranges: u32,
     pub planned_bytes: u64,
@@ -6000,7 +6002,9 @@ mod tests {
         let retained = QueryProfile::retained_bytes(128, 128);
         assert_eq!(
             retained,
-            size_of::<QueryProfile>() + 256 * size_of::<RangeSpan>()
+            size_of::<QueryProfile>()
+                + 2 * ALLOCATION_ALLOWANCE_BYTES
+                + 256 * size_of::<RangeSpan>()
         );
         let extra = QueryProfile::additional_bytes(128, 128);
         assert_eq!(

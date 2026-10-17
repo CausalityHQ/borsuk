@@ -3306,8 +3306,8 @@ impl TwoBitGeneration {
         Ok((result, trace))
     }
 
-    /// `diagnostic_search_with_store` plus opt-in SQ8 range diagnostics written to the
-    /// caller's trace, which keeps every span even when the query fails. The trace's
+    /// `diagnostic_search_with_store` plus opt-in SOURCE/SQ8 CPU and range diagnostics
+    /// written to the caller's profile, which survives query failure. The trace's
     /// memory and range capacity are admitted before the query slot, any allocation
     /// or any GET; results, plans, charges and GETs are exactly the untraced ones.
     #[doc(hidden)]
@@ -3327,7 +3327,11 @@ impl TwoBitGeneration {
             range_trace,
             self.physical_sq8_cap(self.limits.max_query_gets),
             self.modeled_memory_bytes,
-            self.limits.max_source_gets,
+            if self.source.is_some() {
+                self.limits.max_source_gets
+            } else {
+                0
+            },
         )?;
         let _permit = self
             .slots
@@ -3933,9 +3937,10 @@ impl TwoBitGeneration {
         Ok((result, trace))
     }
 
-    /// `diagnostic_direct_closure_search_with_store` plus opt-in SQ8 range diagnostics in
-    /// the caller's trace. The trace's modeled memory is checked right after the unchanged
-    /// direct memory classification, and its capacity must cover `limits.max_sq8_gets`;
+    /// `diagnostic_direct_closure_search_with_store` plus opt-in CPU/range diagnostics in
+    /// the caller's profile; SOURCE and nomination counters remain unreached. Profile
+    /// memory is checked after direct memory classification, and SQ8 capacity must
+    /// cover `limits.max_sq8_gets`;
     /// both refuse (non-resource) before the slot or any request.
     #[doc(hidden)]
     pub async fn diagnostic_direct_closure_search_with_store_traced(
@@ -12342,6 +12347,11 @@ mod source_walk_tests {
                     .unwrap();
                 assert_eq!(profiled_error.read_stats(), error.read_stats());
                 assert_eq!(profile.source.outcome, "fetch_failed");
+                assert_eq!(
+                    profile.source.ranges()[0].outcome,
+                    if reopen { "page_auth" } else { "store_headers" }
+                );
+                assert_eq!(profile.source.cpu.authentication.is_some(), reopen);
                 assert_eq!(profile.sq8.rank_thread_cpu_ns, None);
                 assert_eq!(profile.sq8.planned_ranges, 0);
                 assert_eq!(error.read_stats().0.submitted_gets, 1);
