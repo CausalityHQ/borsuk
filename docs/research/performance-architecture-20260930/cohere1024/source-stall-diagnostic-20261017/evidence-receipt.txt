@@ -1,0 +1,11 @@
+Closed immutable archive:
+s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/source-stall-diagnostic-closure-a0001/evidence.tar.gz
+SHA256 70e9a17701c37ace364f7b879a7767cf978a81c61fb011a4297f0e03b62d0d09
+Bytes18533945; S3 FULL_OBJECT SHA256 and ContentLength independently checked; terminal uploaded LAST.
+Original measurement unit borsuk-source-stall-diagnostic-measurement-a0001 / invocation3c5659bd84614e2c84c23378a8c0740e.
+Analysis original SSM8580ea2d-ab9a-46b1-bf10-0bf2d766e455 Success0.
+Archive original SSM8dca70a5-9c98-40b5-9714-4ffd409ddd46 Success0.
+Instance i-0a30f8aa3769b109f; infrastructure closure published separately after termination.
+Source3d30041e; native producer SHA8c9b40bff33e30099888a488e49bd88a6e7063b635b57d7828549cbc6405c615.
+Reader SHA7b4d1e3174f9c87bc2bd196761b5d0282f76f28452b3e4f9caa11b3bcb7d11ed.
+No code changes in this documentation delivery; reuse exact-source qualification recorded in decision.
