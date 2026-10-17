@@ -1066,6 +1066,44 @@ const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
 }
 const SOURCE_SHORTLIST_RESERVE: u64 = 256 * 1024;
 
+#[cfg(test)]
+std::thread_local! {
+    static SOURCE_RECORD_FULL_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Ranges are sorted by start; the cursor belongs to this unchanged slice.
+fn verified_source_record<'a>(
+    verified: &'a [VerifiedRange],
+    row: usize,
+    width: usize,
+    last_index: &mut Option<usize>,
+) -> Option<&'a [u8]> {
+    let offset = row.checked_mul(width)?;
+    let index = match *last_index {
+        Some(index)
+            if offset >= verified[index].start
+                && verified
+                    .get(index + 1)
+                    .is_none_or(|next| offset < next.start) =>
+        {
+            index
+        }
+        _ => {
+            #[cfg(test)]
+            SOURCE_RECORD_FULL_SEARCHES.with(|count| count.set(count.get() + 1));
+            let index = verified
+                .partition_point(|range| range.start <= offset)
+                .checked_sub(1)?;
+            *last_index = Some(index);
+            index
+        }
+    };
+    let relative = offset.checked_sub(verified[index].start)?;
+    verified[index]
+        .bytes
+        .get(relative..relative.checked_add(width)?)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SourceRowScore {
     row: usize,
@@ -2878,20 +2916,12 @@ impl TwoBitGeneration {
             let width = self.plane.receipt().record_bytes;
             stages.planning.start_ns = started.elapsed().as_nanos().max(1);
             let planning_cpu = profile.as_deref().map(|_| SyncStart::now());
+            let mut last_index = None;
             let plan = self
                 .plan_walks(
                     &walks,
                     &prepared,
-                    |row| {
-                        let offset = row.checked_mul(width)?;
-                        let index = verified
-                            .partition_point(|range| range.start <= offset)
-                            .checked_sub(1)?;
-                        let relative = offset.checked_sub(verified[index].start)?;
-                        verified[index]
-                            .bytes
-                            .get(relative..relative.checked_add(width)?)
-                    },
+                    |row| verified_source_record(&verified, row, width, &mut last_index),
                     trace,
                 )
                 .map_err(|error| TwoBitGenerationError::SourcePlanning {
@@ -3982,6 +4012,108 @@ impl TwoBitGeneration {
 mod source_walk_tests {
     use super::*;
     use futures_util::{StreamExt, stream};
+
+    #[test]
+    fn verified_source_record_matches_uncached_and_searches_once_per_range() {
+        fn check<'a>(
+            verified: &'a [VerifiedRange],
+            row: usize,
+            width: usize,
+            last_index: &mut Option<usize>,
+        ) -> Option<&'a [u8]> {
+            let expected = (|| {
+                let offset = row.checked_mul(width)?;
+                let index = verified
+                    .partition_point(|range| range.start <= offset)
+                    .checked_sub(1)?;
+                let relative = offset.checked_sub(verified[index].start)?;
+                verified[index]
+                    .bytes
+                    .get(relative..relative.checked_add(width)?)
+            })();
+            let actual = verified_source_record(verified, row, width, last_index);
+            assert_eq!(actual, expected, "row={row}, width={width}");
+            if let (Some(actual), Some(expected)) = (actual, expected) {
+                assert!(std::ptr::eq(actual, expected), "record must stay borrowed");
+            }
+            actual
+        }
+
+        // Encoded widths include packing tails and the D1024 width.
+        for width in [1, 9, 10, 12, 16, 264] {
+            let verified: Vec<_> = [
+                (2 * width, 8 * width),
+                (4 * width, 8 * width),
+                (4 * width, 2 * width),
+                (9 * width, 0),
+                (12 * width, 2 * width),
+                (16 * width, 4 * width),
+                (20 * width, 2 * width - 1),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (start, len))| VerifiedRange {
+                start,
+                bytes: vec![(index + 1) as u8; len].into(),
+            })
+            .collect();
+            let mut last_index = None;
+            for row in (0..25)
+                .chain((0..25).rev())
+                .chain([21, 2, 4, 3, 12, 5, 9, 13, 20, 21, 22, 0, 25])
+            {
+                let _ = check(&verified, row, width, &mut last_index);
+            }
+        }
+
+        let mut last_index = None;
+        assert!(check(&[], 0, 9, &mut last_index).is_none());
+        let verified = [VerifiedRange {
+            start: 0,
+            bytes: bytes::Bytes::from_static(b"abcd"),
+        }];
+        for (row, width) in [
+            (0, 1),
+            (1, usize::MAX),
+            (2, usize::MAX),
+            (usize::MAX, 2),
+            (usize::MAX, 1),
+            (0, 0),
+            (usize::MAX, 0),
+            (0, 1),
+        ] {
+            let _ = check(&verified, row, width, &mut last_index);
+        }
+        let verified = [VerifiedRange {
+            start: usize::MAX - 1,
+            bytes: bytes::Bytes::from_static(b"ab"),
+        }];
+        let mut last_index = None;
+        for row in [usize::MAX - 2, usize::MAX - 1, usize::MAX, 0, usize::MAX] {
+            let _ = check(&verified, row, 1, &mut last_index);
+        }
+
+        // Count only helper searches, after all differential edge cases.
+        let width = 264;
+        let verified: Vec<_> = (0..4)
+            .map(|index| VerifiedRange {
+                start: index * 32 * width,
+                bytes: vec![index as u8; 32 * width].into(),
+            })
+            .collect();
+        let mut last_index = None;
+        SOURCE_RECORD_FULL_SEARCHES.with(|count| count.set(0));
+        for row in 0..verified.len() * 32 {
+            assert!(check(&verified, row, width, &mut last_index).is_some());
+        }
+        SOURCE_RECORD_FULL_SEARCHES.with(|count| {
+            assert_eq!(
+                count.get(),
+                verified.len(),
+                "consecutive records must search once per range, not once per row"
+            );
+        });
+    }
 
     // Planning-only fixture: payload authentication is covered by real builders/readers.
     fn source_test_authority(
