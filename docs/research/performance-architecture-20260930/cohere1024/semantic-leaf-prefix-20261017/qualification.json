@@ -1,0 +1,92 @@
+{
+  "actual_shim_unset_workspace_testbuild": true,
+  "affected_counts": {
+    "capsule": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 21
+    },
+    "generation": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 55
+    },
+    "range": {
+      "failed": 0,
+      "ignored": 1,
+      "passed": 52
+    },
+    "reader": {
+      "failed": 0,
+      "ignored": 1,
+      "passed": 16
+    },
+    "runner": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 64
+    }
+  },
+  "affected_total_ignored": 2,
+  "affected_total_passed": 208,
+  "artifacts": {
+    "check_cohere_native_baseline": {
+      "bytes": 18772464,
+      "sha256": "3e86a3e8d5b59db6150ea2db0575725df7200ee1a82018ee3257f5b73178d81c"
+    },
+    "compare_native_replay": {
+      "bytes": 14683368,
+      "sha256": "ec0b3651f8921599f4597cfe6e1ce38f3fd3d14ce14e72c23eb04847164009e4"
+    }
+  },
+  "exits": {
+    "bin-compile": 0,
+    "bin-list": 0,
+    "capsule-regression": 0,
+    "clippy": 0,
+    "generation-regression": 0,
+    "lib-compile": 0,
+    "lib-list": 0,
+    "manager": 0,
+    "range-regression": 0,
+    "reader-compile": 0,
+    "reader-list": 0,
+    "reader-regression": 0,
+    "release": 0,
+    "required-1": 0,
+    "required-10": 0,
+    "required-11": 0,
+    "required-12": 0,
+    "required-13": 0,
+    "required-14": 0,
+    "required-15": 0,
+    "required-16": 0,
+    "required-17": 0,
+    "required-18": 0,
+    "required-19": 0,
+    "required-2": 0,
+    "required-20": 0,
+    "required-21": 0,
+    "required-3": 0,
+    "required-4": 0,
+    "required-5": 0,
+    "required-6": 0,
+    "required-7": 0,
+    "required-8": 0,
+    "required-9": 0,
+    "runner-regression": 0,
+    "testbuild": 0
+  },
+  "gate_invocation": "8209fba5290c453ca08044d9cb5bde4f",
+  "instance": "i-03bb9241416a8437f",
+  "native_manifest_files": 505,
+  "preserved_initial_reader_compile_invalid": "semantic-leaf-prefix-gates-a0001",
+  "required_exact_executions": 21,
+  "revision": "a0463ed097296c19539d05529ddad615be760fdd",
+  "root_repair": "two historical fixture None defaults only",
+  "source_before_after_equal": true,
+  "status": "NATIVE_CORRECTNESS_QUALIFIED_NO_PERFORMANCE_CLAIM",
+  "whole_workspace_runtime_tests": false,
+  "worker_source": "1a3ad0ff45bef73e694a7df9fab9015cede04357",
+  "workspace_clippy_correctness_suspicious": true
+}

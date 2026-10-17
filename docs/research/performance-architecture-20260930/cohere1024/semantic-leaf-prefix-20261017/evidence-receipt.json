@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-semantic-leaf-prefix-closure-v1",
+  "status": "QUALIFIED_QUALITY_READ_SCREEN_ARCHIVED",
+  "source_revision": "a0463ed097296c19539d05529ddad615be760fdd",
+  "assets": [
+    {
+      "name": "source.tar.gz",
+      "bytes": 6196265,
+      "sha256": "eadb19ba6ab8f0c42bf502de678431582df5ebe44b9380f045e88c21ebf3cd9f"
+    },
+    {
+      "name": "evidence.tar.gz",
+      "bytes": 56541865,
+      "sha256": "277cb809fcbfd3e60a16ca01c294b27455a0044dc4ea1cd1106c0a7df3e9026c"
+    },
+    {
+      "name": "archive.sha256",
+      "bytes": 294,
+      "sha256": "b07756cbedd5f546d328b6337d0a03bfa86bda1f3c2af4a6c43ab50039c5df66"
+    }
+  ],
+  "default_promoted": false,
+  "performance_win_claim": false
+}
