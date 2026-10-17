@@ -379,7 +379,10 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
 }
 
 fn diagnostic_shape(diag: &Value) -> Result<()> {
-    super::current_v10::diagnostic_shape(diag)
+    super::current_v10::diagnostic_shape(
+        diag,
+        RESULT_SCHEMA == super::current_v10::CPU_PROFILE_RESULT_SCHEMA,
+    )
 }
 
 fn nullable(v: &Value) -> Result<Option<u64>> {
