@@ -520,6 +520,12 @@ fn pack_source_layout(
         available,
     )
     .map_err(TwoBitGenerationError::Plane)?;
+    drop(leaves);
+    drop(closures);
+    receipt
+        .directory
+        .validate_router(&router, available)
+        .map_err(TwoBitGenerationError::Plane)?;
     if digest_hex(&receipt.logical_flat_sha256) != plane.records_sha256 {
         return Err(bad("capsule logical identity"));
     }
@@ -530,7 +536,7 @@ fn pack_source_layout(
     File::open(output.join("plane"))
         .and_then(|f| f.sync_all())
         .map_err(TwoBitGenerationError::Io)?;
-    Ok(SourceLayout::LeafCapsules {
+    Ok(SourceLayout::LeafCapsulesV2 {
         blob_bytes: receipt.charge.physical_bytes as u64,
         blob_sha256: digest_hex(&receipt.physical_blob_sha256),
         directory_bytes: receipt.charge.encoded_directory_bytes,
@@ -708,7 +714,7 @@ pub fn repackage_source_layout(
     root.page_manifest_sha256 = hash(&page_body);
     root.source_layout = match layout {
         SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
-        SourceLayoutMode::LeafCapsules => {
+        SourceLayoutMode::LeafCapsulesV2 => {
             pack_source_layout(output, &root.discovery, &plane, generation, available)?
         }
     };
@@ -1142,7 +1148,7 @@ impl TwoBitGenerationBuilder<'_> {
             fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
         let source_layout = match layout {
             SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
-            SourceLayoutMode::LeafCapsules => pack_source_layout(
+            SourceLayoutMode::LeafCapsulesV2 => pack_source_layout(
                 output,
                 &discovery,
                 &plane,
@@ -1174,7 +1180,7 @@ mod tests {
         let source_layout = if capsules {
             write_new(&output.join("plane/capsules.bin"), b"capsules").unwrap();
             write_new(&output.join("plane/capsule_directory.bin"), b"directory").unwrap();
-            serde_json::json!({"layout":"leaf_capsules", "blob_bytes":8,
+            serde_json::json!({"layout":"leaf_capsules_v2", "blob_bytes":8,
                 "blob_sha256":hash(b"capsules"), "directory_bytes":9,
                 "directory_sha256":hash(b"directory")})
         } else {
@@ -1438,7 +1444,7 @@ mod tests {
             manifest["page_rows"], 32,
             "new SQ8 proofs must authenticate 32-row blocks"
         );
-        assert_eq!(root["schema"], "borsuk-two-bit-generation-v10");
+        assert_eq!(root["schema"], "borsuk-two-bit-generation-v11");
         assert_eq!(manifest["object_sha256"], sq8_sha);
         let digests = fs::read(output.join("page_digests.bin")).unwrap();
         assert_eq!(digests.len(), rows.div_ceil(32) * 32);
@@ -1882,7 +1888,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v10",
+            manifest["schema"], "borsuk-two-bit-generation-v11",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();

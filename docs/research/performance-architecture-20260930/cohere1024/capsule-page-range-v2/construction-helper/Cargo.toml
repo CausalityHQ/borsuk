@@ -1,0 +1,15 @@
+[package]
+name = "capsule-page-range-v2-construction"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+
+[workspace]
+
+[dependencies]
+borsuk = { path = "/mnt/borsuk-workspace/source-capsule-library-combined-source-a0008/crates/borsuk" }
+rustix = { version = "1.1", features = ["fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"

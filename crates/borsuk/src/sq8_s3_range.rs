@@ -6646,8 +6646,10 @@ mod tests {
     #[tokio::test]
     async fn capsule_transport_admission_rejects_duplicate_overlap_and_minus_one_without_io() {
         assert!(
-            capsule_fetch_descriptor_bytes::<crate::source_capsule::VerifiedSpan<'_>>(usize::MAX)
-                .is_none()
+            capsule_fetch_descriptor_bytes::<crate::source_capsule::VerifiedPageSpan<'_, '_>>(
+                usize::MAX
+            )
+            .is_none()
         );
         let (reader, stop, requests, server) = http_fixture(http_response(
             "206 Partial Content",
@@ -6704,27 +6706,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capsule_http_reversed_completion_earliest_error_full_drain_and_permits() {
+    async fn page_range_v2_capsule_http_queued_errors_full_drain_and_permits() {
         use super::cold_http_fixture::{ETAG, Fixture};
         let key = "gen/plane/capsules.bin";
-        let body = vec![7; 64];
+        let body = vec![7; 80];
         let fixture = Fixture::new(
             std::collections::BTreeMap::from([(key.to_owned(), body)]),
             Instant::now() + Duration::from_secs(10),
         );
-        let ranges = (0..4).map(|i| i * 16..(i + 1) * 16).collect::<Vec<_>>();
+        let ranges = (0..5).map(|i| i * 16..(i + 1) * 16).collect::<Vec<_>>();
         let window = InFlightBytes::new(32);
         fixture.arm(Some((0, [0, 16, 32])));
         let location = Path::from(key);
         let mut work = Box::pin(fetch_capsule_ranges(
             fixture.reader.store(),
             &location,
-            64,
+            80,
             &ranges,
             ETAG,
-            4,
-            64,
-            4,
+            5,
+            80,
+            2,
             Some(&window),
             |_, bytes| {
                 if bytes.iter().all(|b| *b == 7) {
@@ -6744,27 +6746,32 @@ mod tests {
             _ = &mut work => panic!("returned before held sibling drained"),
             () = fixture.wait(|s| s.finished[0].contains(&0)) => {}
         }
+        tokio::select! {
+            _ = &mut work => panic!("returned before queued ranges and held sibling drained"),
+            () = fixture.wait(|s| s.finished[0].contains(&48) && s.finished[0].contains(&64)) => {}
+        }
+        assert!(!fixture.snapshot().finished[0].contains(&32));
         fixture.release_sibling();
         let error = work.await.unwrap_err();
         assert!(matches!(error.error, RangeFetchError::Store(_)));
         assert_eq!(
             error.stats,
             Sq8ReadStats {
-                submitted_gets: 4,
-                verified_bytes: 32,
+                submitted_gets: 5,
+                verified_bytes: 48,
                 failed_gets: 2,
             }
         );
         let state = fixture.snapshot();
         assert_eq!(state.active[0], 0);
-        assert_eq!(state.finished[0].len(), 4);
+        assert_eq!(state.finished[0].len(), 5);
         assert_eq!(state.finished[0][0], 16);
         assert!(state.peak[0] <= 2);
         assert_eq!(*window.available.lock().unwrap(), 32);
         fixture.finish();
     }
     #[tokio::test]
-    async fn capsule_disjoint_http_responses_validate_original_units_and_drain() {
+    async fn page_range_v2_capsule_http_disjoint_original_units_and_drain() {
         use super::cold_http_fixture::{ETAG, Fixture};
         use crate::rotated_two_bit::RotatedTwoBitCodec;
         use crate::semantic_unit_router::SemanticProfile;
@@ -6808,15 +6815,15 @@ mod tests {
         let leaves = [
             LeafPages {
                 leaf_id: 0,
-                pages: &[0, 2],
+                pages: &[0],
             },
             LeafPages {
                 leaf_id: 1,
-                pages: &[1],
+                pages: &[0],
             },
             LeafPages {
                 leaf_id: 2,
-                pages: &[0],
+                pages: &[1],
             },
             LeafPages {
                 leaf_id: 3,
@@ -6840,13 +6847,11 @@ mod tests {
         )
         .unwrap();
         let selected = [leaves[0], leaves[2], leaves[4]];
-        let ranges = selected
-            .iter()
-            .map(|leaf| {
-                let range = built.directory.byte_range(leaf.leaf_id).unwrap();
-                range.start as usize..range.end as usize
-            })
-            .collect::<Vec<_>>();
+        let plan = built
+            .directory
+            .plan_page_ranges(&[0, 2, 4], &[0, 1, 2], &authority, cap)
+            .unwrap();
+        let ranges = plan.ranges().to_vec();
         assert!(ranges.windows(2).all(|pair| pair[0].end < pair[1].start));
         let physical = ranges.iter().map(|range| range.len()).sum::<usize>();
         let window = InFlightBytes::new(physical);
@@ -6868,16 +6873,7 @@ mod tests {
             physical,
             3,
             Some(&window),
-            |offset, bytes| {
-                authenticate_capsule_response(
-                    &built.directory,
-                    &selected,
-                    &authority,
-                    cap,
-                    offset,
-                    bytes,
-                )
-            },
+            |offset, bytes| authenticate_capsule_response(&plan, cap, offset, bytes),
         ));
         tokio::select! {
             _ = &mut work => panic!("returned before earliest selected capsule"),
@@ -6902,16 +6898,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ranges.iter().map(|range| range.start).collect::<Vec<_>>(),
         );
-        let verified = built
-            .directory
-            .verified_rows(&selected, &fetched, &authority, cap)
-            .unwrap();
+        let verified = plan.verified_rows(&fetched, cap).unwrap();
         assert_eq!(verified.record(0), Some(&flat[..width]));
         assert_eq!(verified.record(512), Some(&flat[512 * width..513 * width]));
-        assert!(verified.record(256).is_none());
-        assert!(verified.record(511).is_none());
-        // Pages 0+2, 0 and 2 contain 257+256+1 original records, including duplicates.
-        assert_eq!(verified.charge().hash_bytes, physical + 514 * width);
+        assert_eq!(verified.record(256), Some(&flat[256 * width..257 * width]));
+        assert_eq!(verified.record(511), Some(&flat[511 * width..512 * width]));
+        // All original pages are fetched exactly once; endpoint framing is omitted.
+        assert_eq!(physical, 513 * width);
+        assert_eq!(verified.charge().hash_bytes, physical);
+        assert_eq!(verified.charge().framing_bytes, 0);
         assert_eq!(*window.available.lock().unwrap(), physical);
         assert_eq!(fixture.snapshot().finished[0].len(), 3);
         assert!(
@@ -6923,21 +6918,24 @@ mod tests {
         );
         fixture.finish();
 
-        // Rebind BOTH outer hashes after corrupting the later copy's record bytes.
+        // Rebind the outer hash after corrupting a required original page.
         let mut corrupt = blob.clone();
-        corrupt[ranges[1].start + 36] ^= 1;
+        corrupt[ranges[1].start] ^= 1;
+        let full_range = built.directory.byte_range(2).unwrap();
+        let full_range = full_range.start as usize..full_range.end as usize;
         let mut rebound = encoded;
         let hash_offset = 32 + 2 * 64 + 32;
         rebound[hash_offset..hash_offset + 32]
-            .copy_from_slice(&Sha256::digest(&corrupt[ranges[1].clone()]));
+            .copy_from_slice(&Sha256::digest(&corrupt[full_range.clone()]));
         let digest: [u8; 32] = Sha256::digest(&rebound).into();
-        let directory = Directory::open(&rebound, &digest, geometry, corrupt.len(), cap).unwrap();
-        let bad_copy = corrupt[ranges[1].clone()].to_vec();
+        let directory =
+            Directory::open(&rebound, &digest, geometry, corrupt.len(), 7, cap).unwrap();
+        let bad_copy = corrupt[full_range.clone()].to_vec();
         assert!(matches!(
             directory.verify(
                 &selected[1..2],
                 &[FetchedSpan {
-                    offset: ranges[1].start as u64,
+                    offset: full_range.start as u64,
                     bytes: &bad_copy
                 }],
                 &authority,
@@ -6945,6 +6943,10 @@ mod tests {
             ),
             Err(SourceBuildError::Invalid("capsule original unit digest")),
         ));
+        let corrupt_plan = directory
+            .plan_page_ranges(&[0, 2, 4], &[0, 1, 2], &authority, cap)
+            .unwrap();
+        assert_eq!(corrupt_plan.ranges(), ranges);
         for stream_failure in [false, true] {
             let fixture = Fixture::new(
                 BTreeMap::from([(key.to_owned(), corrupt.clone())]),
@@ -6975,9 +6977,7 @@ mod tests {
                 3,
                 Some(&window),
                 |offset, bytes| {
-                    let result = authenticate_capsule_response(
-                        &directory, &selected, &authority, cap, offset, bytes,
-                    );
+                    let result = authenticate_capsule_response(&corrupt_plan, cap, offset, bytes);
                     authenticated.lock().unwrap().push((offset, result.is_ok()));
                     result
                 },
@@ -6997,7 +6997,7 @@ mod tests {
                 }
             } else {
                 tokio::select! {
-                    _ = &mut work => panic!("healthy first copy masked corrupt duplicate"),
+                    _ = &mut work => panic!("accepted corrupt required page"),
                     () = fixture.wait(|_| authenticated.lock().unwrap()
                         .contains(&(ranges[0].start, true))) => {}
                 }
@@ -7053,7 +7053,8 @@ mod tests {
         fn authenticate(
             _: usize,
             _: Vec<u8>,
-        ) -> Result<crate::source_capsule::VerifiedSpan<'static>, RangeFetchError> {
+        ) -> Result<crate::source_capsule::VerifiedPageSpan<'static, 'static>, RangeFetchError>
+        {
             Err(RangeFetchError::UnexpectedMetadata)
         }
         let reader = CapsuleRangeReader {

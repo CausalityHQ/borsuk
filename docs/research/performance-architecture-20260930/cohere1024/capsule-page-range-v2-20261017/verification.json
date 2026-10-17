@@ -1,0 +1,404 @@
+{
+  "status": "NATIVE_ARCHITECTURE_AND_RECORDED_PERFORMANCE_VERIFIED",
+  "qualified_native_revision": "966b06a7b920ce993335484cbb8b4e3cf95b79bd",
+  "delivery_base": "feb2ab357b7febedcf75964086641a1e06cef26a",
+  "native_qualification": {
+    "status": "EXACT_RUST_CHANGE_NATIVE_QUALIFIED_NOT_REAL_INPUT_OR_PERFORMANCE_QUALIFICATION",
+    "source_revision": "966b06a7b920ce993335484cbb8b4e3cf95b79bd",
+    "affected_predecessor": "329fd2227a17c049b6fa9ceeee71f3ea57f24aad",
+    "difference": "two test-only singleton Range slice assertions expressed as std::slice::from_ref; production and expected ranges unchanged",
+    "affected_execution_evidence": {
+      "status": "AFFECTED_NATIVE_EXECUTION_AND_HANDOFF_ROSTERS_VERIFIED",
+      "source_revision": "329fd2227a17c049b6fa9ceeee71f3ea57f24aad",
+      "stages": {
+        "new-lib": {
+          "passed": 17,
+          "names": [
+            "source_capsule::tests::page_range_v2_dimensions_and_tails",
+            "source_capsule::tests::page_range_v2_directory_roster",
+            "source_capsule::tests::page_range_v2_drop_empty_group_and_hide_bridge",
+            "source_capsule::tests::page_range_v2_full_approval_rejects_unfetched_corruption",
+            "source_capsule::tests::page_range_v2_modeled_minus_one_and_capacities",
+            "source_capsule::tests::page_range_v2_private_proof_context",
+            "source_capsule::tests::page_range_v2_router_equal_rosters",
+            "source_capsule::tests::page_range_v2_stable_owner_trim_hashes_and_fetched_corruption",
+            "sq8_s3_range::tests::page_range_v2_capsule_http_disjoint_original_units_and_drain",
+            "sq8_s3_range::tests::page_range_v2_capsule_http_queued_errors_full_drain_and_permits",
+            "two_bit_compaction::tests::page_range_v2_capsule_compaction_disk_bound_includes_both_rosters",
+            "two_bit_compaction::tests::page_range_v2_old_empty_job_and_ready_schemas_refuse",
+            "two_bit_generation::source_walk_tests::page_range_v2_internal_duplicate_bridge_context_and_capacities",
+            "two_bit_generation::source_walk_tests::page_range_v2_layout_marker_rejects_legacy_variants",
+            "two_bit_generation::source_walk_tests::page_range_v2_metadata_admission_precedes_child_io",
+            "two_bit_generation::source_walk_tests::page_range_v2_n513_dropped_duplicate_preserves_original_order_shortlist_and_sq8",
+            "two_bit_generation::source_walk_tests::page_range_v2_rank_plan_parity_admission_and_no_sq8_after_failure"
+          ],
+          "stdout_sha256": "9e9839b0381aae8f7627c9dbbc29379bab49fa5a50990b25f69cc66bed7d3bd5"
+        },
+        "core-existing": {
+          "passed": 12,
+          "names": [
+            "source_capsule::tests::capsule_magic_leaf_plane_page_order_tail_truncation_and_trailing_rejected",
+            "source_capsule::tests::closure_513_skips_middle_page_and_retains_original_ids_once",
+            "source_capsule::tests::corrupt_duplicate_rejected_even_with_healthy_copy_and_matching_capsule_hash",
+            "source_capsule::tests::dimensions_tails_overlap_stable_copies_and_exact_records",
+            "source_capsule::tests::distinct_full_page_substitution_rejected_after_rehashing_capsule_and_directory",
+            "source_capsule::tests::malformed_directory_geometry_hash_offsets_overflow_and_lengths_rejected",
+            "source_capsule::tests::modeled_minus_one_refuses_before_io_and_actual_capacity_is_charged",
+            "source_capsule::tests::one_response_adjacent_capsules_borrowed_once_stable_rows_and_capacities",
+            "source_capsule::tests::original_flat_length_sha_and_unit_digest_fail_before_output",
+            "source_capsule::tests::response_spans_reject_overlap_gap_unselected_partial_trailing_and_overflow",
+            "source_capsule::tests::streaming_is_page_bounded_and_reauthenticates_copied_duplicates",
+            "source_capsule::tests::wrong_original_plane_unit_digest_and_fetch_set_rejected"
+          ],
+          "stdout_sha256": "dd5e7c535640b73b4ddd6789c529442bc92419f7fe6eec40c7fb761749473820"
+        },
+        "http-existing": {
+          "passed": 1,
+          "names": [
+            "sq8_s3_range::tests::capsule_http_exact_ranges_reject_corruption_truncation_etag_and_rebound"
+          ],
+          "stdout_sha256": "729bedf561c6b7550b22cc43823274991d6c280aca287f9349b122fe75ee48a8"
+        },
+        "lifecycle": {
+          "passed": 24,
+          "names": [
+            "application_ids_survive_ordered_build_publication_reload_and_ranking",
+            "durable_fence_rejects_delayed_mutation_and_generation_commits_after_release",
+            "empty_publication_rejects_invalid_requests_before_previous_layout_io",
+            "fresh_profile_target_refuses_before_seal_and_explicit_scale_transition_works",
+            "gc_rejects_inconsistent_mutation_caps_before_remote_io",
+            "native_overpopulation_unready_job_recovers_with_explicit_scale_profile",
+            "page_range_v2_old_root_refuses_before_payload_reads_or_gc_deletes",
+            "scale_profile_explicit_empty_creation_and_missing_profile_authority_refuse",
+            "scale_profile_recovers_build_ready_and_prehead_with_exact_profile",
+            "scale_profile_remaining_mutation_budget_refuses_before_body_read",
+            "scale_profile_varied_dimensions_scalar_codes_norms_scores_topk_and_refill",
+            "semantic_d1024_compaction_recovers_ready_publication_in_memory",
+            "semantic_d1024_compaction_reopens_with_application_ids_and_score_bits",
+            "semantic_d1025_compaction_refuses_before_side_effects",
+            "semantic_d768_compaction_reopens_with_application_ids_and_score_bits",
+            "source_layout_blob_and_directory_corruption_refuse_publication_import_and_queries",
+            "source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_refill",
+            "source_layout_capsule_ready_restart_requires_selected_layout",
+            "source_layout_compaction_preserves_logical_ids_and_score_bits",
+            "source_layout_empty_v6_roundtrip_requires_layout_and_refuses_old_or_graph_capsules",
+            "source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsule_pair",
+            "source_layout_publication_import_reopen_rosters_logical_identity_and_score_bits",
+            "source_layout_retained_import_capsule_budget_minus_one_and_pins_refuse_head",
+            "source_layout_retained_import_rejects_rehashed_late_capsule_records_framing_and_roster"
+          ],
+          "stdout_sha256": "6283d8fba2fbc22ce7abe3a9d7626c9947ec575f423c8f0a04e3771d468c4880"
+        },
+        "new-runner": {
+          "passed": 1,
+          "names": [
+            "tests::page_range_v2_config_schema_layout_and_compiled_policy"
+          ],
+          "stdout_sha256": "0883ae5e6576aed7123e7adf2fd6321915922b4efea9aab0f642264900955378"
+        },
+        "new-reader": {
+          "passed": 8,
+          "names": [
+            "current_v10::frozen_capsule_v1::page_range_v2_legacy_model_matches_native_witness",
+            "current_v10::tests::page_range_v2_dropped_groups_zero_framing_and_counter_refusals",
+            "current_v10::tests::page_range_v2_frozen_historical_memory_boundary",
+            "scale_native_runner::tests::page_range_v2_config_schema_layout_and_compiled_policy",
+            "tests::page_range_v2_authored_historical_completion_and_policy_hash_boundaries",
+            "tests::page_range_v2_completed_policy_schema_and_root_refusals",
+            "tests::page_range_v2_diagnostic32_uses_ordinary_completed_scale_publication",
+            "tests::page_range_v2_headers_bind_retry_policy_and_preserve_v10_v11_v12_completion"
+          ],
+          "stdout_sha256": "9003cc443ac0fe5abfafaac74d4bd08e5112fa8354b499c3b6b763cc0ecb5703"
+        },
+        "runner-regression": {
+          "passed": 60,
+          "names": [
+            "scale_derivation_producer::derive::tests::derivation_actual_chain_matches_independent_public_api_outputs",
+            "scale_derivation_producer::derive::tests::derivation_actual_publication_conflict_refuses_completed_receipt",
+            "scale_derivation_producer::derive::tests::derivation_mutations_and_partial_publication_never_leave_completed_receipt",
+            "scale_derivation_producer::derive::tests::derivation_refuses_config_geometry_authority_caps_and_occupied_outputs",
+            "scale_derivation_producer::derive::tests::derivation_strict_json_and_symlink_sources_refuse_before_output_creation",
+            "scale_derivation_producer::derive::tests::executable_hash_allows_hardlinks_without_broadening_source_admission",
+            "scale_derivation_producer::derive::tests::post_install_failures_retain_original_error_and_all_revocation_outcomes",
+            "scale_derivation_producer::derive::tests::post_install_namespace_drift_never_unlinks_replacement_directory_receipt",
+            "tests::actual_d1024_derivation_receipt_outputs_bind_generation_and_refuse_one_bit_calibration_mismatch",
+            "tests::actual_direct_closure_queries_match_the_baseline_control_with_zero_source",
+            "tests::actual_generation_profile_mismatch_refuses_before_seal_or_truth",
+            "tests::actual_native_queries_seal_and_reduce_against_literal_oracles",
+            "tests::actual_shared_byte_window_config_reaches_serving_and_preserves_parity",
+            "tests::actual_sq8_split_config_reaches_serving_and_preserves_parity",
+            "tests::cold_fetch_parallelism128_preserves_caps_and_one_source_wave",
+            "tests::cold_fetch_parallelism64_preserves_caps_and_bounded_runtime",
+            "tests::cold_fetch_parallelism_selector_is_explicit_and_bounded",
+            "tests::cold_shared_byte_window_config_is_explicit_and_bounded",
+            "tests::cold_sq8_split_config_version_caps_trace_and_identity",
+            "tests::configured_layout_must_match_authenticated_root_before_query_or_truth",
+            "tests::diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte",
+            "tests::direct_resource_rejections_are_terminal_machine_readable_and_distinct_from_invalid",
+            "tests::execution_selector_is_explicit_strict_sorted_unique_and_bounded",
+            "tests::explicit_scale_population_receipts_and_negative_geometry",
+            "tests::flat_source_layout_extra_fields_are_refused_at_both_decode_boundaries",
+            "tests::full_selected_requests_require_equal_reserved_digest",
+            "tests::generation_calibration_mismatch_refuses_before_query_seal_or_truth",
+            "tests::host_counters_parse_named_values_and_report_missing_wrapped_or_oversize_as_null",
+            "tests::missing_or_tampered_truth_is_invalid_only_after_all_queries_are_sealed",
+            "tests::namespaced_pipeline_faults_preserve_binding_accounting_and_seal",
+            "tests::page_range_v2_config_schema_layout_and_compiled_policy",
+            "tests::panel_authenticates_every_original_request_row_before_any_open",
+            "tests::panel_counters_unavailable_and_overcap_lines_are_bounded_invalid_before_seal",
+            "tests::panel_diagnostic_memory_is_charged_once_and_never_becomes_an_algorithm_rejection",
+            "tests::panel_executes_original_ordinals_and_indexes_truth_by_original_ordinal",
+            "tests::panel_failure_record_keeps_its_error_when_the_diagnostic_overflows_the_line",
+            "tests::panel_line_admission_has_an_exact_65536_byte_boundary_and_full_keeps_the_256kib_cap",
+            "tests::panel_missing_or_tampered_truth_is_invalid_only_after_the_selected_results_are_sealed",
+            "tests::panel_selector_refusals_precede_every_open_and_publication",
+            "tests::panel_trace_toggle_changes_only_the_diagnostic_field_for_baseline_and_direct",
+            "tests::prefix_or_requests_tampering_blocks_first_truth_open",
+            "tests::production_contract_rejects_unknown_hash_geometry_and_caps",
+            "tests::query_error_cause_bounds_cyclic_sources_and_wrapper_depth",
+            "tests::query_error_cause_keeps_real_http500_ahead_of_long_uri",
+            "tests::query_error_cause_keeps_transport_and_non_store_failures_identifiable",
+            "tests::query_runtime_bounds_blocking_threads_and_drains",
+            "tests::reporting_underfill_keeps_fixed_ten_denominator_and_bounded_output",
+            "tests::s3_read_retry_requires_v13_and_binds_identity_without_widening_logical_caps",
+            "tests::scratch_formula_keeps_codec_and_trace_separate",
+            "tests::secure_artifacts_reject_hash_length_eof_symlink_fifo_and_bad_rows",
+            "tests::serving_mode_and_format_marker_are_required_explicit_and_strict",
+            "tests::source_binding_and_all_request_rows_fail_before_queries",
+            "tests::source_binding_has_a_separate_bounded_serialization_reservation",
+            "tests::source_get_budget96_is_explicit_and_bounded",
+            "tests::source_layout_and_explicit_byte_memory_contract",
+            "tests::source_only_derivation_reuses_one_seal_across_query_prefixes_and_refuses_v1_or_wrong_authority",
+            "tests::sq8_budgets_are_required_and_bind_the_operating_point",
+            "tests::sq8_split_multi_query_reservation_and_direct_memory_boundaries",
+            "tests::stale_cohort_and_derivation_pins_refuse_before_requests_or_reader_open",
+            "tests::worst_case_diagnostic_object_fits_the_panel_line_with_room_for_the_record"
+          ],
+          "stdout_sha256": "6b631a92e146a6c695483ceb85507961be33857e4e20cf6b584855de53f60740"
+        },
+        "current-reader-regression": {
+          "passed": 10,
+          "names": [
+            "current_v10::tests::capsule_handoff_authored_legacy_rows_and_resealed_mutations",
+            "current_v10::tests::capsule_handoff_fixed32_and_authority_are_not_inferred",
+            "current_v10::tests::capsule_page_union_tail_duplicates_and_adjacent_gets",
+            "current_v10::tests::historical_full_startup_uses_fixed_source_and_physical_sq8_reservation",
+            "current_v10::tests::ordinary_v10_geometry_uses_input_dimensions_budgets_and_partial_tail",
+            "current_v10::tests::ordinary_v10_refuses_uncovered_ordinals_and_duplicate_unknown_missing_fields",
+            "current_v10::tests::page_range_v2_dropped_groups_zero_framing_and_counter_refusals",
+            "current_v10::tests::page_range_v2_frozen_historical_memory_boundary",
+            "current_v10::tests::source_layout_explicit_caps_exceed_historical_limits_without_rewriting_them",
+            "current_v10::tests::v12_scheduler_ownership_and_trace_bytes_are_strict_and_legacy_stays_strict"
+          ],
+          "stdout_sha256": "967d197ba55239f347f53b07d8e290bf6060aeb1ff4d794f35fcb959157a3ddf"
+        }
+      },
+      "test_executions": 133,
+      "unique_test_names": 130,
+      "duplicate_executions_documented": [
+        "current_v10::tests::page_range_v2_dropped_groups_zero_framing_and_counter_refusals",
+        "current_v10::tests::page_range_v2_frozen_historical_memory_boundary",
+        "tests::page_range_v2_config_schema_layout_and_compiled_policy"
+      ],
+      "historical_producer_interoperability": "separate capsule-page-range-v2-historical-interoperability-a0001 actual ignored test selected1/pass1",
+      "performance_claim": false,
+      "full_assurance": "separate pending source966b06 test-only Clippy repair"
+    },
+    "final_gates": {
+      "clippy": 0,
+      "affected-repaired": 0,
+      "release": 0,
+      "workspace-test-build": 0
+    },
+    "historical_actual_producer_interoperability": {
+      "test_selected": 1,
+      "test_passed": 1,
+      "inside_test_rank_checks": 320,
+      "binary_sha256": "06f19cd1155224ec594e24efc59f021584817309e3f80d0cca6cee17ccc4e8d1"
+    },
+    "review_reconciliation": {
+      "core": "47ce14d3d6284ea4 no demonstrated production defect; test-only descendants preserve core production prefix",
+      "integration": "27e53e75a9a84c9b known missing runner/reader adapter at32 integrated025; final current runner/reader compile and v15 fixtures pass",
+      "historical_models": "retained-old-rlib public size witness plus actual old producer files accepted by strict reader"
+    },
+    "real_1m_new_format": "PENDING",
+    "performance": "UNMEASURED",
+    "vendor_win": false
+  },
+  "source_construction": {
+    "status": "REAL_1M_NATIVE_CONSTRUCTION_RECEIPT_AND_LOGICAL_AUTHORITY_VERIFIED",
+    "receipt_sha256": "c134f3e68abceb292932d23902b5e50de33626b7f05c5728c6a1b598b6b48bc9",
+    "library_revision": "966b06a7b920ce993335484cbb8b4e3cf95b79bd",
+    "helper_commit": "236405a1fa1d222e95487a26960f793f2e0ef6f7",
+    "flat_root_sha256": "824df22c4f3b59ea8b9cd42ca0fbb5e87a5cda1f4887b457695d00940914ace0",
+    "capsule_root_sha256": "9aa2b9a3bd5c5f7da4edd8a1a008e1675464d8c85eba5521418440ba4c5641b9",
+    "source_layout": {
+      "layout": "leaf_capsules_v2",
+      "blob_bytes": 530673680,
+      "blob_sha256": "03868e2f801283aea553a59f4334f791a1f84aad30caeb873e61993251dd3010",
+      "directory_bytes": 78224,
+      "directory_sha256": "2fa64cd7b0a237bed6f41f7114b3e15e54c48a0858738d886307fe7307a27e40"
+    },
+    "rows": 1000000,
+    "dimensions": 1024,
+    "leaves": 731,
+    "unchanged_logical_fields_and_calibration_bits": true,
+    "all_helper_native_checks": {
+      "all_capsule_copies_verified_against_original_unit_authority": true,
+      "all_flat_original_source_units_verified": true,
+      "all_original_asset_full_pins_rechecked": true,
+      "canonical_full_sha_and_all_position_ids_equal_sq8": true,
+      "full_native_router_publication_verified": true,
+      "native_capsule_root_admission": true,
+      "native_flat_publication_admission_via_repackage": true,
+      "production_rejected_original_v10": true,
+      "sq8_full_sha_and_all_original_pages_verified": true,
+      "unchanged_capsule_logical_assets_and_ids_by_full_sha": true,
+      "unique_application_ids_and_raw_order_permutation": true
+    },
+    "queries_or_truth_used": false,
+    "performance_claim": false
+  },
+  "capsule_full1000": {
+    "recall": 0.9783,
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 186.762131,
+      "p90_ms": 244.57615,
+      "p90_ns": 244576150,
+      "p95_ms": 275.341937,
+      "p95_ns": 275341937,
+      "p99_ms": 354.000641,
+      "query_wall_ns": 197625644817,
+      "sequential_qps": 5.0600720413891285
+    },
+    "query_cpu_ns": 145634205873,
+    "rss_bytes": 106635264,
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 24651,
+        "verified_bytes": 40208885880
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 30041,
+        "verified_bytes": 10722616576
+      }
+    },
+    "result_sha256": "d7a56d4d7a84990eee3d652b6fef6a24a546dbbbd417aee77d077eaa60f85e20"
+  },
+  "historical_capsule_full1000": {
+    "recall": 0.9783,
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 199.38111,
+      "p90_ms": 253.266787,
+      "p90_ns": 253266787,
+      "p95_ms": 281.477363,
+      "p95_ns": 281477363,
+      "p99_ms": 360.741922,
+      "query_wall_ns": 209372829138,
+      "sequential_qps": 4.776168923718792
+    },
+    "query_cpu_ns": 158619090182,
+    "rss_bytes": 120057856,
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 24710,
+        "verified_bytes": 41963275448
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 30041,
+        "verified_bytes": 10722616576
+      }
+    },
+    "result_sha256": "44b1801a5ee211489ded3d3a8454340ec0fbbd48f11039cb622e09f5e915fdad"
+  },
+  "current_flat_full1000": {
+    "recall": 0.9783,
+    "statistics": {
+      "count": 1000,
+      "p50_ms": 153.771363,
+      "p90_ms": 203.266901,
+      "p90_ns": 203266901,
+      "p95_ms": 221.573813,
+      "p95_ns": 221573813,
+      "p99_ms": 277.172176,
+      "query_wall_ns": 162419486339,
+      "sequential_qps": 6.156896703347602
+    },
+    "query_cpu_ns": 115802946300,
+    "rss_bytes": 91561984,
+    "charges": {
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 109872,
+        "verified_bytes": 28967583744
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 30041,
+        "verified_bytes": 10722616576
+      }
+    },
+    "result_sha256": "cd973e9fd23e948667d6740a2904c7e9e3e5b6165d1de37a41be19caaa3db592"
+  },
+  "flat_download_selected": "flat64",
+  "flat_download_panel_selection": {
+    "status": "ABBA32_STRICT_EXACT_SEMANTICS",
+    "selected": "flat64",
+    "rule": "minimum sum of two panel query_wall_ns after exact quality parity",
+    "flat64_query_wall_ns": 10428837828,
+    "flat128_query_wall_ns": 11263587237,
+    "population_percentiles_valid": false,
+    "vendor_win": false
+  },
+  "flat_download_abba_ratios": [
+    {
+      "comparison": "B1/A1",
+      "cpu_ratio": 0.9913354717120008,
+      "query_wall_ratio": 0.9247768834591619,
+      "sequential_qps_ratio": 1.0813419083957454
+    },
+    {
+      "comparison": "B2/A2",
+      "cpu_ratio": 1.0110689858615705,
+      "query_wall_ratio": 1.25294934663197,
+      "sequential_qps_ratio": 0.7981168613783801
+    }
+  ],
+  "flat128_source_charge_parity": true,
+  "all10000_rank_score_ordinal_plan_trace_sq8_parity": true,
+  "client_source_cache": "off",
+  "backend_cache": "uncontrolled",
+  "comparison_limits": {
+    "historical_full1000_comparison_not_counterbalanced": true,
+    "paired32_population_percentiles_valid": false,
+    "vendor_win": false,
+    "matched_turbopuffer_result": false,
+    "total_lifecycle_cost_qualified": false,
+    "concurrent_service_qps_qualified": false,
+    "100M_scale_qualified": false
+  },
+  "archive_prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261017/capsule-page-range-v2-delivery-closure-a0001",
+  "archive_terminal_authority": "terminal.json uploaded last; verify separate source/evidence hashes",
+  "product_goal_complete": false
+}

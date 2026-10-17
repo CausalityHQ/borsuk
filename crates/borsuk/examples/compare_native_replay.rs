@@ -1602,8 +1602,7 @@ impl Rows {
         } else {
             self.line_cap
         };
-        let n = Read::take(&mut self.reader, (cap + 1) as u64)
-            .read_until(b'\n', &mut self.line)?;
+        let n = Read::take(&mut self.reader, (cap + 1) as u64).read_until(b'\n', &mut self.line)?;
         self.bytes = plus(self.bytes, n as u64)?;
         require(
             n > 0
@@ -13452,7 +13451,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut identity = json!({"phase":"identity","schema":current_v10::ONEPASS_RESULT_SCHEMA,
+        let mut identity = json!({"phase":"identity","schema":current_v10::PAGE_RANGE_RESULT_SCHEMA,
             "config_sha256":sha(&config_bytes),"binary_sha256":binary_sha,
             "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
             "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
@@ -13495,9 +13494,10 @@ mod tests {
         ] {
             identity[key] = json!(sha(bytes));
         }
-        identity["config_schema"] = json!(current_v10::ONEPASS_CONFIG_SCHEMA);
+        identity["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
         identity["range_scheduler_owner"] = json!("library");
-        identity["source_capsule_verification_policy"] = json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
+        identity["source_capsule_verification_policy"] =
+            json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
         let mut bound = json!({"phase":"bound_inputs","truth_opened":false,"source_cache":"off","credential_source":null,
             "range_scheduler_owner":"library"});
         for key in "dataset revision metric tie_rule rows dimensions count k corpus_source_first query_source_first profile backend generation_prefix generation_root_sha256 corpus_intervals reserved_query_interval producer_authority max_memory_bytes".split_whitespace() {
@@ -13540,8 +13540,9 @@ mod tests {
             &std::fs::read(config["cohort_receipt"]["path"].as_str().unwrap()).unwrap(),
         )
         .unwrap();
-        bound["config_schema"] = json!(current_v10::ONEPASS_CONFIG_SCHEMA);
-        bound["source_capsule_verification_policy"] = json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
+        bound["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
+        bound["source_capsule_verification_policy"] =
+            json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
         bound["reserved_queries_sha256"] = cohort["reserved_queries_sha256"].clone();
         bound["selected_count"] = json!(
             v9_panel::ordinals(&bound, config["count"].as_u64().unwrap() as usize)
@@ -13561,6 +13562,182 @@ mod tests {
         assert_eq!(rows[0], completed.expected_identity);
         assert_eq!(rows[1], completed.expected_bound_inputs);
         read_run_with(result, &completed.input.sha256, Some(&completed)).unwrap();
+        rows
+    }
+
+    // Synthetic historical evidence: author the old wire/model from invariant
+    // observations. No v2 root, directory, payload or ELF is claimed as old output.
+    pub(super) fn historical_source_layout_rows(
+        observations: &[Value],
+        onepass: bool,
+    ) -> Vec<Value> {
+        let mut rows = observations.to_vec();
+        let inputs = rows[1].clone();
+        let capsule = inputs["source_layout"]["layout"] != "flat_records";
+        let n = inputs["rows"].as_u64().unwrap();
+        let dimensions = inputs["dimensions"].as_u64().unwrap();
+        let width = dimensions.div_ceil(32) * 8 + 8;
+        let leaves = n.div_ceil(32);
+        let directory = 32 + leaves * 64;
+        let layout = if capsule {
+            json!({"layout":"leaf_capsules","blob_bytes":leaves*(n*width+32+4*n.div_ceil(256)),
+                "blob_sha256":"d".repeat(64),"directory_bytes":directory,"directory_sha256":"e".repeat(64)})
+        } else {
+            json!({"layout":"flat_records"})
+        };
+        for header in &mut rows[..2] {
+            header["config_schema"] = json!(if onepass {
+                current_v10::ONEPASS_CONFIG_SCHEMA
+            } else {
+                current_v10::SOURCE_LAYOUT_CONFIG_SCHEMA
+            });
+            header["source_layout"] = layout.clone();
+            header
+                .as_object_mut()
+                .unwrap()
+                .remove("source_capsule_verification_policy");
+            if onepass {
+                header["source_capsule_verification_policy"] =
+                    json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
+            }
+        }
+        rows[0]["schema"] = json!(if onepass {
+            current_v10::ONEPASS_RESULT_SCHEMA
+        } else {
+            current_v10::SOURCE_LAYOUT_RESULT_SCHEMA
+        });
+        rows[0]["binary_sha256"] = json!("1".repeat(64));
+        rows[0]["config_sha256"] = json!("2".repeat(64));
+        // Preserve the old handoff's allowed source identity differences.
+        for key in [
+            "runner_source_sha256",
+            "generation_source_sha256",
+            "source_capsule_source_sha256",
+            "sq8_range_source_sha256",
+        ] {
+            rows[0][key] = json!(if onepass {
+                "3".repeat(64)
+            } else {
+                "4".repeat(64)
+            });
+        }
+        let startup = rows.iter().find(|r| r["phase"] == "startup").unwrap();
+        let router_bytes = startup["metadata"]["metadata"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "router/root.bin")
+            .unwrap()["bytes"]
+            .clone();
+        let generation = if capsule { 2 } else { 1 };
+        let page = json!({"schema":"borsuk-v115-sq8-page-authority-v2","generation":generation,
+            "rows":n,"dimensions":dimensions,"page_rows":32,
+            "object_sha256":inputs["native_sq8_sha256"],"page_digest_sha256":"5".repeat(64)});
+        let page_body = serde_json::to_string(&page).unwrap();
+        let sq8 = inputs["native_sq8_sha256"].as_str().unwrap();
+        let key = inputs["backend"]
+            .get("sq8_object_key")
+            .cloned()
+            .unwrap_or_else(|| json!(format!("objects/{sq8}")));
+        let etag = inputs["backend"]
+            .get("sq8_etag")
+            .cloned()
+            .unwrap_or(json!("synthetic-old-etag"));
+        let root = json!({"schema":"borsuk-two-bit-generation-v10","generation":generation,"base_epoch":0,
+            "plane_manifest_sha256":"6".repeat(64),"page_manifest_sha256":sha(page_body.as_bytes()),
+            "discovery":{"mode":"semantic","profile":inputs["profile"],
+                "root_sha256":"7".repeat(64),"root_bytes":router_bytes,
+                "membership_sha256":"8".repeat(64),"membership_bytes":leaves*4,
+                "leaves_sha256":"9".repeat(64),"leaves_bytes":leaves*(4+dimensions*2),
+                "input_schema":"synthetic-historical-wire","input_root_sha256":"a".repeat(64),
+                "centroids_sha256":"b".repeat(64),"source_sha256":inputs["native_source_sha256"],
+                "source_order_sha256":inputs["native_order_sha256"],"mean_sha256":"c".repeat(64),
+                "records_sha256":"d".repeat(64),"sq8_sha256":sq8},
+            "source_layout":layout,"sq8_object_sha256":sq8,"sq8_object_key":key,"sq8_etag":etag,
+            "canonical":null,"low":vec![0.0; dimensions as usize],"step":vec![1.0; dimensions as usize]});
+        let root_body = serde_json::to_string(&root).unwrap();
+        let root_sha = sha(root_body.as_bytes());
+        let mut source_gets = 0;
+        let mut source_bytes = 0;
+        for row in &mut rows {
+            match row["phase"].as_str().unwrap() {
+                "bound_inputs" | "all_queries_sealed" => {
+                    row["generation_root_sha256"] = json!(root_sha)
+                }
+                "source_binding" => {
+                    row["generation_authority"] =
+                        json!({"root_manifest":root_body,"page_manifest":page_body})
+                }
+                "startup" => {
+                    row["source_layout"] = layout.clone();
+                    for entry in row["metadata"]["metadata"].as_array_mut().unwrap() {
+                        let bytes = match entry["name"].as_str().unwrap() {
+                            "manifest.json" => root_body.len() as u64,
+                            "page_manifest.json" => page_body.len() as u64,
+                            "plane/capsule_directory.bin" => directory,
+                            _ => continue,
+                        };
+                        entry["bytes"] = json!(bytes);
+                        entry["payload_buffer_bound_bytes"] = json!(bytes);
+                        entry["logical_get_requests"] = json!(bytes.div_ceil(4 * 1024 * 1024));
+                    }
+                }
+                "query" => {
+                    if capsule {
+                        let selected = row["trace"]["semantic_leaves"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|id| id.as_u64().unwrap())
+                            .collect::<std::collections::BTreeSet<_>>();
+                        let mut previous = None;
+                        let mut gets = 0;
+                        for &id in &selected {
+                            if previous.is_none() || previous != id.checked_sub(1) {
+                                gets += 1;
+                            }
+                            previous = Some(id);
+                        }
+                        let mut pages = std::collections::BTreeMap::<u64, u64>::new();
+                        for unit in row["trace"]["semantic_units"].as_array().unwrap() {
+                            *pages.entry(unit.as_u64().unwrap() / 8).or_default() += 1;
+                        }
+                        let mut logical = 0;
+                        let mut payload = 0;
+                        let mut occurrences = 0;
+                        for (page, units) in pages {
+                            let bytes = (n - page * 256).min(256) * width;
+                            let copies = units.min(selected.len() as u64);
+                            logical += bytes;
+                            payload += bytes * copies;
+                            occurrences += copies;
+                        }
+                        let framing = 32 * selected.len() as u64 + 4 * occurrences;
+                        let physical = payload + framing;
+                        row["stages"]["source_capsules"] = json!({
+                            "physical_bytes":physical,"logical_bytes":logical,"duplicate_bytes":payload-logical,
+                            "framing_bytes":framing,"hash_bytes":if onepass {physical+payload} else {2*(physical+payload)},
+                            "memory_bytes":16*1024*1024_u64 - if onepass {0} else {40*gets}});
+                        row["charges"]["source"] = json!({"submitted_gets":gets,"verified_bytes":physical,"failed_gets":0});
+                        row["sum"] = json!({
+                            "submitted_gets":gets + row["charges"]["router"]["submitted_gets"].as_u64().unwrap() + row["charges"]["sq8"]["submitted_gets"].as_u64().unwrap(),
+                            "verified_bytes":physical + row["charges"]["router"]["verified_bytes"].as_u64().unwrap() + row["charges"]["sq8"]["verified_bytes"].as_u64().unwrap(),
+                            "failed_gets":0});
+                    }
+                    source_gets += row["charges"]["source"]["submitted_gets"].as_u64().unwrap();
+                    source_bytes += row["charges"]["source"]["verified_bytes"].as_u64().unwrap();
+                }
+                _ => (),
+            }
+        }
+        let summary = &mut rows.last_mut().unwrap()["summary"];
+        summary["generation_root_sha256"] = json!(root_sha);
+        summary["charges"]["source"] =
+            json!({"submitted_gets":source_gets,"verified_bytes":source_bytes,"failed_gets":0});
+        summary["sum"] = json!({
+            "submitted_gets":source_gets + summary["charges"]["router"]["submitted_gets"].as_u64().unwrap() + summary["charges"]["sq8"]["submitted_gets"].as_u64().unwrap(),
+            "verified_bytes":source_bytes + summary["charges"]["router"]["verified_bytes"].as_u64().unwrap() + summary["charges"]["sq8"]["verified_bytes"].as_u64().unwrap(),
+            "failed_gets":0});
         rows
     }
 
@@ -13627,8 +13804,7 @@ mod tests {
         }
         let synthetic_metadata = |bodies: [String; 2]| {
             let mut synthetic = config.clone();
-            for (i, (original, root_body)) in
-                [&flat, &capsules].into_iter().zip(bodies).enumerate()
+            for (i, (original, root_body)) in [&flat, &capsules].into_iter().zip(bodies).enumerate()
             {
                 let mut rows = original.clone();
                 let root_sha = sha(root_body.as_bytes());
@@ -13653,7 +13829,9 @@ mod tests {
         };
         let check_roots = |roots: &[Value; 2]| {
             check(&synthetic_metadata(
-                roots.clone().map(|root| serde_json::to_string(&root).unwrap()),
+                roots
+                    .clone()
+                    .map(|root| serde_json::to_string(&root).unwrap()),
             ))
         };
         // Preserve the original decimal spellings in the authenticated raw bodies.
@@ -13767,15 +13945,23 @@ mod tests {
             let mut bad = capsules.clone();
             bad[qi]["stages"]["source_capsules"]["logical_bytes"] = json!(logical);
             bad[qi]["stages"]["source_capsules"]["duplicate_bytes"] = json!(duplicate);
-            let (path, _) = write_fixture(dir.path(), "layout-impossible-page-split.jsonl", bad.clone());
+            let (path, _) = write_fixture(
+                dir.path(),
+                "layout-impossible-page-split.jsonl",
+                bad.clone(),
+            );
             let mut invalid = config.clone();
             invalid["arms"][1] = completed(&path, &bad);
-            assert!(check(&invalid).is_err(), "whole-page split {logical}+{duplicate}");
+            assert!(
+                check(&invalid).is_err(),
+                "whole-page split {logical}+{duplicate}"
+            );
         }
         let mut bad = capsules.clone();
         assert_eq!(bad[qi]["charges"]["source"]["submitted_gets"], 1);
         bad[qi]["charges"]["source"]["submitted_gets"] = json!(0);
-        bad[qi]["sum"]["submitted_gets"] = json!(bad[qi]["sum"]["submitted_gets"].as_u64().unwrap() - 1);
+        bad[qi]["sum"]["submitted_gets"] =
+            json!(bad[qi]["sum"]["submitted_gets"].as_u64().unwrap() - 1);
         let summary = &mut bad.last_mut().unwrap()["summary"];
         for pointer in ["/charges/source/submitted_gets", "/sum/submitted_gets"] {
             let counter = summary.pointer_mut(pointer).unwrap();
@@ -13786,7 +13972,11 @@ mod tests {
         invalid["arms"][1] = completed(&path, &bad);
         assert!(check(&invalid).is_err());
 
-        for name in ["manifest.json", "plane/capsule_directory.bin", "router/membership.bin"] {
+        for name in [
+            "manifest.json",
+            "plane/capsule_directory.bin",
+            "router/membership.bin",
+        ] {
             for (key, value) in [
                 ("logical_get_requests", json!(0)),
                 ("logical_head_requests", json!(9)),
@@ -13795,10 +13985,15 @@ mod tests {
                 ("reused_root_bytes", json!(1)),
             ] {
                 let mut bad = capsules.clone();
-                let entry = bad[si]["metadata"]["metadata"].as_array_mut().unwrap()
-                    .iter_mut().find(|entry| entry["name"] == name).unwrap();
+                let entry = bad[si]["metadata"]["metadata"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap();
                 entry[key] = value;
-                let (path, _) = write_fixture(dir.path(), "layout-forged-startup.jsonl", bad.clone());
+                let (path, _) =
+                    write_fixture(dir.path(), "layout-forged-startup.jsonl", bad.clone());
                 let mut invalid = config.clone();
                 invalid["arms"][1] = completed(&path, &bad);
                 assert!(check(&invalid).is_err(), "{name}: {key}");
@@ -13949,9 +14144,13 @@ mod tests {
     #[test]
     fn source_layout_native_multileaf_tail_and_near_cap_panel_authority() {
         for (rows, panel, padded) in [(2049, false, false), (32, true, true)] {
-            let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture_with(rows, 2, panel, padded).unwrap();
+            let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture_with(
+                rows, 2, panel, padded,
+            )
+            .unwrap();
             let flat = assert_current_native(dir.path(), &paths[0]);
-            let capsules = assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+            let capsules =
+                assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
             let arms = paths.iter().zip([&flat, &capsules]).map(|(path, records)| {
                 let body = std::fs::read(path).unwrap();
                 json!({"schema":SCALE_CONFIG_SCHEMA,"input":{"path":path,"bytes":body.len(),"sha256":sha(&body)},
@@ -13963,11 +14162,17 @@ mod tests {
             std::fs::write(&path, &body).unwrap();
             let report = current_v10::paired_source_layout(&path, &sha(&body)).unwrap();
             assert_eq!(report["status"], "PARITY_VERIFIED");
-            for (a, b) in flat.iter().filter(|r| r["phase"] == "query")
-                .zip(capsules.iter().filter(|r| r["phase"] == "query")) {
+            for (a, b) in flat
+                .iter()
+                .filter(|r| r["phase"] == "query")
+                .zip(capsules.iter().filter(|r| r["phase"] == "query"))
+            {
                 assert_eq!(a["trace"], b["trace"]);
                 assert_eq!(a["returned"], b["returned"]);
-                assert_eq!(a["returned_physical_ordinals"], b["returned_physical_ordinals"]);
+                assert_eq!(
+                    a["returned_physical_ordinals"],
+                    b["returned_physical_ordinals"]
+                );
                 assert_eq!(a["plan"], b["plan"]);
                 if rows > 32 {
                     assert!(b["trace"]["semantic_leaves"].as_array().unwrap().len() > 1);
@@ -13976,9 +14181,24 @@ mod tests {
                 }
             }
             if padded {
-                let binding = flat.iter().find(|r| r["phase"] == "source_binding").unwrap();
-                assert_eq!(binding["generation_authority"]["root_manifest"].as_str().unwrap().len(), 65_536);
-                assert_eq!(binding["generation_authority"]["page_manifest"].as_str().unwrap().len(), 65_536);
+                let binding = flat
+                    .iter()
+                    .find(|r| r["phase"] == "source_binding")
+                    .unwrap();
+                assert_eq!(
+                    binding["generation_authority"]["root_manifest"]
+                        .as_str()
+                        .unwrap()
+                        .len(),
+                    65_536
+                );
+                assert_eq!(
+                    binding["generation_authority"]["page_manifest"]
+                        .as_str()
+                        .unwrap()
+                        .len(),
+                    65_536
+                );
                 assert!(serde_json::to_vec(binding).unwrap().len() > 65_536);
                 assert!(flat[1]["max_memory_bytes"].as_u64().unwrap() > 512 * 1024 * 1024);
                 assert!(flat[1]["source_byte_budget"].as_u64().unwrap() > 64 * 1024 * 1024);
@@ -13994,13 +14214,19 @@ mod tests {
     }
 
     #[test]
-    fn onepass_diagnostic32_uses_ordinary_completed_scale_publication() {
-        let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture_with(32, 33, true, false).unwrap();
+    fn page_range_v2_diagnostic32_uses_ordinary_completed_scale_publication() {
+        let (dir, paths) =
+            scale_native_runner::source_layout_reducer_native_fixture_with(32, 33, true, false)
+                .unwrap();
         let rows = assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
         assert_eq!(rows.iter().filter(|r| r["phase"] == "query").count(), 32);
         let (config, pin) = scale_config(dir.path(), &paths[1], &rows);
-        let output = dir.path().join("ordinary-completed-scale-diagnostic32.json");
-        assert!(execute_report(&output, SCALE_REPORT_SCHEMA, || reduce_scale(&config, &pin)).unwrap());
+        let output = dir
+            .path()
+            .join("ordinary-completed-scale-diagnostic32.json");
+        assert!(
+            execute_report(&output, SCALE_REPORT_SCHEMA, || reduce_scale(&config, &pin)).unwrap()
+        );
         let report: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
         assert_eq!(report["status"], "MEASURED");
         assert_eq!(report["diagnostic_query_count"], 32);
@@ -14010,44 +14236,160 @@ mod tests {
     }
 
     #[test]
-    fn onepass_native_completion_and_resealed_historical_policy_hash_boundaries() {
+    fn page_range_v2_completed_policy_schema_and_root_refusals() {
+        let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture().unwrap();
+        let current =
+            assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+        assert_eq!(current[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
+        assert_eq!(
+            current[1]["config_schema"],
+            current_v10::PAGE_RANGE_CONFIG_SCHEMA
+        );
+        assert_eq!(current[1]["source_layout"]["layout"], "leaf_capsules_v2");
+        for mutation in [
+            "missing_policy",
+            "old_policy",
+            "extra_policy",
+            "skip_verification",
+            "null_policy",
+            "result_schema",
+            "config_schema",
+            "old_layout",
+            "old_root",
+        ] {
+            let mut bad = current.clone();
+            match mutation {
+                "missing_policy" => {
+                    for header in &mut bad[..2] {
+                        header
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("source_capsule_verification_policy");
+                    }
+                }
+                "old_policy" | "null_policy" => {
+                    for header in &mut bad[..2] {
+                        header["source_capsule_verification_policy"] = if mutation == "old_policy" {
+                            json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY)
+                        } else {
+                            Value::Null
+                        };
+                    }
+                }
+                "extra_policy" | "skip_verification" => {
+                    for header in &mut bad[..2] {
+                        header[mutation] = json!(true);
+                    }
+                }
+                "result_schema" => bad[0]["schema"] = json!(current_v10::ONEPASS_RESULT_SCHEMA),
+                "config_schema" => {
+                    for header in &mut bad[..2] {
+                        header["config_schema"] = json!(current_v10::ONEPASS_CONFIG_SCHEMA);
+                        header["source_capsule_verification_policy"] =
+                            json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
+                    }
+                }
+                "old_layout" => {
+                    for header in &mut bad[..2] {
+                        header["source_layout"]["layout"] = json!("leaf_capsules");
+                    }
+                }
+                "old_root" => {
+                    let binding = bad
+                        .iter()
+                        .position(|r| r["phase"] == "source_binding")
+                        .unwrap();
+                    let mut root: Value = serde_json::from_str(
+                        bad[binding]["generation_authority"]["root_manifest"]
+                            .as_str()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    // Invalid negative case only: a rehashed v10 marker cannot admit v15.
+                    root["schema"] = json!("borsuk-two-bit-generation-v10");
+                    let body = serde_json::to_string(&root).unwrap();
+                    let digest = sha(body.as_bytes());
+                    bad[binding]["generation_authority"]["root_manifest"] = json!(body);
+                    bad[1]["generation_root_sha256"] = json!(digest);
+                    for row in &mut bad {
+                        if row["phase"] == "all_queries_sealed" {
+                            row["generation_root_sha256"] = json!(digest);
+                        }
+                        if row["phase"] == "terminal" {
+                            row["summary"]["generation_root_sha256"] = json!(digest);
+                        }
+                        if row["phase"] == "startup" {
+                            for entry in row["metadata"]["metadata"].as_array_mut().unwrap() {
+                                if entry["name"] == "manifest.json" {
+                                    entry["bytes"] = json!(body.len());
+                                    entry["payload_buffer_bound_bytes"] = json!(body.len());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let (path, _) =
+                write_fixture(dir.path(), "page-range-resealed-refusal.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+            assert!(!error.contains("seal"), "{mutation}: {error}");
+        }
+    }
+
+    #[test]
+    fn page_range_v2_authored_historical_completion_and_policy_hash_boundaries() {
         for panel in [false, true] {
-            let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture_with(2049, 2, panel, false).unwrap();
-            let current = assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+            let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture_with(
+                2049, 2, panel, false,
+            )
+            .unwrap();
+            let native =
+                assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+            let current = historical_source_layout_rows(&native, true);
+            let (current_path, _) =
+                write_fixture(dir.path(), "authored-old-onepass.jsonl", current.clone());
             assert_eq!(current[0]["schema"], current_v10::ONEPASS_RESULT_SCHEMA);
-            assert_eq!(current[1]["config_schema"], current_v10::ONEPASS_CONFIG_SCHEMA);
+            assert_eq!(
+                current[1]["config_schema"],
+                current_v10::ONEPASS_CONFIG_SCHEMA
+            );
             for row in current.iter().filter(|r| r["phase"] == "query") {
                 let stats = &row["stages"]["source_capsules"];
                 let physical = stats["physical_bytes"].as_u64().unwrap();
                 let framing = stats["framing_bytes"].as_u64().unwrap();
                 assert_eq!(stats["hash_bytes"], 2 * physical - framing);
             }
-            let (config, pin) = scale_config(dir.path(), &paths[1], &current);
+            let (config, pin) = scale_config(dir.path(), &current_path, &current);
             let report = reduce_scale(&config, &pin).unwrap();
             assert_eq!(report["status"], "MEASURED");
             assert_eq!(report["diagnostic_only"], true);
             assert_eq!(report["population_percentiles_valid"], false);
 
-            // SYNTHETIC historical boundary evidence; current producer bytes above stay untouched.
-            let mut historical = current.clone();
-            historical[0]["schema"] = json!(current_v10::SOURCE_LAYOUT_RESULT_SCHEMA);
-            for header in &mut historical[..2] {
-                header["config_schema"] = json!(current_v10::SOURCE_LAYOUT_CONFIG_SCHEMA);
-                header.as_object_mut().unwrap().remove("source_capsule_verification_policy");
-            }
-            for row in historical.iter_mut().filter(|r| r["phase"] == "query") {
-                let stats = &mut row["stages"]["source_capsules"];
-                let physical = stats["physical_bytes"].as_u64().unwrap();
-                let payload = stats["logical_bytes"].as_u64().unwrap() + stats["duplicate_bytes"].as_u64().unwrap();
-                stats["hash_bytes"] = json!(2 * (physical + payload));
-            }
-            let (path, _) = write_fixture(dir.path(), "synthetic-config-v12-result-v13.jsonl", historical.clone());
+            let historical = historical_source_layout_rows(&native, false);
+            let (path, _) = write_fixture(
+                dir.path(),
+                "synthetic-config-v12-result-v13.jsonl",
+                historical.clone(),
+            );
             let (config, pin) = scale_config(dir.path(), &path, &historical);
             assert_eq!(reduce_scale(&config, &pin).unwrap()["status"], "MEASURED");
 
             for (onepass, original) in [(true, &current), (false, &historical)] {
-                for mutation in ["opposite_hash", "missing_policy", "wrong_policy", "null_policy", "numeric_policy", "identity_policy", "config_pair", "result_pair"] {
-                    if !onepass && mutation == "missing_policy" { continue; }
+                for mutation in [
+                    "opposite_hash",
+                    "missing_policy",
+                    "wrong_policy",
+                    "null_policy",
+                    "numeric_policy",
+                    "identity_policy",
+                    "config_pair",
+                    "result_pair",
+                ] {
+                    if !onepass && mutation == "missing_policy" {
+                        continue;
+                    }
                     let mut bad = original.clone();
                     match mutation {
                         "opposite_hash" => {
@@ -14055,15 +14397,24 @@ mod tests {
                                 let stats = &mut row["stages"]["source_capsules"];
                                 let physical = stats["physical_bytes"].as_u64().unwrap();
                                 let framing = stats["framing_bytes"].as_u64().unwrap();
-                                stats["hash_bytes"] = json!(if onepass { 2 * (physical + physical - framing) } else { 2 * physical - framing });
+                                stats["hash_bytes"] = json!(if onepass {
+                                    2 * (physical + physical - framing)
+                                } else {
+                                    2 * physical - framing
+                                });
                             }
                         }
                         "missing_policy" => {
                             for header in &mut bad[..2] {
-                                header.as_object_mut().unwrap().remove("source_capsule_verification_policy");
+                                header
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .remove("source_capsule_verification_policy");
                             }
                         }
-                        "identity_policy" => bad[0]["source_capsule_verification_policy"] = json!("skip"),
+                        "identity_policy" => {
+                            bad[0]["source_capsule_verification_policy"] = json!("skip")
+                        }
                         "wrong_policy" | "null_policy" | "numeric_policy" => {
                             let value = match mutation {
                                 "wrong_policy" => json!("skip"),
@@ -14076,25 +14427,43 @@ mod tests {
                         }
                         "config_pair" => {
                             for header in &mut bad[..2] {
-                                header["config_schema"] = json!(if onepass { current_v10::SOURCE_LAYOUT_CONFIG_SCHEMA } else { current_v10::ONEPASS_CONFIG_SCHEMA });
-                                if onepass {
-                                    header.as_object_mut().unwrap().remove("source_capsule_verification_policy");
+                                header["config_schema"] = json!(if onepass {
+                                    current_v10::SOURCE_LAYOUT_CONFIG_SCHEMA
                                 } else {
-                                    header["source_capsule_verification_policy"] = json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
+                                    current_v10::ONEPASS_CONFIG_SCHEMA
+                                });
+                                if onepass {
+                                    header
+                                        .as_object_mut()
+                                        .unwrap()
+                                        .remove("source_capsule_verification_policy");
+                                } else {
+                                    header["source_capsule_verification_policy"] =
+                                        json!(current_v10::SOURCE_CAPSULE_VERIFICATION_POLICY);
                                 }
                             }
                         }
-                        "result_pair" => bad[0]["schema"] = json!(if onepass { current_v10::SOURCE_LAYOUT_RESULT_SCHEMA } else { current_v10::ONEPASS_RESULT_SCHEMA }),
+                        "result_pair" => {
+                            bad[0]["schema"] = json!(if onepass {
+                                current_v10::SOURCE_LAYOUT_RESULT_SCHEMA
+                            } else {
+                                current_v10::ONEPASS_RESULT_SCHEMA
+                            })
+                        }
                         _ => unreachable!(),
                     }
                     // Recompute the internal query seal and pin the changed full file.
-                    let (path, _) = write_fixture(dir.path(), "onepass-resealed-mutation.jsonl", bad.clone());
+                    let (path, _) =
+                        write_fixture(dir.path(), "onepass-resealed-mutation.jsonl", bad.clone());
                     let (config, pin) = scale_config(dir.path(), &path, &bad);
                     let error = reduce_scale(&config, &pin).unwrap_err().to_string();
                     if mutation == "opposite_hash" {
                         assert_eq!(error, "v13 physical/logical/hash SOURCE conservation");
                     }
-                    assert!(!error.contains("seal"), "semantic rejection must survive resealing: {onepass} {mutation}: {error}");
+                    assert!(
+                        !error.contains("seal"),
+                        "semantic rejection must survive resealing: {onepass} {mutation}: {error}"
+                    );
                 }
             }
         }
@@ -14142,8 +14511,12 @@ mod tests {
         bad["stages"]["source_capsules"]["extra"] = json!(0);
         assert!(current_v10::validate_source_capsules(&bad, &capsules[1]).is_err());
         let mut bad = query.clone();
-        bad["charges"]["source"]["verified_bytes"] =
-            bad["stages"]["source_capsules"]["logical_bytes"].clone();
+        bad["charges"]["source"]["verified_bytes"] = json!(
+            bad["stages"]["source_capsules"]["physical_bytes"]
+                .as_u64()
+                .unwrap()
+                - 1
+        );
         assert!(current_v10::validate_source_capsules(&bad, &capsules[1]).is_err());
         let mut bad = flat_query.clone();
         bad["stages"]["source_capsules"] = query["stages"]["source_capsules"].clone();
@@ -14163,7 +14536,10 @@ mod tests {
                 0,
                 "source_capsule_source_sha256 source_layout source_byte_budget max_memory_bytes config_schema source_capsule_verification_policy",
             ),
-            (1, "source_layout source_byte_budget config_schema source_capsule_verification_policy"),
+            (
+                1,
+                "source_layout source_byte_budget config_schema source_capsule_verification_policy",
+            ),
         ] {
             for key in keys.split_whitespace() {
                 rows[index].as_object_mut().unwrap().remove(key);
@@ -14500,7 +14876,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_v14_headers_bind_exact_retry_policy_and_preserve_v10_v11_v12_completion() {
+    fn page_range_v2_headers_bind_retry_policy_and_preserve_v10_v11_v12_completion() {
         let (dir, result) =
             scale_native_runner::scale_reducer_native_fixture(false, false).unwrap();
         let original = assert_current_native(dir.path(), &result);
@@ -14512,10 +14888,7 @@ mod tests {
             .take(2)
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(
-            headers[0]["schema"],
-            current_v10::ONEPASS_RESULT_SCHEMA
-        );
+        assert_eq!(headers[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
         let config_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
         assert_eq!(headers[0]["config_sha256"], sha(&config_bytes));
         for key in [
@@ -14976,7 +15349,7 @@ mod tests {
                 scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
             let rows = assert_current_native(dir.path(), &result);
             // Pin expected headers before any falsifier changes producer output.
-            assert_eq!(rows[0]["schema"], current_v10::ONEPASS_RESULT_SCHEMA);
+            assert_eq!(rows[0]["schema"], current_v10::PAGE_RANGE_RESULT_SCHEMA);
             assert_eq!(rows[0]["sq8_range_split"], Value::Null);
             let (config, pin) = scale_config(dir.path(), &result, &rows);
             let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();

@@ -116,7 +116,7 @@ fn run(args: &[String]) -> Result<String, Box<dyn Error>> {
             &args[3],
             Path::new(&args[6]),
             generation,
-            SourceLayoutMode::LeafCapsules,
+            SourceLayoutMode::LeafCapsulesV2,
             limits,
         )?);
     }
@@ -394,9 +394,9 @@ mod tests {
             };
             let before = read_root(&current);
             let after = read_root(&output);
-            assert_eq!(after["schema"], "borsuk-two-bit-generation-v10");
+            assert_eq!(after["schema"], "borsuk-two-bit-generation-v11");
             assert_eq!(after["generation"], 2);
-            assert_eq!(after["source_layout"]["layout"], "leaf_capsules");
+            assert_eq!(after["source_layout"]["layout"], "leaf_capsules_v2");
             for field in [
                 "discovery",
                 "canonical",

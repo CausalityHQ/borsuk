@@ -1,0 +1,3627 @@
+{
+  "schema": "borsuk-qualified-native-source-snapshot-v1",
+  "source_revision": "966b06a7b920ce993335484cbb8b4e3cf95b79bd",
+  "file_count": 517,
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 610,
+      "mode": "100644",
+      "git_blob": "098de2b959485e3aafb6f472c3230f1bb368ae99",
+      "sha256": "560faf475a6c8af4f190a1679b3d95885e3b54b9b7bd56eb721bf571737cb51e"
+    },
+    {
+      "path": "AGENTS.md",
+      "bytes": 11167,
+      "mode": "100644",
+      "git_blob": "14d986b606166b090fb48f7e360bb5682b3c696b",
+      "sha256": "64e8dacc657a00610f8e2b858d0d6e62a19997f8c26ef2d76a9babbfe34167d6"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 103890,
+      "mode": "100644",
+      "git_blob": "7695c71d2cca01cddad16e57fcde557a190e9862",
+      "sha256": "2aaaccb5eb99098785dda3dfba48d97624f7f0f3c20dbcc3ed84d83c895382e8"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 821,
+      "mode": "100644",
+      "git_blob": "333f9ecfa89057ddae3749dae306d2c436243b04",
+      "sha256": "029a3c72f17251ade5a31078cb5151f98ac89c206c0922a8ac86607dff0a55eb"
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 4348,
+      "mode": "100644",
+      "git_blob": "475534d1e457294b7b01e7532336c5df95dcde0d",
+      "sha256": "55d0f54151154971764f9c643ed833ff6393138cc95575ea758053528d083a04"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2525,
+      "mode": "100644",
+      "git_blob": "c4754393a3b52f3540cc2fbeeb2fa3cf036eef17",
+      "sha256": "5504a194dc77332d56ee44d8efff279e14da564742f8c3e8961122230bb7f8b5"
+    },
+    {
+      "path": "crates/borsuk-cli/Cargo.toml",
+      "bytes": 613,
+      "mode": "100644",
+      "git_blob": "a90fc827015575b972739601f3e041404a92f1cf",
+      "sha256": "303f2867afd714c56eefb2482ec96a86b978c42e9f0e4db68cc50544705f0da2"
+    },
+    {
+      "path": "crates/borsuk-cli/src/main.rs",
+      "bytes": 53615,
+      "mode": "100644",
+      "git_blob": "49368ec6b435e28ce7ec7980494401be79fa45e8",
+      "sha256": "8bd41ba3acbcc6123339e2b3d9348822529b5550efbc501a170419efa0f47fc5"
+    },
+    {
+      "path": "crates/borsuk-cli/tests/cli.rs",
+      "bytes": 54677,
+      "mode": "100644",
+      "git_blob": "fd7a6b40c22faea3f6dc80410f55f81dffdecbbf",
+      "sha256": "08e09e146c02bda08fe094289937c51a4dc0e8e4d281d0d6e57f5f77be0ec9b5"
+    },
+    {
+      "path": "crates/borsuk-fma/Cargo.toml",
+      "bytes": 299,
+      "mode": "100644",
+      "git_blob": "b6275bde4a30c26dbb03fe96814384021180e9eb",
+      "sha256": "570c7dc6c8247a58043ed6e3271e15551091a9271e7747f6793834411d8fa5f7"
+    },
+    {
+      "path": "crates/borsuk-fma/src/lib.rs",
+      "bytes": 32720,
+      "mode": "100644",
+      "git_blob": "d35c0b7eac739f2331df538780d928b1bb1b6f1a",
+      "sha256": "1803e060e22954b5f983c9349aef62728826421358455fdb75cfcb839b67b58b"
+    },
+    {
+      "path": "crates/borsuk-node/Cargo.toml",
+      "bytes": 613,
+      "mode": "100644",
+      "git_blob": "c91ec8cd31275b61287b64060d0631a4d3562160",
+      "sha256": "1613cedf92ed0be402343b2fae6974a3aad3d202bdde9ae300734c8cb8b9fb9b"
+    },
+    {
+      "path": "crates/borsuk-node/build.rs",
+      "bytes": 87,
+      "mode": "100644",
+      "git_blob": "20c7b537461b93653105d10b9d9467f2d2805b5b",
+      "sha256": "13b3d5f0e632a6be6516a1fcaa09ccfb77e736b55d63a694cb0b715a5c779475"
+    },
+    {
+      "path": "crates/borsuk-node/src/lib.rs",
+      "bytes": 86705,
+      "mode": "100644",
+      "git_blob": "dbb7b934f21249197d18101d0779c3ad539a02b8",
+      "sha256": "9bdd9a74692ad5fd48d8760693531a15d85bedaad42e5f9e9ded2e96fc197a61"
+    },
+    {
+      "path": "crates/borsuk-pq4/Cargo.toml",
+      "bytes": 681,
+      "mode": "100644",
+      "git_blob": "bb0b122d5839c0d430ddce7b0d54c18bedb0837d",
+      "sha256": "a9b606a8c64f1f347ea6fb324762f5029cbc11ac88527a3bbb3199deb7d7deb3"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/builder.rs",
+      "bytes": 12914,
+      "mode": "100644",
+      "git_blob": "3d56d25d6308385c839ad5ddb43235636be7e246",
+      "sha256": "6d1779a0550f2a1f4e4c5cfdb77fdd070aa6d4c57886ae17ea45f33620ba1773"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/core.rs",
+      "bytes": 15294,
+      "mode": "100644",
+      "git_blob": "7e39a48de18528d5e0b213c5a4279a4fd6c35b73",
+      "sha256": "4ae9658812f5f3ba35193e9dc47fa8a59bedd478a8ef876dec89f67f5ce71e2f"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/format.rs",
+      "bytes": 5756,
+      "mode": "100644",
+      "git_blob": "61b4c1991bdd763d661e6eaea6909034eb37bf3f",
+      "sha256": "f5edcc9c749a431ebf6dcdd034ccc6aa2729441686636d465923ea4717b08256"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/index.rs",
+      "bytes": 8007,
+      "mode": "100644",
+      "git_blob": "9cfdd8b3bde243bc8c0530aaaad563a15a7285d7",
+      "sha256": "d204e606fddbf9246316bc2e4f54b4736eac9cf7f73e9aeba0a949b91afb2c8d"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/lib.rs",
+      "bytes": 33534,
+      "mode": "100644",
+      "git_blob": "0e7fcf433957421475801d94beeef0bbe2002eb9",
+      "sha256": "a41639b28ee1594f21dcc3a4f74c6392eb42716338dcbee6e86e4c02bbc973b8"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/sharded_index.rs",
+      "bytes": 4073,
+      "mode": "100644",
+      "git_blob": "d6f3a74f218f76bffe75bd2b6141d1344b8bdb26",
+      "sha256": "5e6ebe0e9bd1fe51ffd8e0245d424290a47192ed15ea63a5a09188631f8e9004"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/shards.rs",
+      "bytes": 1846,
+      "mode": "100644",
+      "git_blob": "5939ccc0f8ab5fe0d8cbb4666a9085ea51ebf8db",
+      "sha256": "2adf8b7ac07d209ac65868a7e6fbf18857b0e75692551218bd7760fdca0e51cc"
+    },
+    {
+      "path": "crates/borsuk-pq4/src/snapshot.rs",
+      "bytes": 34272,
+      "mode": "100644",
+      "git_blob": "d1496fd318ef15ac68523ace8ff838142fa6d3ab",
+      "sha256": "eb4196b58e40fe40fed96546c1f07018087cd2891284ee6942204456b191dc91"
+    },
+    {
+      "path": "crates/borsuk-python/Cargo.toml",
+      "bytes": 560,
+      "mode": "100644",
+      "git_blob": "1b0d717b48a9e35f20846be48f28ba60b40bd482",
+      "sha256": "066a86ddf41f51944fdb79ac2d342774060543ec9c271f469eb6ddfb3aa4418f"
+    },
+    {
+      "path": "crates/borsuk-python/build.rs",
+      "bytes": 410,
+      "mode": "100644",
+      "git_blob": "afaed6b36c20acb1d04a8b226282e500d853f9c7",
+      "sha256": "f3a56d1331b15fa82bdcee9ea46afdc29fd1d46f2d0df239cb1fa4b6a0931ad8"
+    },
+    {
+      "path": "crates/borsuk-python/src/lib.rs",
+      "bytes": 119005,
+      "mode": "100644",
+      "git_blob": "450d9b106e1ca7f7ac2b72f9b91b096289591c67",
+      "sha256": "e2728164ed94ff36c3f8dde2930b8921c82e1d57bd995a6efccd6b541f9b3794"
+    },
+    {
+      "path": "crates/borsuk-v25/Cargo.toml",
+      "bytes": 473,
+      "mode": "100644",
+      "git_blob": "22816900c464f37b58d6a959b87e94f9343106ec",
+      "sha256": "a3372240af5f75127af13f3a44fde4c380b9cea4e1515b87271315be00d22661"
+    },
+    {
+      "path": "crates/borsuk-v25/src/lib.rs",
+      "bytes": 26292,
+      "mode": "100644",
+      "git_blob": "99500dc2b46d64c0f0a30d6f3208b8d1893f0386",
+      "sha256": "2c8540565252b51541a039880052a68633798b0cd8ff487b59f594329b3db1c5"
+    },
+    {
+      "path": "crates/borsuk-v25/src/local.rs",
+      "bytes": 59251,
+      "mode": "100644",
+      "git_blob": "d23d1c6fd4a94922547e2b546f3184e2577135e4",
+      "sha256": "db8ae6cf8b67a23d25a9fb1eed9e9f222f8246bac31f9c9608a2b50b223d6825"
+    },
+    {
+      "path": "crates/borsuk-v26/Cargo.toml",
+      "bytes": 529,
+      "mode": "100644",
+      "git_blob": "9d0ea712db6a864e687d2b39a99f4184baefdd9a",
+      "sha256": "9b868e9dbf5cd223efd67265d677d4beb4c1c5d8a633e6a5096ad423e10587e9"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_dual_pq_key_preflight.rs",
+      "bytes": 8975,
+      "mode": "100644",
+      "git_blob": "36ebf78e278776c973c91d12b051827448ee728d",
+      "sha256": "56b1eb66462ab86407370f55c62e2747c2ba0824b5eb81a0b42a779e54751bc0"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_page_layout.rs",
+      "bytes": 60822,
+      "mode": "100644",
+      "git_blob": "0788638024408b847682ab9fcb96bcc634fac563",
+      "sha256": "bfe1478fd0e0bbed7bd69768f6e01b736a94a7a6be09589129b81441dcd87b3c"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq16_serving.rs",
+      "bytes": 12051,
+      "mode": "100644",
+      "git_blob": "92c9bb5ab3eb36dcd942262fee5eda81a9e8464a",
+      "sha256": "8edfd6bd63c8387f0c67083cfa35ad845fbc0a08ce33187838f905c76beb54aa"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq16_serving_build.rs",
+      "bytes": 6691,
+      "mode": "100644",
+      "git_blob": "2f7683b941a4f8ec1e81858a8bd7dbc0ef59a442",
+      "sha256": "cc4e65d121b73dde8f7a327ab7a1c0e61454559aa2ccc1cd696aad0cdfb20473"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq4_fast_build.rs",
+      "bytes": 7673,
+      "mode": "100644",
+      "git_blob": "2bc4db12d645aac1f41482beb744e91dd9f0543d",
+      "sha256": "648de655935433d4595058dc0269802a5ca477f32b89927aa396b3a56f939311"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq4_fast_holdout.rs",
+      "bytes": 7517,
+      "mode": "100644",
+      "git_blob": "6aa3ab9c0db1c6c1d3c11ab96f2836ee00b56830",
+      "sha256": "d0fa4adf97fdd5f92c1fbdc660a9fab4c0b9f4eb6b2476747b39148b813e83ff"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq4_fast_quality.rs",
+      "bytes": 7548,
+      "mode": "100644",
+      "git_blob": "7bc55ffd319a7c9068245465ebcaa92852b4e835",
+      "sha256": "205768609ed42aa44a1ce4122b44d6e07ed11ebae6ad3b451f7682925725c1ec"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_pq4_fast_serving.rs",
+      "bytes": 7320,
+      "mode": "100644",
+      "git_blob": "e6e2aae71962f4903d7352ddb6b4adcc3be71aa9",
+      "sha256": "a49743b63f1a4ea02a392de472d86f0da08ee03b2857f71881025871939b37d9"
+    },
+    {
+      "path": "crates/borsuk-v26/examples/v26_simhash_preflight.rs",
+      "bytes": 6937,
+      "mode": "100644",
+      "git_blob": "acaefbbe984fcaabc566f2ddebf19c0e4f2230d7",
+      "sha256": "59a7bb88f3ba8333d12a171368ea7facf8fd5d4034a7bea1b8a21b77d9043d73"
+    },
+    {
+      "path": "crates/borsuk-v26/src/lib.rs",
+      "bytes": 288167,
+      "mode": "100644",
+      "git_blob": "f942b0d15996e6a2d5e0111e1c449f6f7577245f",
+      "sha256": "22cb7dfb8ba0460b77bfba5678ac2d1ac1cc74c947b328b79ea56b710f07e78f"
+    },
+    {
+      "path": "crates/borsuk-v26/src/local.rs",
+      "bytes": 474202,
+      "mode": "100644",
+      "git_blob": "9166b8ff2c65598a095b4cee45f0b31dd523598d",
+      "sha256": "ff3652a9813bdf9cfa74494fbb79bfc50d6b4dd4874f13319f2b8829658fa401"
+    },
+    {
+      "path": "crates/borsuk-v26/src/tree.rs",
+      "bytes": 20609,
+      "mode": "100644",
+      "git_blob": "a8b2af804bba79457c9104b0a6a50f1b62de9360",
+      "sha256": "4c93bca28ff1cfcd49ba656a8737b8ece21b9245c6cec4470c2f61ee6c7a5afd"
+    },
+    {
+      "path": "crates/borsuk-v41/Cargo.toml",
+      "bytes": 424,
+      "mode": "100644",
+      "git_blob": "be52da775fb5da720938701c6f551c02361ade58",
+      "sha256": "497afa1a5385501a611a01b0bce10ca98d82d16cec0966390166c686b2ab1336"
+    },
+    {
+      "path": "crates/borsuk-v41/src/lib.rs",
+      "bytes": 84966,
+      "mode": "100644",
+      "git_blob": "ec5ede5bab8a3ec23bef5e03fdbc55d1e09e9e3c",
+      "sha256": "e9eeb88fc9e0fdc2afbe61550701d17cfd54b0be60c1c3a8950721e3a6112235"
+    },
+    {
+      "path": "crates/borsuk-v71/Cargo.toml",
+      "bytes": 850,
+      "mode": "100644",
+      "git_blob": "e75f58969dcdcb037ef3c74caf1ac1d4ccf1557c",
+      "sha256": "34cad95d7e214c4ef6e7167fb7d8a26ba9480ca41b89d669af07211704b230eb"
+    },
+    {
+      "path": "crates/borsuk-v71/src/bin/v74_ingest.rs",
+      "bytes": 9612,
+      "mode": "100644",
+      "git_blob": "88f8bbbdce1df55236512d59122bf31ba272ad38",
+      "sha256": "281552b7318348b0b52b163222f6f10ad9cc80e27d4677069e969d45726950aa"
+    },
+    {
+      "path": "crates/borsuk-v71/src/bin/v85_delta_reader.rs",
+      "bytes": 73846,
+      "mode": "100644",
+      "git_blob": "18d6c0fb490451e0a209d4245f8696b49a72c1e8",
+      "sha256": "a765ec3e0febf7227e3b61fc5dc120346c51688442a1190c62e0e4f5b14e7d58"
+    },
+    {
+      "path": "crates/borsuk-v71/src/delta.rs",
+      "bytes": 46734,
+      "mode": "100644",
+      "git_blob": "9636f348d44c8176ee5611b84878b165eedd374a",
+      "sha256": "86794856d78c64318cbb255ae9aaded5d2dadde40fbc8eab9eda723bb4eb64e9"
+    },
+    {
+      "path": "crates/borsuk-v71/src/lib.rs",
+      "bytes": 161,
+      "mode": "100644",
+      "git_blob": "785c8f311d3c7c1190da47b685865b796b22ff06",
+      "sha256": "ce731b02c5125680010fd96958832d2b3b9cfb5069f84169a68d93638494b933"
+    },
+    {
+      "path": "crates/borsuk-v71/src/main.rs",
+      "bytes": 45214,
+      "mode": "100644",
+      "git_blob": "834eab3a7c5fcf72b7574419f044d381727bf465",
+      "sha256": "82ab103d475763db59fa6931f131457adc489e0eae4da09b9944cb513b52ab55"
+    },
+    {
+      "path": "crates/borsuk/Cargo.toml",
+      "bytes": 3840,
+      "mode": "100644",
+      "git_blob": "4c643a4b685145de97781a572daac7b5044e49cd",
+      "sha256": "d1c1ac790fdd41f353ba6526d706a340f57c19f8a16ede9cab6a0c7ba3c824b6"
+    },
+    {
+      "path": "crates/borsuk/benches/local_search.rs",
+      "bytes": 15743,
+      "mode": "100644",
+      "git_blob": "d8fb89cba2a7087c0e7bef3d8f73095a06c2386b",
+      "sha256": "f4eb25d6c50d666d5c18988d5d0292d51e7770d3da5e9133d1c5d1d037d17752"
+    },
+    {
+      "path": "crates/borsuk/examples/benchmark_report.rs",
+      "bytes": 110742,
+      "mode": "100644",
+      "git_blob": "02a58f74ba67e5180557498560b7fbae25bdcb29",
+      "sha256": "e8ea9d837cc3973b78b4f6ca8ced726791f92a50debfe07ad4c9c212e657a2bb"
+    },
+    {
+      "path": "crates/borsuk/examples/build_config_timing.rs",
+      "bytes": 5302,
+      "mode": "100644",
+      "git_blob": "136ac8c4610efe81a67efa41f260afa19585cbd0",
+      "sha256": "0de9b9f9cb48e53cd6afd412993864c7e59004996476141908ead51f03f812c4"
+    },
+    {
+      "path": "crates/borsuk/examples/build_sq8_source.rs",
+      "bytes": 47963,
+      "mode": "100644",
+      "git_blob": "39d3e9979dfdaeedc9b1a26c98b3303dda7a4a7d",
+      "sha256": "a7ba542c3ada061002b09e638a68423236d5499d11aae0e0083cd6e52d38adfd"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay.rs",
+      "bytes": 829101,
+      "mode": "100644",
+      "git_blob": "4565fc978c333d644bab3af6b875d4c632363c32",
+      "sha256": "a7f3afd2a8fc102333ac69780ad68253967eac895a49d3281e25b1f44f66b02f"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/current_v10.rs",
+      "bytes": 122354,
+      "mode": "100644",
+      "git_blob": "2c16efda17b88b8c5e7e40324c759270331c13b7",
+      "sha256": "0fcf1aae529d263f2b05f38c94d36b7aff040eec2ed3287d09551ecb8022abca"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/paired_partition_coverage.rs",
+      "bytes": 177603,
+      "mode": "100644",
+      "git_blob": "e67a131a546ccde7f7e0025dc1a1d74d179cf03c",
+      "sha256": "038f0bf40b56ecdb735d0e190d273b9e103d273d354ec57908b72bd4fb84068b"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/paired_returned_panel.rs",
+      "bytes": 64201,
+      "mode": "100644",
+      "git_blob": "5af6bc122574e122c197ba070fe64c8f1351c651",
+      "sha256": "914b4046e3971da250b63a20eb83eb3a4ac0acec27f203d5c5319378cf3934aa"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/partition_reconstruction.rs",
+      "bytes": 98465,
+      "mode": "100644",
+      "git_blob": "2cdd120dc1d7e04c9ab25014c16531c1d13d6a5f",
+      "sha256": "d2eb4c5da33c940d60e4003169dcbf14839e6078b215c653791af7459480ee89"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_count_curve.rs",
+      "bytes": 28386,
+      "mode": "100644",
+      "git_blob": "e594600a29e06e5c4fee4e1b1a72006225e3884c",
+      "sha256": "22f6885da2ad6cbebddffe3b93b04cb12b75169d9700c282fd72e0898a743ed7"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_get_curve.rs",
+      "bytes": 77861,
+      "mode": "100644",
+      "git_blob": "9e4e6a16aacef18651427788a031198a6178070b",
+      "sha256": "d7ff588f39e320a03c22289adcbe948cf2c94e0dcb2b314f294ac9a1c1514956"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_panel_attribution.rs",
+      "bytes": 68362,
+      "mode": "100644",
+      "git_blob": "319758e718e4f96678702ddc38f9d760b23650c6",
+      "sha256": "009431cb9e8cb4126a2663ac8ba406a87af4c94b060f0807e09d2502f71748b1"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_split_panel.rs",
+      "bytes": 75207,
+      "mode": "100644",
+      "git_blob": "c7e2471fcf317f83ca3e625723d8db59527384e2",
+      "sha256": "ee002a5f14b784b5cf0bc1c8f86c9916e5d0ff335bc9cd7ea6db116a8ff2d5a0"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_subpage_shortlist.rs",
+      "bytes": 174846,
+      "mode": "100644",
+      "git_blob": "aeac76cc4e9a399d09ce4a380d325827c5db50fb",
+      "sha256": "b52daff6d599103aeced9ea1073860b5f4a7fc52e216ea5d20bdad747ac64dd5"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/sq8_virtual_layout.rs",
+      "bytes": 38012,
+      "mode": "100644",
+      "git_blob": "fd696ece76b4d5d28afbb694f16a6885e630d8ec",
+      "sha256": "40ac06b3bde5f81832334b8f0dec5894fd389bce59891fb07144ba3b82c4ab52"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/unit_layout.rs",
+      "bytes": 11499,
+      "mode": "100644",
+      "git_blob": "aeb625d93ff2366d2fe252b90ebcee4d7e24a014",
+      "sha256": "e6c1119bf252bf6221a7e14cbb505aec22b6c67cea7e84213bfcf49a811af4d5"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/v9_fixture.rs",
+      "bytes": 31668,
+      "mode": "100644",
+      "git_blob": "12aaed4631f4f618c030873cead1a6d8616ddc35",
+      "sha256": "d537f89aeb7f20248fe08c825e295644a1cf073a7178fac024cbd1e97e5d2d16"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/v9_panel.rs",
+      "bytes": 40309,
+      "mode": "100644",
+      "git_blob": "3f8c34494b57ad31339507363357d3723d0ffc2f",
+      "sha256": "aba7cfb40019636e671c40575bd16bf9a54b34d36a58c497da7620e9c3b17c66"
+    },
+    {
+      "path": "crates/borsuk/examples/compare_native_replay/virtual_sq8.rs",
+      "bytes": 25840,
+      "mode": "100644",
+      "git_blob": "d1287ed167f89022bd7d976e0c7efbe20d8b5a9c",
+      "sha256": "c4a3ba49c2520d528a8cd6f36dc87d6a6b29fd98cae9ef26f3c7b37fda811156"
+    },
+    {
+      "path": "crates/borsuk/examples/docs_ladder.rs",
+      "bytes": 11106,
+      "mode": "100644",
+      "git_blob": "32b58a1959c83aeab55af598e2bd8ed90b79d3cc",
+      "sha256": "632658b2b20789be9a2cc3381286c32827a20e41d53a92550d8bc91c4ffc7bac"
+    },
+    {
+      "path": "crates/borsuk/examples/exact_sq8_runtime_probe.rs",
+      "bytes": 11995,
+      "mode": "100644",
+      "git_blob": "84b2f32f7ee6cad59ee6345992c4ae7e9eeeb42a",
+      "sha256": "8148ee0d1f114b0ee86b850ff302b25a18261eba65dade95dcc308c909f60b05"
+    },
+    {
+      "path": "crates/borsuk/examples/extract_closed_native_replay.rs",
+      "bytes": 39574,
+      "mode": "100644",
+      "git_blob": "d3e1d01511e4247df143e84ba116afff4e4a1aed",
+      "sha256": "1a0eafb29c320212daafba03911be10a14801d7b2feb30daee418b5f14426d69"
+    },
+    {
+      "path": "crates/borsuk/examples/generate_synthetic_dataset.rs",
+      "bytes": 50616,
+      "mode": "100644",
+      "git_blob": "3a99dd8156112c186abe6b2a99984874d0e5a29b",
+      "sha256": "bb7c668eaa2c311e90000cf59a480fe091c7f433400a9ad1fac6cad275c0e756"
+    },
+    {
+      "path": "crates/borsuk/examples/group_commit_bench.rs",
+      "bytes": 2257,
+      "mode": "100644",
+      "git_blob": "7030543e8a22209096dfc66a2a08cd4e5fd547d9",
+      "sha256": "f58a25c4537b33b48129b9dfaea4d6fc776c84bab74726ae637d3f500f6f6204"
+    },
+    {
+      "path": "crates/borsuk/examples/hybrid_retrieval_bench.rs",
+      "bytes": 52410,
+      "mode": "100644",
+      "git_blob": "8c3c8787a96dbbef312b0516af710849043e114e",
+      "sha256": "2ea179504f423f3cd048e780c8714384127f90c320786e57b6c2e5325ca42891"
+    },
+    {
+      "path": "crates/borsuk/examples/leaf_capability_timing.rs",
+      "bytes": 2744,
+      "mode": "100644",
+      "git_blob": "bb665c06c8d5d0e0b230781e84fd3334c0a53070",
+      "sha256": "614342047f85100e0206cd1af6219e3009cb6596ab476da78ca5762e07406bce"
+    },
+    {
+      "path": "crates/borsuk/examples/local_index.rs",
+      "bytes": 5629,
+      "mode": "100644",
+      "git_blob": "3c0480ab408240055a7a30e14a62c8bec6e0b171",
+      "sha256": "8a2c2e0ccd372aa8c101ac69b96dcf7a0c479d1df05b159968bf2fa70e898c57"
+    },
+    {
+      "path": "crates/borsuk/examples/logical_cell_routing_bench.rs",
+      "bytes": 31008,
+      "mode": "100644",
+      "git_blob": "613aa2699c0050ab7ecbd99195a455b932e31831",
+      "sha256": "26031b81f74537f7f9acdb4d515fce062f6abe4bce2529861fb1e5adcfd39181"
+    },
+    {
+      "path": "crates/borsuk/examples/market_workload_bench.rs",
+      "bytes": 64263,
+      "mode": "100644",
+      "git_blob": "daca234d34835bb837a9c89df10b2431958c4f7a",
+      "sha256": "4b2893fd0cc63128a11f569ed11e0aaf3ddef2aee1a58d0be6fd85dccd1e5b22"
+    },
+    {
+      "path": "crates/borsuk/examples/memory_scale.rs",
+      "bytes": 8941,
+      "mode": "100644",
+      "git_blob": "4764bd963590376edbaa8081b5ae18c41a7555eb",
+      "sha256": "ab55b26f9cdf712b22f8588e536f3736af176f65d8f75ec69e741bf66f8a4d42"
+    },
+    {
+      "path": "crates/borsuk/examples/mutation_extent_format_bench.rs",
+      "bytes": 9140,
+      "mode": "100644",
+      "git_blob": "9576f96bc66e554fa21a110b889a421d6e14dc5e",
+      "sha256": "89c5cf67153953425ea4f059ced5cac51dee2ff28d75f0c1f655c76ebc83da4b"
+    },
+    {
+      "path": "crates/borsuk/examples/native_ann_100k_qualify.rs",
+      "bytes": 39031,
+      "mode": "100644",
+      "git_blob": "842c8821c326060cefeb515d445a762b9d4d9108",
+      "sha256": "2ff3101f11687dde913546b8924f8027355d27de356f8d69ed33487c4072224a"
+    },
+    {
+      "path": "crates/borsuk/examples/native_process_cpu.rs",
+      "bytes": 40971,
+      "mode": "100644",
+      "git_blob": "a83f7960c5a2cb22bc0905dca9a32f0ebf512cda",
+      "sha256": "4c6d63fecec2eaf289949fbb00b6cc52810e740c92ab63b6a0cb224e1be8ddf5"
+    },
+    {
+      "path": "crates/borsuk/examples/object_store_floor.rs",
+      "bytes": 13267,
+      "mode": "100644",
+      "git_blob": "c881af94e580f603c8e35a26ad47a3eeef9b7ab8",
+      "sha256": "0d4284823f0c6ab18e2b545d5913699f74be408989a57eadfc23920cd05fd70a"
+    },
+    {
+      "path": "crates/borsuk/examples/pq4_build.rs",
+      "bytes": 5129,
+      "mode": "100644",
+      "git_blob": "ad9217c01989053fd7d3db1cb5a0fd00f95b0689",
+      "sha256": "98d4dd8715337d20e414642506a914e253c90371dbdcc56f65283cc1d60495fa"
+    },
+    {
+      "path": "crates/borsuk/examples/pq4_qualify.rs",
+      "bytes": 32868,
+      "mode": "100644",
+      "git_blob": "2b803c9361138cc8d9c500862ac1d9e9c730e816",
+      "sha256": "43910d5f443e7cb2ef6f6094c01b6fc84161e206700390c5fe9783c4eede45d0"
+    },
+    {
+      "path": "crates/borsuk/examples/pq4_search.rs",
+      "bytes": 8356,
+      "mode": "100644",
+      "git_blob": "4aca7357cb4e2c20a1bf2d4eb024632ebc95d2b9",
+      "sha256": "ae6148da4b4b5e044cfb4240eedb7eff6ceebf07741ff9c28d65793fb7c34bd8"
+    },
+    {
+      "path": "crates/borsuk/examples/pq4_sharded_qualify.rs",
+      "bytes": 27890,
+      "mode": "100644",
+      "git_blob": "4ab116099dbaa019ae5e02d1fcc5bfc739178878",
+      "sha256": "d5068a0d8a36278f6f619273c2cdd33d07db67dd823b5aa1c90f1a1698ecdcd0"
+    },
+    {
+      "path": "crates/borsuk/examples/pq4_stage.rs",
+      "bytes": 21844,
+      "mode": "100644",
+      "git_blob": "348e3516e4970294743ecaf89f22a1e7abcf3b4e",
+      "sha256": "b46ece027f2f54f697be41a98411ff9654d94daaf8eb3ffda4d094106f2db7cb"
+    },
+    {
+      "path": "crates/borsuk/examples/production_bench.rs",
+      "bytes": 502860,
+      "mode": "100644",
+      "git_blob": "459f8b464068d35e76bc4d32786fd00737b0f4fb",
+      "sha256": "b8b3a8b6c79cc248b31cc05caec074c8fbb74a399e55cdaee745cad217575472"
+    },
+    {
+      "path": "crates/borsuk/examples/resident_graph_frontier.rs",
+      "bytes": 6627,
+      "mode": "100644",
+      "git_blob": "36093dc60d008b1a812478104eb309a58c11d56e",
+      "sha256": "ddd5eb275654a7b43939bb0d2958dd3b536d4ae85ac905b11fa19b1ffe98ac43"
+    },
+    {
+      "path": "crates/borsuk/examples/resident_graph_rc.rs",
+      "bytes": 2500,
+      "mode": "100644",
+      "git_blob": "59bc3afa0d850816ffe55d0c39938b7c39bd532a",
+      "sha256": "4a27eaf62d9ab7f696a2742453527d4aefced250b02efbd0dc61abaf23559169"
+    },
+    {
+      "path": "crates/borsuk/examples/rest_app_bench.rs",
+      "bytes": 29907,
+      "mode": "100644",
+      "git_blob": "06d9355457c65123df50f77d53ceb690649a46ce",
+      "sha256": "85a5f9f0eb6a81f344cdefc09c9619342b979ba70cdee92a9e8c9833a9aba891"
+    },
+    {
+      "path": "crates/borsuk/examples/s3_index.rs",
+      "bytes": 3271,
+      "mode": "100644",
+      "git_blob": "63c64b4652713f71a9e4f6231cf4a3f3e01132b7",
+      "sha256": "58537bd101d33a8dcc05517c6de2ca09d1acb2b81165bf62ee66a23cd731f127"
+    },
+    {
+      "path": "crates/borsuk/examples/source_capsule_geometry.rs",
+      "bytes": 24052,
+      "mode": "100644",
+      "git_blob": "377a8165931895da75a613e9c75a762ffd059ee9",
+      "sha256": "d29fc5ec7ddb1ee95e37a7e95a54e2d721926278f38b99c26cbf87148cb34c3f"
+    },
+    {
+      "path": "crates/borsuk/examples/two_bit_http.rs",
+      "bytes": 15602,
+      "mode": "100644",
+      "git_blob": "77ce79f23861f108ee6824558336e333b8dac7b4",
+      "sha256": "f84e3606e589dd68204a05f7dd526b5111b3a65bfcbe25b7aa3961361c3180f0"
+    },
+    {
+      "path": "crates/borsuk/examples/v131_source_replay.rs",
+      "bytes": 14425,
+      "mode": "100644",
+      "git_blob": "0309ac82a97f64409aced5539ebf0c831fcf22b8",
+      "sha256": "b098cb336abedc590e643f49d5636d67e0f105fcccec4f834e19b6ddc0db8b8b"
+    },
+    {
+      "path": "crates/borsuk/examples/v132_live_s3_transport.rs",
+      "bytes": 18665,
+      "mode": "100644",
+      "git_blob": "718dda848d9b27eea2780bbdcaab662b71bf6605",
+      "sha256": "b2e1c0ce4b8b8d53bc8ef05c6cf1bbe958bb8287b6f7c871481eac080b8e0b07"
+    },
+    {
+      "path": "crates/borsuk/examples/v133_local_sq8_transport.rs",
+      "bytes": 19176,
+      "mode": "100644",
+      "git_blob": "b14e0571d25f9bdaf2622065c89d62bff9d826c9",
+      "sha256": "ed034f18aa0cb5bef14ae3566bd860ee8c371c721301260493ef9769f628bf13"
+    },
+    {
+      "path": "crates/borsuk/examples/v134_native_route.rs",
+      "bytes": 31915,
+      "mode": "100644",
+      "git_blob": "2d40f252f49b727cbb27045b11ef50fbdc2e5087",
+      "sha256": "5ef8e3d37c37c001d36e4bfb591c754dd54d3a0edde658f3f2d752995bb8827d"
+    },
+    {
+      "path": "crates/borsuk/examples/v220_graph_http.rs",
+      "bytes": 12549,
+      "mode": "100644",
+      "git_blob": "c1667af28b37dfb570c7d543fe317a997008ac8b",
+      "sha256": "93324924ad79a51565c22fd881094c56a0a757481487f806706741e08ef8304b"
+    },
+    {
+      "path": "crates/borsuk/examples/v224_graph_store_roundtrip.rs",
+      "bytes": 2472,
+      "mode": "100644",
+      "git_blob": "9df8aee42dbc33909f3923de52f2a057e832b337",
+      "sha256": "0fdb7c47a710f15a05334b91835a3f6d3a8fcc373f86dd3fc90ffa653c74f197"
+    },
+    {
+      "path": "crates/borsuk/examples/v225_graph_switch_s3.rs",
+      "bytes": 6695,
+      "mode": "100644",
+      "git_blob": "480784f0c1e558641e6e2b02c810ce7bb2e0b6ed",
+      "sha256": "f619e9274e0d2b1fcdddf18c1c3d954a77295ded22c1e137eb78372c55bea5a2"
+    },
+    {
+      "path": "crates/borsuk/examples/v228_graph_collection_s3.rs",
+      "bytes": 8758,
+      "mode": "100644",
+      "git_blob": "6bc018630d7c38ac3c7125acff39ab323dcd8bbb",
+      "sha256": "562fbd3bf6409a1e38f2d23d93e034b05a04ab6c5b512ac41cf7260b61d9af0c"
+    },
+    {
+      "path": "crates/borsuk/examples/v236_graph_collection_1m.rs",
+      "bytes": 7580,
+      "mode": "100644",
+      "git_blob": "e8759deea511bfa44448a6b318602e5dd4f0a007",
+      "sha256": "a5c7a62d378ed2c6fc13cd7313795f6dd2be09227f14b6f14465f8ca8fb3a9c2"
+    },
+    {
+      "path": "crates/borsuk/examples/v238_shared_graph_base_1m.rs",
+      "bytes": 4051,
+      "mode": "100644",
+      "git_blob": "d9716dcb29ea0c8a330d5b6a8fdbf979d7643de5",
+      "sha256": "34955c654a404e9a986f8f955c4faafc7ce4ef11ed59a8a1d7575d82b05d495e"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_balanced_page_falsifier.rs",
+      "bytes": 6974,
+      "mode": "100644",
+      "git_blob": "19c4ae85b35587f31602bb3fde59ee4bb85f6b7f",
+      "sha256": "8ac18e1f370951d64c76a62b83d65d5a70fc6f4bd2ba066787ce9ffb3a927485"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_global_adc_diagnostic.rs",
+      "bytes": 12171,
+      "mode": "100644",
+      "git_blob": "0289cfdfa4c5e625264fa4608636ed62f330d385",
+      "sha256": "a71155fd4e3fdee6e00ff463e45440996bce6a08ef04f80cce9cc1319ea035fd"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_incidence_development_screen.rs",
+      "bytes": 10310,
+      "mode": "100644",
+      "git_blob": "f964c00073ba012c2c659805cc12c66f03745406",
+      "sha256": "b832483bcd64bf7afddbe476c85d32a8a0494d7d8efab77ffe9ffd832a9a1e7e"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_leaf_page_incidence_falsifier.rs",
+      "bytes": 14210,
+      "mode": "100644",
+      "git_blob": "218392908e9f16b64972288db41c31f92b3aa62b",
+      "sha256": "07e1a94cf0773a107260aeff0eabfecbaa3d61295a932dad49835f8cde977929"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_rabitq_construct.rs",
+      "bytes": 7551,
+      "mode": "100644",
+      "git_blob": "9e4ce3e2f5bc043f06f504ed3c6ab7e0456ed84b",
+      "sha256": "e82fb9b9a176f68992cc002fc53488c48d7987fa88f52c20d1f5da16dce63c89"
+    },
+    {
+      "path": "crates/borsuk/examples/v23_rabitq_falsifier.rs",
+      "bytes": 8030,
+      "mode": "100644",
+      "git_blob": "f99023ce5f6b9d74706b3d1d9af9d5d56a388e8a",
+      "sha256": "32ace7b45367d4032d552248a13dae884438861bb00848e9906ce3ee83e03beb"
+    },
+    {
+      "path": "crates/borsuk/examples/v246_publish_graph_s3.rs",
+      "bytes": 1435,
+      "mode": "100644",
+      "git_blob": "d4504825a04eb265cd3daa1a07f644a96d7e060f",
+      "sha256": "ac905ba0cf35763df06fa0fb85988336c7f690fac043b30fb4941e253ab57547"
+    },
+    {
+      "path": "crates/borsuk/examples/v24_prepare_witness_inputs.rs",
+      "bytes": 4606,
+      "mode": "100644",
+      "git_blob": "74d29615e6edc7e270cabe8c3d6e694c6e987cae",
+      "sha256": "83f6c0a3072c0ee1e7939b77e411e72a6a6f4e3a9d4340339009ef782f9a8612"
+    },
+    {
+      "path": "crates/borsuk/examples/v24_witness_page_router.rs",
+      "bytes": 10095,
+      "mode": "100644",
+      "git_blob": "7f72b9aa3df0d8b48108fb306dcdf4b77b115b94",
+      "sha256": "3e3dce4c552fdb1f9a3cf9e29e39cd2cc092d92e38b274fe1f4852497de02d00"
+    },
+    {
+      "path": "crates/borsuk/examples/v27_s3_build.rs",
+      "bytes": 17577,
+      "mode": "100644",
+      "git_blob": "4a7c5a5dc79d8f95a44a0766cc0146b7c37ebe7d",
+      "sha256": "eed071747fdf570e857e7c99fdae0572b8382b0d9f55dade7824b11696312c1e"
+    },
+    {
+      "path": "crates/borsuk/examples/v27_s3_qualify.rs",
+      "bytes": 26430,
+      "mode": "100644",
+      "git_blob": "10cec52e38b926f3937bdee07b80af694ebbdc2d",
+      "sha256": "51616680b7197e30081554d67bd26ba5f7c2d82416f01b828b3b5c4a9e05be82"
+    },
+    {
+      "path": "crates/borsuk/examples/v30_s3_build.rs",
+      "bytes": 49571,
+      "mode": "100644",
+      "git_blob": "4122aaf687c005d2914e9a4a242777e8b1cf80a6",
+      "sha256": "da00e6f852c3fac2cf7c96d8fdc7873f9a36a779433bee441e79fe071b96464c"
+    },
+    {
+      "path": "crates/borsuk/examples/v30_s3_qualify.rs",
+      "bytes": 157974,
+      "mode": "100644",
+      "git_blob": "b6f23868f61517d38e27b95e53a8bea3a610fc53",
+      "sha256": "e43c3e447cc6b315cf96d67f04ef233e90a68fc942a07f1f864caad289862304"
+    },
+    {
+      "path": "crates/borsuk/examples/v32_cpu_preflight.rs",
+      "bytes": 2943,
+      "mode": "100644",
+      "git_blob": "61c0dc1845a142d660b2e7ddade248ab9c307a73",
+      "sha256": "368a5cab443cae71fc38f4885d9868e593a216247251a3f4d40aa98509c36c90"
+    },
+    {
+      "path": "crates/borsuk/examples/v32_selective_layout_simulator.rs",
+      "bytes": 26946,
+      "mode": "100644",
+      "git_blob": "dd98357da6dc48cba97c099d136a7d351c181989",
+      "sha256": "ce015dee04a589ee51ce99b2d3ad41549a948909c441c571a260e49884cb1a7c"
+    },
+    {
+      "path": "crates/borsuk/examples/v33_group_shape_diagnostic.rs",
+      "bytes": 34425,
+      "mode": "100644",
+      "git_blob": "1351b4f9e931cee38363eb8151c14b1b011a61f9",
+      "sha256": "217567bec5af5c393dd1950cfaf0742a42e67b6f8c0c4a6973c9b46d333e2bc6"
+    },
+    {
+      "path": "crates/borsuk/examples/v33_shape_pq_replay.rs",
+      "bytes": 24087,
+      "mode": "100644",
+      "git_blob": "570d0d00d988eb87ec06bd3435a083159d690eb8",
+      "sha256": "0f577e61e3752c3e1484fb2ca32d577b960cd41dd2b32eb14f7ac91868b35f1b"
+    },
+    {
+      "path": "crates/borsuk/examples/v36_geometry_oracle.rs",
+      "bytes": 15716,
+      "mode": "100644",
+      "git_blob": "5d1fa074f90baafd2821145527b11aa686f4fdc9",
+      "sha256": "c5b286078d3f6f6af6fc53199fdcebcac5aab03fbb33186305b7538660699aec"
+    },
+    {
+      "path": "crates/borsuk/examples/v36_prefix_freeze.rs",
+      "bytes": 6431,
+      "mode": "100644",
+      "git_blob": "d467df9742bc9348b694e9e6b1e6a6efc5802889",
+      "sha256": "9c51550d2328bb1065ace8cd0d9836129e8bb863ffde97210f37534b91ad9e49"
+    },
+    {
+      "path": "crates/borsuk/examples/v37_relation_router.rs",
+      "bytes": 10620,
+      "mode": "100644",
+      "git_blob": "271b3c2d0a6ee76fc8083e4c2d95900492885f33",
+      "sha256": "9e62e35cbbdcd2569b43f5783cacc24bcfcae91ab38998646f2f7e9e668bb870"
+    },
+    {
+      "path": "crates/borsuk/examples/v38_boundary_spill.rs",
+      "bytes": 11213,
+      "mode": "100644",
+      "git_blob": "1150f372adaee80305e347b1299a7b194ff12dff",
+      "sha256": "250987b29feebcd12edc8f86cb06ab4c820db786a466bb73376783a0ffae5e2d"
+    },
+    {
+      "path": "crates/borsuk/examples/v40_spill_router.rs",
+      "bytes": 13040,
+      "mode": "100644",
+      "git_blob": "62c455e1e5319ffb0f5ceea7e100a39954533911",
+      "sha256": "59fd05059f685bab77c33e15e7a0bca934c6be8f4aaec96aae20dae6e33e8ead"
+    },
+    {
+      "path": "crates/borsuk/examples/v41_forest_probe.rs",
+      "bytes": 2196,
+      "mode": "100644",
+      "git_blob": "bc3e510b0d8fe092e04da3fffc2b3db097e82777",
+      "sha256": "1144c62c257bb512705c602247e5da7783af2ce6e1cb748c4c75adc75f1df02b"
+    },
+    {
+      "path": "crates/borsuk/examples/v42_pq4_relaion_probe.rs",
+      "bytes": 2045,
+      "mode": "100644",
+      "git_blob": "91c24b1ad4a5c5d2be27b73ccf7c63eff0d2b314",
+      "sha256": "59818c420a82587ec32c9bb8a34e2d7a0aecbf6a623d8d51e92b9d8380a664e4"
+    },
+    {
+      "path": "crates/borsuk/examples/v43_shared_dictionary_probe.rs",
+      "bytes": 2008,
+      "mode": "100644",
+      "git_blob": "5ee6dd936ba956b7c2ac74b4637f9b07e4a53163",
+      "sha256": "ede137a8b1e486c11ac683d6da39f790dcf220e78190cc4e2e57fa7530fd86ee"
+    },
+    {
+      "path": "crates/borsuk/examples/v44_page_kernel_probe.rs",
+      "bytes": 1972,
+      "mode": "100644",
+      "git_blob": "2529b7ef13cc2a198f36ccce3cc01af54f8d3ee4",
+      "sha256": "c6431ddfc0f6bf1f82b7b19291d86d7ff537d4a39f782d81fded91dcc67250b1"
+    },
+    {
+      "path": "crates/borsuk/examples/v45_lsh_probe.rs",
+      "bytes": 1931,
+      "mode": "100644",
+      "git_blob": "1a2c161c07da74b1422ad175aa49ad122b6b852e",
+      "sha256": "99c0bc8636dc26c7e34e523de681cd76f07730fadc207d3fc15d11aaa2a14302"
+    },
+    {
+      "path": "crates/borsuk/examples/v50_exact_original_control.rs",
+      "bytes": 2005,
+      "mode": "100644",
+      "git_blob": "97969dfd6ad44155a1d3132a37ea63f9cba5c01d",
+      "sha256": "a8f86937e05ec2b2ecc402ba78eb03f0e947b5c5a70e93793b811916d20b0d31"
+    },
+    {
+      "path": "crates/borsuk/examples/v51_tree_row_probe.rs",
+      "bytes": 1977,
+      "mode": "100644",
+      "git_blob": "2ff07603a0a4f9ce67f9a73766f29cecd9f8bdea",
+      "sha256": "e68d8a59b38875dbada31a9661337212fe472335a63b7dfd0f2dae8a0b8cc900"
+    },
+    {
+      "path": "crates/borsuk/examples/verify_canonical_f32.rs",
+      "bytes": 45537,
+      "mode": "100644",
+      "git_blob": "5044b1b3f6c08d2392c751aad9205205e341751e",
+      "sha256": "fe16eeebc8618bd941fa389e48708202c057e88fb149071547e0883edd7e0c2e"
+    },
+    {
+      "path": "crates/borsuk/src/arrow_vector_sidecar.rs",
+      "bytes": 53376,
+      "mode": "100644",
+      "git_blob": "eafc5586229e0d7d463cb1cd57d878def19e16c0",
+      "sha256": "fdbba3240b8d663d5e498a6fcd5e40283a1cff2debf48c21582f2f38ad35789a"
+    },
+    {
+      "path": "crates/borsuk/src/bin/build_semantic_unit_router.rs",
+      "bytes": 26058,
+      "mode": "100644",
+      "git_blob": "86001751d3f7f6d6dd49d7fc1fb438ee1d6012b2",
+      "sha256": "084626198b23f93b3de878823951c4847891e5225d1020a058363f29c45713a6"
+    },
+    {
+      "path": "crates/borsuk/src/bin/build_two_bit_generation.rs",
+      "bytes": 18986,
+      "mode": "100644",
+      "git_blob": "1c3a936e833fa59ddf3f62d8b8059d504298176e",
+      "sha256": "a067fe9de8eb737122870002d1dddbb2c57e9e18367bed385381a25bbd92e2b5"
+    },
+    {
+      "path": "crates/borsuk/src/bin/build_two_bit_graph_variant.rs",
+      "bytes": 8870,
+      "mode": "100644",
+      "git_blob": "f9b1259bf59a3da5fd19a20fd39e55f47d0ec246",
+      "sha256": "ccf9ae392f3767f79911050a79f480493eb43da53418a76ad308353fb1f8b294"
+    },
+    {
+      "path": "crates/borsuk/src/bin/build_two_bit_source.rs",
+      "bytes": 782,
+      "mode": "100644",
+      "git_blob": "ca63bd84c83b92e9d3ae8354c46a242ec7f8d110",
+      "sha256": "bcccf832c218d56b75b485687e1dbb9f040efce8b054e25f119101358b9466c4"
+    },
+    {
+      "path": "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+      "bytes": 315872,
+      "mode": "100644",
+      "git_blob": "5edb056e69ebc24ba5dc6ce476a924cb9f600bbd",
+      "sha256": "899b8cb6a0323f9c60b4ce0212199a441e9d09e44b468fba71b0a9a8f5853fa2"
+    },
+    {
+      "path": "crates/borsuk/src/bin/check_hierarchical_split_balance.rs",
+      "bytes": 3321,
+      "mode": "100644",
+      "git_blob": "da0bec1ecabebdb23dc784559408dba970ca1903",
+      "sha256": "9ac017f570260632e5b42ab56df77dab5e6702e9d770b788b344cb173201e12a"
+    },
+    {
+      "path": "crates/borsuk/src/bin/check_s3_vectors_baseline.rs",
+      "bytes": 126862,
+      "mode": "100644",
+      "git_blob": "96b378a57040ce298411558574e1cae9982fe239",
+      "sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c"
+    },
+    {
+      "path": "crates/borsuk/src/bin/check_semantic_router_scorer.rs",
+      "bytes": 27392,
+      "mode": "100644",
+      "git_blob": "1af30606f935b8f4efa5b48b958c718f1f336f4a",
+      "sha256": "efc9db7efca6dd7091d59bcafe714740b5cb1d24edbb9b946b16a40eab0612dd"
+    },
+    {
+      "path": "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+      "bytes": 241982,
+      "mode": "100644",
+      "git_blob": "461d90095bc2ce76c0a58e4551c11a988531ba10",
+      "sha256": "34a4e63e77bd2ce5aaede845f2b2c00ef27876d9b2b2dc4112290dc0b004eb05"
+    },
+    {
+      "path": "crates/borsuk/src/bin/prepare_cohere_native_cohort.rs",
+      "bytes": 101102,
+      "mode": "100644",
+      "git_blob": "f8e59ddb85508c42e57f03b84ca70dfd24263799",
+      "sha256": "96555b442dd3852b4674207cea02c9969a1dce5388d69bd0c31b50cab3237fe6"
+    },
+    {
+      "path": "crates/borsuk/src/bin/publish_two_bit_generation.rs",
+      "bytes": 95887,
+      "mode": "100644",
+      "git_blob": "7f6563506cb84b3c1770a589fd57b97af5c55e27",
+      "sha256": "54b65fda77ef81a7a0d6986590524f37889d978e05fb55115c086c78678f68a5"
+    },
+    {
+      "path": "crates/borsuk/src/bin/repackage_semantic_generation.rs",
+      "bytes": 6897,
+      "mode": "100644",
+      "git_blob": "1375474b7b6b3def2ab0939a72cbcd6e6bff05b1",
+      "sha256": "b4076ff7ec0a88bae6070c9e932f4e16ba07a92d6fba8bfa6756e42bb99c61f1"
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_plan_demo.rs",
+      "bytes": 14204,
+      "mode": "100644",
+      "git_blob": "6876bfcd325ac4f4d9c79cba42bf49e3f392659a",
+      "sha256": "2a89f80da6ba650cb9b3c3de5650c43d9facdbfb0a6c5ce00c41522d37b0ef54"
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_union_nomination.rs",
+      "bytes": 9028,
+      "mode": "100644",
+      "git_blob": "012744fda82ceb5573fa21309f07bf5fa4ee6454",
+      "sha256": "79ed545cdee7183e921295e2cb40fa9371bd1078b8a930c2db7a6cdbb68b03e9"
+    },
+    {
+      "path": "crates/borsuk/src/bin/two_bit_walk_nomination.rs",
+      "bytes": 11398,
+      "mode": "100644",
+      "git_blob": "8f08e02772d37150a7631492eabca5f109f9586c",
+      "sha256": "ba2383c638f1254a17dd08b45d4035070da897d991246029f5fa2cd8b442e437"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v150_unit_centroid_graph.rs",
+      "bytes": 15975,
+      "mode": "100644",
+      "git_blob": "5af423d28de62d320134083e45e5244fdc614ce6",
+      "sha256": "4452dd80e6fca4b800ccf625017ee4bad636792ad1906941e59da09ccef9e593"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v151_page_seeded_graph.rs",
+      "bytes": 14554,
+      "mode": "100644",
+      "git_blob": "f59c69ad0cbb4fe620006fc824e7f77b622b8228",
+      "sha256": "b4dab3900e4f81378796e26eb286b417c661bca621a2c12bac17ae08ece8c80d"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v152_cached_page_graph.rs",
+      "bytes": 22340,
+      "mode": "100644",
+      "git_blob": "60839759741e2ddf5a4e77d9c413802fba5e0586",
+      "sha256": "7dfb47d467abd3a2d782f037b0ecf5084c2f68e60bde08dba2a3041c5a47b4bc"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v154_relaion_page_graph.rs",
+      "bytes": 24107,
+      "mode": "100644",
+      "git_blob": "d7427a9bf6f34b49477df2e63a6b1ab3024c422a",
+      "sha256": "84ed83419d44ba9f48f5791c811e86711e223927e0b3c0133e8b7aa17335287e"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v196_resident_fp16_preflight.rs",
+      "bytes": 4357,
+      "mode": "100644",
+      "git_blob": "8808e764d95eec08f83eeb2bc88dca1670a83e41",
+      "sha256": "bb69fbd8c4d2c7451618a102f5990263d304f57ace4cb09c274a463181cd3f5d"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v199_live_s3_resident_fp16.rs",
+      "bytes": 13173,
+      "mode": "100644",
+      "git_blob": "92697fe69f9183415618fc2a43e354f5af906403",
+      "sha256": "eaf4492f50029cb6f291053ffdcb532e49698e7af23737a98f2999991f6c1f24"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v200_uncapped_cover_preflight.rs",
+      "bytes": 5164,
+      "mode": "100644",
+      "git_blob": "7caa56667f3820dfb02f0921794f8820f792a2e8",
+      "sha256": "05901bd9ed503c40a2fbbecc5536c8f21e7591c0004a6fbb9f31970a79d0778b"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v201_relaxed_cover_preflight.rs",
+      "bytes": 7539,
+      "mode": "100644",
+      "git_blob": "43ddc525b6f43ae053fc75472dc082e68cf8e1b8",
+      "sha256": "2414d50e6b1e0bb8360a7e1f11e837a37e4513a1ea92e809c8c4a02c34dda005"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v202_two_cap_cover_preflight.rs",
+      "bytes": 8334,
+      "mode": "100644",
+      "git_blob": "4928032fe4130159dab4cb95a624ad41c08cb439",
+      "sha256": "e4e98910b6bb9ff90d9e6001c97d44cb65d25e5cf708f364177159d74a96fb63"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v205_dual_certificate_preflight.rs",
+      "bytes": 10022,
+      "mode": "100644",
+      "git_blob": "ccc867753b481708bddddefb492c504a050be203",
+      "sha256": "f983700c84a7925991c8f0fd71941f7d3d0eb71137915afa1d737e3ad9e45b12"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v209_resident_nominee_1m.rs",
+      "bytes": 9910,
+      "mode": "100644",
+      "git_blob": "bdf050e0d85b0b918ce3e98b7e67d7f35fb00f22",
+      "sha256": "6f52b2f072a7ba9864bbd2ac45e17ad3fc2d1cf4dec6354714ad869c0098912b"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v212_rust_resident_100k.rs",
+      "bytes": 9169,
+      "mode": "100644",
+      "git_blob": "0a464cc59c672ed70352eccd88dcbcb33e9a06af",
+      "sha256": "d3aaef2b3541b57cb1140f22a0bfbcc81d0cc02703f26e5f361845b4902f5879"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v213_resident_graph_100k.rs",
+      "bytes": 6480,
+      "mode": "100644",
+      "git_blob": "d057e1168f9bd6d7bb066b6e42f25d17f0b1e691",
+      "sha256": "9954d92565d5e79aae36f1213b740c98613deaf0da1371b346c412a954bb4694"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v214_build_pq_graph_100k.rs",
+      "bytes": 3489,
+      "mode": "100644",
+      "git_blob": "6719e66bc1d49c15cf7f89e3f4193dc45916724d",
+      "sha256": "eb28c12be47d9b0c269a3a8fb639abaac6b7fdc22ce8d1e413d585f60a65f5d9"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v214_serve_pq_graph_100k.rs",
+      "bytes": 7790,
+      "mode": "100644",
+      "git_blob": "61d6b3ba39fe5f818bf7052ddcb8fb36bbb4e8f9",
+      "sha256": "c5ecbe4c6dc29712e14150f271b1e9611bb69420966f8b596a242ded88413546"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v215_serve_pq_cosine_graph_100k.rs",
+      "bytes": 7981,
+      "mode": "100644",
+      "git_blob": "3918ba8ba9957c1b9ce676ce1a81360d19ce0d2a",
+      "sha256": "63210434ddad190f601a29f24df739e0f29d8a017672a50cdf3cf55379c75f4c"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v216_heldout_pq_cosine_graph_100k.rs",
+      "bytes": 7750,
+      "mode": "100644",
+      "git_blob": "d655d00d54aee3f4396a6b8159f4ffd449cdcc4f",
+      "sha256": "3fd00b7febbd427a310d0ffcc40ef0e9e749f13990d9c0da1a048a722c024aeb"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v217_build_pq_graph_1m.rs",
+      "bytes": 3497,
+      "mode": "100644",
+      "git_blob": "a2a247ccee7785ff046a2a36125794de61c76b17",
+      "sha256": "ca9a140bf3a23ab2e541ea48f5570f3dcd7a0b1ef202286bd20b0f6bd6a6e24f"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v217_serve_pq_graph_1m.rs",
+      "bytes": 10397,
+      "mode": "100644",
+      "git_blob": "869f826da844325afb6620cb0ef9875bdb4bf23b",
+      "sha256": "b82cc6eb9403590d712b14f6e29cb1284b0cb85b85013ddbafb8904155b2b683"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v218_build_reachable_graph_100k.rs",
+      "bytes": 4636,
+      "mode": "100644",
+      "git_blob": "a7ecd862fcba31293f76cbc7069b078da242974a",
+      "sha256": "86450aa514bde6ac2ad253511f7aa3fab8028ff02db8f5d0e94f221e2d65fbfb"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v218_serve_reachable_graph_100k.rs",
+      "bytes": 11442,
+      "mode": "100644",
+      "git_blob": "e7633e846bfc659e00dd625ba06de874665f848b",
+      "sha256": "bb981928ee0f453586fe725db4157779e5e42e8c6520f9a61e989773e860803a"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v219_build_reachable_graph_1m.rs",
+      "bytes": 4800,
+      "mode": "100644",
+      "git_blob": "73a5d8b34873a13f5b6e03a6b7ee44bc18cd5438",
+      "sha256": "f983985dd65a0f8357ef11d8877fa730b1021c283ef488b682062aa6f1c3058d"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v219_serve_reachable_graph_1m.rs",
+      "bytes": 10518,
+      "mode": "100644",
+      "git_blob": "00eb32edec2a69ed202849c6ec481b7bca3e4bc1",
+      "sha256": "4e3c91aa1224aff3860ad62e840fcb5197d638c4a58efe26d898e60b5551cd9f"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v229_serve_mutation_overlay_100k.rs",
+      "bytes": 12006,
+      "mode": "100644",
+      "git_blob": "8333da7011a222ab10a708b7d38bcb9efb76e483",
+      "sha256": "5a67ce40f2019bce6e300c016332b5834f17e9ac5932e04d7e0a7f55c9470424"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v239_graph_containment_100k.rs",
+      "bytes": 6997,
+      "mode": "100644",
+      "git_blob": "eeed9ed2d1e14d5432817282cbd9167cee7d230c",
+      "sha256": "bfa8ff8a9cf83da7dd8b03ccd916c85111bf5bbf2aea0dae8e9be3c7b88cb7ea"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v248_build_cohere_graph_100k.rs",
+      "bytes": 6300,
+      "mode": "100644",
+      "git_blob": "e99ee240adf782cea444efe28ac294e2520bcde9",
+      "sha256": "4cb9e64d8f410f84ce3f5df548918cc156da4708b9d5476544e1891ecee9a063"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v248_serve_cohere_graph_100k.rs",
+      "bytes": 41760,
+      "mode": "100644",
+      "git_blob": "1220c5c84a07795c3cc93506b4f9a7302ae0aeee",
+      "sha256": "0f54200e9cbbca44acfe12902aaacdd2b0412059425cfd0cf1daf4dd7989f402"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v282_build_routing.rs",
+      "bytes": 2810,
+      "mode": "100644",
+      "git_blob": "7c0f474d0bd8654b0b8f64bae13d23f450d50bc8",
+      "sha256": "f16289cd8a01327d8a08187a4c89230412b57c66b2443424f2138a0272429a02"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v282_local_falsifier.rs",
+      "bytes": 7741,
+      "mode": "100644",
+      "git_blob": "a2b404a6d90bb4786304d6c7d0f1d41bc2f7e6ba",
+      "sha256": "b72c041861a2da0d47e0020dcbe5a0accf375cbfe4d5f67a3b334a6e598c0f83"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v287_exact_pq_page.rs",
+      "bytes": 6079,
+      "mode": "100644",
+      "git_blob": "9b13d787a7a061b147b214704b1363e6e68ece85",
+      "sha256": "ea8920f1f85da3a1988830e764fdf73f1dec5f0ab7f2af40254cd8f5981d0ce8"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v291_rust_sq8_parity.rs",
+      "bytes": 7617,
+      "mode": "100644",
+      "git_blob": "75639cec85bcf2dc7d37038b86fdeaf714ad32d3",
+      "sha256": "783a20f546bea3ca275f8662e28f888068dc0da4738d0892231a5968e8487097"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v292_centroid_route.rs",
+      "bytes": 6133,
+      "mode": "100644",
+      "git_blob": "356cf1f8a6b7e42be589a091735c307356be7899",
+      "sha256": "f1a4cb1346756dae91f37e306af8fca17fe855b541be292dfef7fc450e465e0c"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v294_rust_source_parity.rs",
+      "bytes": 4851,
+      "mode": "100644",
+      "git_blob": "21b5360a442e923acccb70f5d1bd031c5673479c",
+      "sha256": "a94248d3888ac04ade575dc419e52e2f90f9d436749edb4084307778a01b75b4"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v295_rust_two_bit_route.rs",
+      "bytes": 6114,
+      "mode": "100644",
+      "git_blob": "570faf5122891cca73b63c64b816bb5fab3dec7e",
+      "sha256": "9b153b54ec10d2fea06c0f9078a134bf97de7b44d33e9a2c90ee7f971a3a0583"
+    },
+    {
+      "path": "crates/borsuk/src/bin/v296_two_bit_validation_plans.rs",
+      "bytes": 7602,
+      "mode": "100644",
+      "git_blob": "bb800143d08ca96519ae01a3d1a0328505826281",
+      "sha256": "0014ec188a6b7ed1914e5bd49d373cad8e64b0cee28122d34c4749c021600958"
+    },
+    {
+      "path": "crates/borsuk/src/bm25.rs",
+      "bytes": 6603,
+      "mode": "100644",
+      "git_blob": "bd9ff0a0fcd468422ff0d0a861f3fe2c3ace4a8d",
+      "sha256": "bc5ccefd0fb1189a93919444bbdf83cfb1dddd23703ac1ec4a84e57f436baa33"
+    },
+    {
+      "path": "crates/borsuk/src/budget_object_fitter.rs",
+      "bytes": 80012,
+      "mode": "100644",
+      "git_blob": "5d16b420059653db0ec2ab764cbc652d8abdc0a5",
+      "sha256": "0d25feb6e8adfb9d995fc2039931c28ed012d7777b2bee8a4a3d0f97b202379e"
+    },
+    {
+      "path": "crates/borsuk/src/budget_object_selector.rs",
+      "bytes": 128448,
+      "mode": "100644",
+      "git_blob": "dbed087b1a82cef24a2399d09e9fb2400ae55e69",
+      "sha256": "79158becf9a0bdbd7aacce84abf46a37fe6013836fcdb3984105a374e61be682"
+    },
+    {
+      "path": "crates/borsuk/src/budgeted_page_rank.rs",
+      "bytes": 15939,
+      "mode": "100644",
+      "git_blob": "cb77711900652769edfeecc3e998f72eab9f3db6",
+      "sha256": "01bc80d27da3df775cd2dcab473004999c58fcc4105eb1f7e7021805d742110a"
+    },
+    {
+      "path": "crates/borsuk/src/build_timing.rs",
+      "bytes": 9041,
+      "mode": "100644",
+      "git_blob": "cf4caaafc753b71f7fd5cdc5556297a9e3767982",
+      "sha256": "fffce82d5850b20a0f284ed43ec1d3648f4689ead561d5d0da90ba35d4cc60ef"
+    },
+    {
+      "path": "crates/borsuk/src/canonical_source.rs",
+      "bytes": 22767,
+      "mode": "100644",
+      "git_blob": "9d054c1634e839f243c75c05c8607ae87e605204",
+      "sha256": "b63855d0a8d4b49ba1e9c5d3ec85f0df633e204f47d150a2abf3cb2d9e9beea7"
+    },
+    {
+      "path": "crates/borsuk/src/cell_wal.rs",
+      "bytes": 133084,
+      "mode": "100644",
+      "git_blob": "6bf5c4522bfe062cf12e91d7e09cb76d5ab99b80",
+      "sha256": "53a99259ee623341723273fde65563c4db0dcc095fb092c101a1693e79ead9c8"
+    },
+    {
+      "path": "crates/borsuk/src/centroid_hnsw.rs",
+      "bytes": 114971,
+      "mode": "100644",
+      "git_blob": "81f1ecfad8f0f03dd645730695d83e83f6d82673",
+      "sha256": "2b70546426266d189fb440bcd66620bad2575c7fd8c985a16eaa56c11566077a"
+    },
+    {
+      "path": "crates/borsuk/src/co_selection_layout.rs",
+      "bytes": 130616,
+      "mode": "100644",
+      "git_blob": "953486630dd2212e6b0ee9e6608b149efdd5984b",
+      "sha256": "b9e31c2aaba06a4f982ac240bfde33b63b6c8fbe1726775eea19fd4e17203c7f"
+    },
+    {
+      "path": "crates/borsuk/src/collection_control.rs",
+      "bytes": 57666,
+      "mode": "100644",
+      "git_blob": "2ca8baf0a2eaf4bb9d8ded4d97f083b31280e424",
+      "sha256": "86467bf9aa4eff72bdffb0f575661c7664a8d7520d8c748ad968c7d02824897c"
+    },
+    {
+      "path": "crates/borsuk/src/contiguous_page_hierarchy.rs",
+      "bytes": 22636,
+      "mode": "100644",
+      "git_blob": "1660a68a3d63dbf88ae154103628065f77c11f33",
+      "sha256": "a61c64e6f31f447b01c87025f212565e16dc9a58b306cf8fb0f74e6c7d8b767a"
+    },
+    {
+      "path": "crates/borsuk/src/corrected_four_bit.rs",
+      "bytes": 26445,
+      "mode": "100644",
+      "git_blob": "b1c1d4f527faf0a65a7cfe199f008a6c8cb94e3d",
+      "sha256": "6ccf7be1c080aa230587cfba100e3639a2dd429e3b745858f5717d7662c120df"
+    },
+    {
+      "path": "crates/borsuk/src/error.rs",
+      "bytes": 10528,
+      "mode": "100644",
+      "git_blob": "efaa1ba43031ec4722b93edbc66f23f8a4a43692",
+      "sha256": "7ab700d1f282d2e721e9e8e660e07c82ac4a9484c1bca4dfc8cb911a6e42a5a7"
+    },
+    {
+      "path": "crates/borsuk/src/exact_sq8_mirror.rs",
+      "bytes": 18432,
+      "mode": "100644",
+      "git_blob": "a7d90246222ac8d3895e8b0d5a3456884306cec8",
+      "sha256": "d7bd2f28f30ba4f6b33ee71647bafbd1374a2a22b3724429350d0633c5e92fd4"
+    },
+    {
+      "path": "crates/borsuk/src/exact_sq8_nominee.rs",
+      "bytes": 24982,
+      "mode": "100644",
+      "git_blob": "b6956244895e2d00ae19ee7758ffb6e708697779",
+      "sha256": "38518415188ac2c07e6d6fea477f6ad0bd1474dd610e7c286f561bca38a2d0dd"
+    },
+    {
+      "path": "crates/borsuk/src/fine_sq8_groups.rs",
+      "bytes": 509000,
+      "mode": "100644",
+      "git_blob": "f7d5739eaf0a7f1870c582d1bb791b4d07201b6e",
+      "sha256": "f87d5c7ec17c71921d681092fd49e13b51d6f53a1af33388a434fea02f7dbc9f"
+    },
+    {
+      "path": "crates/borsuk/src/float8.rs",
+      "bytes": 9985,
+      "mode": "100644",
+      "git_blob": "d3f441a67af5033297a3a3666b57b9432e02f3db",
+      "sha256": "38acfddbba713590230af54401fb8e7123f6fa20ccdd58732134671ad3197990"
+    },
+    {
+      "path": "crates/borsuk/src/format.rs",
+      "bytes": 460095,
+      "mode": "100644",
+      "git_blob": "7baaf857e1d9801864ce8bc39f51f5e57ff2b855",
+      "sha256": "3a0a16f5ec9039d2634826d69eb32713fa6418a32d50c6c387d9588e67e78040"
+    },
+    {
+      "path": "crates/borsuk/src/global_cell_card.rs",
+      "bytes": 263153,
+      "mode": "100644",
+      "git_blob": "ebc9c46953dc5d1ce371d7812324bf4c180b59a1",
+      "sha256": "0886a748b2567c6467e9d8f0846f506b06461939e4b0a4c7059a8f37bb5eb670"
+    },
+    {
+      "path": "crates/borsuk/src/global_leaf.rs",
+      "bytes": 196830,
+      "mode": "100644",
+      "git_blob": "3933dce4503322b2d2a84c61266a3c85aa99d12f",
+      "sha256": "bcba17020e1fc9879828babff1ef306e89f51a5124ae211c7a4de236ae56e3cd"
+    },
+    {
+      "path": "crates/borsuk/src/global_leaf_run.rs",
+      "bytes": 91098,
+      "mode": "100644",
+      "git_blob": "c48b2ecbfd09a3ee925a2911adccdc2c94ea3010",
+      "sha256": "b1b91f9f35f1bcb377b5c11320d766b70b04ea4b9e9c8173b313b09a7c85cf67"
+    },
+    {
+      "path": "crates/borsuk/src/global_pq_sidecar.rs",
+      "bytes": 150861,
+      "mode": "100644",
+      "git_blob": "6fd5cbfb3e50d6b8a716c85262e9ae61f6913ffc",
+      "sha256": "03ad809ee6eea37ce4b46743c58b2a84a6d42fc93cde5529e50b83e19ebde3fd"
+    },
+    {
+      "path": "crates/borsuk/src/graph_generation_resources.rs",
+      "bytes": 8898,
+      "mode": "100644",
+      "git_blob": "aff806763fadd478a523e1c62203f440a38ff415",
+      "sha256": "ee3f26724469b6786c462f4c3cd0a15c56a531fa73cd87883e9caa5f16dc50db"
+    },
+    {
+      "path": "crates/borsuk/src/graph_serving_generation.rs",
+      "bytes": 37858,
+      "mode": "100644",
+      "git_blob": "be9e9d286ee138623d3652065e36316677cab560",
+      "sha256": "e665c637600affc73ebb3ed55665ad1541da2af613ece50d0d22f26229811556"
+    },
+    {
+      "path": "crates/borsuk/src/group_commit.rs",
+      "bytes": 13928,
+      "mode": "100644",
+      "git_blob": "5413b9ee0bf863c6c171745844fed797be92d16b",
+      "sha256": "0bf2f7506748c0761a8e7a12e629ae72544cf63e69880edd59e6c612693c0dd3"
+    },
+    {
+      "path": "crates/borsuk/src/hard_priced_interval.rs",
+      "bytes": 9528,
+      "mode": "100644",
+      "git_blob": "702ffa518091162d4a6e8d0e1d277afa2d0c905c",
+      "sha256": "fe1710ef55e2eaf4de7eae04614fb046b6b20a3f3832e6e96431f32db13c7846"
+    },
+    {
+      "path": "crates/borsuk/src/hierarchical_semantic_cells.rs",
+      "bytes": 368622,
+      "mode": "100644",
+      "git_blob": "ced008feb7e796bb8a7026b8a1d613e498ffe9c8",
+      "sha256": "0330e32270e5b6bc04f8bcd0cbbac6cceff6ef6989ec7f72cd1f9b9dd40211c2"
+    },
+    {
+      "path": "crates/borsuk/src/index.rs",
+      "bytes": 2104994,
+      "mode": "100644",
+      "git_blob": "5544a0515efeb876915ee5325caf520057b73157",
+      "sha256": "3c8f2eab23e44eaeebd36ed2c6401d2b498d9a2493dd242266c41afe744216ee"
+    },
+    {
+      "path": "crates/borsuk/src/lane_log.rs",
+      "bytes": 27728,
+      "mode": "100644",
+      "git_blob": "4bed602e73bd8f171c8cccbcf15fb6440651fcfa",
+      "sha256": "7d39a420700c84fa3dcfd0c35ce3e89e72760e43f3019a951df53b49ca514b21"
+    },
+    {
+      "path": "crates/borsuk/src/late_interaction.rs",
+      "bytes": 12043,
+      "mode": "100644",
+      "git_blob": "3c3c42f781a94107e32bcc74b9984fedcaf78c51",
+      "sha256": "1c91839f8ab832b5d8c6d4031cce87fdf32d59444709466f5f54a6d356cc3b63"
+    },
+    {
+      "path": "crates/borsuk/src/late_interaction_sidecar.rs",
+      "bytes": 25341,
+      "mode": "100644",
+      "git_blob": "4f2c1d9f8313ee854700694dbae1b98de6ad4cdb",
+      "sha256": "b3a5c55c873ac250822ff23dc43442915af175ade4a903837c1a0f976be0e3e0"
+    },
+    {
+      "path": "crates/borsuk/src/lexical_build.rs",
+      "bytes": 14600,
+      "mode": "100644",
+      "git_blob": "84adf7a9c8099446c353aa8415bc82704f0b9ccf",
+      "sha256": "3d40527ee68ae120bdfdda1d507d07eaed12d4ffaec526ac479687a008ff5d69"
+    },
+    {
+      "path": "crates/borsuk/src/lexical_root.rs",
+      "bytes": 20388,
+      "mode": "100644",
+      "git_blob": "880c96595c988596df17d1801aa7c258db95e71f",
+      "sha256": "4f3963ba05e5a817825ddf0f68c6be2c2f30e4950a08e56b05b4e9347c7a9c7a"
+    },
+    {
+      "path": "crates/borsuk/src/lexical_simd.rs",
+      "bytes": 11945,
+      "mode": "100644",
+      "git_blob": "6dc5149d25c7a3d1ab3d5b45a49c7898f7feeafb",
+      "sha256": "e46f70ba7deaded285fbf6cf9fee02c57db01b7daa3bd13a26906c24bf5d0a19"
+    },
+    {
+      "path": "crates/borsuk/src/lib.rs",
+      "bytes": 43539,
+      "mode": "100644",
+      "git_blob": "4afcaace36e27183da8f71416eb3db97382d53a2",
+      "sha256": "97f665ac45cbcca6f573ec810506ee1d8d159c42d56faa247b7b07a14bdddc50"
+    },
+    {
+      "path": "crates/borsuk/src/logical_cell_catalog.rs",
+      "bytes": 41644,
+      "mode": "100644",
+      "git_blob": "571e5266c8cbe8164c57782ac3838ab00b97c94f",
+      "sha256": "7460bfe2025bd80f5df55b36988cdd4e588b5d617d93aea5a47bff24d9c59225"
+    },
+    {
+      "path": "crates/borsuk/src/maintenance.rs",
+      "bytes": 15383,
+      "mode": "100644",
+      "git_blob": "54d8382e91191f0f95175084ffd14e7ce695b0f8",
+      "sha256": "962ca6ee5b2ab9f711c75c7ac6c14fb60bdf275c1429f1a645710ad4d1bab7d7"
+    },
+    {
+      "path": "crates/borsuk/src/manifest.rs",
+      "bytes": 60332,
+      "mode": "100644",
+      "git_blob": "f19d92bdda1ebd40807110a3db52ab03c9784413",
+      "sha256": "0c9ba16e6112c3bb31839b0695e6152d0daeb9f90cff12fa317adba3f5adaf43"
+    },
+    {
+      "path": "crates/borsuk/src/metadata.rs",
+      "bytes": 69416,
+      "mode": "100644",
+      "git_blob": "7581c8548b1b4099d8945dc4a0846aeaa72ae38d",
+      "sha256": "07c99384d695eb5f761cfa56deb4677dda4eca73646048e4b583f3da3649be08"
+    },
+    {
+      "path": "crates/borsuk/src/metric.rs",
+      "bytes": 60539,
+      "mode": "100644",
+      "git_blob": "3f73ee655b4f201ef9ac2fd6f966347c73823194",
+      "sha256": "43a9c3a3fbc9a1f017a7ad7ce131aac7f253a77cb418f451587bd1043a1cdabe"
+    },
+    {
+      "path": "crates/borsuk/src/mutation.rs",
+      "bytes": 22983,
+      "mode": "100644",
+      "git_blob": "e59db9d41e808a82973733062fd329d8dbbd2b8d",
+      "sha256": "8f69f067556f58c32cc09550c7ab16d5ba32aadd9a93245f472f1c5f8e054942"
+    },
+    {
+      "path": "crates/borsuk/src/mutation_extent.rs",
+      "bytes": 42324,
+      "mode": "100644",
+      "git_blob": "76b09cdfac896adaf26d73503c5adfd4631a8f44",
+      "sha256": "cd566f242005b2ee1175901fa0d7a3de7e49286e41daf0aab35f13539c3d8b03"
+    },
+    {
+      "path": "crates/borsuk/src/native_ann.rs",
+      "bytes": 35354,
+      "mode": "100644",
+      "git_blob": "8b1659e358597775525c2035c75c6d0e06508f17",
+      "sha256": "d74e57ff4bd35963498866d8671b73c1ebf610bfbc44d96ca140be960440fe1f"
+    },
+    {
+      "path": "crates/borsuk/src/native_ann_build.rs",
+      "bytes": 55491,
+      "mode": "100644",
+      "git_blob": "9cb574f9e31eca9a972ae1901448cfa094fb1635",
+      "sha256": "dbee2d274afe7b7d1eef9ccd36dad4b6d997037f747b37f004c65efe04022897"
+    },
+    {
+      "path": "crates/borsuk/src/native_ann_format.rs",
+      "bytes": 59996,
+      "mode": "100644",
+      "git_blob": "232c9232ef8534975e07b51d9160d7710ce82637",
+      "sha256": "651f7351402a6ff7138423ecafbf3ab8c474b5a7ebd8bbd1c402f5cb3346ac0b"
+    },
+    {
+      "path": "crates/borsuk/src/native_ann_read.rs",
+      "bytes": 86622,
+      "mode": "100644",
+      "git_blob": "9a58e8827a22066e26df63a5a1d967bfe62cefe9",
+      "sha256": "33f73469aeb707435697f3e980ad031e1fe041e79da77a0e9f99dffc4623b7b5"
+    },
+    {
+      "path": "crates/borsuk/src/native_ann_router.rs",
+      "bytes": 31539,
+      "mode": "100644",
+      "git_blob": "c9a4f5088a409ebc230baa754645bb6a7246e3b2",
+      "sha256": "dbe102d05704411c9065ed5b76dd0d5c043778d11b2c5402cfd54d80938eedb5"
+    },
+    {
+      "path": "crates/borsuk/src/native_development_memory.rs",
+      "bytes": 1085,
+      "mode": "100644",
+      "git_blob": "09c62280b3072a7d5d257e0c4e355109d374fbc6",
+      "sha256": "3228eaf9d1231b785bee1d1f89d1280b9c8255df0ab97b9173d883621d992b36"
+    },
+    {
+      "path": "crates/borsuk/src/native_source_hydration.rs",
+      "bytes": 11087,
+      "mode": "100644",
+      "git_blob": "371a01f5820644e6c8afe0f46d23c5435974547c",
+      "sha256": "c92734b74075ed2b3b1feb093f075b2aebbda8e8a4a851e1adde72d187648677"
+    },
+    {
+      "path": "crates/borsuk/src/native_source_id_map.rs",
+      "bytes": 13753,
+      "mode": "100644",
+      "git_blob": "4f1da5fc7f12b0a540130e7a02189891cecbd6de",
+      "sha256": "5e5a38dcd3f00f361c6451327352de291439559df23b12101fedbab1a5d5b51c"
+    },
+    {
+      "path": "crates/borsuk/src/native_source_tier.rs",
+      "bytes": 33289,
+      "mode": "100644",
+      "git_blob": "45c7c67e31c5d7d381f00731025e65c9e7a15f23",
+      "sha256": "1ab50d61dc5d46b8123e9ecfe907da2bd0ede9291f41c230b8c7a7dfb61df286"
+    },
+    {
+      "path": "crates/borsuk/src/object_native_generation.rs",
+      "bytes": 76269,
+      "mode": "100644",
+      "git_blob": "0c2adc93b480592d9c79b9a99d34e67d5cf4997f",
+      "sha256": "a956239fe6782d03734e60dcb542d0060e995a37d5a1b9a71870d55a69620725"
+    },
+    {
+      "path": "crates/borsuk/src/observability.rs",
+      "bytes": 15285,
+      "mode": "100644",
+      "git_blob": "75a12c54854040495728c3873c01c37ddcfa038b",
+      "sha256": "ddcc742608e29ece8c01ee621fa06f4644bb5470833ee1f0d8676d06130cdfea"
+    },
+    {
+      "path": "crates/borsuk/src/parallel.rs",
+      "bytes": 2511,
+      "mode": "100644",
+      "git_blob": "a87ea40827084ac92b1a566a7cd7a9594b99066a",
+      "sha256": "90198eb4ee92d78797cbdc2140b055a9716a9ec88fd341daa330b1c13c842a57"
+    },
+    {
+      "path": "crates/borsuk/src/physical_interval.rs",
+      "bytes": 34253,
+      "mode": "100644",
+      "git_blob": "5fdcab218e14e6a178847ac4b757933c1867cca5",
+      "sha256": "4754f64a6e93305f4d21b53aef75b347bdd8de5c636b8cc07b9eeb6e20ea22e6"
+    },
+    {
+      "path": "crates/borsuk/src/physical_layout.rs",
+      "bytes": 9478,
+      "mode": "100644",
+      "git_blob": "91c4930a139f6835fb521858b32dc5f8e3ba6f0d",
+      "sha256": "16d8ba9e91b396f6d284b96a7d0b718bd6f60e1b6abb037d8832c58eafe90118"
+    },
+    {
+      "path": "crates/borsuk/src/physical_row_permutation.rs",
+      "bytes": 21442,
+      "mode": "100644",
+      "git_blob": "55832c2cfa7707144c521332242ac7620d2b6b97",
+      "sha256": "669e8096d5d8c65a833cfc3f92508493732b98b8eb6b8979714cc1f86df77a29"
+    },
+    {
+      "path": "crates/borsuk/src/positioned_candidate.rs",
+      "bytes": 68592,
+      "mode": "100644",
+      "git_blob": "db67602a10926f1ba38edd54c105f8a9891e87fa",
+      "sha256": "2a68801789f2476740e83ad926a59928169802755810740ef8858cc558e18b42"
+    },
+    {
+      "path": "crates/borsuk/src/positioned_log.rs",
+      "bytes": 105179,
+      "mode": "100644",
+      "git_blob": "1f46f423c6ded529a26a031965c64ed6d3ff6ffc",
+      "sha256": "83352322a6096fbf888b74abdc9a6f038947a45b792ecc7b4ee06cc44e16846c"
+    },
+    {
+      "path": "crates/borsuk/src/positioned_materializer.rs",
+      "bytes": 2520,
+      "mode": "100644",
+      "git_blob": "99d55aa4cf97f2fcb7f9a4bd5642a301d4e0c161",
+      "sha256": "94d91b435a790eab40636dbddfa869280b67052ddce7e43b0a571d445aa7bcc8"
+    },
+    {
+      "path": "crates/borsuk/src/pq64_nominee.rs",
+      "bytes": 29232,
+      "mode": "100644",
+      "git_blob": "5fa14d4d0964a90301b1073a7fb17701737e0cb3",
+      "sha256": "221513d1a709583a293fa1820c82a489827d3ee8531a7e1e02c4c46e133be95a"
+    },
+    {
+      "path": "crates/borsuk/src/pq64_router_artifact.rs",
+      "bytes": 10047,
+      "mode": "100644",
+      "git_blob": "c5d3c49a17d5c892bb9a4698d244b3a3bf36546c",
+      "sha256": "dac9d261b1dd683c04f27f2b328744fc018691cb7471e1ede33250c88fe4c5e6"
+    },
+    {
+      "path": "crates/borsuk/src/pq_residual_four_bit.rs",
+      "bytes": 18992,
+      "mode": "100644",
+      "git_blob": "dd580ede77fc5d3793bb2f3fe292c85d58865eaf",
+      "sha256": "1daffa92bf652e96add9b2b19c0246fb3a1a5da6427df8febf40b2174e38e949"
+    },
+    {
+      "path": "crates/borsuk/src/quantizer_sidecar.rs",
+      "bytes": 10594,
+      "mode": "100644",
+      "git_blob": "feea79a7c774735c3cf919142c790bedb48adfcf",
+      "sha256": "ee99fb6a799d179e8ae198eecbcece91f5fafd2dc28d535af8c8397a314a8ee2"
+    },
+    {
+      "path": "crates/borsuk/src/record.rs",
+      "bytes": 117997,
+      "mode": "100644",
+      "git_blob": "56d6a9a87cf875dc206e84e3cbd6c3aaeb376aea",
+      "sha256": "fcab65d6347dd9966366870ae540766f8974acd2b5dac19437cfdd2b7346692f"
+    },
+    {
+      "path": "crates/borsuk/src/relaid_generation_authority.rs",
+      "bytes": 6346,
+      "mode": "100644",
+      "git_blob": "56c56780bc9935224fd8d42abee066eeb6646f35",
+      "sha256": "dc485c2b78420c64598a91a31a4ec6a58f497e9a925fc09911b1f346cec1ae70"
+    },
+    {
+      "path": "crates/borsuk/src/relaxed_priced_interval.rs",
+      "bytes": 14309,
+      "mode": "100644",
+      "git_blob": "4a9f8136ec4d35e2384ec7ab859692f4488718f0",
+      "sha256": "ad93c0a6bb729abba3c7ae675a63ec0a603705a8792dc6c8afd9460f10ca26e1"
+    },
+    {
+      "path": "crates/borsuk/src/resident_fp16_tier.rs",
+      "bytes": 32051,
+      "mode": "100644",
+      "git_blob": "6630277a53f8cc21eed0851e10cc7375e940d646",
+      "sha256": "3ad1255e03ff34d31eb9a46c0a17c50be1977ba310d02a139921b4c9954777a4"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_build.rs",
+      "bytes": 6601,
+      "mode": "100644",
+      "git_blob": "3b45785990fc27c7809765f087ef8051cbdee5c5",
+      "sha256": "e46e1a3a788034e8aa0680b07648ccbe9fbc85cfc37639344fe8f81b60871b47"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_collection.rs",
+      "bytes": 18581,
+      "mode": "100644",
+      "git_blob": "375e674fb7ac41e5747e64366798ef1becca830d",
+      "sha256": "d43a27d7c92b34bb864169e0a7e63ef1f4f7e4098a0d2dd320222a601d05d735"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_generation.rs",
+      "bytes": 38881,
+      "mode": "100644",
+      "git_blob": "ba18e6e0dda4adfd66d4ad68ce30617f9f5f7951",
+      "sha256": "d2fd19748aabd5a2e163bd541ad0fb2ca724ef8915e646c7cc411db8d60b98ac"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_mutation_snapshot.rs",
+      "bytes": 9247,
+      "mode": "100644",
+      "git_blob": "b0bc3a9d4ac0c8efd659c431061c92a9994c37ba",
+      "sha256": "b657b043c11db3434db42d8bf0baed4350b410f6849d7d0341d2260c39d3246c"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_overlay.rs",
+      "bytes": 21395,
+      "mode": "100644",
+      "git_blob": "71160603898e4e92f96801ad2d98d5b400bb8c3e",
+      "sha256": "026571ead0855342a5f80dbbd567e7f60bd12a5335b156fa625fafe9527e4b1c"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_store.rs",
+      "bytes": 25851,
+      "mode": "100644",
+      "git_blob": "c73e30ed9d475c1689c2e0530e73d23df0cf8bf3",
+      "sha256": "2b146358f2d3c51e7d2d99b903a3f9f3b8bdd3e037e32a208b71e4fa4956d036"
+    },
+    {
+      "path": "crates/borsuk/src/resident_graph_store_upload_tests.rs",
+      "bytes": 64807,
+      "mode": "100644",
+      "git_blob": "ebc4f5a14646cb4bb9fd6d7e69a1e48e347d4587",
+      "sha256": "03d406600adebf34f5d892d45e28822672e363f25bd312e58bde667d79c3d733"
+    },
+    {
+      "path": "crates/borsuk/src/resident_nominee_generation.rs",
+      "bytes": 13808,
+      "mode": "100644",
+      "git_blob": "970976c9811cf621a571d25e1495e800dcc64f77",
+      "sha256": "d0d865b544f239d48aa74368115ff51d4b59aec1a17b85aea8f40f26f3ef30d4"
+    },
+    {
+      "path": "crates/borsuk/src/resident_vector_graph.rs",
+      "bytes": 66097,
+      "mode": "100644",
+      "git_blob": "c289ecbc47bc46d0b937c1d0c6cfc0be65a48ad2",
+      "sha256": "c62459b45caeaaa798b16b24b88180ad6d4dc5bdd554cd804e6d6b354eb3b79d"
+    },
+    {
+      "path": "crates/borsuk/src/returned_sq8.rs",
+      "bytes": 22962,
+      "mode": "100644",
+      "git_blob": "74d62bdf5e6d22e0ece8f1a96d99cb7dcace816f",
+      "sha256": "a4dcc7f9bc06cdea835f72860f3d2e796fcb6f29276858c349d624884cc9f74b"
+    },
+    {
+      "path": "crates/borsuk/src/rotated_product_quantizer.rs",
+      "bytes": 35586,
+      "mode": "100644",
+      "git_blob": "91eeee26277b9dd046b50759c4060651e2d8f678",
+      "sha256": "a9802d8c63250d0a7702c4706bbe87253669537987912934c658a5834304b611"
+    },
+    {
+      "path": "crates/borsuk/src/rotated_two_bit.rs",
+      "bytes": 13999,
+      "mode": "100644",
+      "git_blob": "6fc6df4efa243f7328d02496115709dc14d6d836",
+      "sha256": "eddf88c6c8ee23a732751f49291293f1cc081545ebb9a21c149eb757aa5c38ec"
+    },
+    {
+      "path": "crates/borsuk/src/row_bundle.rs",
+      "bytes": 295823,
+      "mode": "100644",
+      "git_blob": "73ad9b7de13b73f089eb708751a511f71d23b938",
+      "sha256": "f4d446877db79d56e3df28f87f4913727d17d91b4e516a6f2f32a1eadf5de7fe"
+    },
+    {
+      "path": "crates/borsuk/src/scalar_decode.rs",
+      "bytes": 3608,
+      "mode": "100644",
+      "git_blob": "c0f385152e4d88eaa086398f3e478f2775c9c2ee",
+      "sha256": "50bf51fbd3bf4e5e0d785eeb890b68bd5ef19db7409f62ecd171df3d3c37f497"
+    },
+    {
+      "path": "crates/borsuk/src/segment.rs",
+      "bytes": 51265,
+      "mode": "100644",
+      "git_blob": "8dcafb018218069ba89090ad247937c4edf523a3",
+      "sha256": "976ddee5aaa91ec026ed84b1029a307184ca3a02cc939b46384cb358b547afc9"
+    },
+    {
+      "path": "crates/borsuk/src/segment_cache.rs",
+      "bytes": 60741,
+      "mode": "100644",
+      "git_blob": "b96b38cecdd63495bf1d42a9abee30ec75d0b32f",
+      "sha256": "f572ba1f8549f6d96a14521cf2bc8af4461b3d1205fc9c390672b55a2f27e27a"
+    },
+    {
+      "path": "crates/borsuk/src/semantic_cell_overlap.rs",
+      "bytes": 62237,
+      "mode": "100644",
+      "git_blob": "686e64e411cbe7fd935c00cef7c9edffa7291eca",
+      "sha256": "1376105dc4145260ee3b43b91f0c39a00af78beb9f04162f8eb36fd9659c57c5"
+    },
+    {
+      "path": "crates/borsuk/src/semantic_unit_router.rs",
+      "bytes": 145543,
+      "mode": "100644",
+      "git_blob": "ce9e623d7197a8892ab1476130549eba8c9ee6de",
+      "sha256": "a8b6dbc74ea15b08d15499bcf83cab680c17fcc040840e422818b505a8758cd8"
+    },
+    {
+      "path": "crates/borsuk/src/serving_generation.rs",
+      "bytes": 17339,
+      "mode": "100644",
+      "git_blob": "cb4ff646e971b4a5d047e59dc33ea441f8377790",
+      "sha256": "3a4c5b39a441fffac325050c1c1614b2aa221278ec6579bf732dd884e2a91737"
+    },
+    {
+      "path": "crates/borsuk/src/simd_control.rs",
+      "bytes": 5429,
+      "mode": "100644",
+      "git_blob": "3979695a04ccdb8246f04db5cacc9476fec73635",
+      "sha256": "82bf82bed5167662439160cb0ea8b3db2870e8322c196e50f439ddcadc514b56"
+    },
+    {
+      "path": "crates/borsuk/src/source_capsule.rs",
+      "bytes": 111890,
+      "mode": "100644",
+      "git_blob": "7e59fdd7820430ad0535b53d46c1bbcc7d1a3882",
+      "sha256": "599e7c0f3f69dcf7a2d7855721379c81d2d4001ab6d4b8d764291978b993ac2e"
+    },
+    {
+      "path": "crates/borsuk/src/source_order.rs",
+      "bytes": 19237,
+      "mode": "100644",
+      "git_blob": "6dc4c0b3b24e38ffa24a948b937aa0fbf67ce034",
+      "sha256": "1393f99e71be1e68916b598256d1200d56879b439c05d8c66c098345856c9eb4"
+    },
+    {
+      "path": "crates/borsuk/src/sparse.rs",
+      "bytes": 22123,
+      "mode": "100644",
+      "git_blob": "443ae6eba4e5f4dea7bfb8d3e6aa21b52ed46dc8",
+      "sha256": "5bd1f5e6b5e5d56afedd614953939394f8cda97eac4cbd488308611393091d81"
+    },
+    {
+      "path": "crates/borsuk/src/sparse_index.rs",
+      "bytes": 13063,
+      "mode": "100644",
+      "git_blob": "89b87826f30760d6920566d1a7f2deb0456ea530",
+      "sha256": "4b6205f5ae1076363ab0f707609f605ddb8db6fdef5020569c5e2caf017a1e96"
+    },
+    {
+      "path": "crates/borsuk/src/sq8_page_authority.rs",
+      "bytes": 35944,
+      "mode": "100644",
+      "git_blob": "9038939c02fc078acf153ba4ef5d97b88f2117d8",
+      "sha256": "f309a3b052643c0230d067371bd1bd2c1ee1189acf8ee623f965061ea702aa1d"
+    },
+    {
+      "path": "crates/borsuk/src/sq8_s3_range.rs",
+      "bytes": 261133,
+      "mode": "100644",
+      "git_blob": "2cf93efff08b5fda1f957f513050c3a00746c1ed",
+      "sha256": "50d73ddd7ba6bc020b539ff398e57d0aa7eb00a42a5a0e1bb43c7f5c3c595673"
+    },
+    {
+      "path": "crates/borsuk/src/sq8_source.rs",
+      "bytes": 15552,
+      "mode": "100644",
+      "git_blob": "4a94893598f78bbb35b4fcbd343f4e3aac89d15a",
+      "sha256": "16f03aa7187b4f18676aa511339b07b6e7b8776323710a60071e6ea0d62eb795"
+    },
+    {
+      "path": "crates/borsuk/src/storage.rs",
+      "bytes": 301730,
+      "mode": "100644",
+      "git_blob": "72de6fa76c547c793d252bfbd2f05f37dc24d92b",
+      "sha256": "aa2f78cf8dd57a2372759aab21ff20e48b74d48aa56ffab7bce4ea355ef90aeb"
+    },
+    {
+      "path": "crates/borsuk/src/storage_trace.rs",
+      "bytes": 17765,
+      "mode": "100644",
+      "git_blob": "9e182c8060dc7fff0c51cef64dc7a4920143ff46",
+      "sha256": "7d8e6ec4d00c6e448d46d4131c8dc96f3e3891d1939f10c5307850b4891aaf8f"
+    },
+    {
+      "path": "crates/borsuk/src/text.rs",
+      "bytes": 4129,
+      "mode": "100644",
+      "git_blob": "b47eba9a7bc3b3a198bd6e794fafc6d1f69e463a",
+      "sha256": "533335a9ce7d5d6adb6ca0d53b315c887762eeacf4e36cae6e4b59fc1c0db31a"
+    },
+    {
+      "path": "crates/borsuk/src/turboquant.rs",
+      "bytes": 99312,
+      "mode": "100644",
+      "git_blob": "386c336b59eda619dae3c9f988b5941a8240a828",
+      "sha256": "5433f416668197e0f0ec064f0d84a8f142a5a54369f2d2f8e0a3fe45dd6d1754"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_build.rs",
+      "bytes": 81486,
+      "mode": "100644",
+      "git_blob": "86b171ff524f28da88e8952ab8fbfb0697125e3d",
+      "sha256": "1fdec612ddb80e22e7a1f731745941266437058afe22cf096c803b5486b058ec"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_compaction.rs",
+      "bytes": 52899,
+      "mode": "100644",
+      "git_blob": "284cc1ece38a1ca018ff62e25b2c00846bbd6eab",
+      "sha256": "cbf9df03000eae7f0b29a9cc4323ff788247aec2345a24ac6ac462b69b1a89f5"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_gc.rs",
+      "bytes": 18375,
+      "mode": "100644",
+      "git_blob": "5643152bfbed7b21e9a90e0cff6421d5272ad968",
+      "sha256": "1d863c0ba13d2ea7f28b17e26cd5cde92af226896fb52cd483734c1c8d2674da"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_generation.rs",
+      "bytes": 521691,
+      "mode": "100644",
+      "git_blob": "83581ffed8fe85b37ba3bb4b7a0d26eb30059783",
+      "sha256": "146c18c4b4ec4483b1d519453eb657daf82ecfc7f1cf6a828e1574886d857aa0"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_index.rs",
+      "bytes": 10518,
+      "mode": "100644",
+      "git_blob": "8030a34a061927c45578038688bff380df0f5b05",
+      "sha256": "7154079fc515d1909f16a38b2e316b17e3d2a584cef1fccd1579ebde30e2dcfd"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_mutations.rs",
+      "bytes": 21263,
+      "mode": "100644",
+      "git_blob": "e9c99074b0c0c834eb9b0d2fc8f0e5b2f46247f2",
+      "sha256": "b8a43b8bbb12f3f5edf8ac04d8382a8cf1a75949dc4f22a78b39d60fd45a6553"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_source.rs",
+      "bytes": 22632,
+      "mode": "100644",
+      "git_blob": "7da48d778c14306960edd5adad8f64323cbd6307",
+      "sha256": "dbcc4cdbc4bb5c244354b375afd657f8b5cb1892df3f0ff0b8f41ef580de42e0"
+    },
+    {
+      "path": "crates/borsuk/src/two_bit_store.rs",
+      "bytes": 90953,
+      "mode": "100644",
+      "git_blob": "648da9aeb43a666bc16a61827ce5dd7534e51e55",
+      "sha256": "577f2e05f999502cdd97f566de38c7cbab560d64de82c185d71fd53d2a3f3c17"
+    },
+    {
+      "path": "crates/borsuk/src/unconstrained_priced_interval.rs",
+      "bytes": 8345,
+      "mode": "100644",
+      "git_blob": "26b29e67a467be8a44ffd81fce3e369d7ef42826",
+      "sha256": "6777b6fbab42b207b3e01cee123fb6f73d189008fd6a4ac928478ac9095891a1"
+    },
+    {
+      "path": "crates/borsuk/src/unit_centroid_graph.rs",
+      "bytes": 40405,
+      "mode": "100644",
+      "git_blob": "f710622303af0a7df4340002377e60514c76add0",
+      "sha256": "08bf90c491f53bf8831374f67548c608ba891388528d037d0c5a207186758ea4"
+    },
+    {
+      "path": "crates/borsuk/src/unit_centroid_pages.rs",
+      "bytes": 23599,
+      "mode": "100644",
+      "git_blob": "ab80558215ad7936b5b483ac7d668f1687034d17",
+      "sha256": "116e79911f83ec5631c1b392f5a6b54f54c1ce33255d9c0340a106c7397eb307"
+    },
+    {
+      "path": "crates/borsuk/src/v21_feasibility.rs",
+      "bytes": 56152,
+      "mode": "100644",
+      "git_blob": "041415ab260c2d40ba5bad7c928e6500ff03a500",
+      "sha256": "a77ac22262f3d3632a766e96c5208144c63d21179a5ae0c9a2e65c8f385a168c"
+    },
+    {
+      "path": "crates/borsuk/src/v22_feasibility.rs",
+      "bytes": 128352,
+      "mode": "100644",
+      "git_blob": "20c47b9e217b70c69c06b3e9b0d2cb9d57673a3d",
+      "sha256": "c594781ee52831c966ad8c9f2dbdd09fb3b7858a30485771609fa680f5d56cb1"
+    },
+    {
+      "path": "crates/borsuk/src/v23_balanced_pages.rs",
+      "bytes": 95636,
+      "mode": "100644",
+      "git_blob": "a211a52c8e9d6742082863b4e7bbc8663583d5a3",
+      "sha256": "d94a2a6d29efa36933f5d7b37e2ca10874da5eaeba692cbb8f837082cce0f9ee"
+    },
+    {
+      "path": "crates/borsuk/src/v23_balanced_pages_arrow.rs",
+      "bytes": 30634,
+      "mode": "100644",
+      "git_blob": "d550109bf1d4836b7257a14fd526d4e6daae7f27",
+      "sha256": "b14fd77c0ac80b56c11266298e95a9a26e9b702d6a1e60f118a951b98e4b6166"
+    },
+    {
+      "path": "crates/borsuk/src/v23_balanced_pages_build.rs",
+      "bytes": 75888,
+      "mode": "100644",
+      "git_blob": "b763153008fb3661dfe5632be69ae77c2e824a8f",
+      "sha256": "4bb2a12c7fb733e9b8b2e28d29aa3af861069cf1c1c0092b13525dd77c001ecc"
+    },
+    {
+      "path": "crates/borsuk/src/v23_balanced_pages_eval.rs",
+      "bytes": 68271,
+      "mode": "100644",
+      "git_blob": "6e092854620356676da92c21ad8110b83155d014",
+      "sha256": "00dd3a5b16c9316036e605cd546629149592146ac844e0344df22439b8233670"
+    },
+    {
+      "path": "crates/borsuk/src/v23_balanced_pages_train.rs",
+      "bytes": 17126,
+      "mode": "100644",
+      "git_blob": "28356aff8371ca7e4928a1955a054fa641c776c7",
+      "sha256": "0ffdb8c4096691b1f81a6e9dced27ad4727a9e1ddb164aee29576131f52ec24a"
+    },
+    {
+      "path": "crates/borsuk/src/v23_diagnostic.rs",
+      "bytes": 401506,
+      "mode": "100644",
+      "git_blob": "5c87b85ad141387e25510b4467e3d599ea7b5a7f",
+      "sha256": "7e24e640befc6096f68c797f8e80209d0d461aa837bf26375c4826d8607abd4a"
+    },
+    {
+      "path": "crates/borsuk/src/v23_incidence.rs",
+      "bytes": 316385,
+      "mode": "100644",
+      "git_blob": "bc239d5817e49e36e5d7b7df3bd84c70dbbbadfd",
+      "sha256": "0f9885f2a1160767387407a6873cbfefaf52a42254e6f3c5a7081b6bfd8edebe"
+    },
+    {
+      "path": "crates/borsuk/src/v23_incidence_eval.rs",
+      "bytes": 135283,
+      "mode": "100644",
+      "git_blob": "a18c8f86617c74e25975f4fcdb4ff65538d4ccc1",
+      "sha256": "01ae473222dff47866b49b3d5a1dcc6eeae50218b3231c1fa771c66c004d1cd1"
+    },
+    {
+      "path": "crates/borsuk/src/v23_incidence_postings.rs",
+      "bytes": 85841,
+      "mode": "100644",
+      "git_blob": "a1c219473e74adc14e9b7053a82adf648a14df04",
+      "sha256": "897b98c35022b3d5703f5febb419bab79a975cccc629342522b87dba722ae6d6"
+    },
+    {
+      "path": "crates/borsuk/src/v23_incidence_tree.rs",
+      "bytes": 72268,
+      "mode": "100644",
+      "git_blob": "13bc2c41dcbf23897532a39a8b401a74e94b8611",
+      "sha256": "4892aa61b5263d95e30189b80f6a73ef66394afd994413c9767fd196108a02aa"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq.rs",
+      "bytes": 20182,
+      "mode": "100644",
+      "git_blob": "0da4db4d4e57e71e6b6be0eb5ff4ea1c292508bb",
+      "sha256": "c2ad5fdd57b58443b6a239325bb3508ed2f998ebcd80c56bbd70e7a7449e6e7e"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq_arrow.rs",
+      "bytes": 26880,
+      "mode": "100644",
+      "git_blob": "1b00ea01a5974fbef00e000e66a2f454cc8af403",
+      "sha256": "b4e22a4aa391f792ec231c74a6eebd709c0ed6bbe5e1ff0467844bc0834df686"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq_build.rs",
+      "bytes": 41763,
+      "mode": "100644",
+      "git_blob": "d2641dd501c75c23a40087567f131741ae016ea8",
+      "sha256": "cf339702a68cd66b647a06dc1da8f1dc7ee8329e9d7ac6fcdfeb5aec7c4c1c5a"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq_eval.rs",
+      "bytes": 85037,
+      "mode": "100644",
+      "git_blob": "2f6e238f9b0bb00588d481197c302139c6b2892a",
+      "sha256": "18dd4825e9fa4740387a4b14f3ed8e47b18acdba3013372eee2f3efe63f58a2f"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq_local.rs",
+      "bytes": 23313,
+      "mode": "100644",
+      "git_blob": "66a3c14c2b07cbfa1865fdf2b0b3570c035db19f",
+      "sha256": "0b2551560be64ead94f067016fd0f08ae2212fb8b8a2bb4c30fdfd95cddd1f43"
+    },
+    {
+      "path": "crates/borsuk/src/v23_rabitq_quantizer.rs",
+      "bytes": 20962,
+      "mode": "100644",
+      "git_blob": "340d01e3d81be742218aa07727ddbd0fa3a8954b",
+      "sha256": "80014fa6e0c31fdf7c38f4fb22814b6c42bf0edc500a03aace1ab8ee5c3cb95a"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness.rs",
+      "bytes": 14904,
+      "mode": "100644",
+      "git_blob": "865341344158f40d916b2e9ddf306671b0d0c5f4",
+      "sha256": "9fbd28e92dc2623878f8a40914d449433a34e8b2644f34f5739d016d813329f5"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_eval.rs",
+      "bytes": 36968,
+      "mode": "100644",
+      "git_blob": "679d792bffd0a2c74b5ff13380740f3704eb66ba",
+      "sha256": "0f7b26cea8ffb22ecba09e6e936e36fdfd710ebd9a56b1b829ca8393a4e82ae8"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_graph.rs",
+      "bytes": 53393,
+      "mode": "100644",
+      "git_blob": "ce5815ca0c6971824943ac12023f032ebb0e460e",
+      "sha256": "9742655fd7495315f4666a141dff293a3fe5cbe82005f7e1da3b09db81576569"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_local.rs",
+      "bytes": 142754,
+      "mode": "100644",
+      "git_blob": "7ffccfd3247f4cfb6073eb3ddad678d85d4c9cb9",
+      "sha256": "39591ba2eb09e90a34f4088123b08e826d74b8d0e404433466d87ec3849185b4"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_postings.rs",
+      "bytes": 37153,
+      "mode": "100644",
+      "git_blob": "643af034226e03b9375a0351392ca0a5466b3647",
+      "sha256": "78cd3f1ff15a06057a74914b9ba2de0878fb07883975f7a3415b4a1f75fd5fac"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_prepare.rs",
+      "bytes": 75846,
+      "mode": "100644",
+      "git_blob": "38f88bf5b2a91bc90bf1995e94a6f8f4b4df12b9",
+      "sha256": "5479191996ba22cf986398fb4e36f7156a649f26194262d7eae3347e01787d61"
+    },
+    {
+      "path": "crates/borsuk/src/v24_witness_pseudoquery.rs",
+      "bytes": 82229,
+      "mode": "100644",
+      "git_blob": "4a16363d2b448cc3d75eb91f08e61d98eb75aa0d",
+      "sha256": "dc6a266e80da33e85f8adbf650be0cd7f0c69a3a643b4b18b72892bca7f1621a"
+    },
+    {
+      "path": "crates/borsuk/src/v27_s3_build.rs",
+      "bytes": 59216,
+      "mode": "100644",
+      "git_blob": "5abe137aea7624ac49af62d240bcea9b367a71e3",
+      "sha256": "4a7f5aab393b5e272bba6afb3d81a4634c0cf1daf3ad3e3b9b9daed93be5c95c"
+    },
+    {
+      "path": "crates/borsuk/src/v27_s3_page.rs",
+      "bytes": 10991,
+      "mode": "100644",
+      "git_blob": "9a91391a9d65ff850ee58772eb1f83986a2f66ee",
+      "sha256": "881842878c97b3c763ac7b7d9d1c156068d044744fe1d06e41f3b66805d0b88b"
+    },
+    {
+      "path": "crates/borsuk/src/v27_s3_router.rs",
+      "bytes": 23085,
+      "mode": "100644",
+      "git_blob": "5dfb1b47cd34b4ad943aaae4a0bdc57f2dfbc3aa",
+      "sha256": "a6c7101e10627ecc827a32b8d2d6bfbedadbbc9d980d110bbe3e23d02232a78f"
+    },
+    {
+      "path": "crates/borsuk/src/v27_s3_search.rs",
+      "bytes": 24545,
+      "mode": "100644",
+      "git_blob": "c4de55e46e68506ba68cfc72236efaf3e114f592",
+      "sha256": "bb05d42089f54343626cb62c07e87d8fe2c58c9b9f4e4765da2f998646d373d1"
+    },
+    {
+      "path": "crates/borsuk/src/v28_s3_layout.rs",
+      "bytes": 34018,
+      "mode": "100644",
+      "git_blob": "71795e8dfa91e268baa651fd46629a967ef41d34",
+      "sha256": "17410e961e82f7b820818588b428aecc461886fc095d9a39270f53415994fe25"
+    },
+    {
+      "path": "crates/borsuk/src/v28_s3_pq.rs",
+      "bytes": 27901,
+      "mode": "100644",
+      "git_blob": "25ec084c9007872d6a9da58534f4fbddc29e9671",
+      "sha256": "b1919165286e5af7c21be4e207ee530389b8fcb5025a0d44ed1fda01d83b0761"
+    },
+    {
+      "path": "crates/borsuk/src/v28_s3_search.rs",
+      "bytes": 23420,
+      "mode": "100644",
+      "git_blob": "58ac522263d31c5cd0f7fac627052d8a76c24968",
+      "sha256": "0770ce4a5a69c8ffaa7ff053552d709a125c3829c950f6ba7f3c84a00a59780e"
+    },
+    {
+      "path": "crates/borsuk/src/v30_s3_layout.rs",
+      "bytes": 129344,
+      "mode": "100644",
+      "git_blob": "0f6bb384cdfd953c7b106a4f74d80feb66a70f6e",
+      "sha256": "b1c1f47f7ca41be5ca547cb6ea7570f56548c27cb7a1ad633a2fe37946e26d0e"
+    },
+    {
+      "path": "crates/borsuk/src/v30_s3_pq.rs",
+      "bytes": 70571,
+      "mode": "100644",
+      "git_blob": "869e7c13ebbf3bbec5a20fec7b0f0662fc2d2787",
+      "sha256": "366a19aeba36a297c24e6f144b66e31504dcecd571183240250f6dec131bb457"
+    },
+    {
+      "path": "crates/borsuk/src/v30_s3_search.rs",
+      "bytes": 201066,
+      "mode": "100644",
+      "git_blob": "80a2c0a081b4b3d35bdfe5cb641e421a4032b4df",
+      "sha256": "5ea94b479f3b2558b809aa891f59945c2d305c71a49a3cdafb2a83570d66d859"
+    },
+    {
+      "path": "crates/borsuk/src/v32_code_objects.rs",
+      "bytes": 56017,
+      "mode": "100644",
+      "git_blob": "cdd288cdd155f0a8673d20b9dec24cdcb48b66e6",
+      "sha256": "4d45a33165a780db7c12c28e160623770e0af13f8f97facc740d420f5ae9b63a"
+    },
+    {
+      "path": "crates/borsuk/src/v32_global_pages.rs",
+      "bytes": 9519,
+      "mode": "100644",
+      "git_blob": "84f48030a9994cdcaf226c27368b0cdd80bc1a3c",
+      "sha256": "c1cdcfab7043dc255cc1f38cde06c285a2f9280aae7c755bc4327d8e946ae38f"
+    },
+    {
+      "path": "crates/borsuk/src/v33_group_shape.rs",
+      "bytes": 131439,
+      "mode": "100644",
+      "git_blob": "aa8c1bac2a4e0202ed5e1834781af761ffc43999",
+      "sha256": "16a4ddd6413e3fbc90dc4910e744afc72658e4a8f9c4ef6ba54117d859c6adae"
+    },
+    {
+      "path": "crates/borsuk/src/v34_rank4.rs",
+      "bytes": 48012,
+      "mode": "100644",
+      "git_blob": "7baf46478c438ad266b7d14eb2bc3756890829f4",
+      "sha256": "fedda8085ef04069158fd6deeb98c94ad949f1588401e2fdf2494cf5b2126c22"
+    },
+    {
+      "path": "crates/borsuk/src/v34_route.rs",
+      "bytes": 42052,
+      "mode": "100644",
+      "git_blob": "349b1c4e82e6369e4d4a031aca6c14d29320e676",
+      "sha256": "ec328d5890d18ea499b8665bbd19d31f8cf9b6e3fbc65c6a8d15fc1e72deb838"
+    },
+    {
+      "path": "crates/borsuk/src/v35_authority.rs",
+      "bytes": 14425,
+      "mode": "100644",
+      "git_blob": "3007b1e7630eb65c148315461cc22d0db9b2bf72",
+      "sha256": "f77c481165ac80edbd82a9fcbea1833d566c17afbef27fa3dfdd650fc5adc483"
+    },
+    {
+      "path": "crates/borsuk/src/v35_build.rs",
+      "bytes": 79411,
+      "mode": "100644",
+      "git_blob": "5af70a31f59ff6993687bc09130f150fd7f8ccbf",
+      "sha256": "ee888ef6bba72ade31d34c3b080573c9f709f370fc0ee6cdfade74c8957bbb4b"
+    },
+    {
+      "path": "crates/borsuk/src/v35_delta.rs",
+      "bytes": 20615,
+      "mode": "100644",
+      "git_blob": "943f72f73a4253962b253c2c4538f2a834f5b6d1",
+      "sha256": "ca1ebbb69f8f48c3421a6ac885293a0a3561cfe928ce877a5a53e673e284acb7"
+    },
+    {
+      "path": "crates/borsuk/src/v35_patch.rs",
+      "bytes": 88029,
+      "mode": "100644",
+      "git_blob": "5f1a07b78f68010db9983cf6b0b7af5ce5d0b3a6",
+      "sha256": "f1e280d007c0abd3082caa76b39d9de61b3f7fe1573e3934b230127776d19645"
+    },
+    {
+      "path": "crates/borsuk/src/v35_projection.rs",
+      "bytes": 46152,
+      "mode": "100644",
+      "git_blob": "d97fd81dd06cef3c0c95efe0efbf889a15ad14c5",
+      "sha256": "23d6ffd22ae5d508f67cc104edb6f1a86b00d0951c1995d75e8331896571f782"
+    },
+    {
+      "path": "crates/borsuk/src/v35_remote.rs",
+      "bytes": 156614,
+      "mode": "100644",
+      "git_blob": "6be991aa1b85e731cc36001be67de443ece28c7b",
+      "sha256": "5d675a998a74786e1efd2312614cd7d8d32b51d4dd5694a7baa0c98aa0d67974"
+    },
+    {
+      "path": "crates/borsuk/src/v35_route.rs",
+      "bytes": 38511,
+      "mode": "100644",
+      "git_blob": "5df9640e5ef1a4eaf9743d6e533a3670922716b5",
+      "sha256": "bc3bfbfa1309002e124e5240b80b7125aebc3604bd9c976b435c073ed570ede4"
+    },
+    {
+      "path": "crates/borsuk/src/v36_funnel.rs",
+      "bytes": 125582,
+      "mode": "100644",
+      "git_blob": "1dcfab224ab4f393bb9647569bddfa9eccfa30df",
+      "sha256": "9a9f6d7df10d1022b9844a8a5d09243619691001e8cd96d13230709288883d62"
+    },
+    {
+      "path": "crates/borsuk/src/v36_funnel_code.rs",
+      "bytes": 60388,
+      "mode": "100644",
+      "git_blob": "f31b39ce90833892bac63bf9ba26f4d031ba3e2e",
+      "sha256": "9b08a8420b948a988db79a4f3753ad85ead4ac3105d111eef8ffcaf893a54733"
+    },
+    {
+      "path": "crates/borsuk/src/v36_funnel_geometry.rs",
+      "bytes": 508074,
+      "mode": "100644",
+      "git_blob": "5594a62ec4e6fa80dbed4af609c50daece8d41ac",
+      "sha256": "a3f9b94082a41aa3fc59ded8ba4d50f18a5665787dfd87e7fe95790d90a17308"
+    },
+    {
+      "path": "crates/borsuk/src/v36_posting_hnsw.rs",
+      "bytes": 67425,
+      "mode": "100644",
+      "git_blob": "4fc833edbe38051753da0859002f5e492fbf3056",
+      "sha256": "5c6a93a7e8c3bedda52455e7e1e0a33b3eb58e7ebca8394bf6329eaeb2185908"
+    },
+    {
+      "path": "crates/borsuk/src/v36_prefix_dataset.rs",
+      "bytes": 522405,
+      "mode": "100644",
+      "git_blob": "accde27dce449955a37e562ae71114b4526231c7",
+      "sha256": "0d46c6ba4d6fc8f6f02b19c04bfbe9a93f8480a459ed0478f2d114b2ad3183b0"
+    },
+    {
+      "path": "crates/borsuk/src/v37_relation_router.rs",
+      "bytes": 253329,
+      "mode": "100644",
+      "git_blob": "28b2e604b8558cc53930c85e677001b5784c5722",
+      "sha256": "c8d7ee0a2062c19e528f1170a2e14e23c34b0ead5dedcd168a54f519a9d26571"
+    },
+    {
+      "path": "crates/borsuk/src/v38_boundary_spill.rs",
+      "bytes": 232160,
+      "mode": "100644",
+      "git_blob": "4fe41aa0997e71f1242298245685be532d2b82ca",
+      "sha256": "387f1ee2920de4e421255d928304b5a44dcd77f9f6700011452e16213c8f0343"
+    },
+    {
+      "path": "crates/borsuk/src/v40_spill_router.rs",
+      "bytes": 245874,
+      "mode": "100644",
+      "git_blob": "48a7f64ea94d7033c62ce43d5b548bd340edc474",
+      "sha256": "c2f90645ff2869e33518509053c0fd3a95624f2cf68ffb28b100effadd13759a"
+    },
+    {
+      "path": "crates/borsuk/src/v41_forest_probe.rs",
+      "bytes": 99535,
+      "mode": "100644",
+      "git_blob": "ebea5ffbac58173dc52b973db3b761083d3e4349",
+      "sha256": "336049afe6840ab4098293c7c86b78c3ee909b748f994e57c9692bfa47451f2e"
+    },
+    {
+      "path": "crates/borsuk/src/v42_pq4_relaion_probe.rs",
+      "bytes": 14196,
+      "mode": "100644",
+      "git_blob": "4da1684986acddc6265884496c677c9d4caefeab",
+      "sha256": "a270ffcbae6dee6f061ffda6b9245a061f8576dcdeab47bf61d92ef5bcbb7e6d"
+    },
+    {
+      "path": "crates/borsuk/src/v45_lsh_probe.rs",
+      "bytes": 16093,
+      "mode": "100644",
+      "git_blob": "36d4feb8629e802c1361890bcbd89a00a0de1536",
+      "sha256": "9ef222d6c85927b9e87c132c9b1b629d4e5d5cd5d1f1a8ec18060d4210603e0d"
+    },
+    {
+      "path": "crates/borsuk/src/v50_exact_original_control.rs",
+      "bytes": 9735,
+      "mode": "100644",
+      "git_blob": "4ad3aefab586d461b214306b90444f7d0af7e48e",
+      "sha256": "ad43e5909f26b8c770f48a8296bf449b6ee9ff6ff00f5d1261fdb81231a408ab"
+    },
+    {
+      "path": "crates/borsuk/src/v51_tree_row_probe.rs",
+      "bytes": 17813,
+      "mode": "100644",
+      "git_blob": "f6752801452f9924dd6bacd6ff93b684e88d6c14",
+      "sha256": "2018aef708589ae0fba1771fc2477c6b80c4fab8ac2be5dff0ffa42f0aa2bf18"
+    },
+    {
+      "path": "crates/borsuk/tests/bm25_search.rs",
+      "bytes": 17842,
+      "mode": "100644",
+      "git_blob": "4c0d56f9c19874f593f04623130c02977dcdd568",
+      "sha256": "053d15963bc0bf7f1434183afeb7a885fb3634dc499f91bf8261cf4c0abe533e"
+    },
+    {
+      "path": "crates/borsuk/tests/build_config.rs",
+      "bytes": 15872,
+      "mode": "100644",
+      "git_blob": "99ffe17c033e189901027999dd6e2f025fa07d58",
+      "sha256": "99336d02927d9fcefde6e6745277b79e447352aaa6ec1dfdc421325588ccd52f"
+    },
+    {
+      "path": "crates/borsuk/tests/cell_wal.rs",
+      "bytes": 2330,
+      "mode": "100644",
+      "git_blob": "816ba443359f39647f9412b8d56a8c40cc2aabf3",
+      "sha256": "57ff303df9003d7b46fee69b17025f57515a507bb3744c8e47708125b4e6fee3"
+    },
+    {
+      "path": "crates/borsuk/tests/cold_quantizer.rs",
+      "bytes": 12334,
+      "mode": "100644",
+      "git_blob": "6f77187f54af08d63d904059857d4e5ed777ef48",
+      "sha256": "7729d5f10f96066009ae71efe6cb829f6a2b469a8308f10fc6640d235ce08f25"
+    },
+    {
+      "path": "crates/borsuk/tests/common/mod.rs",
+      "bytes": 27643,
+      "mode": "100644",
+      "git_blob": "ce3edad4a268e0b235c172016fb2ac80c3353704",
+      "sha256": "e29d70029cf0f12b353b0b50309a364d2520111dc51e6b611ad197b6bd5ede70"
+    },
+    {
+      "path": "crates/borsuk/tests/concurrency_stress.rs",
+      "bytes": 13978,
+      "mode": "100644",
+      "git_blob": "81bff4cfef82ad373b1ff7170a1ff41d6d7f229d",
+      "sha256": "d06a7a04755fbc14642d5598e10902f0eeb7c9768d3e8693b7fdc89845b37b58"
+    },
+    {
+      "path": "crates/borsuk/tests/conditional_multipart_create.rs",
+      "bytes": 22291,
+      "mode": "100644",
+      "git_blob": "63b3b4ef778a608181f82b00da634de4d184f5dc",
+      "sha256": "059b9c6f4078b890b07643bd78919cc2b1e5a5d1dd4b4e7c3b23aede8d0ebabf"
+    },
+    {
+      "path": "crates/borsuk/tests/consistency.rs",
+      "bytes": 4719,
+      "mode": "100644",
+      "git_blob": "ac672572c1d9889d2c78a90fb8fcc12b1eef0416",
+      "sha256": "75712c6e9df0c1428b9fbc1ac03cb718ebc7abfb82a2e0b58655b412aa089a05"
+    },
+    {
+      "path": "crates/borsuk/tests/cosine_pruning.rs",
+      "bytes": 26638,
+      "mode": "100644",
+      "git_blob": "7e139b3338266be164b4c883e7754a9b78684afa",
+      "sha256": "4ffd7cefd18f6e93cf13a9fc8d04015fccd85479799af722559dcdda86f59979"
+    },
+    {
+      "path": "crates/borsuk/tests/crash_recovery.rs",
+      "bytes": 15928,
+      "mode": "100644",
+      "git_blob": "016e76e83e1316e50801de8b9b254972efd42e3e",
+      "sha256": "4654d71f9e8cd58306c5646c871f5d5014505bdbeeec1cbabbf3d738151e7deb"
+    },
+    {
+      "path": "crates/borsuk/tests/dataset_scaling.rs",
+      "bytes": 17873,
+      "mode": "100644",
+      "git_blob": "6cbf17b6149d30610b42712bd9920c3af9ac7a37",
+      "sha256": "03bafb968b2908b8cebd4ff579eb2505cd769c2fef3c8c94e73900a7d03775e6"
+    },
+    {
+      "path": "crates/borsuk/tests/exact_sq8_mirror_direct.rs",
+      "bytes": 5130,
+      "mode": "100644",
+      "git_blob": "177ae758a5c7d8088345731c6ddf0eb4e4d54c50",
+      "sha256": "be2e3f4658b3b0eb325fa5c1852a90b035af5103916ff19765f4b1a7b2cfd396"
+    },
+    {
+      "path": "crates/borsuk/tests/explain.rs",
+      "bytes": 2902,
+      "mode": "100644",
+      "git_blob": "c8d969f2628bfc2d4860a02cb43b0cc212b75f71",
+      "sha256": "208d2d3cdc13e9f4a958c5d31ebe3c5bc409f3d5692cb890a5d46be5bfd08d87"
+    },
+    {
+      "path": "crates/borsuk/tests/fault_injection.rs",
+      "bytes": 34200,
+      "mode": "100644",
+      "git_blob": "d89c525c3e8606e46d6f4478a9b187edbaec9b95",
+      "sha256": "378a042775fdc39b8bf8299a01bbce45b8d4a4d767abb7aedbaf5a7e7a37a7d9"
+    },
+    {
+      "path": "crates/borsuk/tests/feature_matrix.rs",
+      "bytes": 24591,
+      "mode": "100644",
+      "git_blob": "9108775a53210a09bf37d5b3305b6bc7d7293157",
+      "sha256": "d349cf499489844e364e627392469fd247db2a38e7b6d5128e1e2de8f22d0cb2"
+    },
+    {
+      "path": "crates/borsuk/tests/filtering_bench.rs",
+      "bytes": 21596,
+      "mode": "100644",
+      "git_blob": "7da575fdd6f9e4ed59e892d378814cc54f696071",
+      "sha256": "f03dba315e16182987d75365aab6be2662bdbcf4580b5bbb2d9e97c74f9fc7e4"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/market-filter/dataset.json",
+      "bytes": 667,
+      "mode": "100644",
+      "git_blob": "593b9d6031a7f294e9badf59aca203ca76ecd286",
+      "sha256": "a3927bf2138f9e77e2629506c20da6864a57176c39d5cd0e919e40abc6c40d90"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/market-filter/source.spec",
+      "bytes": 41,
+      "mode": "100644",
+      "git_blob": "23f40aeabdc5799f1ca71c73d746b993b35c908f",
+      "sha256": "a4eb093e757d521098b9cbff3260c40de16c3e437de806e6e41b469b3b29b8a9"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/market-namespace/dataset.json",
+      "bytes": 667,
+      "mode": "100644",
+      "git_blob": "811e82d930746749ae72fb52bd640064d78bf0bb",
+      "sha256": "a266dfead856d7aefffe62b9a8b9cb70376750de9e44f456375661b35fd8881e"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/market-namespace/source.spec",
+      "bytes": 45,
+      "mode": "100644",
+      "git_blob": "ef4a0ea934c50d65f00bedd998e830bcc8f53ddd",
+      "sha256": "9ac0e6b89f2a39e70b57c83d87d57826323c83cdb233d04c47748db98a70755b"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/v23_incidence_training_manifest.json",
+      "bytes": 36336,
+      "mode": "100644",
+      "git_blob": "59ce69f271a61b0f4b9ded22bf6035b4ef675516",
+      "sha256": "17194043a39ca0976f455efed383573d757b146e0c06662860e60b2d9b073147"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/v23_page_ref.json",
+      "bytes": 401,
+      "mode": "100644",
+      "git_blob": "edc0faf113af95bfbed5eeb8269703752115086d",
+      "sha256": "41181195b7dd996223ee6fd5c76703e8b0e8c2034ba045c74fcf72b131e0f106"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/v36_centered_projection_pyarrow.b64",
+      "bytes": 4693,
+      "mode": "100644",
+      "git_blob": "4630bc6f17df8bb1bffafd0e9aac213c2ab4776a",
+      "sha256": "54dfc7e3b213779cf91f4c485b2584c69aaf985e3d971bfdfee6810a75709e5a"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/v36_coarse_fragment_pyarrow.b64",
+      "bytes": 2858,
+      "mode": "100644",
+      "git_blob": "e4d6260ac76d07b44e689e7df218f39978ba4a8a",
+      "sha256": "29821ae3ca9af27d35137b262f029ee1ab3a9e89ffda26725d56f72a0cf0b427"
+    },
+    {
+      "path": "crates/borsuk/tests/fixtures/v36_pyarrow_registered_input.parquet",
+      "bytes": 4268,
+      "mode": "100644",
+      "git_blob": "5ed98c671111db654aff9b66e8d5b3f9633e61d5",
+      "sha256": "4e963d0e40312f7e9fcf539705be290eb56010ca4078b6a01d1abd12a239906f"
+    },
+    {
+      "path": "crates/borsuk/tests/format.rs",
+      "bytes": 5946,
+      "mode": "100644",
+      "git_blob": "aec23ac14f4ef153cfb813554fb25971e61ceca2",
+      "sha256": "f84850c0ae04e958625ca6f7543a5a9943447aae744bdd56128cc5c5de02f85a"
+    },
+    {
+      "path": "crates/borsuk/tests/format_fuzz.rs",
+      "bytes": 14190,
+      "mode": "100644",
+      "git_blob": "f0d37cb064d24a808876a8a0ef7ca4957a80c447",
+      "sha256": "7e443a8dff3d9b2df8beedf81ef146a564762a6d70d64a1fdc70e78a27e8d0b1"
+    },
+    {
+      "path": "crates/borsuk/tests/fp8_vectors.rs",
+      "bytes": 5098,
+      "mode": "100644",
+      "git_blob": "723e9170392d4938b79b77d017242b3d37ef9f49",
+      "sha256": "94699c271fea325c0e6e41da6b420b9b99eb752ddceb0234601ce7692ad6e567"
+    },
+    {
+      "path": "crates/borsuk/tests/geo_filter.rs",
+      "bytes": 2442,
+      "mode": "100644",
+      "git_blob": "1162dfe62fccda85fc02ad7707a83341a74d0fbe",
+      "sha256": "7f12ec92ccd07940721c7f42bb0bd5460170bffd56f56c77bce1295a17be7cc5"
+    },
+    {
+      "path": "crates/borsuk/tests/group_commit.rs",
+      "bytes": 47021,
+      "mode": "100644",
+      "git_blob": "c8d30729ab6801b610a8fcbcb655ec84e4e29a2d",
+      "sha256": "229be4591aced39b3ac2f83320765c15de33ae757ae6f141c8b23d35206b8690"
+    },
+    {
+      "path": "crates/borsuk/tests/hybrid_search.rs",
+      "bytes": 11557,
+      "mode": "100644",
+      "git_blob": "11848f3e1c86e53865b9b29fce2366587fe1e0da",
+      "sha256": "d54a45dd48aa02f12f3558396c8e223eb16c001df5f929b877c7aff6a99e8475"
+    },
+    {
+      "path": "crates/borsuk/tests/in_memory_preload.rs",
+      "bytes": 6698,
+      "mode": "100644",
+      "git_blob": "c50ec7acc152cf8c4d2bb5544ebc9230a28b2a23",
+      "sha256": "bbe122695f83e7140121b23a110ec59c06d6f324fa7b4e32cf9c4ab8193bae72"
+    },
+    {
+      "path": "crates/borsuk/tests/large_scale.rs",
+      "bytes": 30421,
+      "mode": "100644",
+      "git_blob": "2587f8f883dbb11f97b7ea71549ad7664d465cfa",
+      "sha256": "3d2a72724dfbb971987ea76a429b194cd07029e92bbba51afce1c6efa68642ce"
+    },
+    {
+      "path": "crates/borsuk/tests/late_interaction_index.rs",
+      "bytes": 7653,
+      "mode": "100644",
+      "git_blob": "ee8821c78cddcdb786b4023fb9330109cbb7c162",
+      "sha256": "c2715a64e8335e3d1510198459c75bc48316844ca8ea0d1b05a911f3c0c7ad22"
+    },
+    {
+      "path": "crates/borsuk/tests/leaf_capability.rs",
+      "bytes": 8894,
+      "mode": "100644",
+      "git_blob": "699d1e8fdc41c55734bc645f0cf5e651ba1d8fbe",
+      "sha256": "9339f642a6a9c0a4203027f92cc63adcf9f0a5b4c269064030ea26df957fa5e4"
+    },
+    {
+      "path": "crates/borsuk/tests/local_index.rs",
+      "bytes": 404739,
+      "mode": "100644",
+      "git_blob": "9bf0716b0156886b1a641f8b2756c3be5225ff58",
+      "sha256": "bb8b5e6556929dc0be4d96b1457c12631066ef563d978b6137583d6a0141832e"
+    },
+    {
+      "path": "crates/borsuk/tests/metric_pruning_bench.rs",
+      "bytes": 12717,
+      "mode": "100644",
+      "git_blob": "6b2e591c26d91942da603aefacfddbf81a3322df",
+      "sha256": "22cfaa999320d8cc22626eb376017dfbafbcd181eb2dc92de4d18e5ecc0d92cb"
+    },
+    {
+      "path": "crates/borsuk/tests/metrics.rs",
+      "bytes": 17750,
+      "mode": "100644",
+      "git_blob": "b0d8a82a50a7b95af5ffb04c861a7d92b9f43a0d",
+      "sha256": "8abf5b5e63175ac5a6394d8f2a1ea576650dd4920ba791bb50711a25b8bf5c8c"
+    },
+    {
+      "path": "crates/borsuk/tests/mixture_workload_bench.rs",
+      "bytes": 25396,
+      "mode": "100644",
+      "git_blob": "eac3f191b6d3d88985c7266002aea00f6714b5fc",
+      "sha256": "f202596e47a81fe81a30bfe023f5926f0f0bcbef8ec508245a819ef164885b1f"
+    },
+    {
+      "path": "crates/borsuk/tests/named_vectors.rs",
+      "bytes": 14362,
+      "mode": "100644",
+      "git_blob": "b50315e301768c0fff5b37b4bf3183a99e0077c0",
+      "sha256": "9611bee69cc4fa23e74891adb20a670ca477c110fbee46a825eaa21832bf063c"
+    },
+    {
+      "path": "crates/borsuk/tests/package_metadata.rs",
+      "bytes": 1265,
+      "mode": "100644",
+      "git_blob": "e1723f0c593030f11d836266334f0b8165df38a0",
+      "sha256": "47b42551cad40c6a4f075f25b753eb9472bb8aaf1731c38e56719fcd74ba1c15"
+    },
+    {
+      "path": "crates/borsuk/tests/paged_delete_compaction.rs",
+      "bytes": 2677,
+      "mode": "100644",
+      "git_blob": "86bcc61ab552782abf4c3074a5cae2c7ba86011a",
+      "sha256": "d71ff3daf97c31de63224c2b2c9c7921e8f65eaffd42513c82634f87703e7ec1"
+    },
+    {
+      "path": "crates/borsuk/tests/performance_smoke.rs",
+      "bytes": 15233,
+      "mode": "100644",
+      "git_blob": "153a4295cc499c42c0b149d04c290dcc5185cb63",
+      "sha256": "62e41a6d4fea846bf8f6b02faade43e6694a27208e07ac0437b4da9b01b10fd4"
+    },
+    {
+      "path": "crates/borsuk/tests/physical_layout.rs",
+      "bytes": 4471,
+      "mode": "100644",
+      "git_blob": "75e9acec70b9a0f736a21267f77b0b9f7a333545",
+      "sha256": "b5013488b0c69b7508662977be5794dd895f1104aea4c0d458a10d83d92fc811"
+    },
+    {
+      "path": "crates/borsuk/tests/positioned_log.rs",
+      "bytes": 61909,
+      "mode": "100644",
+      "git_blob": "c86a9466fefe784981c8cb7883c34fb6a12e74bf",
+      "sha256": "bce7c2a5d5ec21e4b5fe3ad70bdf697628aaff64e9efca8560cc9be01a0690c7"
+    },
+    {
+      "path": "crates/borsuk/tests/pq4_public_api.rs",
+      "bytes": 686,
+      "mode": "100644",
+      "git_blob": "19779ae29e0341fbaa7366dcb8b55456faf7d4eb",
+      "sha256": "5db7b2d7724a697969ab40279e8f6718fe205797a338a9869d744a9175b12586"
+    },
+    {
+      "path": "crates/borsuk/tests/production_workload.rs",
+      "bytes": 9752,
+      "mode": "100644",
+      "git_blob": "936780d2652075d5c296b8f1c6eae980533a6f57",
+      "sha256": "572c36d0bf5bd5b097d2be3ff65e1dd0340603373b51c6f629101adcfffa095a"
+    },
+    {
+      "path": "crates/borsuk/tests/regex_filter.rs",
+      "bytes": 1629,
+      "mode": "100644",
+      "git_blob": "402c87568f4a4f892e328c6979f929d007abcab4",
+      "sha256": "8e8a5a2019eb862fe7d854049cdd2f9f7b73e86fd2a46d0ee14925cabc245fd2"
+    },
+    {
+      "path": "crates/borsuk/tests/rerank.rs",
+      "bytes": 2799,
+      "mode": "100644",
+      "git_blob": "3ad7369695c75297851f7863f1412e80950f2188",
+      "sha256": "59ab5f5cc9ad1c9770beb07e2b00793572d8de5426de795972d2dce41b58c17b"
+    },
+    {
+      "path": "crates/borsuk/tests/resident_graph_api.rs",
+      "bytes": 4028,
+      "mode": "100644",
+      "git_blob": "2db45c1da6f59fe89d65eb6e4424f03b76112998",
+      "sha256": "fb97ee1c858d937baf38eac27c287bd5430e3a77094f74acbc578b1e433952c1"
+    },
+    {
+      "path": "crates/borsuk/tests/rotated_two_bit.rs",
+      "bytes": 2104,
+      "mode": "100644",
+      "git_blob": "0cca19a79411d2ba4f4a05395389b75576058d3e",
+      "sha256": "575ca7687529d77b6fda6aaa3544ad000d1bd027c3ebdc105a32d99b52af7e4e"
+    },
+    {
+      "path": "crates/borsuk/tests/s3_compatible.rs",
+      "bytes": 26698,
+      "mode": "100644",
+      "git_blob": "7f9a43b7314458f59e8725566ad648f9511656dc",
+      "sha256": "7c53e350ecf1dbd4d95630a5d403fadfde48ecb7d3f9ed2cae8075598e7f1104"
+    },
+    {
+      "path": "crates/borsuk/tests/s3_soak.rs",
+      "bytes": 8752,
+      "mode": "100644",
+      "git_blob": "ca81a96e8ffbf0db4ef559bf6021464856ec311f",
+      "sha256": "e967aad20c406a0ffc0ff92c4f98c2f82fc5938c9acc5f8b794116ef5b5f6e0c"
+    },
+    {
+      "path": "crates/borsuk/tests/sparse_inverted_bench.rs",
+      "bytes": 6530,
+      "mode": "100644",
+      "git_blob": "c71fbe26099fc78b1904a60d70da3cc2b0e4123d",
+      "sha256": "d6c1a6078b78d03808bc314dc007f902ec204adb53b416243ce4c9213892ec08"
+    },
+    {
+      "path": "crates/borsuk/tests/sparse_named_shard.rs",
+      "bytes": 15551,
+      "mode": "100644",
+      "git_blob": "527694207436945e35c321bb52148da1bfb5f80a",
+      "sha256": "5194c13ce18b99f247b92ab4c711bea6e2485a1d6b8a8bc44f6b9d42bbc1ccfe"
+    },
+    {
+      "path": "crates/borsuk/tests/sparse_named_vectors.rs",
+      "bytes": 20869,
+      "mode": "100644",
+      "git_blob": "319a0ee1da684d3b637d5b1fcc285a16e5e50aaa",
+      "sha256": "1cff480aa8ec7ea36523c69254bfd13307bb4b543b9d580701cb7fa15524af23"
+    },
+    {
+      "path": "crates/borsuk/tests/storage_access_trace.rs",
+      "bytes": 13343,
+      "mode": "100644",
+      "git_blob": "c0c738830e1e134541701fd6efd3ce1fad0001fa",
+      "sha256": "8e2bac9eadec924ef0670277d1f57e875ba0e6d50157f57252cb10847b08f929"
+    },
+    {
+      "path": "crates/borsuk/tests/text_storage.rs",
+      "bytes": 3933,
+      "mode": "100644",
+      "git_blob": "b95729b574f727057274505677f7fc6f037d3a47",
+      "sha256": "f8629e5f5a90accf4fab701f8741820b654274df96c6bc5a60fe0920db03130b"
+    },
+    {
+      "path": "crates/borsuk/tests/tracing_smoke.rs",
+      "bytes": 7637,
+      "mode": "100644",
+      "git_blob": "d01a809b4efb25f574ef4add108d3ff770fbcaae",
+      "sha256": "37948298ef64ef335ee1d21c9f186fef487ff8c60eddb53fa03e453f83f24622"
+    },
+    {
+      "path": "crates/borsuk/tests/turboquant_ab.rs",
+      "bytes": 21364,
+      "mode": "100644",
+      "git_blob": "57fee1aa73f9628a0a901a257dbb40a06e733a06",
+      "sha256": "5feca065fbd77c3d0096d15fe1aeeb2211533166a92e5308b2d5fbe1dd6e5943"
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_application_ids.rs",
+      "bytes": 190257,
+      "mode": "100644",
+      "git_blob": "67331dd492bebcef47f5f6a7cdb173f289f6e3da",
+      "sha256": "936f29b493af63ce9be27ca80710d3f1dd16e603eb3d1013b144b53cecb10e15"
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_gc_delayed_delete.rs",
+      "bytes": 82112,
+      "mode": "100644",
+      "git_blob": "a407f02d1a7e87e5a06cf3c007a4416c4e633397",
+      "sha256": "39b4ec8fed5f1e2b026cd753ab3fb7a8234cc496840c000009b73ebe536a19e3"
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_generation.rs",
+      "bytes": 112622,
+      "mode": "100644",
+      "git_blob": "666ed083f31ee459da251d973377b985a098736b",
+      "sha256": "96fdb7b4df81c08600177d57a27b4e269384213687c273000d9cfb193d148bde"
+    },
+    {
+      "path": "crates/borsuk/tests/two_bit_source.rs",
+      "bytes": 10845,
+      "mode": "100644",
+      "git_blob": "c3ec8eb10c2c99f80ce611817af6f0f5e1ff682c",
+      "sha256": "bb034601f3b2813d7dd6f22f2493c6005bb872c0ff39c03c6569ae408ab47f11"
+    },
+    {
+      "path": "crates/borsuk/tests/upsert.rs",
+      "bytes": 10269,
+      "mode": "100644",
+      "git_blob": "9681878aa647415b233761d66c6519c32e9cfcd0",
+      "sha256": "94c4d3f5b02eb873bf7e5f55eb54a830aece829786692e435ad0ab2aa5f4730a"
+    },
+    {
+      "path": "crates/borsuk/tests/v34_rank4.rs",
+      "bytes": 22791,
+      "mode": "100644",
+      "git_blob": "7ad860c7dd0765416cb863af3ebea8994d2defc6",
+      "sha256": "6b9a2ee5d3dfae9523e1a16e87f7bae5061d62855957d1bb2add8e48837ca076"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_authority.rs",
+      "bytes": 10591,
+      "mode": "100644",
+      "git_blob": "780dd736d9c2e58d175aba43db7b1ffd35e447f1",
+      "sha256": "4803a3577e5083150b750889152210a861e047b9d4eff8d6d5253afe97f38aed"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_build.rs",
+      "bytes": 41372,
+      "mode": "100644",
+      "git_blob": "d9437821d58260e6b7730fd82a6912431988457a",
+      "sha256": "e256026917a8c62f301a048e1229f491ff8ec3f9580cc2d51d4e8aa77ce57e72"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_delta.rs",
+      "bytes": 35304,
+      "mode": "100644",
+      "git_blob": "2d41c2d6442f71c9cba708b9fde901e06e0c68d8",
+      "sha256": "73a15ad6ed7f3e4e95bb595f9701268231d0c4a5181e08a414b40a1265c6d0a0"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_patch.rs",
+      "bytes": 24390,
+      "mode": "100644",
+      "git_blob": "397d6422ca07bc759a5dcd011f46fd9c4d36a533",
+      "sha256": "70ddfed5b915d2760840d05a72f2f6feb4bc58b51ae219381fa76dcaa67508ce"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_projection.rs",
+      "bytes": 24202,
+      "mode": "100644",
+      "git_blob": "d0fc4c74130b616deaefefe1ae79e8bd64c45611",
+      "sha256": "e194e1574cb0a4557acc0f8cc3ca763882ad87e8f584e0266e72258e896f7a55"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_remote.rs",
+      "bytes": 55955,
+      "mode": "100644",
+      "git_blob": "e9c56c0f25e048b7f3f8159d78d9b74bbb0bb556",
+      "sha256": "2cec10fce0c1de2a9916af863323737e81881ee9e2058e184c49b7196bd8b9a9"
+    },
+    {
+      "path": "crates/borsuk/tests/v35_route.rs",
+      "bytes": 19450,
+      "mode": "100644",
+      "git_blob": "07c765b5cb2cf5f70bddd61f4b7c5ced06b45053",
+      "sha256": "b5f12d675f958285af8b92ee472619c8ad0544c5d93fd7aecdff4dcc376ae1d0"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_funnel_authority.rs",
+      "bytes": 22866,
+      "mode": "100644",
+      "git_blob": "0360fa40c86c1a423eebae699394846f43b437cb",
+      "sha256": "28d1d1b82ffc24286baef23c6a29946775b1adeb5bf42c9fd054cc0098fa3a67"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_funnel_geometry.rs",
+      "bytes": 56189,
+      "mode": "100644",
+      "git_blob": "c21a3f19ebd40f36ccae2c3bc861c9e817661693",
+      "sha256": "257c5e604ef84feef44bdfc17e359c78fa64dcbce690ec07800691b37de8409b"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_prefix_checkpoint.rs",
+      "bytes": 61443,
+      "mode": "100644",
+      "git_blob": "b50074e73b8b8f1d6a25302b11525a615624424c",
+      "sha256": "62190829fd337f4ab2e9ff2020d9ac186f017009cf6a445501b27a42b65466e3"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_prefix_dataset.rs",
+      "bytes": 212915,
+      "mode": "100644",
+      "git_blob": "db917d610b24e1bbf94b658391f046336aca4841",
+      "sha256": "0f077fb1a13d6eb53968a36cf9af12a3956c38c0a2e0335390bbf8a97a237f4a"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_prefix_oracle.rs",
+      "bytes": 121449,
+      "mode": "100644",
+      "git_blob": "640bd1ce746c5e43e0eb07409305e7dd0881ab76",
+      "sha256": "caaecfdf920b84e6b7b182968e8cc94094b0a9f499eea3830352dd08961e406e"
+    },
+    {
+      "path": "crates/borsuk/tests/v36_prefix_screen_authority.rs",
+      "bytes": 24978,
+      "mode": "100644",
+      "git_blob": "35f50b0e0e3fbf1a603345c8358c56670c705d9d",
+      "sha256": "810de0fa5bb5d965478bab228fe751e9287d65fec13d43c092f1b0e87c54e30e"
+    },
+    {
+      "path": "crates/borsuk/tests/vector_encoding.rs",
+      "bytes": 8671,
+      "mode": "100644",
+      "git_blob": "62ae0460032b3c5a2b6640e49079c877f504bc8f",
+      "sha256": "f2512a93fa03e8c7671448cddf9cad218ab09d25c5ec357fec8489fdf0fffaef"
+    },
+    {
+      "path": "crates/borsuk/tests/wal.rs",
+      "bytes": 47142,
+      "mode": "100644",
+      "git_blob": "5fd981a56972f95114171f1a69ee28f677565227",
+      "sha256": "703631c41e1f6ece24f9086997b3bb827bbce14741b0ce773038f6954f1d1f57"
+    },
+    {
+      "path": "crates/borsuk/tests/workload_bench.rs",
+      "bytes": 9188,
+      "mode": "100644",
+      "git_blob": "11c9e7ead87a931d814a17ca45500f40c9a301d3",
+      "sha256": "163c702d8c9c7649f8ea3305cb1646f47658a4b8cb9b0dc49bc177554d5cd51b"
+    },
+    {
+      "path": "scripts/check_rust_test_build.sh",
+      "bytes": 1154,
+      "mode": "100755",
+      "git_blob": "7fe091c51c894f88bb84d3b6aac5678a13042d3d",
+      "sha256": "a41d6498d84a26816a868ff96b93aae36c329fcf0630fbfc8438471ef28ba681"
+    },
+    {
+      "path": "scripts/v114_score_rust/Cargo.lock",
+      "bytes": 6066,
+      "mode": "100644",
+      "git_blob": "c3700df253e4145960a29f6640761f47fdd3e30c",
+      "sha256": "6124cc6557bdfd6fd4bc0d4d9dd054edca37a7690fe9854920b2b59a8296e136"
+    },
+    {
+      "path": "scripts/v114_score_rust/Cargo.toml",
+      "bytes": 198,
+      "mode": "100644",
+      "git_blob": "c3ce06994607a59d99522743c360b993ae6ceff6",
+      "sha256": "25576efc51fcbc6de933f1202b46812023f6a41e8bdced7031dc2ea9ad8d382b"
+    },
+    {
+      "path": "scripts/v114_score_rust/src/bin/v144_page_parity.rs",
+      "bytes": 5490,
+      "mode": "100644",
+      "git_blob": "28423d49c6eb4d71c6209804d3fd20a840a846d3",
+      "sha256": "7d8bd3af60f4395e069833971e8f03e87219a210ad2d55529550c59ee2862b23"
+    },
+    {
+      "path": "scripts/v114_score_rust/src/bin/v145_page_parity.rs",
+      "bytes": 5490,
+      "mode": "100644",
+      "git_blob": "a1e3415ac8e3ff97b325433bd31bd8ce7c2e2a4a",
+      "sha256": "35aa402f432a850fce28f68e6ba4cc20be2a6bfdab4e83eb6cc1b259e27f459f"
+    },
+    {
+      "path": "scripts/v114_score_rust/src/bin/v146_centroid_score.rs",
+      "bytes": 8306,
+      "mode": "100644",
+      "git_blob": "b33f9d6fbf501fe5e9095611f6abff624e9706cf",
+      "sha256": "14c05703f47c95326ac5a23ac9d09f385774205c5185debb7ad418c1c264ac96"
+    },
+    {
+      "path": "scripts/v114_score_rust/src/bin/v149_contiguous_hierarchy.rs",
+      "bytes": 12831,
+      "mode": "100644",
+      "git_blob": "a6b0ddca03655d853bed1e52c2dd4cd622d00bda",
+      "sha256": "ff161593426329020d09d95e7d3f68c00a33cdc4c42deadd35400a60a65700d5"
+    },
+    {
+      "path": "scripts/v114_score_rust/src/main.rs",
+      "bytes": 27304,
+      "mode": "100644",
+      "git_blob": "b46409b00516f74e452d9938194df1e32794fa31",
+      "sha256": "12332c46c04b1bf9a18fbbb2eef39ca4354cb401daf62cc3196b96f77e364124"
+    },
+    {
+      "path": "scripts/v83_Cargo.toml",
+      "bytes": 406,
+      "mode": "100644",
+      "git_blob": "e39dbd7ba4e59b6f1d7207b598bd6b2c82be7190",
+      "sha256": "2ed97eb5933f848ec35b89bb8afeee69ac41d2b718209366e02a3f93f266ca5f"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/BORSUK-CONDITIONAL-MULTIPART.patch",
+      "bytes": 15146,
+      "mode": "100644",
+      "git_blob": "a423e344e0ea8e31c89e7fe8d2941a92aee89c43",
+      "sha256": "8000532974403a8dda54d66eae82f2b658cdec71a868a7ce497274fdb9c27960"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/BORSUK-PROVENANCE.md",
+      "bytes": 5674,
+      "mode": "100644",
+      "git_blob": "5ac0e23ec93f763e2870d6a93f9d247eaf90ac15",
+      "sha256": "7c6c475fa6d9c7c92c050738c22bb603e27f594309b1d77381cccded81948a8e"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/BORSUK-UPSTREAM-SHA256SUMS",
+      "bytes": 5439,
+      "mode": "100644",
+      "git_blob": "e2738e6cb0c14c2e63e585860f6e87c91f3a0b7f",
+      "sha256": "4f022dd398943ca74c380a2b5218085347a42adcae844fc7c27bb4f767217dbb"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/Cargo.lock",
+      "bytes": 57853,
+      "mode": "100644",
+      "git_blob": "f01a2377373624607186705d937c86e63955aaab",
+      "sha256": "7090dbc3404b942dd92f94f329e3205bcd92105569b4a77c8f47f7789c928160"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/Cargo.toml",
+      "bytes": 6098,
+      "mode": "100644",
+      "git_blob": "1b323bb565ba14725e82d8225fe8f5b850379fa2",
+      "sha256": "bd07bfed042fd75473b3d2d3a5e5a2142a060b7bd84ce4a7395308eebed3332c"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/Cargo.toml.orig",
+      "bytes": 6295,
+      "mode": "100644",
+      "git_blob": "5e7afc008ddc5faba13e6b622a99478b0d958d93",
+      "sha256": "aee4cc67e3607e41e3a17ae1146679c042e869fb7155a5a253f7c501dd4b45bd"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/LICENSE.txt",
+      "bytes": 11360,
+      "mode": "100644",
+      "git_blob": "de4b130f3500f0a0c7246a4d2482e5f76ef73d74",
+      "sha256": "240b8a39fdfd2bd3b3539c02e34466334884fc84b056b57f06e9da35323ecd97"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/NOTICE.txt",
+      "bytes": 179,
+      "mode": "100644",
+      "git_blob": "7d365625e2c84b4978a535524caf2d8107af4349",
+      "sha256": "db0ba6e84734d37277ceae9dcca1ffbbb2f8e80e9c1db34e3788100792458c63"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/README.md",
+      "bytes": 6245,
+      "mode": "100644",
+      "git_blob": "abf35a56e143108930715e1d0e12f41cb0f552eb",
+      "sha256": "2e85fa469f9aecbf7a2b5a873653cb6a3ff7c6aecbb605b7aad6ed640a7bfe94"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/dev/release/README.md",
+      "bytes": 7320,
+      "mode": "100644",
+      "git_blob": "bbcc3f17052d1e1eaae3eef0b844c19c8f020a46",
+      "sha256": "0ae98c05df2859d915d3a91e1029edb99630eb0ff17d60e7a066a1857f61b36f"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/attributes.rs",
+      "bytes": 8008,
+      "mode": "100644",
+      "git_blob": "cac5b36b5cdd628d8c5c825797a6b51119190f2b",
+      "sha256": "2800a6fa861e10abbc86c33a9c80ee51e69874d3f52b04fced26a6b16f8ba262"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/builder.rs",
+      "bytes": 82156,
+      "mode": "100644",
+      "git_blob": "b09c66595892d5b7fe8f12ab9e4c6ce403796d0c",
+      "sha256": "3883103f648fa3275fb794d1eedee15ded81549e8789e1fff44831cc159cd166"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/checksum.rs",
+      "bytes": 2055,
+      "mode": "100644",
+      "git_blob": "2c22081f5a985a6748c86d1f43af6547d5a04e37",
+      "sha256": "37956bb7829d3596a7a5d2c13b63c972aff4521b5ef38feedc2f75e2b8503c15"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/client.rs",
+      "bytes": 50156,
+      "mode": "100644",
+      "git_blob": "4ea3b888e5811d8afcfc267c406a5fb891c75013",
+      "sha256": "3fccd6d5ff271df5236d6832794a6549923cee6fd5dddc87f146edb74116b2b0"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/credential.rs",
+      "bytes": 51546,
+      "mode": "100644",
+      "git_blob": "7e2245e001009550e17e6b1d467f93cd4cab2dee",
+      "sha256": "bc0c05e174be87320117415daf61566e14552c9243bd1c667679eba08bf78c6f"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/mod.rs",
+      "bytes": 37765,
+      "mode": "100644",
+      "git_blob": "6c74df62435473b6244089a2459e12fa573a9b33",
+      "sha256": "5250c709a3718b2c60cc13037095202f61f66ba78a7619d7bc487e3a520530e8"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/precondition.rs",
+      "bytes": 8186,
+      "mode": "100644",
+      "git_blob": "51b808943cc1dc7762deb436bad01df05d0206ca",
+      "sha256": "84383b39da1a8e827a65a6564cc7e05c4208bb46c7ea1bdcc36ca5ff9202f3a1"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/aws/resolve.rs",
+      "bytes": 2978,
+      "mode": "100644",
+      "git_blob": "fdc9576d6f6c7470db307a745186747c75a8e892",
+      "sha256": "5b1dea6f0c51eca6a7c9099bf64fd5bbf7705da4e2e956efc4edf2d09aaf4fc6"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/azure/builder.rs",
+      "bytes": 71633,
+      "mode": "100644",
+      "git_blob": "d1d68fe8dfa9dff8aee92b675d973f7ef41aa05c",
+      "sha256": "ac7b11bc7d6948339d1e9d97e5c9dbcb4b43e5ab14e9e46a326a5686596f39b6"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/azure/client.rs",
+      "bytes": 85279,
+      "mode": "100644",
+      "git_blob": "e0c7a5bfd5fbf50f15730bae7187a6905d6c0b08",
+      "sha256": "c0a6a6e1275e454a82bdf9d78429a5e7f16db766d54b6cfdb0af6d19f3130b88"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/azure/credential.rs",
+      "bytes": 50097,
+      "mode": "100644",
+      "git_blob": "5537e3407944f075d50c2109c1e997ea0e863b84",
+      "sha256": "e2f09e09e83e4aabc5631fd0261540dad78919b6e24c76e222bc3aca5ddebb73"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/azure/mod.rs",
+      "bytes": 21990,
+      "mode": "100644",
+      "git_blob": "b53e031972064b333c1ca4de9522de4f76111995",
+      "sha256": "4b63b73584294be56d91b743ae4d0aa28b1db0be594028ef539f93cde42ceb8a"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/buffered.rs",
+      "bytes": 25072,
+      "mode": "100644",
+      "git_blob": "54f46df6cab0152d1df089e7a41a4edf79df5ed4",
+      "sha256": "393a25cea4634ac8006dde9f577cab90ed6a8c0a9512a479d94a3a1207abf3dd"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/chunked.rs",
+      "bytes": 8862,
+      "mode": "100644",
+      "git_blob": "11fffacbf7bc7eb060fed2ad99240956dd858b5b",
+      "sha256": "bc1eba9d334e59e07eb4588e767ee8d39f7f666395b05dc86aa07e2c644852ca"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/backoff.rs",
+      "bytes": 5839,
+      "mode": "100644",
+      "git_blob": "f3f18dae4c9c5d845507282065e3d2babb9086ea",
+      "sha256": "b4aeafd6106baa2e3b3f9671beacfecbc5e4cc1217bf7ddb19f56bdd041dca64"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/builder.rs",
+      "bytes": 11998,
+      "mode": "100644",
+      "git_blob": "cca6f93b9747d40bcbdba152f172c91267c275c2",
+      "sha256": "9e489917853fbbb2887d3272ca281c8cf3982320eca60773e85fa3cdf9577fd1"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/crypto.rs",
+      "bytes": 13338,
+      "mode": "100644",
+      "git_blob": "41e3ef5c2dd011e97ebb3602925845465112ff74",
+      "sha256": "0671474f67e949cfe7dfa5551fec7e0cece91d17e228d47a04927c759753dc52"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/dns.rs",
+      "bytes": 1786,
+      "mode": "100644",
+      "git_blob": "b1abe595613642f3ea5470edebb509d75afc7e2a",
+      "sha256": "9edcabcd0d39a39b10fdd6a43358b07a160c9b2a34ca41ebc346a1fd8e48deee"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/get.rs",
+      "bytes": 30008,
+      "mode": "100644",
+      "git_blob": "c7ec36d762649c0828867a29c765da492f46f3af",
+      "sha256": "bdcfea784a679968bdc0fcb0320298ce9268227e600cfe1a58d531b3d147eb80"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/header.rs",
+      "bytes": 5594,
+      "mode": "100644",
+      "git_blob": "58cc3a8bd36cdb17156ea5ffe95554c2f0512ffb",
+      "sha256": "9f9db342690c9c5184365e2326a323a4ddca8b101de9ea967a40b73fc540537e"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/http/body.rs",
+      "bytes": 7277,
+      "mode": "100644",
+      "git_blob": "554b0cf1d4ef51cadba7afcd137f684ff5db5c97",
+      "sha256": "86a3dc804c1945071650fcbd1a79b4887adf226a8be32cf650d46b0b9d26b577"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/http/connection.rs",
+      "bytes": 14646,
+      "mode": "100644",
+      "git_blob": "0558a7e18f250292410c85f2129d517a1c092f8a",
+      "sha256": "2a4e3fb63c7b48f2135fe1b4dd34fbbe31cbe92c6f87e23af45cf148faf4164d"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/http/mod.rs",
+      "bytes": 928,
+      "mode": "100644",
+      "git_blob": "86e1e11d39b91d7dee344241dd57fdeb74a7c8e1",
+      "sha256": "be8115821348d51165d37ae5b462b3c3bcf87592cd9659b44d4dae6ec7585244"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/http/spawn.rs",
+      "bytes": 5197,
+      "mode": "100644",
+      "git_blob": "2750e839316922acbc6f4f6327838c27b5ede25e",
+      "sha256": "c029307de840a098cd1190b311eab4b3b302773dde748ff1897e63fdd7524f22"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/list.rs",
+      "bytes": 4569,
+      "mode": "100644",
+      "git_blob": "e0d684d15f3a726faf1658aba9d632be50f62964",
+      "sha256": "ada2d384ccf06c2c239644706a441bc109d51b50a6e1d41a0086f545585f69ed"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/mock_server.rs",
+      "bytes": 4497,
+      "mode": "100644",
+      "git_blob": "0d0703d03c04f60d23ca6257abd42d6e19c306bb",
+      "sha256": "b0043349bda28f1fb3c5ec507a766066289d8f2732715ed09651732f65cd0a0a"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/mod.rs",
+      "bytes": 45527,
+      "mode": "100644",
+      "git_blob": "a8d2ae56edc4de4feabc19a639d25f66d311078b",
+      "sha256": "f115a7ace56acbb90b416e818b1de00e3fa7689deaf78e2893f09d144314e350"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/pagination.rs",
+      "bytes": 2772,
+      "mode": "100644",
+      "git_blob": "3d6a74ada19d7d10d97e6e541a49a58870b0e71f",
+      "sha256": "ae742c8ed2ebd81de02827ff7d4687b467e4d646d11b5dc465f032a05973de64"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/parts.rs",
+      "bytes": 1922,
+      "mode": "100644",
+      "git_blob": "9fc301edcf813a1aca0696e8a2e8bd2bb4b38d60",
+      "sha256": "24e0fe2581f91b71cc0b6c15f0dfb582ed78c3372870d955376536e706ba8af8"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/retry.rs",
+      "bytes": 33589,
+      "mode": "100644",
+      "git_blob": "c79012a03cdab43e30adaad1463c718ba676f2e4",
+      "sha256": "8e7fbc67ade68db0504c76e6991eb00b79e6648555e7840085056d5ddde24c03"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/s3.rs",
+      "bytes": 5063,
+      "mode": "100644",
+      "git_blob": "1bf76366004761d3b5e5f9c54384cf57fc13aa80",
+      "sha256": "61f5a73c5d5d1772b70758faa1357fce252fc05a0e3adf5cebb504c6cff5e790"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/client/token.rs",
+      "bytes": 5965,
+      "mode": "100644",
+      "git_blob": "7743213a7be2e940b7bd427c9c87d0a637fda8d9",
+      "sha256": "8e038cad220a9f71b886a98ce39169c6dfa63425e6b396f733c4dce6b9f25ba9"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/config.rs",
+      "bytes": 4116,
+      "mode": "100644",
+      "git_blob": "3707a36dee0ab864cb3bec8422a273ce5a3f0a8f",
+      "sha256": "b3814e7f4ce3f9194f489db54f4d690a2218fb2adab181b29182ebafe11b2a79"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/delimited.rs",
+      "bytes": 9859,
+      "mode": "100644",
+      "git_blob": "dbdac395c5badded1b835b141e481d83721b3622",
+      "sha256": "27ec7793b6dc6d7b6fb1f6c6c3628a7c6a4a51e10d76935b1d5b945d2ada016e"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/gcp/builder.rs",
+      "bytes": 38438,
+      "mode": "100644",
+      "git_blob": "7487ad6cd6488ffc21428913c3c5b5ce69da8ba2",
+      "sha256": "0164a507605ba6dc26b789af34c73adece3f4f021d0a150032fc2ae13a296e3f"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/gcp/client.rs",
+      "bytes": 23991,
+      "mode": "100644",
+      "git_blob": "f41171d2879096e9be1f343ab823603a309ee2ba",
+      "sha256": "98b33a6aa0a33e2b6162974b25489acd674f96cc14233715eddf26d87b753911"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/gcp/credential.rs",
+      "bytes": 36137,
+      "mode": "100644",
+      "git_blob": "4a43929bcfad814d4363e357a605dfd1e6e235b8",
+      "sha256": "772251ef71116d1a52883308001a9a6007686e80b4869c51be7f0dde7cff7334"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/gcp/mod.rs",
+      "bytes": 15819,
+      "mode": "100644",
+      "git_blob": "38a92c475c6a10cc9fd8ae253cb47c64d6f11927",
+      "sha256": "1604793530e93042b76f6589bac8abf83d582d1ab8aa690fbcd2ab31f119c273"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/http/client.rs",
+      "bytes": 17082,
+      "mode": "100644",
+      "git_blob": "580b7258ab86bb1bf3cb9f939335c56af7bd43c9",
+      "sha256": "8a2410ed6522282957db0d03f6b911261b9b1f1cc167e146140e6e5270a56aee"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/http/mod.rs",
+      "bytes": 10772,
+      "mode": "100644",
+      "git_blob": "1c83d45b32da5937de591714e8015fba92fc8e47",
+      "sha256": "ae20b6d4cee994233a791d0b671bd06bb59989b4b0e9c6fb538e83c85e8b766c"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/integration.rs",
+      "bytes": 55367,
+      "mode": "100644",
+      "git_blob": "b101fc64f34ee90a86c603a724b9bb477d2a734c",
+      "sha256": "7009daf164c3676c7f58c511693d1cdd4d1f7980c26e231313da3f26470643ee"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/lib.rs",
+      "bytes": 99349,
+      "mode": "100644",
+      "git_blob": "f9bbb25946b0208acc83bc7ed01f36ad1c87d55a",
+      "sha256": "8144cb98bdbdbd970d6b0b9d905b4bbec80494b779a1cd13a187944079c2020b"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/limit.rs",
+      "bytes": 10005,
+      "mode": "100644",
+      "git_blob": "ef4176154cec16e23353a90296e8be97e5c4a11e",
+      "sha256": "082814dc05660e712e5e54403006a3fb972d529c645214f7b610c3709190ae91"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/list.rs",
+      "bytes": 3229,
+      "mode": "100644",
+      "git_blob": "f9a47cf7d51f6ae3411d495895445e169c311de2",
+      "sha256": "8b003325c791edbe4ca1b01041c533a23076fda15c0401ce7b9d07cff1f3a205"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/local.rs",
+      "bytes": 84541,
+      "mode": "100644",
+      "git_blob": "c37b1f4aaca5d6ec8d250a8b6c347aa3203ab0b4",
+      "sha256": "ae4bc1684a76705a6ed238399138af4ffc1ba3ef47d4a3d07c493ff838f78d23"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/memory.rs",
+      "bytes": 23588,
+      "mode": "100644",
+      "git_blob": "732949979db89bbe2299da70b6b4bb98eb01af14",
+      "sha256": "5447996abf1f5b7bca0e2626ca4b8ae51a23543dc8727989a4a75e4a7df2a9bb"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/multipart.rs",
+      "bytes": 5780,
+      "mode": "100644",
+      "git_blob": "90db576d99ff685e3bae46a3ce648aceb909e25f",
+      "sha256": "f2e83e46e17fdcc70095fa13aa7823b35b0f20833da4d0642a6ac7724abbb045"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/parse.rs",
+      "bytes": 18113,
+      "mode": "100644",
+      "git_blob": "218fe69b32384c790a36450fd448722eb25e38d8",
+      "sha256": "dcebb65f79f542166ba04ab17e489e04e81b799dd259efb39c8faef164d9fa45"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/path/mod.rs",
+      "bytes": 26439,
+      "mode": "100644",
+      "git_blob": "dfd353a7d72892ecc2f25aa8585469933826e5b3",
+      "sha256": "c06669274202915113c67005033a59be2bf52de8f063b32e6dfbb306e5f59430"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/path/parts.rs",
+      "bytes": 5970,
+      "mode": "100644",
+      "git_blob": "5628d3f47c037ea2574584b239fa46808221d908",
+      "sha256": "ebce60fb7959069bc79d9ec9841dbd8fd106b658d960dd348a5f9a72ab92f8ed"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/payload.rs",
+      "bytes": 8994,
+      "mode": "100644",
+      "git_blob": "055336b6a3c1e9276c13961367dca34a857286e8",
+      "sha256": "7e73c32218ad568654382de2fb116bd61f0229c0a7138b560d679f73ff77c551"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/prefix.rs",
+      "bytes": 15144,
+      "mode": "100644",
+      "git_blob": "ce428f1e526648860f7e3393781e9273ea18e255",
+      "sha256": "e9afe4de18bdc841cc3e63d18268c804b376f1dfc1fffb58fb6de5a3b35a3975"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/registry.rs",
+      "bytes": 17698,
+      "mode": "100644",
+      "git_blob": "d6cee5a2e5facb42835bc44ca598d1feb2580513",
+      "sha256": "54b74548bbf3a530d1d9139ab9bc927baab9f11ae6cbebbacc4ae12967584f75"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/signer.rs",
+      "bytes": 2116,
+      "mode": "100644",
+      "git_blob": "47f3baaf87d17e7d1f78e139eed61a7be969c838",
+      "sha256": "75f95831361f3e4071610627be92372dce62c4205e8a60c42ca8f7e8feccb804"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/tags.rs",
+      "bytes": 2340,
+      "mode": "100644",
+      "git_blob": "4c7f184a72b1b50e1b9c44a8449ad248811a88bf",
+      "sha256": "a745d9a028a58fbea344727a0b63c8d78887803f101a78cd979acfa9315ddfe2"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/throttle.rs",
+      "bytes": 23811,
+      "mode": "100644",
+      "git_blob": "5151474a3c9e80ca9c3a4416a1ea3af5c06e151d",
+      "sha256": "c0d2929a2ebb6c0a3efa49ae25bf84c37f8b8cd9721bc373813e30c11bc96729"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/upload.rs",
+      "bytes": 13058,
+      "mode": "100644",
+      "git_blob": "b5bc940f5b37db347cf8f3442de68438207e02f6",
+      "sha256": "a68e880954cd7b915fc6e9d37835cfae0cbcdd2c531242a558a3e87de0526f7f"
+    },
+    {
+      "path": "vendor/object_store-0.14.1/src/util.rs",
+      "bytes": 16375,
+      "mode": "100644",
+      "git_blob": "764ab117bdf8a664479debb778973fe84ad49989",
+      "sha256": "0857db15f74b40665e8c3408287c82a0d08277e99736f7769aa0693af054d23c"
+    }
+  ],
+  "scope": "all materialized tracked source/build/support/policy files; no missing historical archives, target, secrets or data"
+}

@@ -574,7 +574,7 @@ mod tests {
 
         // Construct an explicitly historical proof envelope from real builder
         // artifacts. All SOURCE/router bytes and their identities stay intact.
-        let mut old_root: Value =
+        let built_root: Value =
             serde_json::from_slice(&fs::read(original.join("manifest.json")).unwrap()).unwrap();
         let old_sidecar = sq8
             .chunks(256 * (dimensions + 12))
@@ -588,13 +588,20 @@ mod tests {
         .unwrap();
         fs::write(original.join("page_digests.bin"), &old_sidecar).unwrap();
         fs::write(original.join("page_manifest.json"), &old_page).unwrap();
-        // v8 has implicit flat SOURCE storage; the descriptor belongs to v10.
+        // Author v8's implicit-flat wire envelope; no current root is relabeled.
         assert_eq!(
-            old_root.as_object_mut().unwrap().remove("source_layout"),
-            Some(json!({"layout":"flat_records"}))
+            built_root["source_layout"],
+            json!({"layout":"flat_records"})
         );
-        old_root["schema"] = json!("borsuk-two-bit-generation-v8");
-        old_root["page_manifest_sha256"] = json!(hash(&old_page));
+        let old_root = json!({
+            "schema":"borsuk-two-bit-generation-v8", "generation":3,
+            "base_epoch":built_root["base_epoch"],
+            "plane_manifest_sha256":built_root["plane_manifest_sha256"],
+            "page_manifest_sha256":hash(&old_page), "discovery":built_root["discovery"],
+            "sq8_object_sha256":built_root["sq8_object_sha256"],
+            "sq8_object_key":built_root["sq8_object_key"], "sq8_etag":built_root["sq8_etag"],
+            "canonical":built_root["canonical"], "low":built_root["low"], "step":built_root["step"]
+        });
         let old_bytes = serde_json::to_vec(&old_root).unwrap();
         fs::write(original.join("manifest.json"), &old_bytes).unwrap();
         let output = temp.path().join("converted");

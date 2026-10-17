@@ -1,13 +1,14 @@
-//! Streaming, generation-bound SOURCE capsules; no query planner or scoring order.
+//! Streaming, generation-bound SOURCE capsules and authenticated query page ranges.
 //!
-//! Version 1 uses little-endian integers. Both headers are 32 bytes: magic[8],
+//! Version 2 uses little-endian integers. Both headers are 32 bytes: magic[8],
 //! N:u32@8, D:u16@12, codec width:u16@14, profile:u32@16, leaf count:u32@20.
-//! Directory magic is BORSDR01, followed by unit rows (32)@24 and page rows
-//! (256)@28. Capsule magic is BORSCP01, followed by leaf ID@24 and page count@28.
+//! Directory magic is BORSDR02, followed by unit rows (32)@24 and page rows
+//! (256)@28. Capsule magic is BORSCP02, followed by leaf ID@24 and page count@28.
 //! A capsule then stores sorted unique u32 page IDs and their complete raw pages,
 //! including only the true final tail. Directory entries are 64 bytes:
 //! leaf:u32, count:u32, offset:u64, total:u64, payload:u64, SHA256[32].
-//! Entries and concatenated capsules are in leaf-ID order without gaps.
+//! Entries, concatenated directory rosters and capsules are in leaf-ID order.
+//! Directory rosters are authenticated and checked against router membership.
 //!
 //! The caller jointly pins the directory hash, geometry/profile and original
 //! SOURCE authority in its generation. Capsule SHA covers framing AND payload;
@@ -18,12 +19,12 @@
 //!
 //! Charges model payload capacities, descriptors and fixed working storage, not
 //! allocator overhead, RSS, page cache, transport buffers or the caller's existing
-//! authority/codec/router. Borrowed roster slices charge their lengths; callers
-//! separately account for any unused backing capacity. Encoded directories are
-//! streamed on build and retained by the caller during open, not stored here.
+//! authority/codec/router. Owned rosters and query plans charge actual Vec
+//! capacities; callers account for borrowed input backing capacity. Encoded
+//! directories are streamed on build and retained during open, not stored here.
 //! Memory admission uses the smaller of the caller cap and profile allocation cap.
 //! Physical/hash byte charges are exposed for the caller's I/O and work budgets;
-//! they are not memory charges. Leaf closures must be supplied in leaf-ID order.
+//! they are not memory charges. Build/full-validation closures use leaf-ID order.
 //! Publication/fsync is caller-owned: Write::flush does not provide durability.
 use crate::rotated_two_bit::RotatedTwoBitCodec;
 use crate::semantic_unit_router::{SemanticProfile, SemanticUnitRouter};
@@ -43,7 +44,7 @@ const PAGE_ROWS: usize = 256;
 const SCRATCH: usize = 3 * size_of::<Sha256>() + 128;
 const SPAN_DESCRIPTOR_BYTES: usize = size_of::<FetchedSpan<'_>>() + size_of::<Vec<u8>>();
 // The raw-span model already includes the Vec owned by a proof.
-const PROOF_EXTRA_BYTES: usize = size_of::<VerifiedSpan<'_>>() - size_of::<Vec<u8>>();
+const PROOF_EXTRA_BYTES: usize = size_of::<VerifiedPageSpan<'_, '_>>() - size_of::<Vec<u8>>();
 
 fn require(ok: bool, reason: &'static str) -> Result<()> {
     if ok {
@@ -341,63 +342,106 @@ fn closure_charge(geometry: Geometry, leaves: &[LeafPages<'_>]) -> Result<Charge
     Ok(result)
 }
 
-/// Decoded directory. Its pinned hash and the original authority must share a generation.
+/// Decoded directory, jointly pinned with the router and original SOURCE authority.
 #[derive(Debug)]
 pub struct Directory {
     geometry: Geometry,
     entries: Vec<DirectoryEntry>,
+    rosters: Vec<Vec<u32>>,
     blob_bytes: usize,
+    generation: u64,
+    directory_sha256: [u8; 32],
 }
 impl Directory {
     /// Admission model available before fetching an encoded directory.
-    pub fn open_charge(geometry: Geometry, leaf_count: usize) -> Result<Charge> {
+    pub fn open_charge(
+        geometry: Geometry,
+        leaf_count: usize,
+        page_occurrences: usize,
+    ) -> Result<Charge> {
         require(
-            leaf_count > 0 && leaf_count <= geometry.rows.div_ceil(UNIT_ROWS),
-            "capsule leaf count",
+            leaf_count > 0
+                && leaf_count <= page_occurrences
+                && page_occurrences <= geometry.rows.div_ceil(UNIT_ROWS),
+            "capsule leaf/roster count",
         )?;
         let mut charge = Charge {
             source_bytes: mul(geometry.rows, geometry.width)?,
-            encoded_directory_bytes: add(HEADER, mul(leaf_count, ENTRY)?)?,
-            decoded_directory_bytes: add(
-                size_of::<Self>(),
-                mul(leaf_count, size_of::<DirectoryEntry>())?,
+            encoded_directory_bytes: add(
+                add(HEADER, mul(leaf_count, ENTRY)?)?,
+                mul(page_occurrences, 4)?,
             )?,
-            scratch_bytes: SCRATCH,
+            decoded_directory_bytes: add(
+                add(
+                    size_of::<Self>(),
+                    mul(leaf_count, size_of::<DirectoryEntry>())?,
+                )?,
+                add(
+                    mul(leaf_count, size_of::<Vec<u32>>())?,
+                    mul(page_occurrences, 4)?,
+                )?,
+            )?,
+            scratch_bytes: add(
+                SCRATCH,
+                mul(geometry.pages().min(page_occurrences - leaf_count + 1), 4)?,
+            )?,
             ..Charge::default()
         };
         charge.hash_bytes = charge.encoded_directory_bytes;
         charge.memory(true)?;
         Ok(charge)
     }
-    /// Authenticate and parse an exact directory, rejecting gaps, overlaps and trailing bytes.
+    /// Authenticate an exact v2 directory. Old production directories are unsupported.
     pub fn open(
         encoded: &[u8],
         expected_sha256: &[u8; 32],
         geometry: Geometry,
         blob_bytes: usize,
+        generation: u64,
         cap: usize,
     ) -> Result<Self> {
         let cap = cap.min(geometry.profile.allocation_cap());
         require(encoded.len() >= HEADER, "capsule directory header")?;
+        require(
+            &encoded[..8] == b"BORSDR02",
+            "capsule directory format: expected BORSDR02",
+        )?;
         let count = u32::from_le_bytes(encoded[20..24].try_into().unwrap()) as usize;
-        let mut charge = Self::open_charge(geometry, count)?;
+        let roster_start = add(HEADER, mul(count, ENTRY)?)?;
+        let roster_bytes = encoded
+            .len()
+            .checked_sub(roster_start)
+            .ok_or(SourceBuildError::Invalid("capsule directory roster length"))?;
+        require(roster_bytes % 4 == 0, "capsule directory roster length")?;
+        let occurrences = roster_bytes / 4;
+        let mut charge = Self::open_charge(geometry, count, occurrences)?;
         admit(charge.memory_bytes, cap)?;
         require(
-            encoded.len() == charge.encoded_directory_bytes
-                && encoded[..HEADER]
-                    == geometry.header(b"BORSDR01", count, UNIT_ROWS as u32, PAGE_ROWS as u32)
+            encoded[..HEADER]
+                == geometry.header(b"BORSDR02", count, UNIT_ROWS as u32, PAGE_ROWS as u32)
                 && hash(encoded) == *expected_sha256,
             "capsule directory identity",
         )?;
         let mut entries = reserve(count)?;
+        let mut rosters = reserve(count)?;
         charge.decoded_directory_bytes = add(
-            size_of::<Self>(),
-            mul(entries.capacity(), size_of::<DirectoryEntry>())?,
+            add(
+                size_of::<Self>(),
+                mul(entries.capacity(), size_of::<DirectoryEntry>())?,
+            )?,
+            add(
+                mul(rosters.capacity(), size_of::<Vec<u32>>())?,
+                roster_bytes,
+            )?,
         )?;
         charge.memory(true)?;
         admit(charge.memory_bytes, cap)?;
         let mut offset = 0;
-        for (id, bytes) in encoded[HEADER..].chunks_exact(ENTRY).enumerate() {
+        let mut cursor = roster_start;
+        for (id, bytes) in encoded[HEADER..roster_start]
+            .chunks_exact(ENTRY)
+            .enumerate()
+        {
             let item = DirectoryEntry {
                 leaf_id: u32::from_le_bytes(bytes[..4].try_into().unwrap()),
                 page_count: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
@@ -406,42 +450,106 @@ impl Directory {
                 payload_bytes: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
                 sha256: bytes[32..].try_into().unwrap(),
             };
-            let pages = item.page_count as usize;
+            let count = item.page_count as usize;
             require(
-                item.leaf_id as usize == id && pages > 0 && pages <= geometry.pages(),
+                item.leaf_id as usize == id && count > 0 && count <= geometry.pages(),
                 "capsule directory leaf/pages",
             )?;
-            let full = mul(mul(pages, PAGE_ROWS)?, geometry.width)?;
-            let tail = add(
-                mul(mul(pages - 1, PAGE_ROWS)?, geometry.width)?,
-                geometry.page_bytes((geometry.pages() - 1) as u32)?,
+            let stop = add(cursor, mul(count, 4)?)?;
+            let encoded_pages = encoded
+                .get(cursor..stop)
+                .ok_or(SourceBuildError::Invalid("capsule directory roster length"))?;
+            let mut pages = reserve(count)?;
+            charge.decoded_directory_bytes = add(
+                charge.decoded_directory_bytes,
+                mul(pages.capacity() - count, 4)?,
             )?;
-            let bytes = number(item.payload_bytes)?;
+            charge.memory(true)?;
+            admit(charge.memory_bytes, cap)?;
+            for bytes in encoded_pages.chunks_exact(4) {
+                pages.push(u32::from_le_bytes(bytes.try_into().unwrap()));
+            }
+            let expected = entry(
+                geometry,
+                LeafPages {
+                    leaf_id: item.leaf_id,
+                    pages: &pages,
+                },
+                offset,
+            )?;
             require(
-                (bytes == tail || (pages < geometry.pages() && bytes == full))
-                    && number(item.offset)? == offset
-                    && number(item.total_bytes)? == add(add(HEADER, mul(pages, 4)?)?, bytes)?,
+                item.offset == expected.offset
+                    && item.total_bytes == expected.total_bytes
+                    && item.payload_bytes == expected.payload_bytes,
                 "capsule directory layout",
             )?;
             offset = add(offset, number(item.total_bytes)?)?;
+            cursor = stop;
             entries.push(item);
+            rosters.push(pages);
         }
+        require(cursor == encoded.len(), "capsule directory trailing roster")?;
         require(offset == blob_bytes, "capsule blob length")?;
         Ok(Self {
             geometry,
             entries,
+            rosters,
             blob_bytes,
+            generation,
+            directory_sha256: *expected_sha256,
         })
+    }
+    /// Authenticated page IDs for one leaf.
+    pub fn pages(&self, leaf_id: u32) -> Result<&[u32]> {
+        self.rosters
+            .get(leaf_id as usize)
+            .map(Vec::as_slice)
+            .ok_or(SourceBuildError::Invalid("capsule leaf ID"))
+    }
+    /// Independently compare every stored roster with authenticated router membership.
+    pub(crate) fn validate_router(&self, router: &SemanticUnitRouter, cap: usize) -> Result<()> {
+        require(
+            router.manifest().leaves.len() == self.entries.len()
+                && router.manifest().rows == self.geometry.rows
+                && router.manifest().dimensions == self.geometry.dimensions
+                && router.manifest().profile == self.geometry.profile
+                && router.unit_membership().len() == self.geometry.rows.div_ceil(UNIT_ROWS),
+            "capsule router geometry",
+        )?;
+        let cap = cap.min(self.geometry.profile.allocation_cap());
+        let remaining = cap
+            .checked_sub(self.decoded_bytes()?)
+            .ok_or(SourceBuildError::Invalid("capsule memory cap"))?;
+        for item in &self.entries {
+            let expected = leaf_pages(router, item.leaf_id as usize, remaining)?;
+            require(
+                expected.as_slice() == self.pages(item.leaf_id)?,
+                "capsule router roster",
+            )?;
+        }
+        Ok(())
     }
     /// Authenticated entries in original leaf-ID order.
     pub fn entries(&self) -> &[DirectoryEntry] {
         &self.entries
     }
-    /// Actual decoded-directory allocation, including the directory value.
+    /// Actual decoded-directory allocation, including all retained roster capacities.
     pub fn decoded_bytes(&self) -> Result<usize> {
-        add(
-            size_of::<Self>(),
-            mul(self.entries.capacity(), size_of::<DirectoryEntry>())?,
+        let fixed = add(
+            add(
+                size_of::<Self>(),
+                mul(self.entries.capacity(), size_of::<DirectoryEntry>())?,
+            )?,
+            mul(self.rosters.capacity(), size_of::<Vec<u32>>())?,
+        )?;
+        self.rosters
+            .iter()
+            .try_fold(fixed, |sum, pages| add(sum, mul(pages.capacity(), 4)?))
+    }
+    fn encoded_bytes(&self) -> Result<usize> {
+        self.rosters.iter().try_fold(
+            add(HEADER, mul(self.entries.len(), ENTRY)?)?,
+            |sum, pages| add(sum, mul(pages.len(), 4)?),
         )
     }
     /// True half-open byte range in the concatenated capsule blob.
@@ -456,15 +564,28 @@ impl Directory {
                 .checked_add(item.total_bytes)
                 .ok_or(SourceBuildError::Invalid("capsule range overflow"))?)
     }
+    /// Directory-derived extent of one complete original page occurrence.
+    pub(crate) fn page_range(&self, leaf_id: u32, page_id: u32) -> Result<Range<usize>> {
+        let pages = self.pages(leaf_id)?;
+        let index = pages
+            .binary_search(&page_id)
+            .map_err(|_| SourceBuildError::Invalid("capsule missing page"))?;
+        let item = &self.entries[leaf_id as usize];
+        // Only the globally last page can be short, so every preceding page is full.
+        let start = add(
+            add(number(item.offset)?, add(HEADER, mul(pages.len(), 4)?)?)?,
+            mul(mul(index, PAGE_ROWS)?, self.geometry.width)?,
+        )?;
+        Ok(start..add(start, self.geometry.page_bytes(page_id)?)?)
+    }
     /// Total physical blob length.
     pub fn blob_bytes(&self) -> usize {
         self.blob_bytes
     }
-    /// Stream the directory; the returned SHA is suitable for generation pinning.
-    /// Success only flushes the writer, and is not a durable publication.
+    /// Stream v2 entries followed by every roster. Flush is not durable publication.
     pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<[u8; 32]> {
         let header = self.geometry.header(
-            b"BORSDR01",
+            b"BORSDR02",
             self.entries.len(),
             UNIT_ROWS as u32,
             PAGE_ROWS as u32,
@@ -477,29 +598,28 @@ impl Directory {
             writer.write_all(&bytes)?;
             digest.update(bytes);
         }
+        for pages in &self.rosters {
+            for page in pages {
+                let bytes = page.to_le_bytes();
+                writer.write_all(&bytes)?;
+                digest.update(bytes);
+            }
+        }
         writer.flush()?;
         Ok(digest.finalize().into())
     }
-    /// Conservative pre-fetch admission: one exact-capacity response per capsule.
-    /// verify charges actual response count/capacities, including coalesced spans.
+    /// Conservative full-capsule model; independent of trimmed query requests.
     pub fn query_charge(&self, leaves: &[LeafPages<'_>]) -> Result<Charge> {
         let mut charge = closure_charge(self.geometry, leaves)?;
         let mut occurrences = 0;
         for &leaf in leaves {
-            let expected = entry(self.geometry, leaf, 0)?;
-            let stored = self
-                .entries
-                .get(leaf.leaf_id as usize)
-                .ok_or(SourceBuildError::Invalid("capsule leaf ID"))?;
             require(
-                expected.page_count == stored.page_count
-                    && expected.total_bytes == stored.total_bytes
-                    && expected.payload_bytes == stored.payload_bytes,
-                "capsule expected closure geometry",
+                self.pages(leaf.leaf_id)? == leaf.pages,
+                "capsule expected closure roster",
             )?;
             occurrences = add(occurrences, leaf.pages.len())?;
         }
-        charge.encoded_directory_bytes = add(HEADER, mul(self.entries.len(), ENTRY)?)?;
+        charge.encoded_directory_bytes = self.encoded_bytes()?;
         charge.decoded_directory_bytes = self.decoded_bytes()?;
         charge.buffer_bytes = charge.physical_bytes;
         charge.lookup_bytes = add(
@@ -516,6 +636,34 @@ impl Directory {
         charge.memory(false)?;
         Ok(charge)
     }
+    /// Full-leaf lifecycle admission; never routes through page-range planning.
+    pub(crate) fn whole_leaf_charge(&self, leaf_id: u32) -> Result<Charge> {
+        self.query_charge(&[LeafPages {
+            leaf_id,
+            pages: self.pages(leaf_id)?,
+        }])
+    }
+    /// Full capsule SHA, exact framing and every original unit remain mandatory.
+    pub(crate) fn verify_whole_leaf(
+        &self,
+        leaf_id: u32,
+        fetched: FetchedSpan<'_>,
+        authority: &PageAuthority,
+        cap: usize,
+    ) -> Result<Charge> {
+        let leaf = LeafPages {
+            leaf_id,
+            pages: self.pages(leaf_id)?,
+        };
+        let (charge, _) =
+            self.response_charge(&[leaf], std::iter::once(fetched), authority, cap)?;
+        self.authenticate_leaf(
+            leaf,
+            self.leaf_body(leaf_id, std::iter::once(fetched))?,
+            authority,
+        )?;
+        Ok(charge)
+    }
 }
 /// Pre-I/O build model, including original flat validation and all duplicate copies.
 pub fn build_charge(geometry: Geometry, leaves: &[LeafPages<'_>]) -> Result<Charge> {
@@ -523,7 +671,10 @@ pub fn build_charge(geometry: Geometry, leaves: &[LeafPages<'_>]) -> Result<Char
     for (id, leaf) in leaves.iter().enumerate() {
         require(leaf.leaf_id as usize == id, "capsule build leaf IDs")?;
     }
-    let directory = Directory::open_charge(geometry, leaves.len())?;
+    let occurrences = leaves
+        .iter()
+        .try_fold(0, |sum, leaf| add(sum, leaf.pages.len()))?;
+    let directory = Directory::open_charge(geometry, leaves.len(), occurrences)?;
     charge.encoded_directory_bytes = directory.encoded_directory_bytes;
     charge.decoded_directory_bytes = directory.decoded_directory_bytes;
     charge.buffer_bytes = mul(geometry.rows.min(PAGE_ROWS), geometry.width)?;
@@ -577,15 +728,35 @@ pub fn pack<R: Read + Seek, W: Write, D: Write>(
     admit(charge.memory_bytes, cap)?;
     geometry.authority(authority)?;
     let mut entries = reserve(leaves.len())?;
+    let mut rosters = reserve(leaves.len())?;
     let mut buffer = reserve(charge.buffer_bytes)?;
     buffer.resize(charge.buffer_bytes, 0u8);
     charge.buffer_bytes = buffer.capacity();
     charge.decoded_directory_bytes = add(
-        size_of::<Directory>(),
-        mul(entries.capacity(), size_of::<DirectoryEntry>())?,
+        add(
+            size_of::<Directory>(),
+            mul(entries.capacity(), size_of::<DirectoryEntry>())?,
+        )?,
+        add(
+            mul(rosters.capacity(), size_of::<Vec<u32>>())?,
+            leaves
+                .iter()
+                .try_fold(0, |sum, leaf| add(sum, mul(leaf.pages.len(), 4)?))?,
+        )?,
     )?;
     charge.memory(false)?;
     admit(charge.memory_bytes, cap)?;
+    for leaf in leaves {
+        let mut pages = reserve(leaf.pages.len())?;
+        charge.decoded_directory_bytes = add(
+            charge.decoded_directory_bytes,
+            mul(pages.capacity() - leaf.pages.len(), 4)?,
+        )?;
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        pages.extend_from_slice(leaf.pages);
+        rosters.push(pages);
+    }
     // Refuse before any output if either length, flat SHA or original units fail.
     require(
         records.seek(SeekFrom::End(0))? == charge.source_bytes as u64,
@@ -611,7 +782,7 @@ pub fn pack<R: Read + Seek, W: Write, D: Write>(
     for &leaf in leaves {
         let mut item = entry(geometry, leaf, offset)?;
         let mut capsule_digest = Sha256::new();
-        let header = geometry.header(b"BORSCP01", leaves.len(), leaf.leaf_id, item.page_count);
+        let header = geometry.header(b"BORSCP02", leaves.len(), leaf.leaf_id, item.page_count);
         write_part(blob, &header, &mut capsule_digest, &mut blob_digest)?;
         for page in leaf.pages {
             write_part(
@@ -635,12 +806,16 @@ pub fn pack<R: Read + Seek, W: Write, D: Write>(
         entries.push(item);
     }
     blob.flush()?;
-    let directory = Directory {
+    let mut directory = Directory {
         geometry,
         entries,
+        rosters,
         blob_bytes: offset,
+        generation: authority.generation(),
+        directory_sha256: [0; 32],
     };
     let directory_sha256 = directory.write_to(directory_writer)?;
+    directory.directory_sha256 = directory_sha256;
     Ok(BuildReceipt {
         directory,
         logical_flat_sha256,
@@ -710,37 +885,6 @@ impl FetchedSpan<'_> {
         Ok(self.offset..end)
     }
 }
-/// Query-scoped proof owns the exact authenticated body; no mutable body or proof fields escape.
-pub(crate) struct VerifiedSpan<'a> {
-    directory: &'a Directory,
-    authority: &'a PageAuthority,
-    leaves: &'a [LeafPages<'a>],
-    offset: u64,
-    bytes: Vec<u8>,
-}
-impl std::fmt::Debug for VerifiedSpan<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VerifiedSpan")
-            .field("offset", &self.offset)
-            .field("bytes", &self.bytes.len())
-            .finish_non_exhaustive()
-    }
-}
-impl VerifiedSpan<'_> {
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-    #[cfg(test)]
-    pub(crate) fn start(&self) -> u64 {
-        self.offset
-    }
-    fn span(&self) -> FetchedSpan<'_> {
-        FetchedSpan {
-            offset: self.offset,
-            bytes: &self.bytes,
-        }
-    }
-}
 impl Directory {
     /// Verify EVERY capsule copy against its closure and original unit authority
     /// before exposing rows. Disjoint responses may coalesce adjacent selected capsules.
@@ -763,71 +907,6 @@ impl Directory {
         self.row_lookup(leaves, fetched.iter().copied(), charge, occurrences, cap)
     }
 
-    pub(crate) fn authenticate_span<'a>(
-        &'a self,
-        leaves: &'a [LeafPages<'a>],
-        offset: u64,
-        bytes: Vec<u8>,
-        authority: &'a PageAuthority,
-        cap: usize,
-    ) -> Result<VerifiedSpan<'a>> {
-        let cap = cap
-            .min(self.geometry.profile.allocation_cap())
-            .checked_sub(PROOF_EXTRA_BYTES)
-            .ok_or(SourceBuildError::Invalid("capsule memory cap"))?;
-        let span = FetchedSpan {
-            offset,
-            bytes: &bytes,
-        };
-        self.response_charge(leaves, std::iter::once(span), authority, cap)?;
-        for &leaf in leaves {
-            self.authenticate_leaf(
-                leaf,
-                self.leaf_body(leaf.leaf_id, std::iter::once(span))?,
-                authority,
-            )?;
-        }
-        Ok(VerifiedSpan {
-            directory: self,
-            authority,
-            leaves,
-            offset,
-            bytes,
-        })
-    }
-
-    pub(crate) fn verified_rows<'a>(
-        &self,
-        leaves: &[LeafPages<'_>],
-        fetched: &'a [VerifiedSpan<'_>],
-        authority: &PageAuthority,
-        cap: usize,
-    ) -> Result<VerifiedRows<'a>> {
-        for proof in fetched {
-            require(
-                std::ptr::eq(self, proof.directory) && std::ptr::eq(authority, proof.authority),
-                "capsule proof generation",
-            )?;
-            for leaf in proof.leaves {
-                let index = leaves
-                    .binary_search_by_key(&leaf.leaf_id, |item| item.leaf_id)
-                    .map_err(|_| SourceBuildError::Invalid("capsule proof selection"))?;
-                require(leaves[index].pages == leaf.pages, "capsule proof closure")?;
-            }
-        }
-        let extra = mul(fetched.len(), PROOF_EXTRA_BYTES)?;
-        let cap = cap
-            .min(self.geometry.profile.allocation_cap())
-            .checked_sub(extra)
-            .ok_or(SourceBuildError::Invalid("capsule memory cap"))?;
-        let spans = fetched.iter().map(VerifiedSpan::span);
-        let (charge, occurrences) = self.response_charge(leaves, spans.clone(), authority, cap)?;
-        let mut rows = self.row_lookup(leaves, spans, charge, occurrences, cap)?;
-        rows.charge.lookup_bytes = add(rows.charge.lookup_bytes, extra)?;
-        rows.charge.memory(false)?;
-        Ok(rows)
-    }
-
     fn response_charge<'a>(
         &self,
         leaves: &[LeafPages<'_>],
@@ -838,6 +917,10 @@ impl Directory {
         let cap = cap.min(self.geometry.profile.allocation_cap());
         let mut charge = self.query_charge(leaves)?;
         self.geometry.authority(authority)?;
+        require(
+            authority.generation() == self.generation,
+            "capsule authority generation",
+        )?;
         require(
             fetched.len() != 0 && fetched.len() <= leaves.len(),
             "capsule response count",
@@ -932,32 +1015,25 @@ impl Directory {
             bytes.len() == number(item.total_bytes)? && hash(bytes) == item.sha256,
             "capsule fetched size/hash",
         )?;
-        require(
-            bytes[..HEADER]
-                == self.geometry.header(
-                    b"BORSCP01",
-                    self.entries.len(),
-                    leaf.leaf_id,
-                    item.page_count,
-                ),
-            "capsule header",
-        )?;
-        let mut offset = add(HEADER, mul(leaf.pages.len(), 4)?)?;
-        for (index, &page) in leaf.pages.iter().enumerate() {
-            let start = HEADER + index * 4;
-            require(
-                bytes[start..start + 4] == page.to_le_bytes(),
-                "capsule expected page closure",
-            )?;
-            let end = add(offset, self.geometry.page_bytes(page)?)?;
-            let body = bytes
-                .get(offset..end)
-                .ok_or(SourceBuildError::Invalid("capsule truncated page"))?;
-            self.geometry.verify_page(page, body, authority)?;
-            offset = end;
-        }
-        require(offset == bytes.len(), "capsule trailing payload")?;
-        Ok(())
+        let range = self.byte_range(leaf.leaf_id)?;
+        let start = number(range.start)?;
+        self.walk_range(
+            start..number(range.end)?,
+            |offset, expected| {
+                require(
+                    bytes.get(offset - start..add(offset - start, expected.len())?)
+                        == Some(expected),
+                    "capsule expected BORSCP02 header/roster",
+                )
+            },
+            |page, _, extent| {
+                self.geometry.verify_page(
+                    page,
+                    &bytes[extent.start - start..extent.end - start],
+                    authority,
+                )
+            },
+        )
     }
 
     // Only full authentication or an immutable, generation-bound proof reaches this lookup.
@@ -1001,6 +1077,418 @@ impl Directory {
         pages.dedup_by_key(|item| item.page);
         Ok(VerifiedRows {
             geometry: self.geometry,
+            pages,
+            charge,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct PageOwner {
+    page: u32,
+    leaf: u32,
+}
+
+/// Immutable query selection and admitted physical ranges.
+pub(crate) struct PageRangePlan<'g> {
+    directory: &'g Directory,
+    authority: &'g PageAuthority,
+    selected: Vec<usize>,
+    owners: Vec<PageOwner>,
+    ranges: Vec<Range<usize>>,
+    charge: Charge,
+}
+impl std::fmt::Debug for PageRangePlan<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PageRangePlan")
+            .field("generation", &self.directory.generation)
+            .field("directory_sha256", &self.directory.directory_sha256)
+            .field("selected", &self.selected)
+            .field("owners", &self.owners)
+            .field("ranges", &self.ranges)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Owns only fetched, authenticated bytes; it does not approve unfetched artifact bytes.
+pub(crate) struct VerifiedPageSpan<'p, 'g> {
+    plan: &'p PageRangePlan<'g>,
+    range_index: usize,
+    bytes: Vec<u8>,
+}
+impl std::fmt::Debug for VerifiedPageSpan<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifiedPageSpan")
+            .field("range_index", &self.range_index)
+            .field("bytes", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+impl VerifiedPageSpan<'_, '_> {
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> usize {
+        self.plan.ranges[self.range_index].start
+    }
+}
+
+impl Directory {
+    /// Visit directory-derived framing intersections and complete page occurrences.
+    fn walk_range(
+        &self,
+        range: Range<usize>,
+        mut framing: impl FnMut(usize, &[u8]) -> Result<()>,
+        mut page: impl FnMut(u32, u32, Range<usize>) -> Result<()>,
+    ) -> Result<()> {
+        require(
+            !range.is_empty() && range.end <= self.blob_bytes,
+            "capsule page response bounds",
+        )?;
+        let first = self
+            .entries
+            .partition_point(|item| item.offset <= range.start as u64)
+            .saturating_sub(1);
+        let mut covered = range.start;
+        for item in &self.entries[first..] {
+            let start = number(item.offset)?;
+            if start >= range.end {
+                break;
+            }
+            let pages = self.pages(item.leaf_id)?;
+            {
+                let mut frame = |offset: usize, expected: &[u8]| -> Result<()> {
+                    let a = offset.max(range.start);
+                    let b = add(offset, expected.len())?.min(range.end);
+                    if a < b {
+                        require(a == covered, "capsule framing coverage")?;
+                        framing(a, &expected[a - offset..b - offset])?;
+                        covered = b;
+                    }
+                    Ok(())
+                };
+                frame(
+                    start,
+                    &self.geometry.header(
+                        b"BORSCP02",
+                        self.entries.len(),
+                        item.leaf_id,
+                        item.page_count,
+                    ),
+                )?;
+                for (index, id) in pages.iter().enumerate() {
+                    frame(add(start, add(HEADER, mul(index, 4)?)?)?, &id.to_le_bytes())?;
+                }
+            }
+            let mut offset = add(start, add(HEADER, mul(pages.len(), 4)?)?)?;
+            for &id in pages {
+                let stop = add(offset, self.geometry.page_bytes(id)?)?;
+                if offset < range.end && range.start < stop {
+                    require(
+                        range.start <= offset && stop <= range.end && covered == offset,
+                        "capsule partial page/coverage",
+                    )?;
+                    page(id, item.leaf_id, offset..stop)?;
+                    covered = stop;
+                }
+                offset = stop;
+            }
+        }
+        require(covered == range.end, "capsule incomplete page coverage")
+    }
+
+    /// Choose the lowest selected leaf and trim each original adjacent GET group.
+    pub(crate) fn plan_page_ranges<'g>(
+        &'g self,
+        selected_leaves: &[usize],
+        required_pages: &[usize],
+        authority: &'g PageAuthority,
+        cap: usize,
+    ) -> Result<PageRangePlan<'g>> {
+        let cap = cap.min(self.geometry.profile.allocation_cap());
+        self.geometry.authority(authority)?;
+        require(
+            authority.generation() == self.generation,
+            "capsule authority generation",
+        )?;
+        require(
+            !selected_leaves.is_empty() && selected_leaves.len() <= self.entries.len(),
+            "capsule selected leaves",
+        )?;
+        require(
+            !required_pages.is_empty() && required_pages.len() <= self.geometry.pages(),
+            "capsule required pages",
+        )?;
+        let mut charge = Charge {
+            source_bytes: mul(self.geometry.rows, self.geometry.width)?,
+            encoded_directory_bytes: self.encoded_bytes()?,
+            decoded_directory_bytes: self.decoded_bytes()?,
+            roster_bytes: [
+                size_of::<PageRangePlan<'_>>(),
+                mul(selected_leaves.len(), size_of::<usize>())?,
+                mul(required_pages.len(), size_of::<PageOwner>())?,
+                mul(selected_leaves.len(), size_of::<Range<usize>>())?,
+            ]
+            .into_iter()
+            .try_fold(0, add)?,
+            scratch_bytes: SCRATCH,
+            ..Charge::default()
+        };
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        let mut selected = reserve(selected_leaves.len())?;
+        let mut owners = reserve(required_pages.len())?;
+        let mut ranges: Vec<Range<usize>> = reserve(selected_leaves.len())?;
+        charge.roster_bytes = [
+            size_of::<PageRangePlan<'_>>(),
+            mul(selected.capacity(), size_of::<usize>())?,
+            mul(owners.capacity(), size_of::<PageOwner>())?,
+            mul(ranges.capacity(), size_of::<Range<usize>>())?,
+        ]
+        .into_iter()
+        .try_fold(0, add)?;
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        selected.extend_from_slice(selected_leaves);
+        selected.sort_unstable();
+        require(
+            selected.iter().all(|&id| id < self.entries.len())
+                && selected.windows(2).all(|pair| pair[0] < pair[1]),
+            "capsule selected leaf order",
+        )?;
+        let mut previous = None;
+        for &page in required_pages {
+            require(
+                page < self.geometry.pages() && previous.is_none_or(|p| p < page),
+                "capsule required page order",
+            )?;
+            let page =
+                u32::try_from(page).map_err(|_| SourceBuildError::Invalid("capsule page ID"))?;
+            let leaf = selected
+                .iter()
+                .copied()
+                .find(|&id| self.rosters[id].binary_search(&page).is_ok())
+                .ok_or(SourceBuildError::Invalid("capsule required page missing"))?;
+            owners.push(PageOwner {
+                page,
+                leaf: leaf as u32,
+            });
+            previous = Some(page as usize);
+        }
+        let mut first = 0;
+        while first < selected.len() {
+            let mut stop = first + 1;
+            while stop < selected.len()
+                && self.byte_range(selected[stop - 1] as u32)?.end
+                    == self.byte_range(selected[stop] as u32)?.start
+            {
+                stop += 1;
+            }
+            let mut trimmed: Option<Range<usize>> = None;
+            for owner in &owners {
+                if selected[first] <= owner.leaf as usize
+                    && owner.leaf as usize <= selected[stop - 1]
+                {
+                    let page = self.page_range(owner.leaf, owner.page)?;
+                    if let Some(range) = &mut trimmed {
+                        range.start = range.start.min(page.start);
+                        range.end = range.end.max(page.end);
+                    } else {
+                        trimmed = Some(page);
+                    }
+                }
+            }
+            if let Some(range) = trimmed {
+                ranges.push(range);
+            }
+            first = stop;
+        }
+        require(!ranges.is_empty(), "capsule empty page ranges")?;
+        let mut payload_bytes = 0;
+        let mut logical_bytes = 0;
+        let mut framing_bytes = 0;
+        for range in &ranges {
+            charge.physical_bytes = add(charge.physical_bytes, range.len())?;
+            self.walk_range(
+                range.clone(),
+                |_, expected| {
+                    framing_bytes = add(framing_bytes, expected.len())?;
+                    Ok(())
+                },
+                |page, leaf, extent| {
+                    payload_bytes = add(payload_bytes, extent.len())?;
+                    let mut duplicate = false;
+                    for &other in &selected {
+                        if other >= leaf as usize {
+                            break;
+                        }
+                        if self.rosters[other].binary_search(&page).is_ok() {
+                            let copy = self.page_range(other as u32, page)?;
+                            if ranges
+                                .iter()
+                                .any(|r| r.start <= copy.start && copy.end <= r.end)
+                            {
+                                duplicate = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !duplicate {
+                        logical_bytes = add(logical_bytes, extent.len())?;
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        require(
+            add(payload_bytes, framing_bytes)? == charge.physical_bytes,
+            "capsule range accounting",
+        )?;
+        for owner in &owners {
+            let copy = self.page_range(owner.leaf, owner.page)?;
+            require(
+                ranges
+                    .iter()
+                    .any(|r| r.start <= copy.start && copy.end <= r.end),
+                "capsule owner coverage",
+            )?;
+        }
+        charge.logical_bytes = logical_bytes;
+        charge.duplicate_bytes = payload_bytes - logical_bytes;
+        charge.framing_bytes = framing_bytes;
+        charge.hash_bytes = payload_bytes;
+        charge.buffer_bytes = charge.physical_bytes;
+        charge.lookup_bytes = add(
+            mul(owners.len(), size_of::<PageRef<'_>>())?,
+            add(
+                size_of::<VerifiedRows<'_>>(),
+                mul(ranges.len(), add(SPAN_DESCRIPTOR_BYTES, PROOF_EXTRA_BYTES)?)?,
+            )?,
+        )?;
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        Ok(PageRangePlan {
+            directory: self,
+            authority,
+            selected,
+            owners,
+            ranges,
+            charge,
+        })
+    }
+}
+impl<'g> PageRangePlan<'g> {
+    pub(crate) fn ranges(&self) -> &[Range<usize>] {
+        &self.ranges
+    }
+    pub(crate) fn charge(&self) -> Charge {
+        self.charge
+    }
+
+    pub(crate) fn authenticate_span<'p>(
+        &'p self,
+        offset: usize,
+        bytes: Vec<u8>,
+        cap: usize,
+    ) -> Result<VerifiedPageSpan<'p, 'g>> {
+        let range_index = self
+            .ranges
+            .binary_search_by_key(&offset, |range| range.start)
+            .map_err(|_| SourceBuildError::Invalid("capsule unplanned response offset"))?;
+        let range = &self.ranges[range_index];
+        require(
+            bytes.len() == range.len(),
+            "capsule planned response length",
+        )?;
+        let mut charge = self.charge;
+        charge.buffer_bytes = add(charge.buffer_bytes - bytes.len(), bytes.capacity())?;
+        charge.memory(false)?;
+        admit(
+            charge.memory_bytes,
+            cap.min(self.directory.geometry.profile.allocation_cap()),
+        )?;
+        self.directory.walk_range(
+            range.clone(),
+            |start, expected| {
+                require(
+                    bytes.get(start - offset..add(start - offset, expected.len())?)
+                        == Some(expected),
+                    "capsule page framing",
+                )
+            },
+            |page, _, extent| {
+                self.directory.geometry.verify_page(
+                    page,
+                    &bytes[extent.start - offset..extent.end - offset],
+                    self.authority,
+                )
+            },
+        )?;
+        Ok(VerifiedPageSpan {
+            plan: self,
+            range_index,
+            bytes,
+        })
+    }
+
+    /// Only required chosen copies enter lookup; authenticated bridge pages remain unscored.
+    pub(crate) fn verified_rows<'b>(
+        &self,
+        fetched: &'b [VerifiedPageSpan<'_, 'g>],
+        cap: usize,
+    ) -> Result<VerifiedRows<'b>> {
+        require(
+            fetched.len() == self.ranges.len(),
+            "capsule proof range coverage",
+        )?;
+        let mut charge = self.charge;
+        charge.buffer_bytes = 0;
+        for (index, proof) in fetched.iter().enumerate() {
+            require(
+                std::ptr::eq(self, proof.plan) && proof.range_index == index,
+                "capsule proof plan/range",
+            )?;
+            require(
+                proof.bytes.len() == self.ranges[index].len(),
+                "capsule proof length",
+            )?;
+            charge.buffer_bytes = add(charge.buffer_bytes, proof.bytes.capacity())?;
+        }
+        let cap = cap.min(self.directory.geometry.profile.allocation_cap());
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        let mut pages = reserve(self.owners.len())?;
+        charge.lookup_bytes = add(
+            charge.lookup_bytes,
+            mul(
+                pages.capacity() - self.owners.len(),
+                size_of::<PageRef<'_>>(),
+            )?,
+        )?;
+        charge.memory(false)?;
+        admit(charge.memory_bytes, cap)?;
+        for owner in &self.owners {
+            let extent = self.directory.page_range(owner.leaf, owner.page)?;
+            let index = self
+                .ranges
+                .partition_point(|r| r.start <= extent.start)
+                .checked_sub(1)
+                .ok_or(SourceBuildError::Invalid("capsule owner response"))?;
+            let range = &self.ranges[index];
+            require(extent.end <= range.end, "capsule owner response")?;
+            let bytes = fetched[index]
+                .bytes
+                .get(extent.start - range.start..extent.end - range.start)
+                .ok_or(SourceBuildError::Invalid("capsule owner payload"))?;
+            pages.push(PageRef {
+                page: owner.page,
+                leaf: owner.leaf,
+                bytes,
+            });
+        }
+        Ok(VerifiedRows {
+            geometry: self.directory.geometry,
             pages,
             charge,
         })
@@ -1112,9 +1600,121 @@ mod tests {
             self.verify(leaves, &spans, authority, cap)
         }
     }
+    fn fetch_plan<'p, 'g>(
+        plan: &'p PageRangePlan<'g>,
+        blob: &[u8],
+    ) -> Vec<VerifiedPageSpan<'p, 'g>> {
+        plan.ranges()
+            .iter()
+            .map(|range| {
+                plan.authenticate_span(range.start, blob[range.clone()].to_vec(), usize::MAX)
+                    .unwrap()
+            })
+            .collect()
+    }
+
     #[test]
-    fn verified_handoff_binds_directory_authority_ranges_bodies_and_rosters() {
-        let g = geometry(513, 1);
+    fn page_range_v2_router_equal_rosters() {
+        use crate::semantic_unit_router::{self, SourceIdentity};
+        let g = geometry(4096, 1);
+        let mut centroids = b"BORSUCP1".to_vec();
+        centroids.extend_from_slice(&(g.rows as u64).to_le_bytes());
+        for word in [g.dimensions as u32, 32, 256, 0] {
+            centroids.extend_from_slice(&word.to_le_bytes());
+        }
+        centroids.resize(HEADER + g.rows.div_ceil(UNIT_ROWS) * g.dimensions * 2, 0);
+        let centroid_sha = format!("{:x}", Sha256::digest(&centroids));
+        let input = SourceIdentity {
+            profile: g.profile,
+            schema: "capsule-router-test",
+            root_sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+            centroids_sha256: &centroid_sha,
+            rows: g.rows,
+            dimensions: g.dimensions,
+        };
+        // This fixture needs the router's 12.7 MiB training model, independently of query caps.
+        let artifacts = semantic_unit_router::build(&centroids, &input, 16 << 20).unwrap();
+        let root_sha = format!("{:x}", Sha256::digest(&artifacts.manifest));
+        let router = SemanticUnitRouter::open(
+            &artifacts.manifest,
+            &artifacts.membership,
+            &root_sha,
+            &input,
+            g.profile.root_cap(),
+        )
+        .unwrap();
+        let mut rosters: Vec<_> = (0..router.manifest().leaves.len())
+            .map(|leaf| leaf_pages(&router, leaf, usize::MAX).unwrap())
+            .collect();
+        assert!(rosters.len() > 1);
+        let leaves: Vec<_> = rosters
+            .iter()
+            .enumerate()
+            .map(|(id, pages)| LeafPages {
+                leaf_id: id as u32,
+                pages,
+            })
+            .collect();
+        let (flat, original) = source(g);
+        let (built, _, _) = build(g, &leaves, &flat, &original);
+        built
+            .directory
+            .validate_router(&router, usize::MAX)
+            .unwrap();
+        let temporary = rosters.iter().map(|pages| pages.len() * 4).max().unwrap();
+        assert!(
+            built
+                .directory
+                .validate_router(
+                    &router,
+                    built.directory.decoded_bytes().unwrap() + temporary - 1
+                )
+                .is_err()
+        );
+        drop(leaves);
+        let first = rosters[0][0];
+        rosters[0][0] = rosters[1][0];
+        rosters[1][0] = first;
+        rosters[0].sort_unstable();
+        rosters[1].sort_unstable();
+        let false_leaves: Vec<_> = rosters
+            .iter()
+            .enumerate()
+            .map(|(id, pages)| LeafPages {
+                leaf_id: id as u32,
+                pages,
+            })
+            .collect();
+        let (false_built, blob, encoded) = build(g, &false_leaves, &flat, &original);
+        let false_directory = Directory::open(
+            &encoded,
+            &false_built.directory_sha256,
+            g,
+            blob.len(),
+            7,
+            usize::MAX,
+        )
+        .unwrap();
+        false_directory
+            .verify(
+                &false_leaves,
+                &[FetchedSpan {
+                    offset: 0,
+                    bytes: &blob,
+                }],
+                &original,
+                usize::MAX,
+            )
+            .unwrap();
+        assert!(matches!(
+            false_directory.validate_router(&router, usize::MAX),
+            Err(SourceBuildError::Invalid("capsule router roster"))
+        ));
+    }
+
+    #[test]
+    fn page_range_v2_directory_roster() {
+        let g = geometry(513, 257);
         let (flat, original) = source(g);
         let leaves = [
             LeafPages {
@@ -1125,103 +1725,82 @@ mod tests {
                 leaf_id: 1,
                 pages: &[1],
             },
-            LeafPages {
-                leaf_id: 2,
-                pages: &[0],
-            },
         ];
         let (built, blob, encoded) = build(g, &leaves, &flat, &original);
-        let directory = &built.directory;
-        let selected = [leaves[0], leaves[2]];
-        let range = directory.byte_range(0).unwrap();
-        let body = blob[range.start as usize..range.end as usize].to_vec();
-        let authenticate = |offset, bytes| {
-            directory.authenticate_span(&selected[..1], offset, bytes, &original, usize::MAX)
-        };
-        let proof = authenticate(range.start, body.clone()).unwrap();
-        let proof = [proof];
-        let other = Directory::open(&encoded, &hash(&encoded), g, blob.len(), usize::MAX).unwrap();
+        assert_eq!(&encoded[..8], b"BORSDR02");
+        assert_eq!(&blob[..8], b"BORSCP02");
+        assert_eq!(encoded.len(), HEADER + 2 * ENTRY + 3 * 4);
+        let directory = Directory::open(
+            &encoded,
+            &built.directory_sha256,
+            g,
+            blob.len(),
+            7,
+            usize::MAX,
+        )
+        .unwrap();
+        for leaf in leaves {
+            assert_eq!(directory.pages(leaf.leaf_id).unwrap(), leaf.pages);
+        }
+        let tail = directory.page_range(0, 2).unwrap();
+        assert_eq!(tail.len(), g.width);
+        assert_eq!(&blob[tail], &flat[512 * g.width..]);
+        let roster = HEADER + 2 * ENTRY;
+        for ids in [[0u32, 0, 1], [2, 0, 1], [0, 3, 1]] {
+            let mut bad = encoded.clone();
+            for (index, id) in ids.into_iter().enumerate() {
+                bad[roster + index * 4..roster + (index + 1) * 4]
+                    .copy_from_slice(&id.to_le_bytes());
+            }
+            assert!(Directory::open(&bad, &hash(&bad), g, blob.len(), 7, usize::MAX).is_err());
+        }
+        let mut old = encoded.clone();
+        old[..8].copy_from_slice(b"BORSDR01");
+        assert!(matches!(
+            Directory::open(&old, &hash(&old), g, blob.len(), 7, usize::MAX),
+            Err(SourceBuildError::Invalid(
+                "capsule directory format: expected BORSDR02"
+            ))
+        ));
+        assert!(Directory::open_charge(g, 2, 1).is_err());
+        assert!(Directory::open_charge(g, 1, g.rows.div_ceil(UNIT_ROWS) + 1).is_err());
+        assert!(Directory::open_charge(g, usize::MAX, usize::MAX).is_err());
+        assert!(Geometry::new(1, 0, SemanticProfile::Scale1m).is_err());
+        assert!(Geometry::new(1, 1025, SemanticProfile::Scale1m).is_err());
+        let wrong_generation =
+            Directory::open(&encoded, &hash(&encoded), g, blob.len(), 8, usize::MAX).unwrap();
         assert!(
-            other
-                .verified_rows(&selected[..1], &proof, &original, usize::MAX)
-                .is_err()
-        );
-        let other_authority = authority(g, &flat, hash(&flat));
-        assert!(
-            directory
-                .verified_rows(&selected[..1], &proof, &other_authority, usize::MAX)
-                .is_err()
-        );
-        assert!(
-            directory
-                .verified_rows(&selected, &proof, &original, usize::MAX)
-                .is_err()
-        );
-        let wrong_roster = [LeafPages {
-            leaf_id: 0,
-            pages: &[1, 2],
-        }];
-        assert!(
-            directory
-                .verified_rows(&wrong_roster, &proof, &original, usize::MAX)
-                .is_err()
-        );
-        assert!(authenticate(range.start + 1, body.clone()).is_err());
-        let mut corrupt = body.clone();
-        *corrupt.last_mut().unwrap() ^= 1;
-        assert!(authenticate(range.start, corrupt).is_err());
-        assert!(authenticate(range.start, body[..body.len() - 1].to_vec()).is_err());
-        let other_range = directory.byte_range(2).unwrap();
-        assert!(
-            authenticate(
-                range.start,
-                blob[other_range.start as usize..other_range.end as usize].to_vec()
-            )
-            .is_err()
-        );
-        let other_proof = directory
-            .authenticate_span(
-                &selected[1..],
-                other_range.start,
-                blob[other_range.start as usize..other_range.end as usize].to_vec(),
-                &original,
-                usize::MAX,
-            )
-            .unwrap();
-        assert!(
-            directory
-                .verified_rows(&selected[..1], &[other_proof], &original, usize::MAX)
-                .is_err()
-        );
-        let duplicate = [
-            authenticate(range.start, body.clone()).unwrap(),
-            authenticate(range.start, body).unwrap(),
-        ];
-        assert!(
-            directory
-                .verified_rows(&selected[..1], &duplicate, &original, usize::MAX)
+            wrong_generation
+                .plan_page_ranges(&[0], &[0], &original, usize::MAX)
                 .is_err()
         );
     }
 
     #[test]
-    fn verified_handoff_matches_raw_rows_hash_work_and_budget() {
-        for dimensions in [1, 257, 1024] {
-            let g = geometry(513, dimensions);
+    fn page_range_v2_stable_owner_trim_hashes_and_fetched_corruption() {
+        for dimensions in [1, 255, 256, 257, 1024] {
+            let g = geometry(832, dimensions);
             let (flat, original) = source(g);
             let leaves = [
                 LeafPages {
                     leaf_id: 0,
-                    pages: &[0, 2],
+                    pages: &[0, 2, 3],
                 },
                 LeafPages {
                     leaf_id: 1,
-                    pages: &[0],
+                    pages: &[0, 1, 2],
+                },
+                LeafPages {
+                    leaf_id: 2,
+                    pages: &[1, 3],
                 },
             ];
             let (built, blob, _) = build(g, &leaves, &flat, &original);
             let directory = &built.directory;
-            let raw = directory
+            let full_charge = directory.query_charge(&leaves).unwrap();
+            assert_eq!(full_charge.physical_bytes, 1664 * g.width + 128);
+            reset_hash_bytes();
+            let full_rows = directory
                 .verify(
                     &leaves,
                     &[FetchedSpan {
@@ -1232,51 +1811,409 @@ mod tests {
                     usize::MAX,
                 )
                 .unwrap();
-            let pointer = blob.as_ptr();
-            let mut charge = raw.charge();
-            charge.lookup_bytes += PROOF_EXTRA_BYTES;
-            charge.memory(false).unwrap();
-            let expected = (0..=513)
-                .map(|row| raw.record(row).map(<[u8]>::to_vec))
-                .collect::<Vec<_>>();
-            drop(raw);
+            assert_eq!(hash_bytes(), 3328 * g.width + 128);
+            let plan = directory
+                .plan_page_ranges(&[2, 0, 1], &[0, 1, 2, 3], &original, usize::MAX)
+                .unwrap();
+            assert_eq!(plan.ranges().len(), 1);
+            assert_eq!(plan.ranges()[0].start, 44);
+            let charge = plan.charge();
+            assert_eq!(charge.physical_bytes, 1088 * g.width + 44);
+            assert_eq!(charge.logical_bytes, 832 * g.width);
+            assert_eq!(charge.duplicate_bytes, 256 * g.width);
+            assert_eq!(charge.framing_bytes, 44);
+            assert_eq!(charge.hash_bytes, 1088 * g.width);
+            reset_hash_bytes();
+            let proofs = fetch_plan(&plan, &blob);
+            assert_eq!(hash_bytes(), charge.hash_bytes);
+            let rows = plan.verified_rows(&proofs, usize::MAX).unwrap();
+            assert_eq!(rows.charge(), charge);
+            for row in 0..g.rows {
+                assert_eq!(rows.record(row), full_rows.record(row));
+                assert_eq!(
+                    rows.record(row),
+                    Some(&flat[row * g.width..(row + 1) * g.width])
+                );
+            }
+            assert_eq!(rows.page_leaf(0), Some(0));
+            assert_eq!(rows.page_leaf(1), Some(1));
+            assert_eq!(rows.page_leaf(2), Some(0));
+            assert_eq!(rows.page_leaf(3), Some(0));
+            assert_eq!(hash_bytes(), charge.hash_bytes);
+            let response = &plan.ranges()[0];
+            let duplicate = directory.page_range(1, 0).unwrap().start;
+            let header = directory.entries()[1].offset as usize;
+            let selected = directory.page_range(0, 0).unwrap().start;
+            for offset in [
+                duplicate,
+                header,
+                header + HEADER,
+                selected,
+                response.end - 1,
+            ] {
+                let mut corrupt = blob[response.clone()].to_vec();
+                corrupt[offset - response.start] ^= 1;
+                assert!(
+                    plan.authenticate_span(response.start, corrupt, usize::MAX)
+                        .is_err(),
+                    "{offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn page_range_v2_drop_empty_group_and_hide_bridge() {
+        let g = geometry(513, 1);
+        let (flat, original) = source(g);
+        let leaves = [
+            LeafPages {
+                leaf_id: 0,
+                pages: &[0, 1, 2],
+            },
+            LeafPages {
+                leaf_id: 1,
+                pages: &[0, 1],
+            },
+            LeafPages {
+                leaf_id: 2,
+                pages: &[0, 1],
+            },
+        ];
+        let (built, blob, _) = build(g, &leaves, &flat, &original);
+        let directory = &built.directory;
+        let full = directory.query_charge(&[leaves[0], leaves[2]]).unwrap();
+        assert_eq!(full.physical_bytes, 1025 * g.width + 84);
+        let plan = directory
+            .plan_page_ranges(&[0, 2], &[0, 1, 2], &original, usize::MAX)
+            .unwrap();
+        assert_eq!(plan.ranges().len(), 1);
+        assert_eq!(plan.charge().physical_bytes, 513 * g.width);
+        assert_eq!(plan.charge().hash_bytes, 513 * g.width);
+        assert_eq!(plan.charge().framing_bytes, 0);
+        assert_eq!(plan.charge().duplicate_bytes, 0);
+        assert!(plan.ranges()[0].end <= directory.byte_range(0).unwrap().end as usize);
+        let later = directory
+            .plan_page_ranges(&[2, 1], &[0, 1], &original, usize::MAX)
+            .unwrap();
+        let later_proofs = fetch_plan(&later, &blob);
+        let later_rows = later.verified_rows(&later_proofs, usize::MAX).unwrap();
+        assert_eq!(later_rows.page_leaf(0), Some(1));
+        assert_eq!(later_rows.page_leaf(1), Some(1));
+        let bridge = directory
+            .plan_page_ranges(&[0], &[0, 2], &original, usize::MAX)
+            .unwrap();
+        let proofs = fetch_plan(&bridge, &blob);
+        let rows = bridge.verified_rows(&proofs, usize::MAX).unwrap();
+        assert_eq!(rows.page_leaf(1), None);
+        assert!(rows.record(256).is_none());
+        assert!(rows.record(511).is_none());
+        assert_eq!(rows.record(512), Some(&flat[512 * g.width..]));
+        assert_eq!(rows.charge().logical_bytes, 513 * g.width);
+        let extent = &bridge.ranges()[0];
+        let mut corrupt = blob[extent.clone()].to_vec();
+        corrupt[directory.page_range(0, 1).unwrap().start - extent.start] ^= 1;
+        assert!(
+            bridge
+                .authenticate_span(extent.start, corrupt, usize::MAX)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn page_range_v2_private_proof_context() {
+        let g = geometry(513, 1);
+        let (flat, original) = source(g);
+        let leaves = [
+            LeafPages {
+                leaf_id: 0,
+                pages: &[0],
+            },
+            LeafPages {
+                leaf_id: 1,
+                pages: &[1],
+            },
+            LeafPages {
+                leaf_id: 2,
+                pages: &[2],
+            },
+        ];
+        let (built, blob, encoded) = build(g, &leaves, &flat, &original);
+        let directory = &built.directory;
+        let plan = directory
+            .plan_page_ranges(&[0, 2], &[0, 2], &original, usize::MAX)
+            .unwrap();
+        assert_eq!(plan.ranges().len(), 2);
+        let mut extra = fetch_plan(&plan, &blob);
+        extra.push(
+            plan.authenticate_span(
+                plan.ranges()[0].start,
+                blob[plan.ranges()[0].clone()].to_vec(),
+                usize::MAX,
+            )
+            .unwrap(),
+        );
+        assert!(plan.verified_rows(&extra, usize::MAX).is_err());
+        let mut proofs = fetch_plan(&plan, &blob);
+        assert!(plan.verified_rows(&proofs, usize::MAX).is_ok());
+        assert!(plan.verified_rows(&proofs[..1], usize::MAX).is_err());
+        proofs.swap(0, 1);
+        assert!(plan.verified_rows(&proofs, usize::MAX).is_err());
+        proofs.swap(0, 1);
+        let duplicate = plan
+            .authenticate_span(
+                plan.ranges()[0].start,
+                blob[plan.ranges()[0].clone()].to_vec(),
+                usize::MAX,
+            )
+            .unwrap();
+        let duplicates = [proofs.remove(0), duplicate];
+        assert!(plan.verified_rows(&duplicates, usize::MAX).is_err());
+        let proofs = fetch_plan(&plan, &blob);
+        let other =
+            Directory::open(&encoded, &hash(&encoded), g, blob.len(), 7, usize::MAX).unwrap();
+        let other_plan = other
+            .plan_page_ranges(&[0, 2], &[0, 2], &original, usize::MAX)
+            .unwrap();
+        assert!(other_plan.verified_rows(&proofs, usize::MAX).is_err());
+        let equivalent_plan = directory
+            .plan_page_ranges(&[0, 2], &[0, 2], &original, usize::MAX)
+            .unwrap();
+        assert!(equivalent_plan.verified_rows(&proofs, usize::MAX).is_err());
+        let other_authority = authority(g, &flat, hash(&flat));
+        let other_plan = directory
+            .plan_page_ranges(&[0, 2], &[0, 2], &other_authority, usize::MAX)
+            .unwrap();
+        assert!(other_plan.verified_rows(&proofs, usize::MAX).is_err());
+        let other_selection = directory
+            .plan_page_ranges(&[0], &[0], &original, usize::MAX)
+            .unwrap();
+        assert!(other_selection.verified_rows(&proofs, usize::MAX).is_err());
+        let range = &plan.ranges()[0];
+        let body = blob[range.clone()].to_vec();
+        for (offset, bytes) in [
+            (range.start + 1, body.clone()),
+            (range.start, body[..body.len() - 1].to_vec()),
+            (range.start, [body.clone(), vec![0]].concat()),
+            (usize::MAX, body),
+        ] {
+            assert!(plan.authenticate_span(offset, bytes, usize::MAX).is_err());
+        }
+        assert!(
+            directory
+                .plan_page_ranges(&[], &[0], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0, 0], &[0], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[0, 0], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[2, 0], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[1], &original, usize::MAX)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[3], &[0], &original, usize::MAX)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn page_range_v2_modeled_minus_one_and_capacities() {
+        let g = geometry(513, 257);
+        let (flat, original) = source(g);
+        let leaves = [LeafPages {
+            leaf_id: 0,
+            pages: &[0, 1, 2],
+        }];
+        let (mut built, blob, _) = build(g, &leaves, &flat, &original);
+        let before = built.directory.decoded_bytes().unwrap();
+        built.directory.entries.reserve(8);
+        built.directory.rosters.reserve(8);
+        built.directory.rosters[0].reserve(8);
+        let directory = &built.directory;
+        let decoded = directory.decoded_bytes().unwrap();
+        assert!(decoded > before);
+        assert_eq!(
+            decoded,
+            size_of::<Directory>()
+                + directory.entries.capacity() * size_of::<DirectoryEntry>()
+                + directory.rosters.capacity() * size_of::<Vec<u32>>()
+                + directory
+                    .rosters
+                    .iter()
+                    .map(|pages| pages.capacity() * 4)
+                    .sum::<usize>()
+        );
+        let plan = directory
+            .plan_page_ranges(&[0], &[0, 2], &original, usize::MAX)
+            .unwrap();
+        let model = plan.charge();
+        assert_eq!(model.decoded_directory_bytes, decoded);
+        assert_eq!(
+            model.roster_bytes,
+            size_of::<PageRangePlan<'_>>()
+                + plan.selected.capacity() * size_of::<usize>()
+                + plan.owners.capacity() * size_of::<PageOwner>()
+                + plan.ranges.capacity() * size_of::<Range<usize>>()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[0, 2], &original, model.memory_bytes - 1)
+                .is_err()
+        );
+        assert!(
+            directory
+                .plan_page_ranges(&[0], &[0, 2], &original, model.memory_bytes)
+                .is_ok()
+        );
+        let range = &plan.ranges()[0];
+        let mut body = blob[range.clone()].to_vec();
+        body.reserve(4096);
+        let actual = model.memory_bytes - range.len() + body.capacity();
+        assert!(
+            plan.authenticate_span(range.start, body.clone(), model.memory_bytes - 1)
+                .is_err()
+        );
+        let mut excess = blob[range.clone()].to_vec();
+        excess.reserve(4096);
+        let excess_cap = model.memory_bytes - range.len() + excess.capacity();
+        assert!(
+            plan.authenticate_span(range.start, excess, excess_cap - 1)
+                .is_err()
+        );
+        let pointer = body.as_ptr();
+        reset_hash_bytes();
+        let proof = plan.authenticate_span(range.start, body, actual).unwrap();
+        assert_eq!(proof.bytes().as_ptr(), pointer);
+        assert_eq!(proof.start(), range.start);
+        let proofs = [proof];
+        assert!(plan.verified_rows(&proofs, actual - 1).is_err());
+        let rows = plan.verified_rows(&proofs, actual).unwrap();
+        assert_eq!(rows.charge().memory_bytes, actual);
+        assert_eq!(hash_bytes(), model.hash_bytes);
+        assert_eq!(rows.record(0), Some(&flat[..g.width]));
+        assert!(rows.record(256).is_none());
+    }
+
+    #[test]
+    fn page_range_v2_full_approval_rejects_unfetched_corruption() {
+        let g = geometry(513, 1);
+        let (flat, original) = source(g);
+        let leaves = [LeafPages {
+            leaf_id: 0,
+            pages: &[0, 1, 2],
+        }];
+        let (built, blob, _) = build(g, &leaves, &flat, &original);
+        let directory = built.directory;
+        let mut original_encoded = Vec::new();
+        let original_sha = directory.write_to(&mut original_encoded).unwrap();
+        for offset in [0, directory.page_range(0, 2).unwrap().start] {
+            let mut corrupt = blob.clone();
+            corrupt[offset] ^= 1;
+            let mut encoded = Vec::new();
+            let mut rehashed = Directory::open(
+                &original_encoded,
+                &original_sha,
+                g,
+                blob.len(),
+                7,
+                usize::MAX,
+            )
+            .unwrap();
+            rehashed.entries[0].sha256 = hash(&corrupt);
+            encoded.clear();
+            let sha = rehashed.write_to(&mut encoded).unwrap();
+            let approved_directory =
+                Directory::open(&encoded, &sha, g, blob.len(), 7, usize::MAX).unwrap();
+            let plan = approved_directory
+                .plan_page_ranges(&[0], &[0], &original, usize::MAX)
+                .unwrap();
+            let proofs = fetch_plan(&plan, &corrupt);
+            assert!(plan.verified_rows(&proofs, usize::MAX).is_ok());
             assert!(
-                directory
-                    .authenticate_span(
-                        &leaves,
+                approved_directory
+                    .verify_whole_leaf(
                         0,
-                        blob.clone(),
+                        FetchedSpan {
+                            offset: 0,
+                            bytes: &corrupt
+                        },
                         &original,
-                        charge.memory_bytes - charge.buffer_bytes + blob.len() - 1
+                        usize::MAX
                     )
                     .is_err()
             );
-            HASH_BYTES.with(|count| count.set(0));
-            let proof = directory
-                .authenticate_span(&leaves, 0, blob, &original, usize::MAX)
-                .unwrap();
-            HASH_BYTES.with(|count| assert_eq!(count.get(), charge.hash_bytes));
-            assert_eq!(proof.bytes().as_ptr(), pointer);
-            let proofs = [proof];
-            let rows = directory
-                .verified_rows(&leaves, &proofs, &original, usize::MAX)
-                .unwrap();
-            for (row, expected) in expected.iter().enumerate() {
-                assert_eq!(rows.record(row), expected.as_deref());
+        }
+        let full = directory
+            .verify_whole_leaf(
+                0,
+                FetchedSpan {
+                    offset: 0,
+                    bytes: &blob,
+                },
+                &original,
+                usize::MAX,
+            )
+            .unwrap();
+        let mut expected = directory.whole_leaf_charge(0).unwrap();
+        expected.buffer_bytes = blob.capacity();
+        expected.memory(false).unwrap();
+        assert_eq!(full, expected);
+        assert_eq!(full.hash_bytes, blob.len() + flat.len());
+    }
+
+    #[test]
+    fn page_range_v2_dimensions_and_tails() {
+        for dimensions in [1, 255, 256, 257, 1024] {
+            for rows in [1, 31, 32, 33, 255, 256, 257, 511, 512, 513, 832] {
+                let g = geometry(rows, dimensions);
+                let (flat, original) = source(g);
+                let pages: Vec<u32> = (0..g.pages() as u32).collect();
+                let required: Vec<usize> = (0..g.pages()).collect();
+                let leaves = [LeafPages {
+                    leaf_id: 0,
+                    pages: &pages,
+                }];
+                let (built, blob, _) = build(g, &leaves, &flat, &original);
+                let plan = built
+                    .directory
+                    .plan_page_ranges(&[0], &required, &original, usize::MAX)
+                    .unwrap();
+                assert_eq!(plan.ranges().len(), 1);
+                assert_eq!(plan.charge().physical_bytes, flat.len());
+                assert_eq!(plan.charge().framing_bytes, 0);
+                reset_hash_bytes();
+                let proofs = fetch_plan(&plan, &blob);
+                let verified = plan.verified_rows(&proofs, usize::MAX).unwrap();
+                assert_eq!(hash_bytes(), flat.len());
+                for row in 0..rows {
+                    assert_eq!(
+                        verified.record(row),
+                        Some(&flat[row * g.width..(row + 1) * g.width])
+                    );
+                }
+                assert!(verified.record(rows).is_none());
+                assert!(verified.record(usize::MAX).is_none());
             }
-            assert_eq!(rows.page_leaf(0), Some(0));
-            assert_eq!(rows.page_leaf(2), Some(0));
-            assert_eq!(rows.charge(), charge);
-            HASH_BYTES.with(|count| assert_eq!(count.get(), charge.hash_bytes));
-            assert_eq!(
-                rows.charge().hash_bytes,
-                2 * charge.physical_bytes - charge.framing_bytes
-            );
-            assert!(
-                directory
-                    .verified_rows(&leaves, &proofs, &original, charge.memory_bytes - 1)
-                    .is_err()
-            );
         }
     }
 
@@ -1287,7 +2224,7 @@ mod tests {
 
     #[test]
     fn dimensions_tails_overlap_stable_copies_and_exact_records() {
-        for dimensions in [1, 257, 1024] {
+        for dimensions in [1, 255, 256, 257, 1024] {
             for rows in [257, 513] {
                 let g = geometry(rows, dimensions);
                 let codec = RotatedTwoBitCodec::new(&vec![0.0; dimensions], 20260923).unwrap();
@@ -1318,6 +2255,7 @@ mod tests {
                     &receipt.directory_sha256,
                     g,
                     blob.len(),
+                    7,
                     usize::MAX,
                 )
                 .unwrap();
@@ -1346,7 +2284,7 @@ mod tests {
 
     #[test]
     fn distinct_full_page_substitution_rejected_after_rehashing_capsule_and_directory() {
-        for dimensions in [1, 257, 1024] {
+        for dimensions in [1, 255, 256, 257, 1024] {
             let g = geometry(513, dimensions);
             let leaves = [LeafPages {
                 leaf_id: 0,
@@ -1378,7 +2316,7 @@ mod tests {
             let directory_sha256 = receipt.directory.write_to(&mut encoded).unwrap();
             assert_eq!(directory_sha256, hash(&encoded));
             let directory =
-                Directory::open(&encoded, &directory_sha256, g, blob.len(), usize::MAX).unwrap();
+                Directory::open(&encoded, &directory_sha256, g, blob.len(), 7, usize::MAX).unwrap();
             assert!(matches!(
                 directory.verify_copies(&leaves, &fetched, &original, usize::MAX),
                 Err(SourceBuildError::Invalid("capsule original unit digest"))
@@ -1480,7 +2418,7 @@ mod tests {
         ];
         let (flat, original) = source(g);
         let (receipt, blob, encoded) = build(g, &leaves, &flat, &original);
-        assert!(Directory::open(&encoded, &[0; 32], g, blob.len(), usize::MAX).is_err());
+        assert!(Directory::open(&encoded, &[0; 32], g, blob.len(), 7, usize::MAX).is_err());
         for at in [
             0,
             8,
@@ -1500,25 +2438,29 @@ mod tests {
             let mut bad = encoded.clone();
             bad[at] ^= 1;
             assert!(
-                Directory::open(&bad, &hash(&bad), g, blob.len(), usize::MAX).is_err(),
+                Directory::open(&bad, &hash(&bad), g, blob.len(), 7, usize::MAX).is_err(),
                 "{at}"
             );
         }
         for at in [40, 48, 56, HEADER + ENTRY + 8] {
             let mut bad = encoded.clone();
             bad[at..at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-            assert!(Directory::open(&bad, &hash(&bad), g, blob.len(), usize::MAX).is_err());
+            assert!(Directory::open(&bad, &hash(&bad), g, blob.len(), 7, usize::MAX).is_err());
         }
         let mut overlap = encoded.clone();
         overlap[HEADER + ENTRY + 8..HEADER + ENTRY + 16].fill(0);
-        assert!(Directory::open(&overlap, &hash(&overlap), g, blob.len(), usize::MAX).is_err());
+        assert!(Directory::open(&overlap, &hash(&overlap), g, blob.len(), 7, usize::MAX).is_err());
         for bytes in [&encoded[..HEADER - 1], &encoded[..encoded.len() - 1]] {
-            assert!(Directory::open(bytes, &hash(bytes), g, blob.len(), usize::MAX).is_err());
+            assert!(Directory::open(bytes, &hash(bytes), g, blob.len(), 7, usize::MAX).is_err());
         }
         let mut trailing = encoded.clone();
         trailing.push(0);
-        assert!(Directory::open(&trailing, &hash(&trailing), g, blob.len(), usize::MAX).is_err());
-        assert!(Directory::open(&encoded, &hash(&encoded), g, blob.len() + 1, usize::MAX).is_err());
+        assert!(
+            Directory::open(&trailing, &hash(&trailing), g, blob.len(), 7, usize::MAX).is_err()
+        );
+        assert!(
+            Directory::open(&encoded, &hash(&encoded), g, blob.len() + 1, 7, usize::MAX).is_err()
+        );
         assert!(add(usize::MAX, 1).is_err());
         assert!(mul(usize::MAX, 2).is_err());
         assert!(Geometry::new(usize::MAX, 1, SemanticProfile::Scale1m).is_err());
@@ -1742,18 +2684,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(receipt.charge, model);
-        let open = Directory::open_charge(g, leaves.len()).unwrap();
+        let open = Directory::open_charge(
+            g,
+            leaves.len(),
+            leaves.iter().map(|leaf| leaf.pages.len()).sum(),
+        )
+        .unwrap();
         assert!(
             Directory::open(
                 &encoded,
                 &hash(&encoded),
                 g,
                 blob.len(),
+                7,
                 open.memory_bytes - 1
             )
             .is_err()
         );
-        Directory::open(&encoded, &hash(&encoded), g, blob.len(), open.memory_bytes).unwrap();
+        Directory::open(
+            &encoded,
+            &hash(&encoded),
+            g,
+            blob.len(),
+            7,
+            open.memory_bytes,
+        )
+        .unwrap();
         let mut fetched = fetch(&receipt.directory, &blob);
         let query = receipt.directory.query_charge(&leaves).unwrap();
         assert!(

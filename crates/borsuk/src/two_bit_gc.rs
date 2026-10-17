@@ -136,8 +136,10 @@ async fn keep_set(
         }
         let manifest: Manifest =
             serde_json::from_slice(&bytes).map_err(|_| bad("GC root schema"))?;
-        if manifest.schema != crate::two_bit_generation::SCHEMA
-            || manifest.generation != head.generation()
+        if manifest.schema != crate::two_bit_generation::SCHEMA {
+            return Err(bad("unsupported GC root schema"));
+        }
+        if manifest.generation != head.generation()
             || !manifest.canonical.valid()
             || !manifest
                 .discovery

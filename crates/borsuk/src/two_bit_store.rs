@@ -77,7 +77,7 @@ pub(crate) struct EmptyRoot {
 }
 impl EmptyRoot {
     pub(crate) fn valid(&self) -> bool {
-        self.schema == "borsuk-two-bit-empty-generation-v5"
+        self.schema == "borsuk-two-bit-empty-generation-v6"
             && self.generation > 0
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
@@ -301,6 +301,12 @@ fn root_properties(bytes: &[u8], digest: &str, generation: u64) -> Result<(usize
     let root: Root =
         serde_json::from_slice(bytes).map_err(|_| TwoBitStoreError::Invalid("root schema"))?;
     match root {
+        Root::Empty(root) if root.schema != "borsuk-two-bit-empty-generation-v6" => Err(
+            TwoBitStoreError::Invalid("unsupported empty generation schema"),
+        ),
+        Root::Populated(root) if root.schema != crate::two_bit_generation::SCHEMA => {
+            Err(TwoBitStoreError::Invalid("unsupported generation schema"))
+        }
         Root::Empty(root) if root.valid() && root.generation == generation => {
             Ok((root.dimensions, true))
         }
@@ -361,7 +367,7 @@ pub(crate) async fn discovery_profile_and_source_layout(
             let profile = root.discovery.semantic_profile();
             root.capsule_metadata_bytes()?;
             let layout = if root.source_layout.is_capsules() {
-                SourceLayoutMode::LeafCapsules
+                SourceLayoutMode::LeafCapsulesV2
             } else {
                 SourceLayoutMode::FlatRecords
             };
@@ -410,7 +416,7 @@ async fn validate_owned_object(
     .await?;
     let claim: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| TwoBitStoreError::Invalid("maintenance claim schema"))?;
-    if claim["schema"] != "borsuk-two-bit-compaction-job-v5"
+    if claim["schema"] != "borsuk-two-bit-compaction-job-v6"
         || claim["index_prefix"].as_str() != Some(prefix.as_ref())
         || claim["base_epoch"].as_u64() != Some(epoch)
     {
@@ -478,7 +484,7 @@ fn source_artifacts<'a>(
                 plane.records_sha256.as_str(),
             ));
         }
-        SourceLayout::LeafCapsules {
+        SourceLayout::LeafCapsulesV2 {
             blob_bytes,
             blob_sha256,
             directory_bytes,
@@ -2062,7 +2068,8 @@ async fn publish_empty(
             return Err(bad("empty generation namespace/order/dimensions"));
         }
     }
-    if mode == Some(DiscoveryMode::Graph) && source_layout == Some(SourceLayoutMode::LeafCapsules) {
+    if mode == Some(DiscoveryMode::Graph) && source_layout == Some(SourceLayoutMode::LeafCapsulesV2)
+    {
         return Err(bad("empty generation namespace/order/dimensions"));
     }
     let inherited = if let Some(previous) = expected {
@@ -2085,7 +2092,7 @@ async fn publish_empty(
         return Err(bad("Fresh1m maintenance is unsupported"));
     }
     let mut root = EmptyRoot {
-        schema: "borsuk-two-bit-empty-generation-v5".into(),
+        schema: "borsuk-two-bit-empty-generation-v6".into(),
         generation,
         dimensions,
         base_epoch: 0,
@@ -2383,7 +2390,7 @@ mod source_layout_tests {
         let store = object_store::memory::InMemory::new();
         for layout in [
             SourceLayoutMode::FlatRecords,
-            SourceLayoutMode::LeafCapsules,
+            SourceLayoutMode::LeafCapsulesV2,
         ] {
             let prefix = ObjectPath::from(format!("empty/{layout:?}"));
             let head = publish_empty_two_bit_generation_with_source_layout(

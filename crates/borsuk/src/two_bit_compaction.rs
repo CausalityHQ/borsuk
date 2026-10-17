@@ -80,7 +80,7 @@ fn deserialize_job_schema<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<String, D::Error> {
     let schema = String::deserialize(deserializer)?;
-    if schema != "borsuk-two-bit-compaction-job-v5" {
+    if schema != "borsuk-two-bit-compaction-job-v6" {
         return Err(serde::de::Error::custom(
             "unsupported compaction job schema",
         ));
@@ -90,11 +90,23 @@ fn deserialize_job_schema<'de, D: serde::Deserializer<'de>>(
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ready {
+    #[serde(deserialize_with = "deserialize_ready_schema")]
     schema: String,
     job_sha256: String,
     input_sha256: String,
     target_root_sha256: String,
     rows: usize,
+}
+fn deserialize_ready_schema<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    let schema = String::deserialize(deserializer)?;
+    if schema != "borsuk-two-bit-compaction-ready-v3" {
+        return Err(serde::de::Error::custom(
+            "unsupported compaction ready schema",
+        ));
+    }
+    Ok(schema)
 }
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<(T, Vec<u8>)> {
     let file = File::open(path)?;
@@ -213,7 +225,8 @@ fn validate_target(
         || root.base_epoch != job.base_epoch
         || root.discovery.mode() != job.discovery
         || root.discovery.semantic_profile() != job.profile
-        || root.source_layout.is_capsules() != (job.source_layout == SourceLayoutMode::LeafCapsules)
+        || root.source_layout.is_capsules()
+            != (job.source_layout == SourceLayoutMode::LeafCapsulesV2)
         || root.canonical.rows != input.rows
         || root.canonical.dimensions != input.dimensions
     {
@@ -297,12 +310,13 @@ fn disk_bound(rows: usize, dimensions: usize, layout: SourceLayoutMode) -> Resul
         .ok_or(bad("compaction disk geometry"))?;
     // Each unit belongs to one leaf, so a physical page can occur in at most
     // eight capsules. Keep the temporary flat plane and both capsule files.
-    let capsules = if layout == SourceLayoutMode::LeafCapsules {
+    let capsules = if layout == SourceLayoutMode::LeafCapsulesV2 {
         let units = rows.div_ceil(32);
         codec
             .checked_mul(rows)
             .and_then(|n| n.checked_mul(units.min(8)))
             .and_then(|n| n.checked_add(units.checked_mul(32 + 4 + 64)?))
+            .and_then(|n| n.checked_add(units.checked_mul(4)?))
             .and_then(|n| n.checked_add(32))
             .ok_or(bad("compaction capsule disk geometry"))?
     } else {
@@ -525,7 +539,7 @@ fn admit_compaction_dimensions(
     source_layout: SourceLayoutMode,
     dimensions: usize,
 ) -> Result<()> {
-    if source_layout == SourceLayoutMode::LeafCapsules && discovery != DiscoveryMode::Semantic {
+    if source_layout == SourceLayoutMode::LeafCapsulesV2 && discovery != DiscoveryMode::Semantic {
         return Err(bad("capsules require semantic discovery"));
     }
     let profile = profile.unwrap_or(SemanticProfile::Native100k);
@@ -599,7 +613,7 @@ async fn compact_owned(
     let job_path = job_dir.join("job.json");
     let captured = if job_path.exists() {
         let previous = read_json::<Job>(&job_path)?.0;
-        if previous.schema != "borsuk-two-bit-compaction-job-v5"
+        if previous.schema != "borsuk-two-bit-compaction-job-v6"
             || previous.index_prefix != prefix.as_ref()
             || previous.base_root_sha256 != base.root_sha256()
             || previous.base_generation != base.generation()
@@ -615,6 +629,13 @@ async fn compact_owned(
     } else {
         None
     };
+    let ready_path = job_dir.join("ready.json");
+    // Reject unsupported ready journals before mutation I/O or scratch changes.
+    let mut captured_ready = if ready_path.exists() {
+        Some(read_json::<Ready>(&ready_path)?.0)
+    } else {
+        None
+    };
     let (discovery, profile) = resolve_target(
         base_discovery,
         base_profile,
@@ -623,8 +644,7 @@ async fn compact_owned(
         requested_profile,
     );
     if captured.as_ref().is_some_and(|previous| {
-        (previous.discovery, previous.profile) != (discovery, profile)
-            && job_dir.join("ready.json").exists()
+        (previous.discovery, previous.profile) != (discovery, profile) && captured_ready.is_some()
     }) {
         return Err(bad("compaction job changed"));
     }
@@ -650,7 +670,7 @@ async fn compact_owned(
             return Err(bad("unmanaged compaction path"));
         }
         let (job, _): (Job, _) = read_json(&entry.path().join("job.json"))?;
-        if job.schema != "borsuk-two-bit-compaction-job-v5"
+        if job.schema != "borsuk-two-bit-compaction-job-v6"
             || job.index_prefix != prefix.as_ref()
             || job.base_root_sha256 != name
             || job.base_generation >= base.generation()
@@ -714,7 +734,7 @@ async fn compact_owned(
     let (authority, _) =
         crate::two_bit_mutations::require_sealed_two_bit_mutations(store, &base).await?;
     let job = Job {
-        schema: "borsuk-two-bit-compaction-job-v5".into(),
+        schema: "borsuk-two-bit-compaction-job-v6".into(),
         index_prefix: prefix.as_ref().into(),
         base_root_sha256: base.root_sha256().into(),
         base_generation: base.generation(),
@@ -728,7 +748,6 @@ async fn compact_owned(
         discovery,
         profile,
     };
-    let ready_path = job_dir.join("ready.json");
     let job_bytes = serde_json::to_vec(&job).map_err(|_| bad("compaction job"))?;
     if job_path.exists() {
         let (mut previous, bytes): (Job, _) = read_json(&job_path)?;
@@ -751,6 +770,7 @@ async fn compact_owned(
             // Discard owned scratch after GC or an explicit unready mode change.
             // Rebuild claims a fresh namespace; fenced GC reclaims abandoned claims.
             fs::remove_dir_all(&job_dir)?;
+            captured_ready = None;
             fs::create_dir_all(&job_dir)?;
             write_json(&job_path, &job)?;
         }
@@ -759,9 +779,8 @@ async fn compact_owned(
     }
     let input_dir = job_dir.join("input");
     let generation_dir = job_dir.join("generation");
-    let recovered_ready = if ready_path.exists() {
-        let (ready, _): (Ready, _) = read_json(&ready_path)?;
-        if ready.schema != "borsuk-two-bit-compaction-ready-v2"
+    let recovered_ready = if let Some(ready) = captured_ready {
+        if ready.schema != "borsuk-two-bit-compaction-ready-v3"
             || ready.job_sha256 != hash(&job_bytes)
             || !valid_sha256(&ready.target_root_sha256)
         {
@@ -856,7 +875,7 @@ async fn compact_owned(
         let target = if input.rows == 0 {
             hash(
                 &serde_json::to_vec(&EmptyRoot {
-                    schema: "borsuk-two-bit-empty-generation-v5".into(),
+                    schema: "borsuk-two-bit-empty-generation-v6".into(),
                     generation: target_generation,
                     dimensions: base.dimensions(),
                     base_epoch: job.base_epoch,
@@ -1001,7 +1020,7 @@ async fn compact_owned(
             }
         };
         let ready = Ready {
-            schema: "borsuk-two-bit-compaction-ready-v2".into(),
+            schema: "borsuk-two-bit-compaction-ready-v3".into(),
             job_sha256: hash(&job_bytes),
             input_sha256: input_sha,
             target_root_sha256: target,
@@ -1013,7 +1032,7 @@ async fn compact_owned(
     let published = if ready.rows == 0 {
         let expected = hash(
             &serde_json::to_vec(&EmptyRoot {
-                schema: "borsuk-two-bit-empty-generation-v5".into(),
+                schema: "borsuk-two-bit-empty-generation-v6".into(),
                 generation: target_generation,
                 dimensions: base.dimensions(),
                 base_epoch: job.base_epoch,
@@ -1122,32 +1141,43 @@ mod tests {
     }
 
     #[test]
-    fn capsule_compaction_disk_bound_includes_duplicate_pages_and_directory() {
-        for (rows, dimensions) in [(1_usize, 1_usize), (257, 3), (1_000_000, 1024)] {
+    fn page_range_v2_capsule_compaction_disk_bound_includes_both_rosters() {
+        for (rows, dimensions) in [
+            (0_usize, 1_usize),
+            (1, 1),
+            (31, 255),
+            (32, 256),
+            (33, 257),
+            (255, 1024),
+            (256, 1),
+            (257, 3),
+            (513, 257),
+            (1_000_000, 1024),
+        ] {
             let units = rows.div_ceil(32);
             let width = RotatedTwoBitCodec::padded_dimensions(dimensions)
                 .unwrap()
                 .div_ceil(4)
                 + 8;
             assert_eq!(
-                disk_bound(rows, dimensions, SourceLayoutMode::LeafCapsules).unwrap()
+                disk_bound(rows, dimensions, SourceLayoutMode::LeafCapsulesV2).unwrap()
                     - disk_bound(rows, dimensions, SourceLayoutMode::FlatRecords).unwrap(),
-                (rows * width * units.min(8) + units * (32 + 4 + 64) + 32) as u64,
+                (rows * width * units.min(8) + units * (32 + 4 + 64) + units * 4 + 32) as u64,
             );
         }
-        assert!(disk_bound(usize::MAX, 1024, SourceLayoutMode::LeafCapsules).is_err());
+        assert!(disk_bound(usize::MAX, 1024, SourceLayoutMode::LeafCapsulesV2).is_err());
     }
 
     #[test]
     fn empty_and_job_profiles_are_required_and_old_formats_refuse() {
         let root = EmptyRoot {
-            schema: "borsuk-two-bit-empty-generation-v5".into(),
+            schema: "borsuk-two-bit-empty-generation-v6".into(),
             generation: 1,
             dimensions: 257,
             base_epoch: 0,
             discovery: DiscoveryMode::Semantic,
             profile: Some(SemanticProfile::Scale1m),
-            source_layout: SourceLayoutMode::LeafCapsules,
+            source_layout: SourceLayoutMode::LeafCapsulesV2,
         };
         assert!(root.valid());
         let mut value = serde_json::to_value(&root).unwrap();
@@ -1163,7 +1193,7 @@ mod tests {
             admit_compaction_dimensions(
                 DiscoveryMode::Graph,
                 None,
-                SourceLayoutMode::LeafCapsules,
+                SourceLayoutMode::LeafCapsulesV2,
                 257
             )
             .is_err()
@@ -1178,7 +1208,7 @@ mod tests {
         value["schema"] = "borsuk-two-bit-empty-generation-v3".into();
         assert!(!serde_json::from_value::<EmptyRoot>(value).unwrap().valid());
         let job = Job {
-            schema: "borsuk-two-bit-compaction-job-v5".into(),
+            schema: "borsuk-two-bit-compaction-job-v6".into(),
             index_prefix: "test".into(),
             base_root_sha256: "1".repeat(64),
             base_generation: 1,
@@ -1188,7 +1218,7 @@ mod tests {
             mutation_revision: 1,
             base_discovery: DiscoveryMode::Semantic,
             base_profile: Some(SemanticProfile::Scale1m),
-            source_layout: SourceLayoutMode::LeafCapsules,
+            source_layout: SourceLayoutMode::LeafCapsulesV2,
             discovery: DiscoveryMode::Semantic,
             profile: Some(SemanticProfile::Scale1m),
         };
@@ -1210,6 +1240,49 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn page_range_v2_old_empty_job_and_ready_schemas_refuse() {
+        let empty = serde_json::json!({
+            "schema":"borsuk-two-bit-empty-generation-v5", "generation":1,
+            "dimensions":257, "base_epoch":0, "discovery":"semantic",
+            "profile":"scale1m", "source_layout":"flat_records"
+        });
+        assert!(!serde_json::from_value::<EmptyRoot>(empty).unwrap().valid());
+        let job = serde_json::json!({
+            "schema":"borsuk-two-bit-compaction-job-v5", "index_prefix":"old",
+            "base_root_sha256":"1".repeat(64), "base_generation":1,
+            "base_epoch":0, "dimensions":257, "mutation_sha256":"2".repeat(64),
+            "mutation_revision":1, "base_discovery":"semantic", "base_profile":"scale1m",
+            "source_layout":"flat_records", "discovery":"semantic", "profile":"scale1m"
+        });
+        assert!(
+            serde_json::from_value::<Job>(job)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("unsupported compaction job schema")
+        );
+        let old_ready = serde_json::json!({
+            "schema":"borsuk-two-bit-compaction-ready-v2", "job_sha256":"1".repeat(64),
+            "input_sha256":"2".repeat(64), "target_root_sha256":"3".repeat(64), "rows":1
+        });
+        assert!(
+            serde_json::from_value::<Ready>(old_ready)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("unsupported compaction ready schema")
+        );
+        let ready = Ready {
+            schema: "borsuk-two-bit-compaction-ready-v3".into(),
+            job_sha256: "1".repeat(64),
+            input_sha256: "2".repeat(64),
+            target_root_sha256: "3".repeat(64),
+            rows: 1,
+        };
+        assert!(serde_json::from_slice::<Ready>(&serde_json::to_vec(&ready).unwrap()).is_ok());
     }
 
     #[test]
@@ -1252,7 +1325,7 @@ mod tests {
                 recovery: Default::default(),
             };
             let job = Job {
-                schema: "borsuk-two-bit-compaction-job-v5".into(),
+                schema: "borsuk-two-bit-compaction-job-v6".into(),
                 index_prefix: "test".into(),
                 base_root_sha256: input.base_root_sha256.clone(),
                 base_generation: 1,
@@ -1289,7 +1362,7 @@ mod tests {
                 serde_json::from_slice(&fs::read(generation.join("manifest.json")).unwrap())
                     .unwrap();
             let mut wrong_layout = job;
-            wrong_layout.source_layout = SourceLayoutMode::LeafCapsules;
+            wrong_layout.source_layout = SourceLayoutMode::LeafCapsulesV2;
             assert!(matches!(
                 validate_target(&generation, &root, &wrong_layout, &input, 2),
                 Err(TwoBitStoreError::Invalid(

@@ -10,6 +10,19 @@ pub(super) const SOURCE_LAYOUT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-basel
 pub(super) const ONEPASS_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v14";
 pub(super) const ONEPASS_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v13";
 pub(super) const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "capsule_sha256_original_units_once_v1";
+pub(super) const PAGE_RANGE_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v15";
+pub(super) const PAGE_RANGE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v14";
+pub(super) const PAGE_RANGE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
+
+fn layout_result_schema(config: &Value) -> Result<&'static str> {
+    match config.as_str() {
+        Some(SOURCE_LAYOUT_CONFIG_SCHEMA) => Ok(SOURCE_LAYOUT_RESULT_SCHEMA),
+        Some(ONEPASS_CONFIG_SCHEMA) => Ok(ONEPASS_RESULT_SCHEMA),
+        Some(PAGE_RANGE_CONFIG_SCHEMA) => Ok(PAGE_RANGE_RESULT_SCHEMA),
+        _ => Err("exact SOURCE layout config schema".into()),
+    }
+}
+
 const READ_RETRY_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v11";
 const SCOPE_NOTE: &str = "diagnostic selected original ordinals or prefix; not population p99, population recall or full-cohort qualification";
 const MEMORY_CAP: u64 = 512 * 1024 * 1024;
@@ -25,20 +38,21 @@ pub(super) fn is_result_schema(schema: &str) -> bool {
             | LIBRARY_SCHEDULER_RESULT_SCHEMA
             | SOURCE_LAYOUT_RESULT_SCHEMA
             | ONEPASS_RESULT_SCHEMA
+            | PAGE_RANGE_RESULT_SCHEMA
     )
 }
 
 pub(super) fn is_source_layout_schema(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(SOURCE_LAYOUT_RESULT_SCHEMA | ONEPASS_RESULT_SCHEMA)
+        Some(SOURCE_LAYOUT_RESULT_SCHEMA | ONEPASS_RESULT_SCHEMA | PAGE_RANGE_RESULT_SCHEMA)
     )
 }
 
 pub(super) fn is_source_layout_config(header: &Value) -> bool {
     matches!(
         header["config_schema"].as_str(),
-        Some(SOURCE_LAYOUT_CONFIG_SCHEMA | ONEPASS_CONFIG_SCHEMA)
+        Some(SOURCE_LAYOUT_CONFIG_SCHEMA | ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA)
     )
 }
 
@@ -147,7 +161,10 @@ pub(super) fn validate_row_envelope(
         }
     }
     if source_layout
-        && raw["config_schema"] == ONEPASS_CONFIG_SCHEMA
+        && matches!(
+            raw["config_schema"].as_str(),
+            Some(ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA)
+        )
         && matches!(phase, "identity" | "bound_inputs")
     {
         roster.push_str(" source_capsule_verification_policy");
@@ -196,10 +213,10 @@ pub(super) fn validate_row_envelope(
         require(
             raw["config_schema"]
                 == if source_layout {
-                    if raw["config_schema"] == ONEPASS_CONFIG_SCHEMA {
-                        ONEPASS_CONFIG_SCHEMA
-                    } else {
-                        SOURCE_LAYOUT_CONFIG_SCHEMA
+                    match raw["config_schema"].as_str() {
+                        Some(PAGE_RANGE_CONFIG_SCHEMA) => PAGE_RANGE_CONFIG_SCHEMA,
+                        Some(ONEPASS_CONFIG_SCHEMA) => ONEPASS_CONFIG_SCHEMA,
+                        _ => SOURCE_LAYOUT_CONFIG_SCHEMA,
                     }
                 } else {
                     READ_RETRY_CONFIG_SCHEMA
@@ -270,11 +287,7 @@ pub(super) fn validate_row_envelope(
                     if library_scheduler {
                         raw["schema"]
                             == if source_layout {
-                                if raw["config_schema"] == ONEPASS_CONFIG_SCHEMA {
-                                    ONEPASS_RESULT_SCHEMA
-                                } else {
-                                    SOURCE_LAYOUT_RESULT_SCHEMA
-                                }
+                                layout_result_schema(&raw["config_schema"])?
                             } else {
                                 LIBRARY_SCHEDULER_RESULT_SCHEMA
                             }
@@ -774,42 +787,54 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
         "v13 explicit config/memory/SOURCE budget",
     )?;
     require(
-        if raw["config_schema"] == ONEPASS_CONFIG_SCHEMA {
-            raw["source_capsule_verification_policy"] == SOURCE_CAPSULE_VERIFICATION_POLICY
-        } else {
-            raw.get("source_capsule_verification_policy").is_none()
+        match raw["config_schema"].as_str() {
+            Some(PAGE_RANGE_CONFIG_SCHEMA) => {
+                raw["source_capsule_verification_policy"] == PAGE_RANGE_VERIFICATION_POLICY
+            }
+            Some(ONEPASS_CONFIG_SCHEMA) => {
+                raw["source_capsule_verification_policy"] == SOURCE_CAPSULE_VERIFICATION_POLICY
+            }
+            _ => raw.get("source_capsule_verification_policy").is_none(),
         },
         "exact SOURCE capsule verification policy for config schema",
     )?;
-    let layout: borsuk::two_bit_generation::SourceLayout =
-        serde_json::from_value(raw["source_layout"].clone())?;
+    // Historical wire layouts are evidence, independent of the production enum.
+    let layout = &raw["source_layout"];
+    let flat = layout["layout"] == "flat_records";
     fields(
-        &raw["source_layout"],
-        if matches!(
-            &layout,
-            borsuk::two_bit_generation::SourceLayout::FlatRecords
-        ) {
+        layout,
+        if flat {
             "layout"
         } else {
             "layout blob_bytes blob_sha256 directory_bytes directory_sha256"
         },
     )?;
-    if let borsuk::two_bit_generation::SourceLayout::LeafCapsules {
-        blob_bytes,
-        blob_sha256,
-        directory_bytes,
-        directory_sha256,
-    } = layout
-    {
+    if !flat {
+        let v2 = raw["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA;
+        let directory = number(&layout["directory_bytes"])?;
         require(
-            blob_bytes > 0
-                && blob_bytes <= usize::MAX as u64
-                && directory_bytes >= 96
-                && (directory_bytes - 32) % 64 == 0
-                && super::valid_sha(&blob_sha256)
-                && super::valid_sha(&directory_sha256),
+            layout["layout"]
+                == if v2 {
+                    "leaf_capsules_v2"
+                } else {
+                    "leaf_capsules"
+                }
+                && number(&layout["blob_bytes"])? > 0
+                && number(&layout["blob_bytes"])? <= usize::MAX as u64
+                && directory <= usize::MAX as u64
+                && if v2 {
+                    directory >= 100 && (directory - 32) % 4 == 0
+                } else {
+                    directory >= 96 && (directory - 32) % 64 == 0
+                },
             "v13 SOURCE capsule descriptor",
         )?;
+        for key in ["blob_sha256", "directory_sha256"] {
+            require(
+                layout[key].as_str().is_some_and(super::valid_sha),
+                "v13 SOURCE capsule SHA256",
+            )?;
+        }
     }
     Ok(())
 }
@@ -849,7 +874,12 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
                 == root["page_manifest_sha256"]
                     .as_str()
                     .ok_or("v13 page manifest SHA")?
-            && root["schema"] == "borsuk-two-bit-generation-v10"
+            && root["schema"]
+                == if inputs["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA {
+                    "borsuk-two-bit-generation-v11"
+                } else {
+                    "borsuk-two-bit-generation-v10"
+                }
             && root["source_layout"] == inputs["source_layout"]
             && number(&root["generation"])? > 0
             && root["base_epoch"].as_u64().is_some()
@@ -941,7 +971,7 @@ pub(super) fn validate_layout_startup(
         "router/root.bin",
         "router/membership.bin",
     ];
-    if inputs["source_layout"]["layout"] == "leaf_capsules" {
+    if inputs["source_layout"]["layout"] != "flat_records" {
         names.push("plane/capsule_directory.bin");
     }
     let entries = raw["metadata"]["metadata"]
@@ -961,10 +991,16 @@ pub(super) fn validate_layout_startup(
         )?;
         let expected = match name {
             "manifest.json" => Some(
-                authority["root_manifest"].as_str().ok_or("root bytes")?.len() as u64,
+                authority["root_manifest"]
+                    .as_str()
+                    .ok_or("root bytes")?
+                    .len() as u64,
             ),
             "page_manifest.json" => Some(
-                authority["page_manifest"].as_str().ok_or("page bytes")?.len() as u64,
+                authority["page_manifest"]
+                    .as_str()
+                    .ok_or("page bytes")?
+                    .len() as u64,
             ),
             "page_digests.bin" | "plane/page_digests.bin" => {
                 Some(rows.div_ceil(32).checked_mul(32).ok_or("digest bytes")?)
@@ -1016,10 +1052,236 @@ pub(super) fn validate_layout_startup(
     )
 }
 
+// Frozen evidence-only layouts/formula from source_capsule.rs at feb2ab357b7f.
+// These types never parse or serve a production capsule. Keep the producer's
+// pointer-width and sha2 scratch assumptions; do not substitute v2 runtime types.
+#[allow(dead_code)]
+mod frozen_capsule_v1 {
+    use super::{Result, plus, require};
+    use std::mem::size_of;
+    enum Profile {
+        Native100k,
+        Fresh1m,
+        Scale1m,
+    }
+    struct Geometry {
+        rows: usize,
+        dimensions: usize,
+        width: usize,
+        profile: Profile,
+    }
+    struct Entry {
+        leaf_id: u32,
+        page_count: u32,
+        offset: u64,
+        total_bytes: u64,
+        payload_bytes: u64,
+        sha256: [u8; 32],
+    }
+    struct Directory {
+        geometry: Geometry,
+        entries: Vec<Entry>,
+        blob_bytes: usize,
+    }
+    pub(super) struct LeafPages<'a> {
+        leaf_id: u32,
+        pages: &'a [u32],
+    }
+    struct PageRef<'a> {
+        page: u32,
+        leaf: u32,
+        bytes: &'a [u8],
+    }
+    struct Charge {
+        source_bytes: usize,
+        physical_bytes: usize,
+        logical_bytes: usize,
+        duplicate_bytes: usize,
+        framing_bytes: usize,
+        hash_bytes: usize,
+        encoded_directory_bytes: usize,
+        decoded_directory_bytes: usize,
+        roster_bytes: usize,
+        buffer_bytes: usize,
+        lookup_bytes: usize,
+        scratch_bytes: usize,
+        memory_bytes: usize,
+    }
+    pub(super) struct VerifiedRows<'a> {
+        geometry: Geometry,
+        pages: Vec<PageRef<'a>>,
+        charge: Charge,
+    }
+    pub(super) const LEAF_PAGES_BYTES: u64 = 24;
+    pub(super) const VERIFIED_ROWS_BYTES: u64 = 32 + 24 + 104;
+
+    // Public sizes/scratch measured by retained-old-rlib witness:
+    // evidence/capsule-legacy-directory-native-size-a0001/result.txt.
+    #[test]
+    fn page_range_v2_legacy_model_matches_native_witness() {
+        assert_eq!(size_of::<usize>(), 8, "frozen 64-bit producer");
+        assert_eq!(size_of::<Directory>(), 64);
+        assert_eq!(size_of::<Entry>(), 64);
+        assert_eq!(size_of::<Geometry>(), 32);
+        assert_eq!(size_of::<Charge>(), 104);
+        assert_eq!(3 * size_of::<sha2::Sha256>() + 128, 464);
+        // Private sizes follow the exact-base field shapes, not v2 types.
+        assert_eq!(size_of::<LeafPages<'_>>() as u64, LEAF_PAGES_BYTES);
+        assert_eq!(size_of::<VerifiedRows<'_>>() as u64, VERIFIED_ROWS_BYTES);
+        for (rows, leaves, memory) in [(513, 1, 688), (513, 8, 1584), (1_000_000, 731, 94128)] {
+            let (decoded, scratch) = open_charge(rows, leaves).unwrap();
+            assert_eq!(decoded, 64 + 64 * leaves);
+            assert_eq!(scratch, 464);
+            assert_eq!(32 + 64 * leaves + decoded + scratch, memory);
+        }
+    }
+
+    pub(super) fn open_charge(rows: usize, leaves: usize) -> Result<(usize, usize)> {
+        require(
+            leaves > 0 && leaves <= rows.div_ceil(32),
+            "capsule leaf count",
+        )?;
+        let decoded = plus(
+            64,
+            (leaves as u64)
+                .checked_mul(64)
+                .ok_or("capsule arithmetic")?,
+        )?;
+        let scratch = 464;
+        // The old open model also checked encoded-directory + decoded + scratch.
+        let encoded = plus(
+            32,
+            (leaves as u64)
+                .checked_mul(64)
+                .ok_or("capsule arithmetic")?,
+        )?;
+        usize::try_from(plus(plus(encoded, decoded)?, scratch as u64)?)?;
+        Ok((usize::try_from(decoded)?, scratch))
+    }
+}
+
+fn validate_page_range_capsules(raw: &Value, inputs: &Value, stats: &Value) -> Result<()> {
+    use borsuk::source_capsule::Geometry;
+    let physical = number(&stats["physical_bytes"])?;
+    let logical = number(&stats["logical_bytes"])?;
+    let duplicate = number(&stats["duplicate_bytes"])?;
+    let framing = number(&stats["framing_bytes"])?;
+    let payload = plus(logical, duplicate)?;
+    require(
+        physical == plus(payload, framing)?
+            && number(&stats["hash_bytes"])? == payload
+            && raw["charges"]["source"]["verified_bytes"] == physical
+            && raw["charges"]["source"]["failed_gets"] == 0
+            && physical <= number(&inputs["source_byte_budget"])?
+            && physical <= number(&inputs["source_layout"]["blob_bytes"])?,
+        "v15 physical/logical/hash SOURCE conservation",
+    )?;
+    let rows = number(&inputs["rows"])?;
+    let directory = number(&inputs["source_layout"]["directory_bytes"])?;
+    let units = rows.div_ceil(32);
+    require(
+        directory <= plus(32, units.checked_mul(68).ok_or("v15 directory overflow")?)?,
+        "v15 directory roster bound",
+    )?;
+    // Without the binary directory, only a leaf-count upper bound is observable.
+    let leaf_bound = ((directory - 32) / 68).min(units);
+    let leaves = raw["trace"]["semantic_leaves"]
+        .as_array()
+        .ok_or("v15 selected leaves")?;
+    let mut selected = std::collections::BTreeSet::new();
+    for leaf in leaves {
+        let id = number(leaf)?;
+        require(
+            id < leaf_bound && selected.insert(id),
+            "v15 unique selected leaf IDs",
+        )?;
+    }
+    let n = selected.len() as u64;
+    let mut previous = None;
+    let mut groups = 0;
+    for &id in &selected {
+        if previous.is_none() || previous != id.checked_sub(1) {
+            groups += 1;
+        }
+        previous = Some(id);
+    }
+    let gets = number(&raw["charges"]["source"]["submitted_gets"])?;
+    require(
+        n > 0 && gets > 0 && gets <= groups && gets <= number(&inputs["source_get_budget"])?,
+        "v15 trimmed GETs bounded by original adjacent groups",
+    )?;
+    let geometry = Geometry::new(
+        usize::try_from(rows)?,
+        usize::try_from(number(&inputs["dimensions"])?)?,
+        serde_json::from_value(inputs["profile"].clone())?,
+    )?;
+    let width = geometry.record_bytes() as u64;
+    let membership = raw["trace"]["semantic_units"]
+        .as_array()
+        .ok_or("v15 semantic units")?;
+    let mut pages = std::collections::BTreeSet::new();
+    let mut previous = None;
+    for unit in membership {
+        let unit = number(unit)?;
+        require(
+            unit < units && previous.is_none_or(|p| p < unit),
+            "v15 sorted complete semantic membership",
+        )?;
+        pages.insert(unit / 8);
+        previous = Some(unit);
+    }
+    let mut useful = 0;
+    for page in &pages {
+        useful = plus(
+            useful,
+            (rows - page * 256)
+                .min(256)
+                .checked_mul(width)
+                .ok_or("v15 useful bytes overflow")?,
+        )?;
+    }
+    let source = rows.checked_mul(width).ok_or("v15 source bytes overflow")?;
+    let page_bytes = 256 * width;
+    let tail = (rows % 256) * width;
+    let has_tail = tail > 0 && logical % page_bytes == tail;
+    let full_unique = logical
+        .checked_sub(if has_tail { tail } else { 0 })
+        .ok_or("v15 unique tail bytes")?
+        / page_bytes;
+    let duplicate_pages = (0..if has_tail { n } else { 1 }).any(|tails| {
+        let tail_bytes = tails * tail;
+        duplicate.checked_sub(tail_bytes).is_some_and(|full| {
+            full.is_multiple_of(page_bytes)
+                && full_unique
+                    .checked_mul(n - 1)
+                    .is_some_and(|bound| full / page_bytes <= bound)
+        })
+    });
+    require(
+        !pages.is_empty()
+            && logical >= useful
+            && logical <= source
+            && (tail == 0 || !pages.contains(&(rows / 256)) || has_tail)
+            && (logical.is_multiple_of(page_bytes)
+                || (tail > 0 && logical >= tail && (logical - tail).is_multiple_of(page_bytes)))
+            && duplicate_pages
+            && payload <= logical.checked_mul(n).ok_or("v15 payload overflow")?
+            && (framing == 0 || (framing >= 36 && framing.is_multiple_of(4))),
+        "v15 whole-page payload and included framing bounds",
+    )?;
+    // Unique fetched pages can include unscored bridges. Six counters cannot
+    // prove owners, endpoints, exact rosters or allocation capacities.
+    require(
+        number(&stats["memory_bytes"])? >= physical
+            && number(&stats["memory_bytes"])? <= number(&inputs["max_memory_bytes"])?,
+        "v15 retained response memory bounds",
+    )
+}
+
 // Only completed queries reach this validator. Failed reads retain pre-I/O estimates;
 // those are not interchangeable with authenticated response bytes.
 pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()> {
-    use borsuk::source_capsule::{Directory, Geometry, LeafPages, VerifiedRows};
+    use borsuk::source_capsule::Geometry;
     validate_layout_header(inputs)?;
     require(
         number(&raw["charges"]["source"]["submitted_gets"])? > 0
@@ -1043,6 +1305,9 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
         .values()
     {
         number(v)?;
+    }
+    if inputs["config_schema"] == PAGE_RANGE_CONFIG_SCHEMA {
+        return validate_page_range_capsules(raw, inputs, stats);
     }
     let physical = number(&stats["physical_bytes"])?;
     let logical = number(&stats["logical_bytes"])?;
@@ -1084,7 +1349,8 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
         serde_json::from_value(inputs["profile"].clone())?,
     )?;
     let directory = usize::try_from(number(&inputs["source_layout"]["directory_bytes"])?)?;
-    let model = Directory::open_charge(geometry, (directory - 32) / 64)?;
+    let (decoded_directory_bytes, scratch_bytes) =
+        frozen_capsule_v1::open_charge(geometry.rows(), (directory - 32) / 64)?;
     let leaf_count = ((directory - 32) / 64) as u64;
     let mut selected = std::collections::BTreeSet::new();
     for leaf in leaves {
@@ -1117,8 +1383,7 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
     for unit in units {
         let unit = number(unit)?;
         require(
-            unit < (geometry.rows() as u64).div_ceil(32)
-                && previous.is_none_or(|last| last < unit),
+            unit < (geometry.rows() as u64).div_ceil(32) && previous.is_none_or(|last| last < unit),
             "v13 sorted complete semantic membership",
         )?;
         *pages.entry(unit / 8).or_default() += 1;
@@ -1155,7 +1420,10 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
         .ok_or("capsule payload overflow")?;
     let tail_rows = geometry.rows() as u64 % 256;
     if tail_rows == 0 {
-        require(payload == full_payload, "v13 full-page payload conservation")?;
+        require(
+            payload == full_payload,
+            "v13 full-page payload conservation",
+        )?;
     } else {
         let tail_page = geometry.rows() as u64 / 256;
         let tail_units = pages.get(&tail_page).copied().unwrap_or(0);
@@ -1185,7 +1453,7 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
     // The codec charges actual Vec capacities, which the six counters cannot reconstruct.
     // Its public model proves this lower bound; the explicit admission cap proves the upper.
     let roster = plus(
-        n.checked_mul(std::mem::size_of::<LeafPages<'_>>() as u64)
+        n.checked_mul(frozen_capsule_v1::LEAF_PAGES_BYTES)
             .ok_or("capsule roster overflow")?,
         occurrences
             .checked_mul(4)
@@ -1193,10 +1461,10 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
     )?;
     let minimum = [
         physical,
-        model.decoded_directory_bytes as u64,
-        model.scratch_bytes as u64,
+        decoded_directory_bytes as u64,
+        scratch_bytes as u64,
         roster,
-        std::mem::size_of::<VerifiedRows<'_>>() as u64,
+        frozen_capsule_v1::VERIFIED_ROWS_BYTES,
     ]
     .into_iter()
     .try_fold(0, plus)?;
@@ -1222,8 +1490,14 @@ pub(super) fn paired_source_layout(config: &std::path::Path, sha: &str) -> Resul
         validate_completed(arm)?;
     }
     require(
-        a.expected_bound_inputs["source_layout"] == json!({"layout":"flat_records"})
-            && b.expected_bound_inputs["source_layout"]["layout"] == "leaf_capsules",
+        a.expected_identity["schema"] == b.expected_identity["schema"]
+            && a.expected_bound_inputs["source_layout"] == json!({"layout":"flat_records"})
+            && b.expected_bound_inputs["source_layout"]["layout"]
+                == if b.expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+                    "leaf_capsules_v2"
+                } else {
+                    "leaf_capsules"
+                },
         "paired SOURCE ordered flat/capsule arms",
     )?;
     // An allowlist of derived differences; every other field remains exact.
@@ -1353,8 +1627,12 @@ pub(super) fn paired_source_layout(config: &std::path::Path, sha: &str) -> Resul
         "returned_ids_scorebits_physical_ordinals_parity":true,"per_query_hits_parity":true,
         "inputs":c.arms.iter().map(|a| &a.input).collect::<Vec<_>>(),
         "source_bridges":"authenticated_unscored","sq8_bridges":"scored",
-        "source_physical_ranges":"count_from_adjacent_authenticated_leaf_ids; offsets_and_per_leaf_pages_not_in_trace",
-        "source_payload_validation":"exact_useful_page_union; tail_aware_occurrence_bounds_not_full_physical_roster","plan_ranges":"SQ8_only",
+        "source_physical_ranges":if c.arms[1].expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+            "GETs_bounded_by_old_adjacent_groups; exact_trim_and_owners_require_pinned_native_directory"
+        } else { "count_from_adjacent_authenticated_leaf_ids; offsets_and_per_leaf_pages_not_in_trace" },
+        "source_payload_validation":if c.arms[1].expected_identity["schema"] == PAGE_RANGE_RESULT_SCHEMA {
+            "fetched_payload_conservation_and_required_union_lower_bound; exact_roster_requires_native_proof"
+        } else { "exact_useful_page_union; tail_aware_occurrence_bounds_not_full_physical_roster" },"plan_ranges":"SQ8_only",
         "source_archive_and_binary_authority":"root_owned_external_receipts",
         "wire_bytes":null,"billed_bytes":null,"billed_requests":null,
         "qualified":false,"performance_claim":false,"quality_or_scientific_win_claim":false}),
@@ -1773,7 +2051,7 @@ mod tests {
     }
 
     #[test]
-    fn capsule_handoff_native_rows_and_resealed_mutations() {
+    fn capsule_handoff_authored_legacy_rows_and_resealed_mutations() {
         let (dir, paths) =
             super::super::scale_native_runner::source_layout_reducer_native_fixture_with(
                 2049, 2, true, false,
@@ -1784,10 +2062,14 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
+        let current = super::super::tests::historical_source_layout_rows(&current, true);
         let current_pin = handoff_fixture_pin(dir.path(), "native-current", current.clone());
         let expected = handoff_read(&current_pin, true).unwrap();
         let qi = current.iter().position(|r| r["phase"] == "query").unwrap();
-        let si = current.iter().position(|r| r["phase"] == "startup").unwrap();
+        let si = current
+            .iter()
+            .position(|r| r["phase"] == "startup")
+            .unwrap();
 
         let mut chunked = current.clone();
         for entry in chunked[si]["metadata"]["metadata"].as_array_mut().unwrap() {
@@ -1796,31 +2078,8 @@ mod tests {
         let pin = handoff_fixture_pin(dir.path(), "startup-chunks", chunked);
         assert_eq!(handoff_read(&pin, true).unwrap(), expected);
 
-        // Synthetic old-schema boundary only; the unmodified current producer
-        // fixture above is real. Archived four-run interoperability is a separate gate.
-        let mut old = current.clone();
-        old[0]["schema"] = json!(SOURCE_LAYOUT_RESULT_SCHEMA);
-        for header in &mut old[..2] {
-            header["config_schema"] = json!(SOURCE_LAYOUT_CONFIG_SCHEMA);
-            header
-                .as_object_mut()
-                .unwrap()
-                .remove("source_capsule_verification_policy");
-        }
-        old[0]["binary_sha256"] = json!("a".repeat(64));
-        old[0]["config_sha256"] = json!("b".repeat(64));
-        for row in old.iter_mut().filter(|r| r["phase"] == "query") {
-            let gets = number(&row["charges"]["source"]["submitted_gets"]).unwrap();
-            let stats = &mut row["stages"]["source_capsules"];
-            stats["hash_bytes"] = json!(
-                4 * number(&stats["physical_bytes"]).unwrap()
-                    - 2 * number(&stats["framing_bytes"]).unwrap()
-            );
-            stats["memory_bytes"] = json!(
-                number(&stats["memory_bytes"]).unwrap()
-                    - handoff_descriptor_increment(gets).unwrap()
-            );
-        }
+        // Independently authored historical full-capsule policy/model.
+        let old = super::super::tests::historical_source_layout_rows(&current, false);
         let old_pin = handoff_fixture_pin(dir.path(), "synthetic-old", old);
         assert_eq!(handoff_read(&old_pin, false).unwrap(), expected);
         assert_eq!(handoff_descriptor_increment(31).unwrap(), 1240);
@@ -1963,6 +2222,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
+        let rows = super::super::tests::historical_source_layout_rows(&rows, true);
 
         let runs = std::array::from_fn(|i| {
             let mut pin = handoff_fixture_pin(dir.path(), &format!("arm-{i}"), rows.clone());
@@ -1985,7 +2245,7 @@ mod tests {
             declared_run_order: super::super::LABELS.map(String::from),
             runs,
         };
-        // These genuine native headers have 32 selected queries, but the wrong
+        // These synthetic historical headers have 32 selected queries, but the wrong
         // original ordinals/population. Even the correct schema pair must fail.
         assert_eq!(
             handoff_headers(&c).unwrap_err().to_string(),
@@ -2123,6 +2383,135 @@ mod tests {
     }
 
     #[test]
+    fn page_range_v2_dropped_groups_zero_framing_and_counter_refusals() {
+        for (rows, leaves, units, directory, logical, duplicate, framing) in [
+            (
+                513_u64,
+                vec![0, 2],
+                vec![0, 1, 8, 9, 16],
+                252,
+                513 * 264,
+                0,
+                0,
+            ),
+            (
+                832,
+                vec![0, 1, 2],
+                (0..26).collect(),
+                256,
+                832 * 264,
+                256 * 264,
+                44,
+            ),
+        ] {
+            let physical = logical + duplicate + framing;
+            let inputs = json!({"config_schema":PAGE_RANGE_CONFIG_SCHEMA,
+                "source_capsule_verification_policy":PAGE_RANGE_VERIFICATION_POLICY,
+                "rows":rows,"dimensions":1024,"profile":"scale1m",
+                "source_get_budget":128,"source_byte_budget":1_000_000,
+                "max_memory_bytes":2_000_000,
+                "source_layout":{"layout":"leaf_capsules_v2","blob_bytes":1_000_000,
+                    "blob_sha256":"a".repeat(64),"directory_bytes":directory,"directory_sha256":"b".repeat(64)}});
+            let query = json!({"trace":{"semantic_leaves":leaves,"semantic_units":units},
+                "charges":{"source":{"submitted_gets":1,"verified_bytes":physical,"failed_gets":0}},
+                "stages":{"source_capsules":{"physical_bytes":physical,"logical_bytes":logical,
+                    "duplicate_bytes":duplicate,"framing_bytes":framing,
+                    "hash_bytes":physical-framing,"memory_bytes":1_000_000}}});
+            validate_source_capsules(&query, &inputs).unwrap();
+            if rows == 513 {
+                // Whole full-page totals cannot cover a required one-row tail.
+                let mut bad = query.clone();
+                bad["trace"]["semantic_units"] = json!([16]);
+                bad["stages"]["source_capsules"]["physical_bytes"] = json!(256 * 264);
+                bad["stages"]["source_capsules"]["logical_bytes"] = json!(256 * 264);
+                bad["stages"]["source_capsules"]["hash_bytes"] = json!(256 * 264);
+                bad["charges"]["source"]["verified_bytes"] = json!(256 * 264);
+                assert!(validate_source_capsules(&bad, &inputs).is_err());
+            }
+            for (pointer, value) in [
+                (
+                    "/stages/source_capsules/hash_bytes",
+                    json!(2 * physical - framing),
+                ),
+                (
+                    "/stages/source_capsules/physical_bytes",
+                    json!(physical + 1),
+                ),
+                ("/stages/source_capsules/logical_bytes", json!(0)),
+                ("/stages/source_capsules/memory_bytes", json!(physical - 1)),
+                ("/stages/source_capsules/memory_bytes", json!(2_000_001)),
+                ("/stages/source_capsules/framing_bytes", json!(-1)),
+                ("/charges/source/verified_bytes", json!(physical - 1)),
+                ("/charges/source/failed_gets", json!(1)),
+                ("/charges/source/submitted_gets", json!(0)),
+                ("/charges/source/submitted_gets", json!(3)),
+            ] {
+                let mut bad = query.clone();
+                *bad.pointer_mut(pointer).unwrap() = value;
+                assert!(
+                    validate_source_capsules(&bad, &inputs).is_err(),
+                    "{pointer}"
+                );
+            }
+            for key in
+                "physical_bytes logical_bytes duplicate_bytes framing_bytes hash_bytes memory_bytes"
+                    .split_whitespace()
+            {
+                let mut bad = query.clone();
+                bad["stages"]["source_capsules"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+                assert!(validate_source_capsules(&bad, &inputs).is_err(), "{key}");
+            }
+            let mut bad = query.clone();
+            bad["stages"]["source_capsules"]["skip_verification"] = json!(true);
+            assert!(validate_source_capsules(&bad, &inputs).is_err());
+            let mut old = inputs.clone();
+            old["config_schema"] = json!(ONEPASS_CONFIG_SCHEMA);
+            old["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+            assert!(validate_source_capsules(&query, &old).is_err());
+        }
+    }
+
+    #[test]
+    fn page_range_v2_frozen_historical_memory_boundary() {
+        use std::mem::size_of;
+        // Exact old source field shapes, independent of v2 Directory/VerifiedRows.
+        let (decoded, scratch) = frozen_capsule_v1::open_charge(32, 1).unwrap();
+        let physical = 32 * 264 + 36;
+        let minimum = physical
+            + decoded
+            + scratch
+            + size_of::<frozen_capsule_v1::LeafPages<'_>>()
+            + 4
+            + size_of::<frozen_capsule_v1::VerifiedRows<'_>>();
+        for onepass in [false, true] {
+            let mut inputs = json!({"config_schema":SOURCE_LAYOUT_CONFIG_SCHEMA,
+                "rows":32,"dimensions":1024,"profile":"native100k",
+                "source_get_budget":128,"source_byte_budget":1_000_000,"max_memory_bytes":1_000_000,
+                "source_layout":{"layout":"leaf_capsules","blob_bytes":physical,
+                    "blob_sha256":"a".repeat(64),"directory_bytes":96,"directory_sha256":"b".repeat(64)}});
+            if onepass {
+                inputs["config_schema"] = json!(ONEPASS_CONFIG_SCHEMA);
+                inputs["source_capsule_verification_policy"] =
+                    json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+            }
+            let mut query = json!({"trace":{"semantic_leaves":[0],"semantic_units":[0]},
+                "charges":{"source":{"submitted_gets":1,"verified_bytes":physical,"failed_gets":0}},
+                "stages":{"source_capsules":{"physical_bytes":physical,"logical_bytes":32*264,
+                    "duplicate_bytes":0,"framing_bytes":36,
+                    "hash_bytes":if onepass {2*physical-36} else {2*(2*physical-36)},
+                    "memory_bytes":minimum}}});
+            validate_source_capsules(&query, &inputs).unwrap();
+            query["stages"]["source_capsules"]["memory_bytes"] = json!(minimum - 1);
+            assert!(validate_source_capsules(&query, &inputs).is_err());
+            assert!(frozen_capsule_v1::open_charge(32, 0).is_err());
+            assert!(frozen_capsule_v1::open_charge(32, 2).is_err());
+        }
+    }
+
+    #[test]
     fn capsule_page_union_tail_duplicates_and_adjacent_gets() {
         // Literal whole-page oracles: D1024 records are 264 bytes.
         for (rows, ids, units, logical, duplicate, framing, gets, directory_leaves) in [
@@ -2150,13 +2539,19 @@ mod tests {
             for bad_gets in [0, gets + 1] {
                 let mut bad = query.clone();
                 bad["charges"]["source"]["submitted_gets"] = json!(bad_gets);
-                assert!(validate_source_capsules(&bad, &inputs).is_err(), "{rows}: GET {bad_gets}");
+                assert!(
+                    validate_source_capsules(&bad, &inputs).is_err(),
+                    "{rows}: GET {bad_gets}"
+                );
             }
             for shift in [264, logical - 264] {
                 let mut bad = query.clone();
                 bad["stages"]["source_capsules"]["logical_bytes"] = json!(logical - shift);
                 bad["stages"]["source_capsules"]["duplicate_bytes"] = json!(duplicate + shift);
-                assert!(validate_source_capsules(&bad, &inputs).is_err(), "{rows}: split {shift}");
+                assert!(
+                    validate_source_capsules(&bad, &inputs).is_err(),
+                    "{rows}: split {shift}"
+                );
             }
             for key in ["semantic_leaves", "semantic_units"] {
                 let mut bad = query.clone();
@@ -2167,18 +2562,26 @@ mod tests {
             let mut bad = query.clone();
             bad["stages"]["source_capsules"]["framing_bytes"] = json!(framing + 4);
             bad["stages"]["source_capsules"]["physical_bytes"] = json!(physical + 4);
-            bad["stages"]["source_capsules"]["hash_bytes"] = json!(2*(physical+logical+duplicate+4));
+            bad["stages"]["source_capsules"]["hash_bytes"] =
+                json!(2 * (physical + logical + duplicate + 4));
             bad["charges"]["source"]["verified_bytes"] = json!(physical + 4);
-            assert!(validate_source_capsules(&bad, &inputs).is_err(), "{rows}: phantom page");
+            assert!(
+                validate_source_capsules(&bad, &inputs).is_err(),
+                "{rows}: phantom page"
+            );
             // Preserve sums/hash/record divisibility while removing one row from
             // duplicated payload: whole-page/tail multiplicity still must reject.
             if duplicate > 0 {
                 let mut bad = query.clone();
                 bad["stages"]["source_capsules"]["physical_bytes"] = json!(physical - 264);
                 bad["stages"]["source_capsules"]["duplicate_bytes"] = json!(duplicate - 264);
-                bad["stages"]["source_capsules"]["hash_bytes"] = json!(2*(physical+logical+duplicate-528));
+                bad["stages"]["source_capsules"]["hash_bytes"] =
+                    json!(2 * (physical + logical + duplicate - 528));
                 bad["charges"]["source"]["verified_bytes"] = json!(physical - 264);
-                assert!(validate_source_capsules(&bad, &inputs).is_err(), "{rows}: partial duplicate");
+                assert!(
+                    validate_source_capsules(&bad, &inputs).is_err(),
+                    "{rows}: partial duplicate"
+                );
             }
         }
     }

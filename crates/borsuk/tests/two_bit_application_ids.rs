@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v10");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v11");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {
@@ -2352,7 +2352,7 @@ async fn semantic_compaction_fixture(
             * (RotatedTwoBitCodec::new(&vec![0.; dimensions], 42)
                 .unwrap()
                 .record_bytes())
-            + if layout == borsuk::two_bit_generation::SourceLayoutMode::LeafCapsules {
+            + if layout == borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2 {
                 32 + 4 // One capsule header and its one physical-page ID.
             } else {
                 0
@@ -2546,6 +2546,35 @@ async fn semantic_compaction_fixture(
         assert_eq!(job.join("ready.json").exists(), interrupt_publication != 2);
         let job_body = std::fs::read(job.join("job.json")).unwrap();
         let job_value: serde_json::Value = serde_json::from_slice(&job_body).unwrap();
+        assert_eq!(job_value["schema"], "borsuk-two-bit-compaction-job-v6");
+        let mut old_job = job_value.clone();
+        old_job["schema"] = "borsuk-two-bit-compaction-job-v5".into();
+        old_job["source_layout"] = "flat_records".into();
+        std::fs::write(job.join("job.json"), serde_json::to_vec(&old_job).unwrap()).unwrap();
+        let (observed, operations) =
+            common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+        let error = compact_two_bit_index(
+            std::sync::Arc::new(observed),
+            &prefix,
+            &maintenance,
+            options,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            borsuk::two_bit_store::TwoBitStoreError::Invalid("compaction journal schema")
+        ));
+        assert!(operations.entries().iter().all(|entry| matches!(
+            entry.operation,
+            common::StoreOperation::Get | common::StoreOperation::Head
+        ) && !entry.path.contains("/mutations/")
+            && !entry.path.contains("/objects/")));
+        assert_eq!(
+            std::fs::read(job.join("job.json")).unwrap(),
+            serde_json::to_vec(&old_job).unwrap()
+        );
+        std::fs::write(job.join("job.json"), &job_body).unwrap();
         let encoded_profile = serde_json::to_value(profile).unwrap();
         assert_eq!(job_value["base_profile"], encoded_profile);
         assert_eq!(job_value["profile"], encoded_profile);
@@ -2564,7 +2593,7 @@ async fn semantic_compaction_fixture(
         let mut wrong_layout = job_value.clone();
         wrong_layout["source_layout"] = serde_json::to_value(
             if layout == borsuk::two_bit_generation::SourceLayoutMode::FlatRecords {
-                borsuk::two_bit_generation::SourceLayoutMode::LeafCapsules
+                borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2
             } else {
                 borsuk::two_bit_generation::SourceLayoutMode::FlatRecords
             },
@@ -2752,13 +2781,45 @@ async fn semantic_compaction_fixture(
             assert!(matches!(
                 error,
                 borsuk::two_bit_store::TwoBitStoreError::Invalid(message)
-                    if message == if layout == borsuk::two_bit_generation::SourceLayoutMode::LeafCapsules {
+                    if message == if layout == borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2 {
                         "capsules require semantic discovery"
                     } else {
                         "compaction job changed"
                     }
             ));
             let ready_body = std::fs::read(job.join("ready.json")).unwrap();
+            let ready_value: serde_json::Value = serde_json::from_slice(&ready_body).unwrap();
+            assert_eq!(ready_value["schema"], "borsuk-two-bit-compaction-ready-v3");
+            let old_ready = serde_json::to_vec(&serde_json::json!({
+                "schema":"borsuk-two-bit-compaction-ready-v2",
+                "job_sha256":hash(&job_body), "input_sha256":ready_value["input_sha256"],
+                "target_root_sha256":ready_value["target_root_sha256"], "rows":ready_value["rows"]
+            }))
+            .unwrap();
+            std::fs::write(job.join("ready.json"), &old_ready).unwrap();
+            let (observed, operations) =
+                common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+            let error = compact_two_bit_index(
+                std::sync::Arc::new(observed),
+                &prefix,
+                &maintenance,
+                options,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                borsuk::two_bit_store::TwoBitStoreError::Invalid("compaction journal schema")
+            ));
+            assert!(operations.entries().iter().all(|entry| matches!(
+                entry.operation,
+                common::StoreOperation::Get | common::StoreOperation::Head
+            )
+                && !entry.path.contains("/mutations/")
+                && !entry.path.contains("/objects/")));
+            assert_eq!(std::fs::read(job.join("ready.json")).unwrap(), old_ready);
+            assert_eq!(std::fs::read(job.join("job.json")).unwrap(), job_body);
+            std::fs::write(job.join("ready.json"), &ready_body).unwrap();
             saved_ready = Some(ready_body.clone());
             let root_path = job.join("generation/manifest.json");
             let root_body = std::fs::read(&root_path).unwrap();
@@ -3072,7 +3133,7 @@ async fn semantic_compaction_fixture(
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema"], "borsuk-two-bit-empty-generation-v5");
+        assert_eq!(value["schema"], "borsuk-two-bit-empty-generation-v6");
         assert_eq!(value["profile"], "scale1m");
         assert_eq!(
             value["source_layout"],
@@ -3591,7 +3652,7 @@ async fn empty_publication_rejects_invalid_requests_before_previous_layout_io() 
             Some(&head),
             Some(DiscoveryMode::Graph),
             None,
-            SourceLayoutMode::LeafCapsules,
+            SourceLayoutMode::LeafCapsulesV2,
         )
         .await,
         Err(TwoBitStoreError::Invalid(
@@ -3626,7 +3687,7 @@ async fn fresh_profile_target_refuses_before_seal_and_explicit_scale_transition_
     // A durable Fresh empty authority exercises inherited profile resolution
     // without constructing a million-row historical corpus.
     let root = serde_json::json!({
-        "schema": "borsuk-two-bit-empty-generation-v5", "generation": 1,
+        "schema": "borsuk-two-bit-empty-generation-v6", "generation": 1,
         "dimensions": 768, "base_epoch": 0, "discovery": "semantic", "profile": "fresh1m",
         "source_layout": "flat_records"
     });
@@ -4281,13 +4342,55 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
     for dimensions in [3, 257, 1024] {
         let f = LayoutFixture::new(dimensions).await;
         let mut logical_identity = None;
-        for layout in [
-            SourceLayoutMode::FlatRecords,
-            SourceLayoutMode::LeafCapsules,
-        ] {
-            let capsules = layout == SourceLayoutMode::LeafCapsules;
-            let label = if capsules { "capsules" } else { "flat" };
-            let (local, sha) = f.build(label, layout, 1, 0);
+        let mut flat_root: Option<(std::path::PathBuf, String)> = None;
+        for label in ["flat", "capsules", "repacked"] {
+            let capsules = label != "flat";
+            let layout = if capsules {
+                SourceLayoutMode::LeafCapsulesV2
+            } else {
+                SourceLayoutMode::FlatRecords
+            };
+            let (local, sha) = if label == "repacked" {
+                let (flat, digest) = flat_root.as_ref().unwrap();
+                let output = f.temp.path().join(label);
+                let digest = borsuk::two_bit_build::repackage_source_layout(
+                    flat, digest, &output, 2, layout, f.limits,
+                )
+                .unwrap();
+                (output, digest)
+            } else {
+                f.build(label, layout, 1, 0)
+            };
+            if label == "flat" {
+                flat_root = Some((local.clone(), sha.clone()));
+            }
+            let root: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(local.join("manifest.json")).unwrap())
+                    .unwrap();
+            assert_eq!(root["schema"], "borsuk-two-bit-generation-v11");
+            assert_eq!(
+                root["source_layout"]["layout"],
+                if capsules {
+                    "leaf_capsules_v2"
+                } else {
+                    "flat_records"
+                }
+            );
+            if capsules {
+                let directory = std::fs::read(local.join("plane/capsule_directory.bin")).unwrap();
+                assert_eq!(&directory[..8], b"BORSDR02");
+                let leaves = u32::from_le_bytes(directory[20..24].try_into().unwrap()) as usize;
+                let occurrences = (0..leaves)
+                    .map(|id| {
+                        let entry = 32 + id * 64;
+                        u32::from_le_bytes(directory[entry + 4..entry + 8].try_into().unwrap())
+                            as usize
+                    })
+                    .sum::<usize>();
+                assert_eq!(directory.len(), 32 + 64 * leaves + 4 * occurrences);
+                let blob = std::fs::read(local.join("plane/capsules.bin")).unwrap();
+                assert_eq!(&blob[..8], b"BORSCP02");
+            }
             let canonical = std::fs::read(local.join("canonical.bin")).unwrap();
             let raw = std::fs::read(f.temp.path().join("raw")).unwrap();
             let ids = [i64::MIN + 3, 71, -19, i64::MAX - 9];
@@ -4348,7 +4451,7 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
             let (key, etag) = f.current_sq8().await;
             let approval = RetainedTwoBitApproval {
                 root_sha256: &sha,
-                generation: 1,
+                generation: head.generation(),
                 control_epoch: head.control_epoch(),
                 sq8_object_key: key.as_ref(),
                 sq8_etag: &etag,
@@ -4470,7 +4573,7 @@ async fn source_layout_blob_and_directory_corruption_refuse_publication_import_a
         two_bit_store::{RetainedTwoBitApproval, republish_retained_two_bit_generation},
     };
     let f = LayoutFixture::new(257).await;
-    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsules, 1, 0);
+    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsulesV2, 1, 0);
     let (key, etag) = f.current_sq8().await;
     for (ordinal, name) in ["plane/capsules.bin", "plane/capsule_directory.bin"]
         .into_iter()
@@ -4555,6 +4658,117 @@ async fn source_layout_blob_and_directory_corruption_refuse_publication_import_a
 }
 
 #[tokio::test]
+async fn page_range_v2_old_root_refuses_before_payload_reads_or_gc_deletes() {
+    use borsuk::{
+        two_bit_gc::{TwoBitGcLimits, TwoBitGcSession, collect_two_bit_garbage},
+        two_bit_mutations::TwoBitMutationLimits,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(InMemory::new());
+    let prefix = ObjectPath::from("old-root/index");
+    let digest = "1".repeat(64);
+    // Hand-authored v10 flat bytes; no current builder masquerades as old evidence.
+    let root = serde_json::json!({
+        "schema":"borsuk-two-bit-generation-v10", "generation":1, "base_epoch":0,
+        "plane_manifest_sha256":digest, "page_manifest_sha256":digest,
+        "discovery":{"mode":"graph", "centroids_sha256":digest,
+            "graph_sha256":digest, "graph_resident_bytes":1,
+            "diverse_graph_sha256":digest, "diverse_graph_resident_bytes":1},
+        "source_layout":{"layout":"flat_records"},
+        "sq8_object_sha256":digest, "sq8_object_key":format!("old/objects/{digest}"),
+        "sq8_etag":"etag", "low":[0.0], "step":[1.0],
+        "canonical":{"rows":1, "dimensions":1, "bytes":12,
+            "sha256":digest, "object_key":format!("old/objects/{digest}")}
+    });
+    let body = serde_json::to_vec(&root).unwrap();
+    let root_sha = hash(&body);
+    let root_path = prefix
+        .clone()
+        .join("generations")
+        .join(root_sha.as_str())
+        .join("manifest.json");
+    store.put(&root_path, body.into()).await.unwrap();
+    let control = serde_json::to_vec(&serde_json::json!({
+        "schema":"borsuk-two-bit-head-v2", "epoch":1, "generation":1,
+        "root_sha256":root_sha, "mutation":null, "fence":null
+    }))
+    .unwrap();
+    store
+        .put(&prefix.clone().join("head.json"), control.clone().into())
+        .await
+        .unwrap();
+    let garbage = prefix
+        .clone()
+        .join("generations")
+        .join("2".repeat(64))
+        .join("plane/capsules.bin");
+    store
+        .put(&garbage, b"must survive".to_vec().into())
+        .await
+        .unwrap();
+    let (observed, operations) =
+        common::FaultInjectingObjectStore::new(store.clone()).with_operation_log();
+    let error = read_two_bit_head(&observed, &prefix).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            borsuk::two_bit_store::TwoBitStoreError::Invalid("unsupported generation schema")
+        ),
+        "{error}"
+    );
+    let mut gc = TwoBitGcSession::new(std::sync::Arc::new(observed), &prefix, temp.path()).unwrap();
+    let failure = collect_two_bit_garbage(
+        &mut gc,
+        TwoBitGcLimits {
+            max_memory_bytes: 2_000_000,
+            mutations: TwoBitMutationLimits {
+                max_snapshot_bytes: 32768,
+                max_memory_bytes: 1_000_000,
+            },
+            max_objects_scanned: 100,
+            max_objects_deleted: 100,
+            max_deleted_object_bytes: 1_000_000,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        failure.error,
+        borsuk::two_bit_store::TwoBitStoreError::Invalid("unsupported generation schema")
+    ));
+    assert_eq!(failure.report.delete_attempts, 0);
+    assert_eq!(failure.report.objects_scanned, 0);
+    assert!(operations.entries().iter().all(|entry| matches!(
+        entry.operation,
+        common::StoreOperation::Get | common::StoreOperation::Head
+    ) && (entry.path
+        == format!("{prefix}/head.json")
+        || entry.path == root_path.as_ref())));
+    assert_eq!(
+        store
+            .get(&garbage)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"must survive"
+    );
+    assert_eq!(
+        store
+            .get(&prefix.clone().join("head.json"))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        control
+    );
+}
+
+#[tokio::test]
 async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsule_pair() {
     use borsuk::{
         two_bit_gc::{TwoBitGcLimits, TwoBitGcSession, collect_two_bit_garbage},
@@ -4562,7 +4776,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
         two_bit_mutations::{TwoBitMutationLimits, seal_two_bit_mutations},
     };
     let f = LayoutFixture::new(257).await;
-    let (old_local, old_sha) = f.build("old", SourceLayoutMode::LeafCapsules, 1, 0);
+    let (old_local, old_sha) = f.build("old", SourceLayoutMode::LeafCapsulesV2, 1, 0);
     let prefix = ObjectPath::from("gc/index");
     let maintenance = f.temp.path().join("maintenance");
     let old = publish_two_bit_generation(
@@ -4599,7 +4813,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
         .unwrap();
     let (new_local, new_sha) = f.build(
         "new",
-        SourceLayoutMode::LeafCapsules,
+        SourceLayoutMode::LeafCapsulesV2,
         2,
         sealed_head.control_epoch(),
     );
@@ -4692,7 +4906,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
 }
 
 #[tokio::test]
-async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_graph_capsules() {
+async fn source_layout_empty_v6_roundtrip_requires_layout_and_refuses_old_or_graph_capsules() {
     use borsuk::{
         semantic_unit_router::SemanticProfile,
         two_bit_generation::{DiscoveryMode, SourceLayoutMode},
@@ -4722,7 +4936,7 @@ async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_gra
     assert_eq!(root["source_layout"], "flat_records");
     for layout in [
         SourceLayoutMode::FlatRecords,
-        SourceLayoutMode::LeafCapsules,
+        SourceLayoutMode::LeafCapsulesV2,
     ] {
         let prefix = ObjectPath::from(format!("empty/{layout:?}"));
         let head = publish_empty_two_bit_generation_with_source_layout(
@@ -4746,7 +4960,7 @@ async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_gra
             .await
             .unwrap();
         let root: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(root["schema"], "borsuk-two-bit-empty-generation-v5");
+        assert_eq!(root["schema"], "borsuk-two-bit-empty-generation-v6");
         assert_eq!(root["profile"], "scale1m");
         assert_eq!(
             serde_json::from_value::<SourceLayoutMode>(root["source_layout"].clone()).unwrap(),
@@ -4775,7 +4989,7 @@ async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_gra
             .bytes()
             .await
             .unwrap();
-        for corruption in ["missing", "old", "graph"] {
+        for corruption in ["missing", "old", "v5", "old-layout", "graph"] {
             let mut changed = root.clone();
             match corruption {
                 "missing" => {
@@ -4784,10 +4998,18 @@ async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_gra
                 "old" => {
                     changed["schema"] = "borsuk-two-bit-empty-generation-v4".into();
                 }
+                "v5" => {
+                    changed = serde_json::json!({
+                        "schema":"borsuk-two-bit-empty-generation-v5", "generation":1,
+                        "dimensions":257, "base_epoch":0, "discovery":"semantic",
+                        "profile":"scale1m", "source_layout":"flat_records"
+                    });
+                }
+                "old-layout" => changed["source_layout"] = "leaf_capsules".into(),
                 _ => {
                     changed["discovery"] = "graph".into();
                     changed["profile"] = serde_json::Value::Null;
-                    changed["source_layout"] = "leaf_capsules".into();
+                    changed["source_layout"] = "leaf_capsules_v2".into();
                 }
             }
             let bytes = serde_json::to_vec(&changed).unwrap();
@@ -4825,7 +5047,7 @@ async fn source_layout_empty_v5_roundtrip_requires_layout_and_refuses_old_or_gra
             None,
             Some(DiscoveryMode::Graph),
             None,
-            SourceLayoutMode::LeafCapsules
+            SourceLayoutMode::LeafCapsulesV2
         )
         .await
         .is_err()
@@ -4859,7 +5081,7 @@ async fn source_layout_compaction_preserves_logical_ids_and_score_bits() {
             dimensions,
             0,
             profile,
-            SourceLayoutMode::LeafCapsules,
+            SourceLayoutMode::LeafCapsulesV2,
         )
         .await;
         assert_eq!(flat, capsules);
@@ -4873,7 +5095,7 @@ async fn source_layout_capsule_ready_restart_requires_selected_layout() {
         257,
         1,
         borsuk::semantic_unit_router::SemanticProfile::Scale1m,
-        borsuk::two_bit_generation::SourceLayoutMode::LeafCapsules,
+        borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2,
     )
     .await;
 }
@@ -4889,13 +5111,25 @@ async fn source_layout_retained_import_rejects_rehashed_late_capsule_records_fra
     };
     use futures_util::TryStreamExt;
     let f = LayoutFixture::with_rows(2, 2081).await;
-    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsules, 1, 0);
+    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsulesV2, 1, 0);
     let original_blob = std::fs::read(local.join("plane/capsules.bin")).unwrap();
     let original_directory = std::fs::read(local.join("plane/capsule_directory.bin")).unwrap();
-    let original_root: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(local.join("manifest.json")).unwrap()).unwrap();
+    let original_root_body = std::fs::read(local.join("manifest.json")).unwrap();
+    let original_root: serde_json::Value = serde_json::from_slice(&original_root_body).unwrap();
     let source_digests = std::fs::read(local.join("plane/page_digests.bin")).unwrap();
-    let entries = (original_directory.len() - 32) / 64;
+    assert_eq!(&original_directory[..8], b"BORSDR02");
+    let entries = u32::from_le_bytes(original_directory[20..24].try_into().unwrap()) as usize;
+    let occurrences = (0..entries)
+        .map(|id| {
+            let entry = 32 + id * 64;
+            u32::from_le_bytes(original_directory[entry + 4..entry + 8].try_into().unwrap())
+                as usize
+        })
+        .sum::<usize>();
+    assert_eq!(
+        original_directory.len(),
+        32 + entries * 64 + occurrences * 4
+    );
     assert!(entries > 1, "must exercise a late capsule");
     let entry = 32 + (entries - 1) * 64;
     let start = u64::from_le_bytes(
@@ -4957,6 +5191,56 @@ async fn source_layout_retained_import_rejects_rehashed_late_capsule_records_fra
         );
         let root = serde_json::to_vec(&root).unwrap();
         let trusted_sha = hash(&root);
+        for (name, bytes) in [
+            ("plane/capsules.bin", blob.as_slice()),
+            ("plane/capsule_directory.bin", directory.as_slice()),
+            ("manifest.json", root.as_slice()),
+        ] {
+            std::fs::write(local.join(name), bytes).unwrap();
+        }
+        let rejected = ObjectPath::from(format!("rehashed-publication/{corruption}"));
+        let (publication, publication_ops) =
+            common::FaultInjectingObjectStore::new(f.store.clone()).with_operation_log();
+        let error = publish_two_bit_generation(
+            &publication,
+            &rejected,
+            &local,
+            &trusted_sha,
+            f.limits,
+            None,
+        )
+        .await
+        .unwrap_err();
+        if corruption == "record" {
+            assert!(
+                matches!(
+                    error,
+                    TwoBitStoreError::Generation(TwoBitGenerationError::Plane(
+                        borsuk::two_bit_source::SourceBuildError::Invalid(
+                            "capsule original unit digest"
+                        )
+                    ))
+                ),
+                "{error}"
+            );
+        }
+        assert!(publication_ops.entries().iter().all(|entry| matches!(
+            entry.operation,
+            common::StoreOperation::Get | common::StoreOperation::Head
+        )));
+        assert!(
+            read_two_bit_head(f.store.as_ref(), &rejected)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for (name, bytes) in [
+            ("plane/capsules.bin", original_blob.clone()),
+            ("plane/capsule_directory.bin", original_directory.clone()),
+            ("manifest.json", original_root_body.clone()),
+        ] {
+            std::fs::write(local.join(name), bytes).unwrap();
+        }
         let new_prefix = prefix
             .clone()
             .join("generations")
@@ -5090,7 +5374,7 @@ async fn source_layout_retained_import_capsule_budget_minus_one_and_pins_refuse_
         },
     };
     let f = LayoutFixture::new(257).await;
-    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsules, 1, 0);
+    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsulesV2, 1, 0);
     let prefix = ObjectPath::from("budget/source");
     let retained =
         publish_two_bit_generation(f.store.as_ref(), &prefix, &local, &sha, f.limits, None)
@@ -5207,7 +5491,7 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
         },
     };
     let f = LayoutFixture::new(257).await;
-    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsules, 1, 0);
+    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsulesV2, 1, 0);
     let mutations = TwoBitMutationLimits {
         max_snapshot_bytes: 32768,
         max_memory_bytes: 1_000_000,
@@ -5280,7 +5564,7 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(root["source_layout"], "leaf_capsules");
+        assert_eq!(root["source_layout"], "leaf_capsules_v2");
         assert_eq!(root["profile"], "scale1m");
         let empty = read_two_bit_head(f.store.as_ref(), &prefix)
             .await
@@ -5337,7 +5621,7 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(root["source_layout"]["layout"], "leaf_capsules");
+        assert_eq!(root["source_layout"]["layout"], "leaf_capsules_v2");
         let reopened = TwoBitGeneration::open_remote_from_head(
             f.store.as_ref(),
             &filled,

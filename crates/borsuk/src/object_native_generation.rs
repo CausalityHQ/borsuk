@@ -493,7 +493,7 @@ async fn stage_metadata(
                             .ok_or(overflow)?,
                     ),
                     "plane/capsule_directory.bin" => match &root.source_layout {
-                        crate::two_bit_generation::SourceLayout::LeafCapsules {
+                        crate::two_bit_generation::SourceLayout::LeafCapsulesV2 {
                             directory_bytes,
                             ..
                         } => Some(*directory_bytes),

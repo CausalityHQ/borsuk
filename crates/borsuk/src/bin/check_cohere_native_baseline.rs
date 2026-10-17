@@ -45,10 +45,10 @@ const MEMORY_CAP: u64 = 512 * 1024 * 1024;
 const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-// v13 binds the compiled onepass policy; result v13 remains the historical v12 record.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v13";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v14";
-const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "capsule_sha256_original_units_once_v1";
+// The compiled page-range policy has its own config/result protocol.
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v14";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v15";
+const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v3";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
@@ -762,7 +762,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.source_byte_budget > 0,
         "explicit positive memory/SOURCE byte budgets with checked width",
     )?;
-    if let SourceLayout::LeafCapsules {
+    if let SourceLayout::LeafCapsulesV2 {
         blob_bytes,
         blob_sha256,
         directory_bytes,
@@ -772,9 +772,13 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         require(
             *blob_bytes > 0
                 && *blob_bytes <= usize::MAX as u64
-                && *directory_bytes >= 96
-                && (*directory_bytes - 32) % 64 == 0
-                && (*directory_bytes - 32) / 64 <= c.rows.div_ceil(32)
+                && *directory_bytes >= 100
+                && (*directory_bytes - 32) % 4 == 0
+                && c.rows
+                    .div_ceil(32)
+                    .checked_mul(68)
+                    .and_then(|n| n.checked_add(32))
+                    .is_some_and(|bound| *directory_bytes <= bound)
                 && valid_sha(blob_sha256)
                 && valid_sha(directory_sha256),
             "SOURCE capsule descriptor",
@@ -818,7 +822,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v13; older formats refuse",
+        "config format marker must be borsuk-cohere-native-baseline-config-v14; older formats refuse",
     )?;
     require(
         c.s3_read_retry.is_none() || matches!(&c.backend, Backend::S3 { .. }),
@@ -1141,7 +1145,7 @@ async fn bind_source(
     let root_body = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
     let root: Root = serde_json::from_slice(&root_body)?;
     require(
-        root.schema == "borsuk-two-bit-generation-v10" && root.source_layout == c.source_layout,
+        root.schema == "borsuk-two-bit-generation-v11" && root.source_layout == c.source_layout,
         "authenticated root/config SOURCE layout agreement",
     )?;
     require(
@@ -1218,7 +1222,7 @@ fn caller_bytes(c: &Config) -> usize {
     };
     let layout_bytes = match &c.source_layout {
         SourceLayout::FlatRecords => 0,
-        SourceLayout::LeafCapsules {
+        SourceLayout::LeafCapsulesV2 {
             blob_sha256,
             directory_sha256,
             ..
@@ -3056,7 +3060,8 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
         require(page.len() <= CONFIG_CAP, "fixture page cap")?;
         page.resize(CONFIG_CAP, b'\t');
         std::fs::write(root.join("page_manifest.json"), &page)?;
-        let mut manifest: Value = serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
         manifest["page_manifest_sha256"] = json!(hash(&page));
         let mut body = serde_json::to_vec(&manifest)?;
         require(body.len() <= CONFIG_CAP, "fixture root cap")?;
@@ -3067,8 +3072,12 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
         let store = Reader::new(&c.backend, None)?;
         let head = query_runtime(c.fetch_parallelism)?.block_on(
             borsuk::two_bit_store::publish_two_bit_generation(
-                store.store(), &ObjectPath::from("padded/index"), &root,
-                &c.generation_root_sha256, limits(&c)?, None,
+                store.store(),
+                &ObjectPath::from("padded/index"),
+                &root,
+                &c.generation_root_sha256,
+                limits(&c)?,
+                None,
             ),
         )?;
         value["generation_prefix"] = json!(head.metadata_prefix().as_ref());
@@ -3076,9 +3085,12 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
     let (config, sha) = tests::write_config(dir.path(), &value);
     let flat = dir.path().join("scale-native-result.jsonl");
     require(
-        matches!(execute_paths_status(&config, &sha, &flat, shape, |c, shape, out, p|
-            query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
-        )?, Status::Measured),
+        matches!(
+            execute_paths_status(&config, &sha, &flat, shape, |c, shape, out, p| {
+                query_runtime(c.fetch_parallelism)?.block_on(query_and_seal(c, shape, out, p))
+            })?,
+            Status::Measured
+        ),
         "flat layout fixture must seal",
     )?;
     let c: Config = serde_json::from_value(value.clone())?;
@@ -3088,7 +3100,7 @@ pub(crate) fn source_layout_reducer_native_fixture_with(
         &c.generation_root_sha256,
         &root,
         2,
-        SourceLayoutMode::LeafCapsules,
+        SourceLayoutMode::LeafCapsulesV2,
         limits(&c)?,
     )?;
     let manifest: Value = serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
@@ -3603,12 +3615,21 @@ mod tests {
         assert_eq!(output[0]["config_schema"], CONFIG_SCHEMA);
         assert_eq!(output[1]["config_schema"], CONFIG_SCHEMA);
         for header in &output[..2] {
-            assert_eq!(header["source_capsule_verification_policy"], SOURCE_CAPSULE_VERIFICATION_POLICY);
+            assert_eq!(
+                header["source_capsule_verification_policy"],
+                SOURCE_CAPSULE_VERIFICATION_POLICY
+            );
         }
-        for key in ["source_capsule_verification_policy", "skip_source_capsule_verification"] {
+        for key in [
+            "source_capsule_verification_policy",
+            "skip_source_capsule_verification",
+        ] {
             let mut override_policy = value.clone();
             override_policy[key] = json!(false);
-            assert!(serde_json::from_value::<Config>(override_policy).is_err(), "{key}");
+            assert!(
+                serde_json::from_value::<Config>(override_policy).is_err(),
+                "{key}"
+            );
         }
         assert_eq!(output[0]["s3_read_retry"], policy);
         assert_eq!(output[1]["s3_read_retry"], policy);
@@ -3618,7 +3639,10 @@ mod tests {
             2
         );
         assert_eq!(policy["sdk_retry_window_is_hard_deadline"], false);
-        for schema in ["borsuk-cohere-native-baseline-config-v11", "borsuk-cohere-native-baseline-config-v12"] {
+        for schema in [
+            "borsuk-cohere-native-baseline-config-v11",
+            "borsuk-cohere-native-baseline-config-v12",
+        ] {
             let mut old = value.clone();
             old["schema"] = json!(schema);
             let c: Config = serde_json::from_value(old).unwrap();
@@ -4213,6 +4237,43 @@ mod tests {
     }
 
     #[test]
+    fn page_range_v2_config_schema_layout_and_compiled_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let mut good = config_value(dir.path(), shape);
+        good["source_layout"] = json!({"layout":"leaf_capsules_v2","blob_bytes":8484,
+            "blob_sha256":"d".repeat(64),"directory_bytes":100,"directory_sha256":"e".repeat(64)});
+        let c: Config = serde_json::from_value(good.clone()).unwrap();
+        validate_config(&c, shape).unwrap();
+        assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v14");
+        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v15");
+        assert_eq!(
+            SOURCE_CAPSULE_VERIFICATION_POLICY,
+            "directory_page_ranges_original_units_v2"
+        );
+        for directory in [0, 96, 99, 101, 104, u64::MAX] {
+            let mut bad = good.clone();
+            bad["source_layout"]["directory_bytes"] = json!(directory);
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(config(&path, &sha, shape).is_err(), "{directory}");
+        }
+        for (pointer, value) in [
+            ("/schema", json!("borsuk-cohere-native-baseline-config-v13")),
+            ("/source_layout/layout", json!("leaf_capsules")),
+        ] {
+            let mut bad = good.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            let (path, sha) = write_config(dir.path(), &bad);
+            assert!(config(&path, &sha, shape).is_err(), "{pointer}");
+        }
+        for key in ["source_capsule_verification_policy", "skip_verification"] {
+            let mut bad = good.clone();
+            bad[key] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+            assert!(serde_json::from_value::<Config>(bad).is_err(), "{key}");
+        }
+    }
+
+    #[test]
     fn source_layout_and_explicit_byte_memory_contract() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
@@ -4239,8 +4300,8 @@ mod tests {
             ("source_layout", json!({"layout":"flat_records","extra":1})),
             (
                 "source_layout",
-                json!({"layout":"leaf_capsules","blob_bytes":100,"blob_sha256":"bad",
-                "directory_bytes":96,"directory_sha256":"e".repeat(64)}),
+                json!({"layout":"leaf_capsules_v2","blob_bytes":100,"blob_sha256":"bad",
+                "directory_bytes":100,"directory_sha256":"e".repeat(64)}),
             ),
         ] {
             let mut bad = good.clone();
@@ -4266,8 +4327,8 @@ mod tests {
     async fn configured_layout_must_match_authenticated_root_before_query_or_truth() {
         let shape = Shape::tiny(32);
         let (dir, mut value) = fixture(shape).await;
-        value["source_layout"] = json!({"layout":"leaf_capsules","blob_bytes":100,
-            "blob_sha256":"d".repeat(64),"directory_bytes":96,"directory_sha256":"e".repeat(64)});
+        value["source_layout"] = json!({"layout":"leaf_capsules_v2","blob_bytes":100,
+            "blob_sha256":"d".repeat(64),"directory_bytes":100,"directory_sha256":"e".repeat(64)});
         let c: Config = serde_json::from_value(value).unwrap();
         validate_config(&c, shape).unwrap();
         let mut out = Output::create(&dir.path().join("bad-layout.jsonl")).unwrap();
@@ -7262,7 +7323,10 @@ mod tests {
         assert_eq!(out.panel_cap, PANEL_LINE_CAP);
         assert!(out.emit(&"x".repeat(PANEL_LINE_CAP)).is_err());
         assert_eq!(out.bytes, bytes as u64);
-        assert!(out.emit_source_binding(&"x".repeat(SOURCE_BINDING_LINE_CAP)).is_err());
+        assert!(
+            out.emit_source_binding(&"x".repeat(SOURCE_BINDING_LINE_CAP))
+                .is_err()
+        );
         assert_eq!(out.bytes, bytes as u64);
         let c: Config = serde_json::from_value(config_value(dir.path(), Shape::tiny(32))).unwrap();
         assert!(caller_bytes(&c) >= 2 * SOURCE_BINDING_LINE_CAP);

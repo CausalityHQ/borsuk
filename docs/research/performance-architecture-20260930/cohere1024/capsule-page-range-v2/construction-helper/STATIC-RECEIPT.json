@@ -1,0 +1,78 @@
+{
+  "active_library_observed_revision": "966b06a7b920ce993335484cbb8b4e3cf95b79bd",
+  "active_library_status_clean": true,
+  "api_contract_library_base": "329fd2227a17c049b6fa9ceeee71f3ea57f24aad",
+  "checks": {
+    "manifest_dependency_versions_from_actual_workspace": true,
+    "only_new_helper_package_paths": true,
+    "rustfmt_edition_2024_check": true,
+    "standalone_workspace": true
+  },
+  "design_receipts": [
+    "f0ec40de-8fb2-4811-b6f2-37886cd9e172",
+    "0d2a3dc5-ab62-45c2-917f-8bcb8c590e54"
+  ],
+  "final_library_revision_requires_external_binding": true,
+  "git_base": "329fd2227a17c049b6fa9ceeee71f3ea57f24aad",
+  "guarded_sparse_checkout_receipt": "2f045582-19fc-480c-98a0-b02dd09cc7aa",
+  "inventory": [
+    {
+      "bytes": 12000,
+      "path": "CONTRACT.md",
+      "sha256": "b35c8c390e38f01ea06d8d2a62c91f3056a6dd96687da0eb75bf602b8a3f2208"
+    },
+    {
+      "bytes": 391,
+      "path": "Cargo.toml",
+      "sha256": "a753b2f364018bf871faa89808e2e503d2af08ecdaa7c5d82ea63df9a7dcd4c0"
+    },
+    {
+      "bytes": 18210,
+      "path": "src/authority.rs",
+      "sha256": "c2206b74879fb3f518852f83748840b286438c9f18d8924fad1c533f8171f83c"
+    },
+    {
+      "bytes": 7917,
+      "path": "src/io.rs",
+      "sha256": "40ecf55250a3884d93b74cd617e72edf5a34764f502a63e3a343fdf88e4804b1"
+    },
+    {
+      "bytes": 8486,
+      "path": "src/main.rs",
+      "sha256": "cb6ec1210e88964095373449a7d9bbb00e90462ca18749abe976d2fe5f84ae19"
+    },
+    {
+      "bytes": 16319,
+      "path": "src/verify.rs",
+      "sha256": "239f5b8615e45c853e2ef4f8d74deb0bbb8eeec458f6239a885a6265e507f2b5"
+    }
+  ],
+  "inventory_encoding": "UTF8 JSON sorted keys, separators comma/colon, no newline",
+  "inventory_json_sha256": "894f1276830ad54010e0a04fce4131e366212d41ea91be1a86cac3fc4c0fcd05",
+  "not_run": [
+    "Cargo",
+    "rustc",
+    "dependency resolution",
+    "lock generation",
+    "tests",
+    "native helper",
+    "actual payload reads",
+    "queries",
+    "truth",
+    "S3",
+    "reviews",
+    "children",
+    "consultations",
+    "experiment launch"
+  ],
+  "resource_properties": "RuntimeMaxUSec=2min\nEffectiveCPUs=10\nCPUWeight=10\nCPUQuotaPerSecUSec=1s\nAllowedCPUs=10\nMemoryMax=1073741824\nMemorySwapMax=0\nTasksMax=128\n",
+  "root_revision_instruction": "1792212899063486288-3532086",
+  "source_api_receipts": [
+    "e74599d1-8bf3-4eda-b9bb-2c235b202b2b",
+    "68dd3051-c884-4646-80b7-208ad0a19448",
+    "57620edb-7644-4462-9619-c913d960bb84",
+    "3afefc28-aaf1-4b26-b81c-77ed23c70516",
+    "0fb5d0c5-56b9-4efa-a32c-c3a33cfc1b7e"
+  ],
+  "status": "SOURCE_UNVERIFIED_HOLD"
+}
