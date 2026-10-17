@@ -30,7 +30,7 @@ Receipt schema: borsuk-s3-vectors-receipt-v1, with config_sha256, kind and data.
 State is create-only except append-only call ledgers and numbered cleanup attempts.
 
 1. run.sh gates: full real-input admission; native canary preparation; exact byte comparison to canary.expected.json; canary admission; live publication and all 257 rows bit-exact readback; two diagnostic queries, native reduction, one cleanup. Canary uses first 257 authenticated raw rows and first two queries, synthetic ID-validation truth. Canary quality/performance claims are forbidden.
-2. run.sh verify-canary: independent GetVectorBucket/GetIndex probes after gate unit is terminal. Each requires CLI exit 254 and ResourceNotFoundException; timeout/access denial/other errors fail. Emits config-bound absence.json.
+2. run.sh verify-canary: independent GetVectorBucket/GetIndex probes after gate unit is terminal. Each requires CLI exit 254 and NotFoundException; timeout/access denial/other errors fail. Emits config-bound absence.json.
 3. Parent reviews actual gate statuses/receipts/cleanup/absence. run.sh full enforces them too. Fresh distinct full index: 2,000 paced PutVectors calls of 500 rows; complete key enumeration; 10,000 GetVectors calls of 100 rows; bit-identical readback of every original raw f32.
 4. Wait until publication verification plus 3,600 seconds. Run exactly one ordered query1000 pass and qualified reducer. Reduction requires a complete file/directory-fsynced response seal before truth opens. quality-comparison.json records SDK hits, denominator and difference from 9,783, with vendor_win_claim=false. No partial CSV/JSONL reduction.
 5. EXIT performs one full cleanup. After terminal completion parent runs verify-full for independent absence.
@@ -67,7 +67,7 @@ systemctl show borsuk-matched-raw-gates-a0001 -p ActiveState -p SubState -p Resu
 After gate unit is actually terminal and reviewed:
 
 ~~~bash
-systemd-run --unit=borsuk-matched-raw-verify-canary-a0001 \
+systemd-run --unit=borsuk-matched-raw-verify-canary-a0002 \
   -p CPUQuota=400% -p AllowedCPUs=4-7 -p MemoryMax=8G -p MemorySwapMax=0 -p TasksMax=512 \
   -p RuntimeMaxSec=120 -p TimeoutStopSec=15 -p KillMode=mixed -p Restart=no \
   /usr/bin/bash "$packet/run.sh" verify-canary
@@ -109,3 +109,6 @@ static-validation.json records remote static checks only. Worker never executed 
 
 ## Root prospective execution binding
 Upstream3928ab42 is preserved unexecuted. This snapshot binds actual execution host and verified guest poweroff minus60s, with an independently prearmed6h termination timer. 8GiB/4CPU/512tasks is an operational safety envelope, not a product acceptance threshold. Native SDK, raw/queries/truth, source proof, idle3600 and all stage/runtime/cleanup bounds are unchanged. Full state/bucket name remains unused; canary config/namespace is deterministically refreshed from new full config SHA before any input admission or service call.
+
+## Observed verification correction
+Original independent verify-canary attempt is preserved with exit1/drain0: actual authenticated CLI returned exit254 and NotFoundException, while the control expected ResourceNotFoundException. Native admission/canary/readback/reduction/cleanup all passed0 and are NOT repeated. Corrected read-only verification writes new verify-canary-a0002; full gate binds exactly that new absence/runner receipt. SDK, configs, ownership, data and scientific conditions are unchanged.

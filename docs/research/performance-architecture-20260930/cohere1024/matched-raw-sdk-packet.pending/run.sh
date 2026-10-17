@@ -81,6 +81,7 @@ mkdir -p "$root"
 exec 9>"$root/owner.lock"
 flock -n 9
 logs=$root/$mode
+if [[ "$mode" == verify-canary ]]; then logs=$root/verify-canary-a0002; fi
 mkdir "$logs"
 printf 'NOT_RUN\n' > "$logs/measurement.exit"
 printf 'NOT_RUN\n' > "$logs/cleanup.exit"
@@ -198,9 +199,9 @@ elif action=='full-gates':
   assert (root/'gates'/(label+'.exit')).read_text().strip()=='0',label
  a=receipt(canary,cs,'cleanup.json')
  assert a['bucket_absence_verified'] is True and a['index_absence_verified'] is True
- a=json.loads((root/'verify-canary/absence.json').read_text())
+ a=json.loads((root/'verify-canary-a0002/absence.json').read_text())
  assert a=={'config_sha256':cs,'bucket':canary['bucket'],'index':canary['index'],'bucket_absent':True,'index_absent':True}
- assert (root/'verify-canary/runner.exit').read_text().strip()=='0'
+ assert (root/'verify-canary-a0002/runner.exit').read_text().strip()=='0'
  for name in ['publish.jsonl','published.json','bucket-create-intent.json','responses.jsonl','measure-started.json','calls.jsonl','cleanup.json']:
   assert not (pathlib.Path(full['state_dir'])/name).exists(),'full attempt already consumed'
 elif action=='quality':
@@ -265,7 +266,7 @@ PY
         phase "probe-$what" 40 "$aws" --profile causality --region eu-central-1 \
             --cli-connect-timeout 5 --cli-read-timeout 30 s3vectors "${args[@]}" || rc=$?
         [[ "$rc" == 254 && "$drain_rc" == 0 ]]
-        grep -q 'An error occurred (ResourceNotFoundException)' "$logs/probe-$what.stderr"
+        grep -q 'An error occurred (NotFoundException)' "$logs/probe-$what.stderr"
     done
     python3 -I - "$logs/absence.json" "$sha" "${names[0]}" "${names[1]}" <<'PY'
 import json,sys
