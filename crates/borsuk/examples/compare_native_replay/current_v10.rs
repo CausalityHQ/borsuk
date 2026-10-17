@@ -928,7 +928,8 @@ fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
                 width,
                 256,
                 usize::try_from(number(&inputs["source_get_budget"])?)?,
-            )?
+            )
+            .map_err(|e| format!("SOURCE diagnostic cover: {e:?}"))?
             .0,
         )
     } else {
