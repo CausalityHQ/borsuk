@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-leaf-prefix-abba-closure-v1",
+  "status": "ABBA_SCREEN_CLOSED_ARCHIVED",
+  "source_revision": "a0463ed097296c19539d05529ddad615be760fdd",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "key": "research/semantic-router/20261017/leaf-prefix-abba-closure-a0001/evidence.tar.gz",
+  "bytes": 42229774,
+  "sha256": "1bf692264aa2f570d68b3ec60cd4cd00146a66150f3f14856ec25b15c76d2002",
+  "default_promoted": false,
+  "competitor_win_claim": false
+}
