@@ -1,5 +1,5 @@
 {
-  "canary_config_sha256": "091404c98e1a270074f3b812af7cec8b674d8e00902ac867f18c5300b325e8d7",
+  "canary_config_sha256": "8c24ca401c3bd294159cd2e20440b96f0f0a93d6a07b5fb42155904486e097cd",
   "full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
   "guest_horizon_epoch": 1792289276,
   "host": "i-08f0d6520a3cb73df",

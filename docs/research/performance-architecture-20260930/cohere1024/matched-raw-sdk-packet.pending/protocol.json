@@ -49,7 +49,7 @@
     "Original normalization producer ELF not recovered; retained source-bound reexecution establishes matching normalized digest, not independent arithmetic proof.",
     "Cost and matched latency comparison require parent reconciliation; no vendor win from canary or incomplete output."
   ],
-  "canary_config_sha256": "091404c98e1a270074f3b812af7cec8b674d8e00902ac867f18c5300b325e8d7",
+  "canary_config_sha256": "8c24ca401c3bd294159cd2e20440b96f0f0a93d6a07b5fb42155904486e097cd",
   "claims": {
     "input_admitted": false,
     "performance": false,
