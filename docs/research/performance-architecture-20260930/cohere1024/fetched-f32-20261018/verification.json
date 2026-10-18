@@ -1,0 +1,26 @@
+{
+  "status": "FINAL_QUALIFIED_SOURCE_REPLAY_PASS",
+  "source": "a179416d8176776057918066f593c761b1eadb6b",
+  "binary_sha256": "d4ddcbce2cabebb6aa16493df067559f5a78ba26505d0cb65ecd6bd36700325e",
+  "queries": 32,
+  "native_hits": 314,
+  "canonical_f32_hits": 319,
+  "denominator": 320,
+  "gains": 5,
+  "losses": 0,
+  "recovered_native_ranks": [
+    11,
+    11,
+    11,
+    11,
+    11
+  ],
+  "native_top16_contains_all_reference_top10": true,
+  "unknown_top16_memberships": [],
+  "same_query_rows_as_provisional": true,
+  "native_sq8_replay_exact": true,
+  "actual_serving_changed": false,
+  "performance_claim": false,
+  "global_recall_claim": false,
+  "quantization_only_attribution": false
+}
