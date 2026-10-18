@@ -6334,6 +6334,11 @@ fn execute_report_with_sync(
         "output/parent identity changed",
     )?;
     sync(&dir, true)?;
+    if schema == fp32_serving::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema
+            && report["valid"] == true
+            && report.get("status").is_none());
+    }
     if schema == "borsuk-paired-source-layout-v1" {
         return Ok(report["schema"] == schema
             && report["status"] == "PARITY_VERIFIED"
@@ -16505,7 +16510,7 @@ mod tests {
     }
 
     #[test]
-    fn fp32_actual_native_runner_strict_replay_and_falsifiers() {
+    fn fp32_actual_native_runner_strict_replay_writer_and_falsifiers() {
         let (dir, result) = scale_native_runner::fp32_reducer_native_fixture().unwrap();
         let body = std::fs::read_to_string(&result).unwrap();
         let rows = body
@@ -16516,6 +16521,36 @@ mod tests {
         let report = fp32_serving::reduce(&config, &pin).unwrap();
         assert_eq!(report["queries"], 2);
         assert_eq!(report["score_precision"], "f64");
+        let output = dir.path().join("fp32-writer-success.json");
+        assert!(execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+            fp32_serving::reduce(&config, &pin)
+        }).unwrap());
+        let written: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(written, report);
+        for (case, field, value) in [
+            ("valid-false", "valid", json!(false)),
+            ("wrong-schema", "schema", json!("unexpected-report-v1")),
+            ("invalid-status", "status", json!("INVALID")),
+            ("valid-wrong-type", "valid", json!("true")),
+        ] {
+            let mut invalid = report.clone();
+            invalid[field] = value;
+            let output = dir.path().join(format!("fp32-writer-{case}.json"));
+            assert!(!execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+                Ok(invalid.clone())
+            }).unwrap(), "{case}");
+            let written: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(written, invalid, "{case}");
+        }
+        let output = dir.path().join("fp32-writer-reducer-error.json");
+        assert!(!execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+            Err("injected FP32 reducer refusal".into())
+        }).unwrap());
+        let invalid: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(invalid["schema"], fp32_serving::REPORT_SCHEMA);
+        assert_eq!(invalid["status"], "INVALID");
+        assert_eq!(invalid["complete"], false);
+        assert_eq!(invalid["error"], "injected FP32 reducer refusal");
         for selector in [
             json!({"mode":"unknown"}),
             json!({"mode":"fp32_rerank","shortlist":9,
