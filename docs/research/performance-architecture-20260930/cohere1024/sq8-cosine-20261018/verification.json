@@ -1,0 +1,15 @@
+{
+  "all_query_objects_equal_except_workspace_charge": true,
+  "config_sha256": "c9ab88776349efa99fad6e0d99983874665662d005635f04676e6f9d0a902a0d",
+  "cosine_hits": 315,
+  "displaced_truth": 1,
+  "gained_truth": 2,
+  "max_checked_workspace_bytes": 115367936,
+  "native_hits": 314,
+  "oracle_hits": 315,
+  "oracle_order_disagreement_queries": 0,
+  "report_sha256": "ab186513861fee71e7bcebd08d2d7bc4c1b2fe620ed4ebfac3cb76d374491d96",
+  "serving_latency_vendor_claim": false,
+  "source_commit": "92d586fa79ed3a0bbfad95ecb50e05d748a4571b",
+  "status": "VALID_OFFLINE_FIRST32_QUALITY_GAIN"
+}

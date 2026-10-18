@@ -5,3 +5,4 @@ leaf48-autoresearch-a0001	7c3de4f	7c3de4f	leaf40to48	see-archive	first32	VALID	l
 fetch128-gates-a0001	7c3de4f	7c3de4f	width128traceONcanary	see-archive	first32	INVALID	S3archive	PRESERVE	diagnostic1MiBcap;zero payloadIO;no algorithm result
 fetch128-autoresearch-a0001	7c3de4f	7c3de4f	width64to128	see-archive	first32	VALID	S3archive	FULL1000_NOMINATION	exactparity;wall-7.7/-14.5%;repaireduntracedcanaryPASS
 fetch128-full1000-a0001	7c3de4f	7c3de4f	width64to128	recommended-q1-fetch128.json	historical1000	VALID	full1000-confirmation.json	RECOMMEND_FOR_THIS_WORKLOAD	9737/10000all4;exactperqueryparity;wall-8.9/-12.4%;p95-7.9/-12.9%
+sq8-cosine-real32-a0002	0f3e518	92d586f	reconstructedSQ8cosine	c9ab88776349efa99fad6e0d99983874665662d005635f04676e6f9d0a902a0d	development-first32	VALID	../sq8-cosine-20261018/verification.json	RETAIN_QUALITY_PARETO_FULL1000_NEXT	314to315/320;G2/L1;oracle_agrees;no_serving_claim
