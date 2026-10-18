@@ -63,17 +63,13 @@ each cell is a fresh process and backend/cache state remains unknown. No prewarm
 Historical fixed40 reference: 9737hits,127811logicalGET,34229466368logicalB.
 No concurrent performance claim is made by this source qualification.
 
-Qualification at source freeze: focused a0002 affected-2 exits0 with runner3/3,
-reader4/4 (including included runner cases). After that pass, production-only
-fixed1M validation and a pure config-refusal test were added; the exact frozen
-source is undergoing the full runner/reader/library/release/Clippy/testbuild
-gates. This source freeze is UNVERIFIED until their terminal receipt is collected.
-Evidence: /mnt/borsuk-workspace/evidence/concurrent-query-qualification-a0002.
-Original failed setup/compile attempts remain in qualification-a0001; no real-data
-runs were performed. The new controller started only after original terminal1.
+Qualification is recorded in qualification.md. Original setup, compile and fixture
+failures remain in the evidence directories. The final repaired source passed its
+affected checks, release build, workspace Clippy and actual shim-unset workspace
+test build. No real-data or performance run was performed by this worker.
 
 Review repairs: cohort elapsed must cover the sum of each ordered batch's maximum
-query wall. The reader rejects a coherently resealed 90ms/10ms pair claiming50ms
+query wall. The reader rejects a coherently resealed 90ms/10ms pair claiming 50ms
 elapsed/QPS40, including an updated terminal copy. Production small-population
 headers refuse; fixture bypass is test-only. Runner-level overlap holds both
 payload GETs at zero permits until both actually enter. Caller memory boundaries
