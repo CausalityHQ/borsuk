@@ -109,11 +109,16 @@ fn read_artifact(a: &Artifact, cap: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 fn read_config(path: &Path) -> Result<Config> {
-    let metadata = fs::metadata(path)?;
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > 65536 {
         return Err(fail("config cap"));
     }
-    let bytes = fs::read(path)?;
+    read_config_reader(file)
+}
+fn read_config_reader(reader: impl Read) -> Result<Config> {
+    let mut bytes = Vec::new();
+    reader.take(65537).read_to_end(&mut bytes)?;
     if bytes.len() > 65536 {
         return Err(fail("config cap"));
     }
@@ -287,7 +292,7 @@ fn execute(c: &Config, measure: bool) -> Result<Value> {
     for a in [&c.generation, &c.plane, &c.digests] {
         read_artifact(a, c.max_metadata_bytes)?;
     }
-    let mut report = json!({"schema":"source-frame-report-v1","mode":if measure {"measure"}else{"admit-only"},"config":c,"original_bytes":c.records.bytes,"original_sha256":records_hash,"authenticated_original_units":c.rows.div_ceil(32),"frame_rows":FRAME_ROWS,"frame_count":nframes,"query_or_truth_opened":false,"limits":{"frame_decoded_bytes":c.max_frame_bytes,"zstd_max_window_bytes":1<<20,"metadata_admission_bytes":metadata_total},"resources":resource_snapshot(),"limitations":"Whole-plane lossless compression only. No query-range transfer, GET, billed-byte, ANN recall, latency, QPS or vendor claim. Buffers/windows are bounded; zstd context/allocator/process overhead is represented by observed process/cgroup RSS, not an analytic total workspace cap."});
+    let mut report = json!({"schema":"source-frame-report-v1","mode":if measure {"measure"}else{"admit-only"},"config":c,"original_bytes":c.records.bytes,"original_sha256":records_hash,"authenticated_original_units":c.rows.div_ceil(32),"frame_rows":FRAME_ROWS,"frame_count":nframes,"query_or_truth_opened":false,"limits":{"frame_decoded_bytes":c.max_frame_bytes,"zstd_max_window_bytes":1<<20,"metadata_admission_bytes":metadata_total},"resources":resource_snapshot(),"limitations":"Whole-plane lossless compression only. No query-range transfer, GET, billed-byte, ANN recall, latency, QPS or vendor claim. VmHWM is process resident-memory high-water; VmRSS is the end snapshot. Cgroup memory.peak includes file cache and is not process RSS. Resource snapshot is taken at the end of execute and covers the whole process/cgroup. Buffer/window bounds are not a total workspace cap. Encode/decode timings describe whole fresh calls, including contexts, zeroing, transpose and validation; no steady-state/context-reuse cost claim. Total times cover execute, excluding config loading and report publication."});
     if measure {
         sizes.sort_unstable();
         let header_bytes = (HEADER_BYTES as u64)
@@ -303,7 +308,7 @@ fn execute(c: &Config, measure: bool) -> Result<Value> {
         let framed_bytes = payload_bytes
             .checked_add(header_bytes)
             .ok_or_else(|| fail("framed overflow"))?;
-        report["measurement"] = json!({"codec_input_sha256":format!("{:x}",input_hash.finalize()),"decoded_sha256":format!("{:x}",decoded_hash.finalize()),"payload_bytes":payload_bytes,"actual_frame_header_bytes":header_bytes,"candidate_framed_bytes":framed_bytes,"counterfactual_directory_bytes":directory_bytes,"candidate_framed_plus_counterfactual_directory_bytes":framed_bytes.checked_add(directory_bytes).ok_or_else(||fail("total overflow"))?,"raw_fallback_frames":fallback,"raw_fallback_header_expansion_bytes":fallback*HEADER_BYTES,"frame_size_bytes_including_header":{"min":sizes[0],"p50":sizes[(sizes.len()-1)/2],"p95":sizes[(sizes.len()-1)*95/100],"max":sizes[sizes.len()-1]},"encode_wall_ns":encode_wall,"decode_wall_ns":decode_wall,"encode_process_cpu_ns":encode_cpu,"decode_process_cpu_ns":decode_cpu,"zstd_level":1,"dictionary":false,"directory_is_adopted":false});
+        report["measurement"] = json!({"codec_input_sha256":format!("{:x}",input_hash.finalize()),"decoded_sha256":format!("{:x}",decoded_hash.finalize()),"payload_bytes":payload_bytes,"actual_frame_header_bytes":header_bytes,"candidate_framed_bytes":framed_bytes,"counterfactual_directory_bytes":directory_bytes,"candidate_framed_plus_counterfactual_directory_bytes":framed_bytes.checked_add(directory_bytes).ok_or_else(||fail("total overflow"))?,"raw_fallback_frames":fallback,"raw_fallback_header_expansion_bytes":fallback*HEADER_BYTES,"frame_size_bytes_including_header":{"min":sizes[0],"p50":sizes[(sizes.len()-1)/2],"p95":sizes[(sizes.len()-1)*95/100],"max":sizes[sizes.len()-1]},"encode_wall_ns":encode_wall,"decode_wall_ns":decode_wall,"encode_process_cpu_ns":encode_cpu,"decode_process_cpu_ns":decode_cpu,"zstd_level":1,"zstd_version":zstd::zstd_safe::version_number(),"dictionary":false,"directory_is_adopted":false});
     }
     report["total_wall_ns"] = json!(start.elapsed().as_nanos());
     report["total_process_cpu_ns"] = json!(cpu_ns() - cpu_start);
@@ -330,11 +335,23 @@ fn artifact(path: PathBuf, bytes: &[u8]) -> Result<Artifact> {
         sha256: hash(bytes),
     })
 }
-fn fixture(dir: &Path) -> Result<Config> {
+fn fixture(dir: &Path, incompressible: bool) -> Result<Config> {
     let rows = 289usize;
     let dimensions = 3;
     let width = 9;
-    let records: Vec<u8> = (0..rows * width).map(|i| (i / width) as u8).collect();
+    let mut state = 9u64;
+    let records: Vec<u8> = (0..rows * width)
+        .map(|i| {
+            if incompressible {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            } else {
+                (i / width) as u8
+            }
+        })
+        .collect();
     let mut digests = Vec::new();
     for chunk in records.chunks(32 * width) {
         digests.extend_from_slice(&Sha256::digest(chunk));
@@ -366,7 +383,7 @@ fn fixture(dir: &Path) -> Result<Config> {
 }
 fn canary() -> Result<Value> {
     let dir = tempfile::tempdir()?;
-    let config = fixture(dir.path())?;
+    let config = fixture(dir.path(), false)?;
     execute(&config, false)?;
     execute(&config, true)?;
     let mut bad = config.clone();
@@ -457,6 +474,47 @@ mod tests {
         canary().unwrap();
     }
     #[test]
+    fn source_frame_config_reader_stops_after_growth() {
+        use std::io::{Seek, SeekFrom};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, b"{}").unwrap();
+        let mut reader = File::open(&path).unwrap();
+        assert_eq!(reader.metadata().unwrap().len(), 2);
+        // Deterministic growth after descriptor admission, before bounded reading.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(200000)
+            .unwrap();
+        assert!(read_config_reader(&mut reader).is_err());
+        assert_eq!(reader.stream_position().unwrap(), 65537);
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        assert!(read_config(&path).is_err());
+        let c = fixture(dir.path(), false).unwrap();
+        fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+        assert_eq!(read_config(&path).unwrap().rows, c.rows);
+    }
+    #[test]
+    fn source_frame_cli_all_raw_accounting() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = fixture(dir.path(), true).unwrap();
+        let report = execute(&c, true).unwrap();
+        let n = c.rows.div_ceil(FRAME_ROWS) as u64;
+        let m = &report["measurement"];
+        assert_eq!(m["raw_fallback_frames"], n);
+        assert_eq!(m["payload_bytes"], c.records.bytes);
+        assert_eq!(m["actual_frame_header_bytes"], 25 * n);
+        assert_eq!(m["candidate_framed_bytes"], c.records.bytes + 25 * n);
+        assert_eq!(m["counterfactual_directory_bytes"], 64 + 24 * n);
+        assert_eq!(
+            m["candidate_framed_plus_counterfactual_directory_bytes"],
+            c.records.bytes + 25 * n + 64 + 24 * n
+        );
+        assert_eq!(m["raw_fallback_header_expansion_bytes"], 25 * n);
+    }
+    #[test]
     fn source_frame_cli_strictness() {
         for args_ in [
             vec!["--mode", "measure", "--report", "new"],
@@ -492,7 +550,7 @@ mod tests {
     #[test]
     fn source_frame_cli_authority_and_caps() {
         let dir = tempfile::tempdir().unwrap();
-        let c = fixture(dir.path()).unwrap();
+        let c = fixture(dir.path(), false).unwrap();
         let mut bad = c.clone();
         bad.max_frame_bytes = 1;
         assert!(execute(&bad, true).is_err());

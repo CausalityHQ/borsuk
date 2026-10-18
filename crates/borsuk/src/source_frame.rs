@@ -3,8 +3,8 @@ use std::io::{Error, ErrorKind, Result};
 pub const FRAME_ROWS: usize = 256;
 pub const HEADER_BYTES: usize = 25;
 const MAGIC: &[u8; 4] = b"BSF1";
-/// Caps are checked before codec buffers are allocated. Zstd contexts additionally
-/// use a fixed 1 MiB maximum window; this is not a total process RSS allowance.
+/// Caps are checked before codec buffers are allocated. Decoding rejects Zstd
+/// windows above 1 MiB; this is not a context allocation or total RSS allowance.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub max_decoded_bytes: usize,
@@ -51,6 +51,7 @@ pub fn encode(rows: usize, width: usize, original: &[u8], limits: Limits) -> Res
     Ok(frame)
 }
 /// Decode exactly one frame with expected geometry and an explicit output cap.
+/// Callers must authenticate decoded bytes; this codec supplies no integrity proof.
 pub fn decode(frame: &[u8], rows: usize, width: usize, limits: Limits) -> Result<Vec<u8>> {
     let n = geometry(rows, width, limits)?;
     if frame.len() < HEADER_BYTES || frame.len() > HEADER_BYTES + n || &frame[..4] != MAGIC {
@@ -205,7 +206,7 @@ mod tests {
         let mut bad = frame.clone();
         bad[25] = 0;
         assert!(decode(&bad, 256, 264, limits()).is_err());
-        // A streaming frame claiming a 2 GiB window must fail before allocation.
+        // A streaming frame claiming a 128 MiB window must fail before allocation.
         let mut window = frame;
         window[29] &= !0x20;
         window.insert(30, 0x88);
