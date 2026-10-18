@@ -1,0 +1,251 @@
+{
+  "native_serving": {
+    "arm": "B",
+    "cell": "admit",
+    "diagnostic_not_population": false,
+    "fullycold_claim": false,
+    "observed_query_ms": {
+      "0.5": 135.65745,
+      "0.9": 231.402016,
+      "0.95": 323.058077,
+      "0.99": 404.060493
+    },
+    "plan_and_logical_charges_equal_retained": true,
+    "queries": 1000,
+    "query_cpu_total_s": 101.046987653,
+    "query_wall_total_s": 158.000107044,
+    "result_sha256": "31b19584d6ea7ef2a67d441f6b5e225066b77ee70f9467ce20a14ef0ba83100d",
+    "scorebits_equal_frozen_offline": true,
+    "serial_qps": 6.329109636118912,
+    "source_bytes": 24255289344,
+    "source_gets": 97797,
+    "sq8_bytes": 9974177024,
+    "sq8_gets": 30014,
+    "stage_total_ms": {
+      "discovery": 2019.670108,
+      "planning": 21501.055586,
+      "source": 68113.004379,
+      "sq8": 66295.924144
+    },
+    "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+    "truth_hits": 9746,
+    "underfill": 0,
+    "vendor_claim": false
+  },
+  "qualification": {
+    "allocation_audit": "Same returned ranking scratch/weights. Pending retains existing normalized query and heap, adds constant f32 norm/dot accumulators. No decoded plane; existing D*4 query allowance unchanged.",
+    "base": "f44354c4440827f1ff464ee1f72a9973d6f59238",
+    "branch": "refs/heads/cosine-serving-native-a0001",
+    "bundle": {
+      "path": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/delivery.bundle",
+      "sha256": "34b69e3b77bf1ea623ff0b0314fc962cc92948fa66fa306e8ab35bfc108955d5",
+      "verify_exit": 0
+    },
+    "canonical_evidence": "/mnt/borsuk-workspace/evidence/cosine-serving-native-a0001",
+    "commit": "e5293d37576a8e1eee92f487bb5b80a543363952",
+    "controller": {
+      "current_unit": "borsuk-cosine-serving-native-a0003",
+      "launch_ssm": "e2ced6dc-0b3a-4890-8cdf-3482dab5065d",
+      "nonoverlap": "previous MainPID0 verified before every source repair; final unit terminal MainPID0 exit0",
+      "owned_stop_ssm": "7a87df2e-8fa3-4487-8951-8d6cd0f1bd46",
+      "prior_launch_ssms": [
+        "f90fda0a-fac3-49e4-a1eb-846ca4e3842a",
+        "ca7bdf2d-1ace-450b-bbd6-be70f763a46f"
+      ],
+      "shared_flock": "/mnt/borsuk-workspace/cargo-target.lock",
+      "units": {
+        "borsuk-cosine-serving-native-a0001": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainStatus=0\nCPUUsageNSec=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=70273\nActiveState=inactive\n",
+        "borsuk-cosine-serving-native-a0002": "RuntimeMaxUSec=30min\nMainPID=0\nResult=exit-code\nExecMainStatus=1\nCPUUsageNSec=1078187144000\nCPUQuotaPerSecUSec=8s\nAllowedCPUs=8-15\nMemoryMax=42949672960\nMemorySwapMax=0\nTasksMax=2048\nActiveState=failed\n",
+        "borsuk-cosine-serving-native-a0003": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainStatus=0\nCPUUsageNSec=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=70273\nActiveState=inactive\n"
+      }
+    },
+    "elfs": [
+      {
+        "bytes": 19696064,
+        "file": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=de699a110a4d8cb0551281ae1eb9eb85b8e62271, not stripped",
+        "path": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/bin/check_cohere_native_baseline",
+        "sha256": "cd3bdf824ac90c9e2a83452c83828a6e2d66dffd0941b6256e3ed563d8226c01"
+      },
+      {
+        "bytes": 16751880,
+        "file": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=a509719c2fb184ee3d6884c3b8e7164b5ee73486, not stripped",
+        "path": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/bin/compare_native_replay",
+        "sha256": "38c35e3c52a9780be15a42cdeb374734d2c9298cbf769c8415b480bb04499645"
+      },
+      {
+        "bytes": 285518792,
+        "kind": "native test ELF",
+        "path": "/mnt/borsuk-workspace/target/debug/deps/borsuk-4053e33bd11ca67d",
+        "sha256": "c40d1510f83237b62491310502f028650769012e6da5a3deb5de7731c89f681c"
+      },
+      {
+        "bytes": 46341064,
+        "kind": "native test ELF",
+        "path": "/mnt/borsuk-workspace/target/debug/deps/two_bit_application_ids-3a1c0089cc66550b",
+        "sha256": "35b6c9d135e274eddaf71f0dde5110776a5e65599acc2019b68b11416025f1f2"
+      }
+    ],
+    "environment": {
+      "children_or_consultations": false,
+      "data_or_truth_reads": false,
+      "instance": "i-0b573afda34440956",
+      "jobs": 8,
+      "local_source_build_prep": false,
+      "profile": "causality",
+      "region": "eu-central-1"
+    },
+    "gates": {
+      "application-ids": {
+        "command": "cargo test --locked -p borsuk --test two_bit_application_ids",
+        "counts": {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 27
+        },
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/application-ids.attempt3.log",
+        "log_sha256": "dfa0801cf4656f779b0033b8935ac9f43553772c64833d83f41b5b7261f26a75"
+      },
+      "clippy": {
+        "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/clippy.attempt3.log",
+        "log_sha256": "2df1b64ad127cb42ad1d967a545e9e2caee0f44a7b71b78137497eaae6b9d3cd"
+      },
+      "object-native": {
+        "command": "cargo test --locked -p borsuk --lib object_native_generation::",
+        "counts": {
+          "failed": 0,
+          "filtered": 2055,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9
+        },
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/object-native.attempt3.log",
+        "log_sha256": "d8fa18ad6ee71ddc3d487c781ae09268e839671210629f165ad559e862d1cf4c"
+      },
+      "release": {
+        "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay",
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/release.attempt3.log",
+        "log_sha256": "3cfa85adfbb88ddacd5a2d6cdd105873dadeb697a202f3d302341e9bf6d43f9d"
+      },
+      "returned-sq8": {
+        "command": "cargo test --locked -p borsuk --lib returned_sq8::",
+        "counts": {
+          "failed": 0,
+          "filtered": 2057,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 7
+        },
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/returned-sq8.attempt3.log",
+        "log_sha256": "46041fed42a752e43044928f67795fed736f70e2a2298f57a2cb0c8decb48ba3"
+      },
+      "sq8-range": {
+        "command": "cargo test --locked -p borsuk --lib sq8_s3_range::",
+        "counts": {
+          "failed": 0,
+          "filtered": 2002,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 61
+        },
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/sq8-range.attempt3.log",
+        "log_sha256": "62b8f40f4cf9ff6de67e2d365bd3ae2b146ced980114ced19edfc9bf5f034ee5"
+      },
+      "two-bit": {
+        "command": "cargo test --locked -p borsuk --lib two_bit_",
+        "counts": {
+          "failed": 0,
+          "filtered": 1987,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 77
+        },
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/two-bit.attempt3.log",
+        "log_sha256": "2fdd9ce718bbe67772b9bead384d78e10ec84e3e2f290282ecb163ff145ffb59"
+      },
+      "workspace-testbuild": {
+        "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 CARGO_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh",
+        "exit": 0,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/workspace-testbuild.attempt3.log",
+        "log_sha256": "ac4694223cdbf3b18e1a589b3296a5031f2fe5906eb634916614de178bd567e8"
+      }
+    },
+    "known_failures": {
+      "broad_failed_roster": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/broad-failed-tests.json",
+      "causal_scope": "These diagnostic groups call preserved L2 APIs; representative fixture construction fails before scoring. Other broad failures remain baseline-unverified; no assertions or fixture schemas weakened.",
+      "count": 28,
+      "exact_parent_baseline": "UNVERIFIED; no full-suite baseline qualification",
+      "representative": {
+        "cause": "generated fixture build fails with missing field source_layout at fine_sq8_groups.rs:5409, before changed serving ranker",
+        "command": "cargo test --locked -p borsuk --lib pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount -- --nocapture",
+        "executed": 1,
+        "exit": 101,
+        "log": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/diagnostic-failure-trace.attempt3.log"
+      },
+      "unchanged_base_file_git_blobs": {
+        "crates/borsuk/src/fine_sq8_groups.rs": "f7d5739eaf0a7f1870c582d1bb791b4d07201b6e",
+        "crates/borsuk/src/hierarchical_semantic_cells.rs": "ced008feb7e796bb8a7026b8a1d613e498ffe9c8"
+      }
+    },
+    "limits": [
+      "No data or performance claim.",
+      "Requantization may change cosine scores across compaction; reopened output checked against its own scalar cosine oracle.",
+      "Two existing native/S3 ignored tests were not executed.",
+      "HOLD same worker; no push, merge, or agent_complete without parent authorization."
+    ],
+    "patch": {
+      "path": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/final.patch",
+      "sha256": "efaee8defc9972049cd7ace9f079f0ec72a9e74d04732187804d0696eef2f919"
+    },
+    "preserved_attempts": {
+      "attempt1": "Owned interruption of overbroad2064 selection; no terminal native exit; interruption marker143, observed unit exit0. 28 failures captured before stop.",
+      "attempt2": "75 two-bit tests passed/2 test-oracle failures; other affected gates passed; release target-kind invocation failed; Clippy/workspace passed. All original logs retained.",
+      "attempt3": "All requested gates pass. Diagnostic representative intentionally outside qualification; actual failure retained separately."
+    },
+    "qualification_scope": "requested affected native gates; not the complete library test suite",
+    "review": {
+      "evidence": "/mnt/borsuk-workspace/evidence/cosine-serving-root-review-a0001",
+      "id": "60389",
+      "reconciled": [
+        "L2 bridge oracle separated and winner assertions retained",
+        "orthogonal layout score1",
+        "split decoded sequential norms + score diversity + independent cosine oracle",
+        "top10 comparisons retained + actual full-return tail sentinel oracle"
+      ]
+    },
+    "source_files": {
+      "crates/borsuk/src/object_native_generation.rs": "c0d603cb11c52f463e044a181fec3136e36941fce97c2116bd04865d776f7c4b",
+      "crates/borsuk/src/returned_sq8.rs": "30e409f8c02fd6bcfca8c9ab312539de0a9017728675f66eeeb22054d4f04a1d",
+      "crates/borsuk/src/sq8_s3_range.rs": "2e298c31d93724c4806f39490c51735ea93e1d9cd9197dd753c38c859ff1126a",
+      "crates/borsuk/src/two_bit_build.rs": "5dfed295d6143855c3d5a279e7ca3ee2862312743224672bcaf1169dfd5f3a39",
+      "crates/borsuk/src/two_bit_generation.rs": "7f9c48e079a693a6288f2982423cf48c654be50ce1bdda2a732876b83cdb8fde",
+      "crates/borsuk/src/two_bit_mutations.rs": "b028c7b0f50fd3a9f959615363b5bf9218a201bf56f0b8b5904e9599ff965684",
+      "crates/borsuk/tests/two_bit_application_ids.rs": "f0cc6a12b473e3d2d69834eee031a521795b0328c8105825fb833e82de226fc6"
+    },
+    "status": "QUALIFIED",
+    "timestamp": "2026-10-18T19:08:14.504270+00:00",
+    "total_scoped_ignored": 2,
+    "total_scoped_passed": 181,
+    "tree": "e9eb853fd618d937dbeb78960376dd85316c183a",
+    "tree_audit": {
+      "missing_inherited_preserved": 22810,
+      "path": "/mnt/borsuk-workspace/cosine-serving-source-a0001/evidence/cosine-serving-native-a0001/tree-audit.json",
+      "sha256": "60867148c72df0f2167d1ec0ce73efdaae1d55bd044756f53f5a4288cf7781fc",
+      "unowned_preserved": 34832
+    },
+    "worker": "borsuk/cosine-serving-integration-native",
+    "workspace_executable_targets_compiled": 162,
+    "worktree": "/mnt/borsuk-workspace/cosine-serving-source-a0001"
+  },
+  "qualified_source": "e5293d37576a8e1eee92f487bb5b80a543363952",
+  "quality_not_latency_win": true
+}
