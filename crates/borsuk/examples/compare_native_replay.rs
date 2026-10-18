@@ -6092,11 +6092,41 @@ fn report_cap(schema: &str) -> u64 {
         512 * 1024
     } else if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
         || schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA
+        || schema == sq8_cosine::REPORT_SCHEMA
     {
         16 * 1024 * 1024
     } else {
         REPORT_CAP
     }
+}
+
+
+#[cfg(test)]
+#[test]
+fn sq8_cosine_report_writer_boundaries() {
+    let dir = tempfile::tempdir().unwrap();
+    for (case, schema, status, bytes, accepted) in [
+        ("cosine-over2", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", REPORT_CAP + 1, true),
+        ("cosine-exact16", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", 16*1024*1024, true),
+        ("cosine-over16", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", 16*1024*1024 + 1, false),
+        ("f32-exact2", fetched_f32::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC", REPORT_CAP, true),
+        ("f32-over2", fetched_f32::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC", REPORT_CAP + 1, false),
+    ] {
+        let mut report = json!({"schema":schema,"status":status,"complete":true,"qualified":false,"padding":""});
+        let overhead = serde_json::to_vec(&report).unwrap().len() as u64 + 1;
+        report["padding"] = json!("x".repeat(usize::try_from(bytes-overhead).unwrap()));
+        let path = dir.path().join(case);
+        let result = execute_report(&path, schema, ||Ok(report));
+        if accepted {
+            assert!(result.unwrap(), "{case}");
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), bytes, "{case}");
+        } else {
+            assert!(result.unwrap_err().to_string().contains("report byte cap"), "{case}");
+            assert!(std::fs::metadata(&path).unwrap().len() <= report_cap(schema), "{case}");
+        }
+    }
+    assert_eq!(report_cap("unrelated-schema"), REPORT_CAP);
+    assert_eq!(report_cap(sq8_subpage_shortlist::COUNT_CURVE_SCHEMA), 16*1024*1024);
 }
 
 struct Output {
