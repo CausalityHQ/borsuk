@@ -138,7 +138,7 @@ pub(super) fn replay_matches(native: &[ScoredNominee], s: &Selected, k: usize) -
                 .all(|((a, b), o)| {
                     u64::try_from(a.id).ok() == Some(b.id)
                         && a.ordinal == *o
-                        && a.score.to_bits() == b.score_bits
+                        && u64::from(a.score.to_bits()) == b.score_bits
                 }),
         "sq8-cosine exact native IDs/ordinals/scorebits: attribution refused",
     )

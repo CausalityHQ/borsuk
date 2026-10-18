@@ -80,6 +80,13 @@ const BASELINE_SOURCE_GETS: usize = 128;
 enum Serving {
     /// Historical SOURCE nomination, then SQ8 under the unchanged baseline caps.
     Baseline {},
+    /// Exact canonical refinement of the unchanged baseline fetch.
+    Fp32Rerank {
+        shortlist: usize,
+        max_fp32_bytes: usize,
+        max_fp32_gets: usize,
+        max_parallel_fp32_gets: usize,
+    },
     /// Opt-in direct closure: no SOURCE I/O. These caps are explicit and independent of
     /// the baseline `max_query_*` limits.
     DirectClosure {
@@ -88,9 +95,25 @@ enum Serving {
     },
 }
 impl Serving {
+    fn fp32(self) -> Option<borsuk::fp32_rerank::Fp32RerankLimits> {
+        match self {
+            Self::Fp32Rerank {
+                shortlist,
+                max_fp32_bytes,
+                max_fp32_gets,
+                max_parallel_fp32_gets,
+            } => Some(borsuk::fp32_rerank::Fp32RerankLimits {
+                shortlist,
+                max_bytes: max_fp32_bytes,
+                max_gets: max_fp32_gets,
+                max_parallel_gets: max_parallel_fp32_gets,
+            }),
+            _ => None,
+        }
+    }
     fn direct(self) -> Option<DirectClosureLimits> {
         match self {
-            Self::Baseline {} => None,
+            Self::Baseline {} | Self::Fp32Rerank { .. } => None,
             Self::DirectClosure {
                 max_sq8_bytes,
                 max_sq8_gets,
@@ -962,6 +985,20 @@ fn config_schema(c: &Config) -> bool {
     }
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    if let Some(limits) = c.serving.fp32() {
+        require(
+            !concurrent_config(c)
+                && !c.execution.trace()
+                && (K..=256).contains(&limits.shortlist)
+                && limits.max_gets >= limits.shortlist
+                && limits.max_parallel_gets > 0
+                && limits
+                    .shortlist
+                    .checked_mul(D * 4 + 8)
+                    .is_some_and(|n| n <= limits.max_bytes),
+            "FP32 runner requires serial untraced execution and bounded explicit limits",
+        )?;
+    }
     require(
         concurrent_config(c) || c.query_runtime == QueryRuntime::CurrentThread,
         "multi_thread2 requires the concurrent task probe",
@@ -1425,7 +1462,7 @@ async fn bind_source(
     let root_body = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
     let root: Root = serde_json::from_slice(&root_body)?;
     require(
-        root.schema == "borsuk-two-bit-generation-v12" && root.source_layout == c.source_layout,
+        root.schema == "borsuk-two-bit-generation-v13" && root.source_layout == c.source_layout,
         "authenticated root/config SOURCE layout agreement",
     )?;
     require(
@@ -2281,11 +2318,18 @@ impl Charge {
 }
 #[derive(Default, Serialize)]
 struct Charges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical: Option<Charge>,
     router: Charge,
     source: Charge,
     sq8: Charge,
 }
 impl Charges {
+    fn add_canonical(&mut self, stats: Sq8ReadStats) -> Result<()> {
+        self.canonical
+            .get_or_insert_with(Charge::default)
+            .add(stats)
+    }
     fn add(&mut self, router: Sq8ReadStats, source: Sq8ReadStats, sq8: Sq8ReadStats) -> Result<()> {
         self.router.add(router)?;
         self.source.add(source)?;
@@ -2295,11 +2339,16 @@ impl Charges {
         Charge {
             submitted_gets: self.router.submitted_gets
                 + self.source.submitted_gets
-                + self.sq8.submitted_gets,
+                + self.sq8.submitted_gets
+                + self.canonical.map_or(0, |c| c.submitted_gets),
             verified_bytes: self.router.verified_bytes
                 + self.source.verified_bytes
-                + self.sq8.verified_bytes,
-            failed_gets: self.router.failed_gets + self.source.failed_gets + self.sq8.failed_gets,
+                + self.sq8.verified_bytes
+                + self.canonical.map_or(0, |c| c.verified_bytes),
+            failed_gets: self.router.failed_gets
+                + self.source.failed_gets
+                + self.sq8.failed_gets
+                + self.canonical.map_or(0, |c| c.failed_gets),
         }
     }
 }
@@ -2307,22 +2356,31 @@ impl Charges {
 #[serde(deny_unknown_fields)]
 struct Hit {
     id: u64,
-    score_bits: u32,
+    score_bits: u64,
 }
-fn validate_hits(hits: &[Hit], rows: usize) -> Result<()> {
+fn validate_hits(hits: &[Hit], rows: usize, fp32: bool) -> Result<()> {
+    let score = |h: &Hit| {
+        if fp32 {
+            f64::from_bits(h.score_bits)
+        } else {
+            u32::try_from(h.score_bits)
+                .map(|n| f64::from(f32::from_bits(n)))
+                .unwrap_or(f64::NAN)
+        }
+    };
     require(hits.len() <= K, "returned count exceeds k")?;
     for (i, h) in hits.iter().enumerate() {
         require(
             h.id < rows as u64
-                && f32::from_bits(h.score_bits).is_finite()
+                && score(h).is_finite()
                 && !hits[..i].iter().any(|old| old.id == h.id),
             "returned IDs/scores",
         )?;
     }
     require(
         hits.windows(2).all(|h| {
-            f32::from_bits(h[0].score_bits)
-                .total_cmp(&f32::from_bits(h[1].score_bits))
+            score(&h[0])
+                .total_cmp(&score(&h[1]))
                 .then(h[0].id.cmp(&h[1].id))
                 .is_le()
         }),
@@ -2565,6 +2623,23 @@ async fn query_and_seal_with(
             && generation.semantic_profile() == Some(c.profile),
         "generation geometry/profile",
     )?;
+    let mut generation = generation;
+    let fp32_startup = if let Some(limits) = c.serving.fp32() {
+        let memory = generation.fp32_rerank_memory(limits)?;
+        require(
+            memory <= c.max_memory_bytes,
+            "FP32 total modeled memory cap",
+        )?;
+        p.transport.begin(&reader, "canonical_open", None);
+        let opened = generation.enable_fp32_rerank(store).await;
+        p.transport.finish(&reader);
+        Some(
+            json!({"limits":limits,"modeled_memory_bytes":memory,"open":opened?,
+            "transport":p.transport,"score_precision":"f64"}),
+        )
+    } else {
+        None
+    };
     let generation = Arc::new(generation);
     let mut startup = json!({"phase":"startup","metadata":generation.remote_open_stats(),
         "serving":c.serving,
@@ -2572,6 +2647,9 @@ async fn query_and_seal_with(
         "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
     startup["source_layout"] = json!(c.source_layout);
+    if let Some(fp32) = fp32_startup {
+        startup["fp32_rerank"] = fp32;
+    }
     startup["range_state_charged_by_library_bytes"] = json!(range_scheduler_bytes(c)?);
     startup["source_authentication_extra_library_bytes"] = json!(source_authentication_bytes(c)?);
     if let Some(bytes) = generation.byte_window_state_bytes() {
@@ -2711,7 +2789,20 @@ async fn query_and_seal_with(
             None
         };
         let prefetched_wall = prefetched.as_ref().map(|(_, wall)| *wall);
-        let result = if let Some((result, _)) = prefetched {
+        let mut fp32_result = None;
+        let result = if let Some(limits) = c.serving.fp32() {
+            generation
+                .diagnostic_search_fp32_with_store(store, &query, K, limits)
+                .await
+                .map(|(result, trace)| {
+                    fp32_result = Some((
+                        result.candidates,
+                        result.canonical_stats,
+                        result.rerank_wall_ns,
+                    ));
+                    (result.base, trace)
+                })
+        } else if let Some((result, _)) = prefetched {
             result
         } else {
             match (c.serving.direct(), diag.as_mut()) {
@@ -2765,6 +2856,9 @@ async fn query_and_seal_with(
             Err(e) => {
                 let (source, sq8) = e.read_stats();
                 p.charges.add(e.router_stats(), source, sq8)?;
+                if c.serving.fp32().is_some() {
+                    p.charges.add_canonical(e.canonical_stats())?;
+                }
                 let rejection = e.direct_resource_rejection();
                 let error_text = query_error_text(&e);
                 let error_text = if c.execution.panel() {
@@ -2814,26 +2908,44 @@ async fn query_and_seal_with(
             result.ranked.stats,
         )?;
         require(
-            result.ranked.candidates.len() <= K,
+            fp32_result
+                .as_ref()
+                .map_or(result.ranked.candidates.len(), |r| r.0.len())
+                <= K,
             "native returned count exceeds k",
         )?;
         let mut returned = Vec::with_capacity(K);
         let mut returned_physical_ordinals = [0; K];
-        for (rank, hit) in result.ranked.candidates.iter().enumerate() {
-            require(
-                hit.id >= 0 && hit.ordinal < c.rows,
-                "native returned identity",
-            )?;
-            returned.push(Hit {
-                id: hit.id as u64,
-                score_bits: hit.score.to_bits(),
-            });
-            returned_physical_ordinals[rank] = hit.ordinal;
+        if let Some((hits, _, _)) = &fp32_result {
+            for (rank, hit) in hits.iter().enumerate() {
+                let ordinal = hit.ordinal.ok_or("FP32 runner base ordinal")?;
+                require(
+                    hit.id >= 0 && ordinal < c.rows,
+                    "native exact returned identity",
+                )?;
+                returned.push(Hit {
+                    id: hit.id as u64,
+                    score_bits: hit.score.to_bits(),
+                });
+                returned_physical_ordinals[rank] = ordinal;
+            }
+        } else {
+            for (rank, hit) in result.ranked.candidates.iter().enumerate() {
+                require(
+                    hit.id >= 0 && hit.ordinal < c.rows,
+                    "native returned identity",
+                )?;
+                returned.push(Hit {
+                    id: hit.id as u64,
+                    score_bits: u64::from(hit.score.to_bits()),
+                });
+                returned_physical_ordinals[rank] = hit.ordinal;
+            }
         }
         #[cfg(test)]
         returned.truncate(shape.returned_limit);
         let returned_physical_ordinals = &returned_physical_ordinals[..returned.len()];
-        validate_hits(&returned, c.rows)?;
+        validate_hits(&returned, c.rows, c.serving.fp32().is_some())?;
         let underfill = returned.len() < K;
         let mut charges = Charges::default();
         charges.add(
@@ -2841,6 +2953,14 @@ async fn query_and_seal_with(
             result.source_stats,
             result.ranked.stats,
         )?;
+        if let Some((_, stats, _)) = &fp32_result {
+            charges.add_canonical(*stats)?;
+            p.charges.add_canonical(*stats)?;
+        }
+        let canonical_stage = fp32_result.as_ref().map(|(_,_,wall)| json!({
+            "score_precision":"f64","wall_ns":wall,"record_bytes":D*4+8,
+            "shortlist":result.ranked.candidates.iter().map(|h| json!({"id":h.id,"ordinal":h.ordinal,"sq8_score_bits":h.score.to_bits()})).collect::<Vec<_>>()
+        }));
         // Full ordered range identity, not just totals: `selected_pages` is the required
         // closure (direct) or the admitted pages (baseline); bridges live only in `ranges`.
         #[derive(Serialize)]
@@ -2885,6 +3005,8 @@ async fn query_and_seal_with(
             ordinal: usize,
             truth_opened: bool,
             serving: Serving,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            canonical_stage: Option<&'a Value>,
             source_nomination_skipped: bool,
             // What `stages.planning` measures: baseline = SOURCE nomination plus cover;
             // direct = the cover computation alone (SOURCE nomination is skipped).
@@ -2921,6 +3043,7 @@ async fn query_and_seal_with(
             ordinal,
             truth_opened: false,
             serving: c.serving,
+            canonical_stage: canonical_stage.as_ref(),
             source_nomination_skipped: result.source_nomination_skipped,
             planning_scope: if result.source_nomination_skipped {
                 "direct_cover_only"
@@ -3076,7 +3199,7 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
             "sealed query sequence/truth boundary",
         )?;
         let returned = row.returned.ok_or("sealed returned IDs missing")?;
-        validate_hits(&returned, c.rows)?;
+        validate_hits(&returned, c.rows, c.serving.fp32().is_some())?;
         require(
             row.returned_count == Some(returned.len()) && row.underfill == Some(returned.len() < K),
             "sealed returned count/underfill",
@@ -3229,6 +3352,16 @@ fn execute_paths_status(
             "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
             "external_gate_required":true,"truth_opened":false});
         // Added after the literal: json! recursion depth grows with the entry count.
+        if configured
+            .as_ref()
+            .ok()
+            .is_some_and(|c| c.serving.fp32().is_some())
+        {
+            identity["fp32_rerank_source_sha256"] =
+                json!(hash(include_bytes!("../fp32_rerank.rs")));
+            identity["canonical_source_sha256"] =
+                json!(hash(include_bytes!("../canonical_source.rs")));
+        }
         identity["source_capsule_source_sha256"] =
             json!(hash(include_bytes!("../source_capsule.rs")));
         identity["config_schema"] = json!(
@@ -3478,8 +3611,10 @@ pub(crate) fn scale_reducer_native_fixture(
     prefix: bool,
     panel: bool,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
-    scale_reducer_native_fixture_count(if prefix { 1 } else { 2 },
-        panel.then_some(if prefix { 0 } else { 1 }))
+    scale_reducer_native_fixture_count(
+        if prefix { 1 } else { 2 },
+        panel.then_some(if prefix { 0 } else { 1 }),
+    )
 }
 
 #[cfg(test)]
@@ -3487,7 +3622,10 @@ pub(crate) fn scale_reducer_native_fixture_count(
     count: usize,
     panel_ordinal: Option<usize>,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
-    let shape = Shape { count, ..Shape::tiny(32) };
+    let shape = Shape {
+        count,
+        ..Shape::tiny(32)
+    };
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":32,"end":32+count.max(2)});
@@ -3506,6 +3644,25 @@ pub(crate) fn scale_reducer_native_fixture_count(
     Ok((dir, result))
 }
 
+#[cfg(test)]
+pub(crate) fn fp32_reducer_native_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+    let shape = Shape::tiny(33);
+    let (dir, mut value) = query_runtime(default_fetch_parallelism())?
+        .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
+    value["reserved_query_interval"] = json!({"start":33,"end":35});
+    value["serving"] = json!({"mode":"fp32_rerank","shortlist":16,"max_fp32_bytes":16*(D*4+8),
+        "max_fp32_gets":16,"max_parallel_fp32_gets":3});
+    let (config, sha) = tests::write_config(dir.path(), &value);
+    let result = dir.path().join("fp32-native-result.jsonl");
+    let status = execute_paths_status(&config, &sha, &result, shape, |c, shape, out, progress| {
+        configured_query_runtime(c)?.block_on(query_and_seal(c, shape, out, progress))
+    })?;
+    require(
+        matches!(status, Status::Measured),
+        "native FP32 fixture must seal",
+    )?;
+    Ok((dir, result))
+}
 #[cfg(test)]
 pub(crate) fn source_layout_reducer_native_fixture() -> Result<(tempfile::TempDir, [PathBuf; 2])> {
     source_layout_reducer_native_fixture_with(32, 2, false, false)
@@ -8212,6 +8369,24 @@ mod tests {
         (records(&output), summary)
     }
 
+    #[test]
+    fn fp32_score_precision_rejects_baseline_high_bits() {
+        let baseline = Hit {
+            id: 0,
+            score_bits: u64::from(0.5_f32.to_bits()),
+        };
+        assert!(validate_hits(&[baseline], 33, false).is_ok());
+        let high = Hit {
+            id: 0,
+            score_bits: (1_u64 << 32) | u64::from(0.5_f32.to_bits()),
+        };
+        assert!(validate_hits(&[high], 33, false).is_err());
+        let exact = Hit {
+            id: 0,
+            score_bits: (0.5_f64 + f64::EPSILON).to_bits(),
+        };
+        assert!(validate_hits(&[exact], 33, true).is_ok());
+    }
     #[test]
     fn execution_selector_is_explicit_strict_sorted_unique_and_bounded() {
         let dir = tempfile::tempdir().unwrap();

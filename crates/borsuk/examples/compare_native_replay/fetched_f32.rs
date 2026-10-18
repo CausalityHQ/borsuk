@@ -205,7 +205,7 @@ fn replay_matches(scores: &[ScoredNominee], selected: &Selected, k: usize) -> Re
             .all(|((s, h), o)| {
                 u64::try_from(s.id).ok() == Some(h.id)
                     && s.ordinal == *o
-                    && s.score.to_bits() == h.score_bits
+                    && u64::from(s.score.to_bits()) == h.score_bits
             }),
         "fetched-f32 native replay discrepancy: attribution refused",
     )

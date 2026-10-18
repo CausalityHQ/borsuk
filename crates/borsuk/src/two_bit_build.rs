@@ -386,6 +386,11 @@ pub fn repackage_semantic_router(
                 .ok_or(bad("repackage page digest"))?,
         ),
         (
+            "canonical_row_digests.bin",
+            root.canonical.row_digests_bytes as u64,
+            root.canonical.row_digests_sha256.as_str(),
+        ),
+        (
             "canonical.bin",
             root.canonical.bytes,
             root.canonical.sha256.as_str(),
@@ -801,6 +806,11 @@ pub fn repackage_source_layout(
             leaves_sha256.as_str(),
         ),
         (
+            "canonical_row_digests.bin",
+            root.canonical.row_digests_bytes as u64,
+            root.canonical.row_digests_sha256.as_str(),
+        ),
+        (
             "canonical.bin",
             root.canonical.bytes,
             root.canonical.sha256.as_str(),
@@ -896,7 +906,7 @@ fn admit_build_payload_with_partition(
         })
         .and_then(|n| n.checked_add(pages.checked_mul(32)?))
         .and_then(|n| n.checked_add(page_bytes))
-        .and_then(|n| n.checked_add(262144))
+        .and_then(|n| n.checked_add(327680))
         .and_then(|n| n.checked_add(if ordered { rows.checked_mul(8)? } else { 0 }))
         .ok_or(bad("build memory"))?;
     let semantic_memory = if mode == DiscoveryMode::Semantic {
@@ -1350,6 +1360,7 @@ mod tests {
             "source_layout":source_layout, "sq8_object_sha256":digest,
             "sq8_object_key":format!("test/objects/{digest}"), "sq8_etag":"etag",
             "canonical":{"rows":1, "dimensions":1, "bytes":12,
+                "row_digests_bytes":32, "row_digests_sha256":digest,
                 "sha256":digest, "object_key":format!("test/objects/{digest}")},
             "low":[0.0], "step":[1.0]}))
         .unwrap()
@@ -1582,7 +1593,7 @@ mod tests {
             manifest["page_rows"], 32,
             "new SQ8 proofs must authenticate 32-row blocks"
         );
-        assert_eq!(root["schema"], "borsuk-two-bit-generation-v12");
+        assert_eq!(root["schema"], "borsuk-two-bit-generation-v13");
         assert_eq!(manifest["object_sha256"], sq8_sha);
         let digests = fs::read(output.join("page_digests.bin")).unwrap();
         assert_eq!(digests.len(), rows.div_ceil(32) * 32);
@@ -1873,7 +1884,7 @@ mod tests {
             artifacts.manifest
         );
         let modeled =
-            2 * 128 + rows.div_ceil(SQ8_PAGE_ROWS) * 32 + SQ8_PAGE_ROWS * (2 + 12) + 262144;
+            2 * 128 + rows.div_ceil(SQ8_PAGE_ROWS) * 32 + SQ8_PAGE_ROWS * (2 + 12) + 327680;
         let retained = import.retained_bytes().unwrap();
         let rejected = temp.path().join("import-between");
         let error = builder
@@ -2026,7 +2037,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v12",
+            manifest["schema"], "borsuk-two-bit-generation-v13",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();
@@ -2185,4 +2196,293 @@ mod tests {
         fs::remove_file(output.join("diverse_graph.bin")).unwrap();
         assert!(TwoBitGeneration::open(&output, &root_sha, limits).is_err());
     }
+}
+
+/// Offline construction from one explicitly pinned v12 input. This is not a
+/// serving compatibility reader. Input contains canonical.bin plus
+/// its complete manifest-selected artifacts; output is create-only.
+pub fn authenticate_canonical_generation(
+    current: &Path,
+    trusted_root: &str,
+    sq8_path: &Path,
+    output: &Path,
+    max_memory_bytes: usize,
+) -> Result<String> {
+    use crate::two_bit_source::SourcePlaneReceipt;
+    let bad = TwoBitGenerationError::Invalid;
+    let read_small = |name: &str, digest: &str| -> Result<Vec<u8>> {
+        let length = fs::metadata(current.join(name))
+            .map_err(TwoBitGenerationError::Io)?
+            .len();
+        if length == 0 || length > 65536 {
+            return Err(bad("FP32 prep metadata length"));
+        }
+        crate::two_bit_source::read_authenticated(&current.join(name), length as usize, digest)
+            .map_err(TwoBitGenerationError::Plane)
+    };
+    if output.exists() {
+        return Err(bad("FP32 prep output exists"));
+    }
+    let body = read_small("manifest.json", trusted_root)?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| bad("FP32 prep root"))?;
+    if value["schema"] != "borsuk-two-bit-generation-v12"
+        || value["canonical"].get("row_digests_bytes").is_some()
+        || value["canonical"].get("row_digests_sha256").is_some()
+    {
+        return Err(bad("FP32 prep requires pinned v12 input"));
+    }
+    let rows = value["canonical"]["rows"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or(bad("FP32 prep rows"))?;
+    let digests_bytes = rows
+        .checked_mul(32)
+        .ok_or(bad("FP32 prep digest geometry"))?;
+    value["schema"] = SCHEMA.into();
+    value["canonical"]["row_digests_bytes"] = digests_bytes.into();
+    value["canonical"]["row_digests_sha256"] = hash(&[]).into();
+    let mut root: Manifest =
+        serde_json::from_value(value).map_err(|_| bad("FP32 prep strict root"))?;
+    if !root.valid_descriptor()
+        || root.low.len() != root.canonical.dimensions
+        || !root.discovery.valid(rows, root.canonical.dimensions)
+        || root.generation == 0
+        || !valid_object_key(&root.sq8_object_key, &root.sq8_object_sha256)
+    {
+        return Err(bad("FP32 prep descriptor"));
+    }
+    root.generation = root
+        .generation
+        .checked_add(1)
+        .ok_or(bad("FP32 prep generation overflow"))?;
+    let dimensions = root.canonical.dimensions;
+    let modeled = digests_bytes
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(rows.checked_mul(8)?))
+        .and_then(|n| n.checked_add(dimensions.checked_mul(32)?))
+        .and_then(|n| n.checked_add(4 * 1024 * 1024))
+        .ok_or(bad("FP32 prep memory"))?;
+    if modeled > max_memory_bytes {
+        return Err(bad("FP32 prep memory cap"));
+    }
+    // Admit the sidecar, copies, IDs and streaming buffers before opening either payload.
+    let plane_body = read_small("plane/manifest.json", &root.plane_manifest_sha256)?;
+    let plane: SourcePlaneReceipt =
+        serde_json::from_slice(&plane_body).map_err(|_| bad("FP32 prep plane"))?;
+    let page_body = read_small("page_manifest.json", &root.page_manifest_sha256)?;
+    let mut page: serde_json::Value =
+        serde_json::from_slice(&page_body).map_err(|_| bad("FP32 prep pages"))?;
+    if plane.rows != rows
+        || plane.dimensions != dimensions
+        || plane.sq8_sha256 != root.sq8_object_sha256
+        || page["generation"].as_u64() != Some(root.generation - 1)
+        || page["rows"].as_u64() != Some(rows as u64)
+        || page["dimensions"].as_u64() != Some(dimensions as u64)
+        || page["object_sha256"].as_str() != Some(root.sq8_object_sha256.as_str())
+        || page["page_rows"].as_u64() != Some(SQ8_PAGE_ROWS as u64)
+    {
+        return Err(bad("FP32 prep cross-artifact binding"));
+    }
+    plane.validate_identity(&root.sq8_object_sha256).map_err(TwoBitGenerationError::Plane)?;
+    root.capsule_metadata_bytes()?;
+    let page_digest_len = rows.div_ceil(SQ8_PAGE_ROWS).checked_mul(32)
+        .ok_or(bad("FP32 prep page digest geometry"))?;
+    let page_digests = crate::two_bit_source::read_authenticated(
+        &current.join("page_digests.bin"), page_digest_len,
+        page["page_digest_sha256"].as_str().ok_or(bad("FP32 prep page digest"))?)
+        .map_err(TwoBitGenerationError::Plane)?;
+    crate::sq8_page_authority::PageAuthority::load(&page_body, &root.page_manifest_sha256, &page_digests)
+        .map_err(|_| bad("FP32 prep page authority"))?;
+    fs::create_dir(output).map_err(TwoBitGenerationError::Io)?;
+    fs::create_dir(output.join("plane")).map_err(TwoBitGenerationError::Io)?;
+    if root.discovery.mode() == DiscoveryMode::Semantic {
+        fs::create_dir(output.join("router")).map_err(TwoBitGenerationError::Io)?;
+    }
+    let mut copies = vec![
+        (
+            "plane/manifest.json",
+            plane_body.len() as u64,
+            root.plane_manifest_sha256.as_str(),
+        ),
+        (
+            "plane/mean.bin",
+            (dimensions * 4) as u64,
+            plane.mean_sha256.as_str(),
+        ),
+        (
+            "plane/page_digests.bin",
+            (rows.div_ceil(32) * 32) as u64,
+            plane.page_digest_sha256.as_str(),
+        ),
+        (
+            "page_digests.bin",
+            (rows.div_ceil(SQ8_PAGE_ROWS) * 32) as u64,
+            page["page_digest_sha256"]
+                .as_str()
+                .ok_or(bad("FP32 prep page digest"))?,
+        ),
+    ];
+    copies.extend(
+        crate::two_bit_store::source_artifacts(&root, &plane)
+            .map_err(|_| bad("FP32 prep source geometry"))?
+            .into_iter()
+            .map(|(n, b, h)| (n, b as u64, h)),
+    );
+    let centroids_sha = match &root.discovery {
+        Discovery::Graph {
+            centroids_sha256,
+            graph_sha256,
+            diverse_graph_sha256,
+            ..
+        } => {
+            for (name, sha) in [
+                ("graph.bin", graph_sha256),
+                ("diverse_graph.bin", diverse_graph_sha256),
+            ] {
+                copies.push((
+                    name,
+                    fs::metadata(current.join(name))
+                        .map_err(TwoBitGenerationError::Io)?
+                        .len(),
+                    sha.as_str(),
+                ));
+            }
+            centroids_sha256
+        }
+        Discovery::Semantic {
+            centroids_sha256,
+            root_sha256,
+            root_bytes,
+            membership_sha256,
+            membership_bytes,
+            leaves_sha256,
+            leaves_bytes,
+            ..
+        } => {
+            copies.extend([
+                ("router/root.bin", *root_bytes as u64, root_sha256.as_str()),
+                (
+                    "router/membership.bin",
+                    *membership_bytes as u64,
+                    membership_sha256.as_str(),
+                ),
+                (
+                    "router/leaves.bin",
+                    *leaves_bytes as u64,
+                    leaves_sha256.as_str(),
+                ),
+            ]);
+            centroids_sha256
+        }
+    };
+    copies.push((
+        "centroids.bin",
+        fs::metadata(current.join("centroids.bin"))
+            .map_err(TwoBitGenerationError::Io)?
+            .len(),
+        centroids_sha.as_str(),
+    ));
+    for (name, bytes, digest) in copies {
+        copy_authenticated(current, output, name, bytes, digest)?;
+    }
+    let width = dimensions
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(8))
+        .ok_or(bad("FP32 prep width"))?;
+    let sq8_width = dimensions
+        .checked_add(12)
+        .ok_or(bad("FP32 prep SQ8 width"))?;
+    let canonical = File::open(current.join("canonical.bin")).map_err(TwoBitGenerationError::Io)?;
+    let sq8 = File::open(sq8_path).map_err(TwoBitGenerationError::Io)?;
+    if canonical
+        .metadata()
+        .map_err(TwoBitGenerationError::Io)?
+        .len()
+        != root.canonical.bytes
+        || sq8.metadata().map_err(TwoBitGenerationError::Io)?.len()
+            != rows
+                .checked_mul(sq8_width)
+                .ok_or(bad("FP32 prep SQ8 length"))? as u64
+    {
+        return Err(bad("FP32 prep payload length"));
+    }
+    let mut canonical = BufReader::with_capacity(65536, canonical);
+    let mut sq8 = BufReader::with_capacity(65536, sq8);
+    let mut records = std::io::BufWriter::with_capacity(
+        65536,
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output.join("canonical.bin"))
+            .map_err(TwoBitGenerationError::Io)?,
+    );
+    let mut digests = std::io::BufWriter::with_capacity(
+        65536,
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output.join("canonical_row_digests.bin"))
+            .map_err(TwoBitGenerationError::Io)?,
+    );
+    let (mut canonical_hash, mut sq8_hash, mut digest_hash) =
+        (Sha256::new(), Sha256::new(), Sha256::new());
+    let mut row = vec![0; width];
+    let mut sq8_row = vec![0; sq8_width];
+    let mut ids = Vec::with_capacity(rows);
+    for _ in 0..rows {
+        canonical
+            .read_exact(&mut row)
+            .map_err(TwoBitGenerationError::Io)?;
+        sq8.read_exact(&mut sq8_row)
+            .map_err(TwoBitGenerationError::Io)?;
+        if row[..8] != sq8_row[..8] {
+            return Err(bad("FP32 prep canonical/SQ8 ID order"));
+        }
+        let mut norm = 0_f64;
+        for value in row[8..].chunks_exact(4) {
+            let value = f32::from_le_bytes(value.try_into().unwrap());
+            if !value.is_finite() {
+                return Err(bad("FP32 prep canonical coordinate"));
+            }
+            norm += f64::from(value) * f64::from(value);
+        }
+        if !norm.is_finite() || (norm - 1.).abs() > 1e-6 {
+            return Err(bad("FP32 prep canonical norm"));
+        }
+        ids.push(i64::from_le_bytes(row[..8].try_into().unwrap()));
+        canonical_hash.update(&row);
+        sq8_hash.update(&sq8_row);
+        let row_hash = Sha256::digest(&row);
+        digest_hash.update(row_hash);
+        records.write_all(&row).map_err(TwoBitGenerationError::Io)?;
+        digests
+            .write_all(&row_hash)
+            .map_err(TwoBitGenerationError::Io)?;
+    }
+    ids.sort_unstable();
+    if ids.windows(2).any(|v| v[0] == v[1])
+        || canonical
+            .read(&mut [0])
+            .map_err(TwoBitGenerationError::Io)?
+            != 0
+        || sq8.read(&mut [0]).map_err(TwoBitGenerationError::Io)? != 0
+        || format!("{:x}", canonical_hash.finalize()) != root.canonical.sha256
+        || format!("{:x}", sq8_hash.finalize()) != root.sq8_object_sha256
+    {
+        return Err(bad("FP32 prep payload identity"));
+    }
+    for file in [&mut records, &mut digests] {
+        file.flush().map_err(TwoBitGenerationError::Io)?;
+        file.get_ref()
+            .sync_all()
+            .map_err(TwoBitGenerationError::Io)?;
+    }
+    root.canonical.row_digests_sha256 = format!("{:x}", digest_hash.finalize());
+    page["generation"] = root.generation.into();
+    let page_body = serde_json::to_vec(&page).map_err(|_| bad("FP32 prep pages encoding"))?;
+    write_new(&output.join("page_manifest.json"), &page_body)?;
+    root.page_manifest_sha256 = hash(&page_body);
+    let body = serde_json::to_vec(&root).map_err(|_| bad("FP32 prep root encoding"))?;
+    finish_root(output, &body)
 }

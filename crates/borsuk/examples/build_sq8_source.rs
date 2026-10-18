@@ -10,6 +10,27 @@ use std::{
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--authenticate-canonical")
+    {
+        if args.len() != 7 {
+            return Err("usage: build_sq8_source --authenticate-canonical RETAINED_DIR ROOT_SHA SQ8_PATH NEW_OUTPUT_DIR MAX_MEMORY_BYTES".into());
+        }
+        let root = borsuk::two_bit_build::authenticate_canonical_generation(
+            Path::new(&args[2]),
+            &args[3],
+            Path::new(&args[4]),
+            Path::new(&args[5]),
+            args[6].parse()?,
+        )?;
+        println!(
+            "{}",
+            serde_json::json!({"schema":"borsuk-canonical-row-auth-preparation-v1",
+            "input_root_sha256":args[3],"root_sha256":root,"query_or_truth_used":false})
+        );
+        return Ok(());
+    }
     if args.get(1).is_some_and(|arg| arg == "--derive") {
         if args.len() != 5 {
             return Err("usage: build_sq8_source --derive CONFIG CONFIG_SHA NEW_OUTPUT_DIR".into());

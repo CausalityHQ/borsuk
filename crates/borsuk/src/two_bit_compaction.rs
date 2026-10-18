@@ -338,6 +338,7 @@ fn disk_bound(rows: usize, dimensions: usize, layout: SourceLayoutMode) -> Resul
                     .checked_mul(32)?,
             )
         })
+        .and_then(|n| n.checked_add(rows.checked_mul(32)?))
         .and_then(|n| n.checked_add(262144))
         .map(|n| n as u64)
         .ok_or(bad("compaction disk geometry"))
@@ -1133,7 +1134,8 @@ mod tests {
         let profile = SemanticProfile::Scale1m;
         // Proof digests grow by874976B, while the one-block buffer shrinks
         // by232064B (256->32 rows at1036B/row): net+642912B.
-        let build = 516_156_296;
+        // The canonical digest writer adds one 64 KiB streaming buffer.
+        let build = 516_221_832;
         assert_eq!(
             crate::two_bit_build::admit_build_payload(
                 1_000_000,
@@ -1157,11 +1159,11 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(build + 8_000_000 + 262144, 524_418_440);
-        assert_eq!(profile.allocation_cap() - 524_418_440, 12_452_472);
+        assert_eq!(build + 8_000_000 + 262144, 524_483_976);
+        assert_eq!(profile.allocation_cap() - 524_483_976, 12_386_936);
         assert_eq!(
             disk_bound(1_000_000, 1024, SourceLayoutMode::FlatRecords).unwrap(),
-            11_053_262_144
+            11_085_262_144
         );
     }
 

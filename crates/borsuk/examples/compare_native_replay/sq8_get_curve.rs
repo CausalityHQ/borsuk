@@ -903,7 +903,7 @@ mod tests {
                 .iter()
                 .map(|&id| crate::Hit {
                     id,
-                    score_bits: 1_f32.to_bits(),
+                    score_bits: u64::from(1_f32.to_bits()),
                 })
                 .collect::<Vec<_>>();
             for index in 0..2 {

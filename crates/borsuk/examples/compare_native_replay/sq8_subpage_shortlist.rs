@@ -1222,7 +1222,7 @@ fn reduce_shortlist_engine(
         require(
             baseline.len() == sample.returned.len()
                 && baseline.iter().zip(&sample.returned).all(|(a, b)| {
-                    a.id >= 0 && a.id as u64 == b.id && a.score.to_bits() == b.score_bits
+                    a.id >= 0 && a.id as u64 == b.id && u64::from(a.score.to_bits()) == b.score_bits
                 }),
             "shortlist original ordered IDs/score bits",
         )?;
@@ -3610,7 +3610,7 @@ mod budget_block_tests {
             .iter()
             .map(|p| super::super::Hit {
                 id: p.id as u64,
-                score_bits: p.score.to_bits(),
+                score_bits: u64::from(p.score.to_bits()),
             })
             .collect::<Vec<_>>();
         assert_eq!(

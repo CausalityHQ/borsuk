@@ -284,6 +284,9 @@ pub struct InFlightBytes {
 }
 
 impl InFlightBytes {
+    pub(crate) fn admits_record(&self, bytes: usize) -> bool {
+        bytes <= self.capacity
+    }
     #[cfg(test)]
     fn new(capacity: usize) -> Arc<Self> {
         Self::with_waiter_limit(capacity, 1024, usize::MAX).unwrap()
@@ -3283,6 +3286,7 @@ pub(crate) mod cold_http_fixture {
         // Stage, then starts of delayed stream error, early digest error, held sibling.
         fault: Option<(usize, [usize; 3])>,
         retry_status: bool,
+        response_fault: Option<(String, &'static str)>,
         error_released: bool,
         sibling_released: bool,
         stop: bool,
@@ -3412,6 +3416,10 @@ pub(crate) mod cold_http_fixture {
                 store: PrefixStore::new(store, Path::default()),
                 counters,
             }
+        }
+
+        pub fn response_fault(&self, fault: Option<(String, &'static str)>) {
+            self.state.0.lock().unwrap().response_fault = fault;
         }
 
         pub fn arm_retry_status(&self, starts: [usize; 3]) {
@@ -3619,7 +3627,40 @@ pub(crate) mod cold_http_fixture {
             state.finished[stage].push(first);
             return result;
         }
+
+        let response_fault = state
+            .response_fault
+            .as_ref()
+            .filter(|(path, _)| path == key && !head)
+            .map(|(_, fault)| *fault);
         drop(state);
+        if let Some(fault) = response_fault {
+            if fault == "auth" {
+                socket.write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )?;
+                return Ok(());
+            }
+            let status = if fault == "200" {
+                "200 OK"
+            } else {
+                "206 Partial Content"
+            };
+            let response_etag = if fault == "etag" { "\"wrong\"" } else { ETAG };
+            let content_length = end - first + usize::from(fault == "long");
+            let response_first = first + usize::from(fault == "range");
+            let total = body.len() + usize::from(fault == "size");
+            write!(
+                socket,
+                "HTTP/1.1 {status}\r\nContent-Length: {content_length}\r\nETag: {response_etag}\r\nLast-Modified: Wed, 23 Sep 2026 00:00:00 GMT\r\nContent-Range: bytes {response_first}-{}/{total}\r\nConnection: close\r\n\r\n",
+                end - 1
+            )?;
+            socket.write_all(&body[first..end - usize::from(fault == "short")])?;
+            if fault == "long" {
+                socket.write_all(&[0])?;
+            }
+            return Ok(());
+        }
         let status = if range.is_some() {
             "206 Partial Content"
         } else {
@@ -6565,31 +6606,61 @@ mod tests {
                 "rows":3,"dimensions":2,"page_rows":256,
                 "object_sha256":format!("{:x}", Sha256::digest(&object)),
                 "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
-            })).unwrap();
+            }))
+            .unwrap();
             let authority = PageAuthority::load(
-                &manifest, &format!("{:x}", Sha256::digest(&manifest)), &sidecar,
-            ).unwrap();
+                &manifest,
+                &format!("{:x}", Sha256::digest(&manifest)),
+                &sidecar,
+            )
+            .unwrap();
             let store = InMemory::new();
             let location = Path::from("nonunit");
-            let etag = store.put(&location, PutPayload::from(object.clone()))
-                .await.unwrap().e_tag.unwrap();
+            let etag = store
+                .put(&location, PutPayload::from(object.clone()))
+                .await
+                .unwrap()
+                .e_tag
+                .unwrap();
             for traced in [false, true] {
                 let mut trace = Sq8RangeTrace::new(1).unwrap();
                 let result = rank_verified_sq8_pages_traced_with_split(
-                    &store, &location, &authority, &[(0, 0)], &etag,
-                    &[1., 0.], &[-1., -1.], &[0.25, 0.25], 3, 1, 42, 1,
+                    &store,
+                    &location,
+                    &authority,
+                    &[(0, 0)],
+                    &etag,
+                    &[1., 0.],
+                    &[-1., -1.],
+                    &[0.25, 0.25],
+                    3,
+                    1,
+                    42,
+                    1,
                     if invalid { &[90] } else { &[] },
-                    traced.then_some(&mut trace), None, None,
-                ).await;
+                    traced.then_some(&mut trace),
+                    None,
+                    None,
+                )
+                .await;
                 if invalid {
-                    assert!(matches!(result.unwrap_err().error,
-                        RangeFetchError::Score(Sq8ScoreError::InvalidPlane)));
+                    assert!(matches!(
+                        result.unwrap_err().error,
+                        RangeFetchError::Score(Sq8ScoreError::InvalidPlane)
+                    ));
                 } else {
                     let hits = result.unwrap().candidates;
-                    let expected = [(41, 2, 0_f32), (90, 0, 0.),
-                        (7, 1, 1. - (1_f32 / 1.0625_f32.sqrt()).clamp(-1., 1.))];
-                    assert_eq!(hits.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
-                        expected.map(|(id, ordinal, score)| (id, ordinal, score.to_bits())));
+                    let expected = [
+                        (41, 2, 0_f32),
+                        (90, 0, 0.),
+                        (7, 1, 1. - (1_f32 / 1.0625_f32.sqrt()).clamp(-1., 1.)),
+                    ];
+                    assert_eq!(
+                        hits.iter()
+                            .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                            .collect::<Vec<_>>(),
+                        expected.map(|(id, ordinal, score)| (id, ordinal, score.to_bits()))
+                    );
                 }
             }
         }
@@ -6599,10 +6670,12 @@ mod tests {
         let mut object = Vec::new();
         for row in 0..rows {
             object.extend_from_slice(&(row as i64).to_le_bytes());
-            let codes = (0..dimensions).map(|dim| {
-                let code = ((row * 17 + dim * 13) % 251) as u8;
-                if code == 15 { 16 } else { code }
-            }).collect::<Vec<_>>();
+            let codes = (0..dimensions)
+                .map(|dim| {
+                    let code = ((row * 17 + dim * 13) % 251) as u8;
+                    if code == 15 { 16 } else { code }
+                })
+                .collect::<Vec<_>>();
             let norm = codes.iter().fold(0_f32, |sum, &code| {
                 let value = -0.3_f32 + f32::from(code) * 0.02;
                 sum + value * value
@@ -6782,20 +6855,28 @@ mod tests {
                     let mut oracle = Vec::new();
                     for &(first, last) in ranges {
                         let span = authority.byte_range(first, last).unwrap();
-                        for (slot, record) in object[span.clone()].chunks_exact(dimensions + 12).enumerate() {
+                        for (slot, record) in object[span.clone()]
+                            .chunks_exact(dimensions + 12)
+                            .enumerate()
+                        {
                             let id = i64::from_le_bytes(record[..8].try_into().unwrap());
                             let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
                             let mut inner = 0_f32;
                             for d in 0..dimensions {
                                 inner += f32::from(record[12 + d]) * (query[d] * step[d]);
                             }
-                            let score = 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.);
+                            let score = 1.
+                                - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.);
                             if excluded.binary_search(&id).is_err() {
                                 oracle.push((id, span.start / (dimensions + 12) + slot, score));
                             }
                         }
                     }
-                    assert!(oracle.iter().any(|s| s.2.to_bits() != oracle[0].2.to_bits()));
+                    assert!(
+                        oracle
+                            .iter()
+                            .any(|s| s.2.to_bits() != oracle[0].2.to_bits())
+                    );
                     oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)));
                     let plain = rank_verified_sq8_pages_traced_with_byte_window(
                         &store,
@@ -6816,8 +6897,17 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                    assert_eq!(plain.candidates.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
-                        oracle[..10].iter().map(|&(id, ordinal, score)| (id, ordinal, score.to_bits())).collect::<Vec<_>>());
+                    assert_eq!(
+                        plain
+                            .candidates
+                            .iter()
+                            .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                            .collect::<Vec<_>>(),
+                        oracle[..10]
+                            .iter()
+                            .map(|&(id, ordinal, score)| (id, ordinal, score.to_bits()))
+                            .collect::<Vec<_>>()
+                    );
                     for blocks in [1, 2, 3] {
                         let split = Sq8RangeSplit {
                             max_physical_range_bytes: blocks * 256 * (dimensions + 12),

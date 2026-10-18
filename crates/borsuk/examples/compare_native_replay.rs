@@ -629,6 +629,15 @@ fn validate_current_scale_inputs(i: &Inputs, raw: &Value) -> Result<()> {
 }
 
 fn validate_scale_input_values(i: &Inputs, raw: &Value, current: bool, v10: bool) -> Result<()> {
+    let exact_fp32 = fp32_serving::enabled(raw);
+    if exact_fp32 {
+        require(
+            current && v10 && raw["config_schema"] == current_v10::FRAMED_CONFIG_SCHEMA,
+            "FP32 current config binding",
+        )?;
+        fp32_serving::limits(raw)?;
+    }
+
     require(
         i.dataset == "CohereLabs/wikipedia-2023-11-embed-multilingual-v3"
             && i.revision == "ade45fb52bd549f5e8c065636fe4160a43c2af36"
@@ -647,7 +656,7 @@ fn validate_scale_input_values(i: &Inputs, raw: &Value, current: bool, v10: bool
             && (i.profile != "native100k" || i.rows <= 100_000)
             && i.requests_bytes == i.count as u64 * i.dimensions as u64 * 4
             && i.truth_bytes == i.count as u64 * K as u64 * 8
-            && raw["serving"] == json!({"mode":"baseline"})
+            && (raw["serving"] == json!({"mode":"baseline"}) || exact_fp32)
             && raw["source_cache"] == "off"
             && (if current_v10::is_source_layout_config(raw) {
                 raw["max_memory_bytes"]
@@ -1122,6 +1131,7 @@ struct CompletedEvidence {
     binding_charge: Charge,
     generation_authority: Value,
     last: Option<TransportSpan>,
+    fp32_head_attempt_cap: Option<u64>,
     stage_samples: [Vec<u64>; 4],
     startup: Value,
     terminal: Value,
@@ -1133,6 +1143,7 @@ impl CompletedEvidence {
             binding_charge,
             generation_authority: Value::Null,
             last: None,
+            fp32_head_attempt_cap: None,
             stage_samples: std::array::from_fn(|_| Vec::with_capacity(COUNT)),
             startup: Value::Null,
             terminal: Value::Null,
@@ -1188,6 +1199,27 @@ impl CompletedEvidence {
         span.after.follows(&span.before)?;
         if let Some(last) = &self.last {
             span.before.follows(&last.after)?;
+            if self.fp32_head_attempt_cap.is_some() {
+                require(span.before == last.after, "FP32 exact serial transport continuity")?;
+            }
+        }
+        if stage == "canonical_open" {
+            let cap = self.fp32_head_attempt_cap.ok_or("FP32 HEAD policy")?;
+            let heads = span.after.method_counts[1] - span.before.method_counts[1];
+            let successes = |stats: &TransportStats| -> Result<u64> {
+                stats.status_counts.iter().filter(|(code, _)| (200..300).contains(code))
+                    .try_fold(0_u64, |n, (_, count)| plus(n, *count))
+            };
+            let successful_heads = successes(&span.after)? - successes(&span.before)?;
+            // The preceding open resolves credentials; refresh traffic cannot certify an isolated HEAD.
+            require((1..=cap).contains(&heads)
+                && successful_heads == 1
+                && span.after.attempts - span.before.attempts == heads
+                && span.after.method_counts.iter().zip(span.before.method_counts).enumerate()
+                    .all(|(i, (&a,b))| i == 1 || a == b)
+                && span.after.consumed_payload_bytes == span.before.consumed_payload_bytes
+                && span.after.stream_failures == span.before.stream_failures,
+                "FP32 isolated canonical HEAD transport")?;
         }
         self.last = Some(span);
         Ok(())
@@ -1345,6 +1377,8 @@ impl Charge {
 #[derive(Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Charges {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    canonical: Option<Charge>,
     router: Charge,
     source: Charge,
     sq8: Charge,
@@ -1354,13 +1388,22 @@ impl Charges {
     fn add(&mut self, other: Self) -> Result<()> {
         self.router.add(other.router)?;
         self.source.add(other.source)?;
-        self.sq8.add(other.sq8)
+        self.sq8.add(other.sq8)?;
+        if let Some(canonical) = other.canonical {
+            self.canonical
+                .get_or_insert_with(Charge::default)
+                .add(canonical)?;
+        }
+        Ok(())
     }
 
     fn sum(self) -> Result<Charge> {
         let mut sum = self.router;
         sum.add(self.source)?;
         sum.add(self.sq8)?;
+        if let Some(canonical) = self.canonical {
+            sum.add(canonical)?;
+        }
         Ok(sum)
     }
 }
@@ -1369,7 +1412,7 @@ impl Charges {
 #[serde(deny_unknown_fields)]
 struct Hit {
     id: u64,
-    score_bits: u32,
+    score_bits: u64,
 }
 
 #[derive(Deserialize)]
@@ -1964,6 +2007,10 @@ fn read_run_observed_policy(
             "successful source binding charges",
         )?;
         let mut evidence = CompletedEvidence::new(binding_charge);
+        if fp32_serving::enabled(&expected.ok_or("FP32 expected config")?.expected_bound_inputs) {
+            let policy = &expected.unwrap().expected_bound_inputs["s3_read_retry"];
+            evidence.fp32_head_attempt_cap = Some(if policy["policy"] == "one_retry_100ms" { 2 } else { 1 });
+        }
         if rows.source_layout {
             current_v10::validate_generation_authority(
                 &binding["generation_authority"],
@@ -1993,6 +2040,17 @@ fn read_run_observed_policy(
             "byte-window header agreement",
         )?;
         let raw: Value = serde_json::from_slice(&rows.line)?;
+        if fp32_serving::enabled(&c.expected_bound_inputs) {
+            completed
+                .as_mut()
+                .ok_or("FP32 startup evidence")?
+                .transport_scale(
+                    &serde_json::to_vec(&raw["fp32_rerank"])?,
+                    "canonical_open",
+                    None,
+                    local,
+                )?;
+        }
         match c.expected_bound_inputs.get("shared_byte_window") {
             Some(window) => require(
                 raw["shared_byte_window_state_bytes"]
@@ -2176,18 +2234,36 @@ fn read_run_observed_policy(
             "query order/truth/count/underfill",
         )?;
         underfilled += usize::from(q.underfill);
+        let exact_fp32 = expected.is_some_and(|c| fp32_serving::enabled(&c.expected_bound_inputs));
+        let score = |h: &Hit| {
+            if exact_fp32 {
+                f64::from_bits(h.score_bits)
+            } else {
+                u32::try_from(h.score_bits)
+                    .map(|b| f64::from(f32::from_bits(b)))
+                    .unwrap_or(f64::NAN)
+            }
+        };
+        require(
+            q.charges.canonical.is_some() == exact_fp32,
+            "FP32 charge selector",
+        )?;
+        if exact_fp32 {
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            fp32_serving::validate_query(&raw, &expected.unwrap().expected_bound_inputs)?;
+        }
         for (i, hit) in q.returned.iter().enumerate() {
             require(
                 hit.id < inputs.rows as u64
-                    && f32::from_bits(hit.score_bits).is_finite()
+                    && score(hit).is_finite()
                     && !q.returned[..i].iter().any(|h| h.id == hit.id),
                 "returned IDs/scores",
             )?;
         }
         require(
             q.returned.windows(2).all(|h| {
-                f32::from_bits(h[0].score_bits)
-                    .total_cmp(&f32::from_bits(h[1].score_bits))
+                score(&h[0])
+                    .total_cmp(&score(&h[1]))
                     .then(h[0].id.cmp(&h[1].id))
                     .is_le()
             }),
@@ -3983,7 +4059,7 @@ mod scale_prefix_parity_tests {
                 returned: (0..K)
                     .map(|id| Hit {
                         id: (ordinal * K + id) as u64,
-                        score_bits: (id as f32).to_bits(),
+                        score_bits: u64::from((id as f32).to_bits()),
                     })
                     .collect(),
                 charges: Charges::default(),
@@ -6103,33 +6179,72 @@ fn report_cap(schema: &str) -> u64 {
     }
 }
 
-
 #[cfg(test)]
 #[test]
 fn sq8_cosine_report_writer_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     for (case, schema, status, bytes, accepted) in [
-        ("cosine-over2", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", REPORT_CAP + 1, true),
-        ("cosine-exact16", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", 16*1024*1024, true),
-        ("cosine-over16", sq8_cosine::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_SQ8_COSINE", 16*1024*1024 + 1, false),
-        ("f32-exact2", fetched_f32::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC", REPORT_CAP, true),
-        ("f32-over2", fetched_f32::REPORT_SCHEMA, "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC", REPORT_CAP + 1, false),
+        (
+            "cosine-over2",
+            sq8_cosine::REPORT_SCHEMA,
+            "NATIVE_REPLAY_VERIFIED_SQ8_COSINE",
+            REPORT_CAP + 1,
+            true,
+        ),
+        (
+            "cosine-exact16",
+            sq8_cosine::REPORT_SCHEMA,
+            "NATIVE_REPLAY_VERIFIED_SQ8_COSINE",
+            16 * 1024 * 1024,
+            true,
+        ),
+        (
+            "cosine-over16",
+            sq8_cosine::REPORT_SCHEMA,
+            "NATIVE_REPLAY_VERIFIED_SQ8_COSINE",
+            16 * 1024 * 1024 + 1,
+            false,
+        ),
+        (
+            "f32-exact2",
+            fetched_f32::REPORT_SCHEMA,
+            "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC",
+            REPORT_CAP,
+            true,
+        ),
+        (
+            "f32-over2",
+            fetched_f32::REPORT_SCHEMA,
+            "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC",
+            REPORT_CAP + 1,
+            false,
+        ),
     ] {
-        let mut report = json!({"schema":schema,"status":status,"complete":true,"qualified":false,"padding":""});
+        let mut report =
+            json!({"schema":schema,"status":status,"complete":true,"qualified":false,"padding":""});
         let overhead = serde_json::to_vec(&report).unwrap().len() as u64 + 1;
-        report["padding"] = json!("x".repeat(usize::try_from(bytes-overhead).unwrap()));
+        report["padding"] = json!("x".repeat(usize::try_from(bytes - overhead).unwrap()));
         let path = dir.path().join(case);
-        let result = execute_report(&path, schema, ||Ok(report));
+        let result = execute_report(&path, schema, || Ok(report));
         if accepted {
             assert!(result.unwrap(), "{case}");
             assert_eq!(std::fs::metadata(&path).unwrap().len(), bytes, "{case}");
         } else {
-            assert!(result.unwrap_err().to_string().contains("report byte cap"), "{case}");
-            assert!(std::fs::metadata(&path).unwrap().len() <= report_cap(schema), "{case}");
+            assert!(
+                result.unwrap_err().to_string().contains("report byte cap"),
+                "{case}"
+            );
+            assert!(
+                std::fs::metadata(&path).unwrap().len() <= report_cap(schema),
+                "{case}"
+            );
         }
     }
     assert_eq!(report_cap("unrelated-schema"), REPORT_CAP);
-    assert_eq!(report_cap(sq8_subpage_shortlist::COUNT_CURVE_SCHEMA), 16*1024*1024);
+    assert_eq!(
+        report_cap(sq8_subpage_shortlist::COUNT_CURVE_SCHEMA),
+        16 * 1024 * 1024
+    );
 }
 
 struct Output {
@@ -6226,12 +6341,16 @@ fn execute_report_with_sync(
             && report["qualified"] == false);
     }
     if schema == sq8_cosine::REPORT_SCHEMA {
-        return Ok(report["schema"] == schema && report["status"] == "NATIVE_REPLAY_VERIFIED_SQ8_COSINE"
-            && report["complete"] == true && report["qualified"] == false);
+        return Ok(report["schema"] == schema
+            && report["status"] == "NATIVE_REPLAY_VERIFIED_SQ8_COSINE"
+            && report["complete"] == true
+            && report["qualified"] == false);
     }
     if schema == fetched_f32::REPORT_SCHEMA {
-        return Ok(report["schema"] == schema && report["status"] == "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC"
-            && report["complete"] == true && report["qualified"] == false);
+        return Ok(report["schema"] == schema
+            && report["status"] == "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC"
+            && report["complete"] == true
+            && report["qualified"] == false);
     }
     if schema == source_frame_range::REPORT_SCHEMA {
         return Ok(report["schema"] == schema
@@ -9793,42 +9912,95 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--fp32-serving") {
+        let result = if args.len() == 5 {
+            args[3]
+                .to_str()
+                .ok_or_else(|| "FP32 config SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(Path::new(&args[4]), fp32_serving::REPORT_SCHEMA, || {
+                        fp32_serving::reduce(Path::new(&args[2]), sha)
+                    })
+                })
+        } else {
+            Err("usage: compare_native_replay --fp32-serving COMPLETED_CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(error) => {
+                eprintln!("INVALID: {error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--f32-top16") {
         let result = if args.len() == 5 {
-            args[3].to_str().ok_or_else(|| "f32-top16 SHA UTF-8".into()).and_then(|sha| {
-                execute_report(Path::new(&args[4]), f32_top16::REPORT_SCHEMA,
-                    || f32_top16::reduce(Path::new(&args[2]), sha))
-            })
-        } else { Err("usage: compare_native_replay --f32-top16 CONFIG CONFIG_SHA NEW_REPORT".into()) };
-        match result { Ok(true) => (), Ok(false) => std::process::exit(2),
-            Err(e) => { eprintln!("INVALID: {e}"); std::process::exit(2); } }
+            args[3]
+                .to_str()
+                .ok_or_else(|| "f32-top16 SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(Path::new(&args[4]), f32_top16::REPORT_SCHEMA, || {
+                        f32_top16::reduce(Path::new(&args[2]), sha)
+                    })
+                })
+        } else {
+            Err("usage: compare_native_replay --f32-top16 CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => {
+                eprintln!("INVALID: {e}");
+                std::process::exit(2);
+            }
+        }
         return;
     }
     if args.get(1).is_some_and(|a| a == "--sq8-cosine") {
         let result = if args.len() == 5 {
-            args[3].to_str().ok_or_else(|| "sq8-cosine SHA UTF-8".into()).and_then(|sha| {
-                execute_report(Path::new(&args[4]), sq8_cosine::REPORT_SCHEMA,
-                    || sq8_cosine::reduce(Path::new(&args[2]), sha))
-            })
-        } else { Err("usage: compare_native_replay --sq8-cosine CONFIG CONFIG_SHA NEW_REPORT".into()) };
+            args[3]
+                .to_str()
+                .ok_or_else(|| "sq8-cosine SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(Path::new(&args[4]), sq8_cosine::REPORT_SCHEMA, || {
+                        sq8_cosine::reduce(Path::new(&args[2]), sha)
+                    })
+                })
+        } else {
+            Err("usage: compare_native_replay --sq8-cosine CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
         match result {
             Ok(true) => (),
             Ok(false) => std::process::exit(2),
-            Err(e) => { eprintln!("{e}"); std::process::exit(2); }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
         }
         return;
     }
     if args.get(1).is_some_and(|a| a == "--fetched-f32") {
         let result = if args.len() == 5 {
-            args[3].to_str().ok_or_else(|| "fetched-f32 SHA UTF-8".into()).and_then(|sha| {
-                execute_report(Path::new(&args[4]), fetched_f32::REPORT_SCHEMA,
-                    || fetched_f32::reduce(Path::new(&args[2]), sha))
-            })
-        } else { Err("usage: compare_native_replay --fetched-f32 CONFIG CONFIG_SHA NEW_REPORT".into()) };
+            args[3]
+                .to_str()
+                .ok_or_else(|| "fetched-f32 SHA UTF-8".into())
+                .and_then(|sha| {
+                    execute_report(Path::new(&args[4]), fetched_f32::REPORT_SCHEMA, || {
+                        fetched_f32::reduce(Path::new(&args[2]), sha)
+                    })
+                })
+        } else {
+            Err("usage: compare_native_replay --fetched-f32 CONFIG CONFIG_SHA NEW_REPORT".into())
+        };
         match result {
             Ok(true) => (),
             Ok(false) => std::process::exit(2),
-            Err(e) => { eprintln!("{e}"); std::process::exit(2); }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
         }
         return;
     }
@@ -10619,37 +10791,69 @@ mod scale_native_runner;
 mod tests {
     // Current producer scores cosine; legacy diagnostic controls explicitly require L2 bits.
     pub(super) fn legacy_l2_fixture(dir: &Path, result: &Path) {
-        use borsuk::{exact_sq8_nominee::Sq8Geometry, returned_sq8::{ReturnedRange,rank_returned_ranges},
-            two_bit_generation::normalize_two_bit_diagnostic_query};
-        let original=std::fs::read_to_string(result).unwrap();
-        let mut rows=original.lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
-        let dimensions=rows[1]["dimensions"].as_u64().unwrap() as usize;
-        let population=rows[1]["rows"].as_u64().unwrap() as usize;
-        let k=rows[1]["k"].as_u64().unwrap() as usize;
-        let body=std::fs::read(dir.join("sq8")).unwrap();
-        let requests=std::fs::read(dir.join("requests.f32")).unwrap();
-        let generation:Value=serde_json::from_slice(&std::fs::read(dir.join("generation/manifest.json")).unwrap()).unwrap();
-        let low:Vec<f32>=serde_json::from_value(generation["low"].clone()).unwrap();
-        let step:Vec<f32>=serde_json::from_value(generation["step"].clone()).unwrap();
-        for q in rows.iter_mut().filter(|q|q["phase"]=="query") {
-            let ordinal=q["ordinal"].as_u64().unwrap() as usize;
-            let mut query=vec![0f32;dimensions];
-            super::fetched_f32::floats(&requests[ordinal*dimensions*4..(ordinal+1)*dimensions*4],&mut query).unwrap();
-            let query=normalize_two_bit_diagnostic_query(&query).unwrap();
-            let ranges=q["plan"]["ranges"].as_array().unwrap().iter().map(|r|{
-                let start=r[0].as_u64().unwrap() as usize;
-                let end=r[1].as_u64().unwrap() as usize;
-                ReturnedRange{start,bytes:&body[start..end]}
-            }).collect::<Vec<_>>();
-            let scores=rank_returned_ranges(Sq8Geometry{rows:population,dimensions},&ranges,&query,&low,&step,k,body.len()).unwrap();
-            for (j,n) in scores.iter().enumerate() {
-                assert_eq!(q["returned"][j]["id"],n.id);
-                assert_eq!(q["returned_physical_ordinals"][j],n.ordinal);
-                q["returned"][j]["score_bits"]=json!(n.score.to_bits());
+        use borsuk::{
+            exact_sq8_nominee::Sq8Geometry,
+            returned_sq8::{ReturnedRange, rank_returned_ranges},
+            two_bit_generation::normalize_two_bit_diagnostic_query,
+        };
+        let original = std::fs::read_to_string(result).unwrap();
+        let mut rows = original
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let dimensions = rows[1]["dimensions"].as_u64().unwrap() as usize;
+        let population = rows[1]["rows"].as_u64().unwrap() as usize;
+        let k = rows[1]["k"].as_u64().unwrap() as usize;
+        let body = std::fs::read(dir.join("sq8")).unwrap();
+        let requests = std::fs::read(dir.join("requests.f32")).unwrap();
+        let generation: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("generation/manifest.json")).unwrap())
+                .unwrap();
+        let low: Vec<f32> = serde_json::from_value(generation["low"].clone()).unwrap();
+        let step: Vec<f32> = serde_json::from_value(generation["step"].clone()).unwrap();
+        for q in rows.iter_mut().filter(|q| q["phase"] == "query") {
+            let ordinal = q["ordinal"].as_u64().unwrap() as usize;
+            let mut query = vec![0f32; dimensions];
+            super::fetched_f32::floats(
+                &requests[ordinal * dimensions * 4..(ordinal + 1) * dimensions * 4],
+                &mut query,
+            )
+            .unwrap();
+            let query = normalize_two_bit_diagnostic_query(&query).unwrap();
+            let ranges = q["plan"]["ranges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    let start = r[0].as_u64().unwrap() as usize;
+                    let end = r[1].as_u64().unwrap() as usize;
+                    ReturnedRange {
+                        start,
+                        bytes: &body[start..end],
+                    }
+                })
+                .collect::<Vec<_>>();
+            let scores = rank_returned_ranges(
+                Sq8Geometry {
+                    rows: population,
+                    dimensions,
+                },
+                &ranges,
+                &query,
+                &low,
+                &step,
+                k,
+                body.len(),
+            )
+            .unwrap();
+            for (j, n) in scores.iter().enumerate() {
+                assert_eq!(q["returned"][j]["id"], n.id);
+                assert_eq!(q["returned_physical_ordinals"][j], n.ordinal);
+                q["returned"][j]["score_bits"] = json!(n.score.to_bits());
             }
         }
         authenticate(&mut rows);
-        std::fs::write(result,encode(&rows)).unwrap();
+        std::fs::write(result, encode(&rows)).unwrap();
     }
 
     use super::*;
@@ -16301,6 +16505,140 @@ mod tests {
     }
 
     #[test]
+    fn fp32_actual_native_runner_strict_replay_and_falsifiers() {
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture().unwrap();
+        let body = std::fs::read_to_string(&result).unwrap();
+        let rows = body
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        let report = fp32_serving::reduce(&config, &pin).unwrap();
+        assert_eq!(report["queries"], 2);
+        assert_eq!(report["score_precision"], "f64");
+        for selector in [
+            json!({"mode":"unknown"}),
+            json!({"mode":"fp32_rerank","shortlist":9,
+            "max_fp32_bytes":65664,"max_fp32_gets":16,"max_parallel_fp32_gets":3}),
+        ] {
+            let mut bad = rows.clone();
+            bad[0]["serving"] = selector.clone();
+            bad[1]["serving"] = selector;
+            let (path, _) = write_fixture(dir.path(), "fp32-selector-falsifier.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err());
+        }
+        let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        for pointer in [
+            "/charges/canonical/verified_bytes",
+            "/canonical_stage/record_bytes",
+            "/canonical_stage/shortlist/0/id",
+            "/returned/0/score_bits",
+        ] {
+            let mut bad = rows.clone();
+            *bad[query].pointer_mut(pointer).unwrap() = json!(u64::MAX);
+            let (path, _) = write_fixture(dir.path(), "fp32-falsifier.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err(), "{pointer}");
+        }
+        let mut bad = rows.clone();
+        let startup = bad.iter().position(|r| r["phase"] == "startup").unwrap();
+        bad[startup]["fp32_rerank"]["open"]["row_digest_bytes"] = json!(0);
+        let (path, _) = write_fixture(dir.path(), "fp32-startup-falsifier.jsonl", bad.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &bad);
+        assert!(fp32_serving::reduce(&config, &pin).is_err());
+        let mut bad = rows.clone();
+        let model = bad[startup]["fp32_rerank"]["modeled_memory_bytes"].as_u64().unwrap();
+        bad[startup]["fp32_rerank"]["modeled_memory_bytes"] = json!(model - 1);
+        let (path, _) = write_fixture(dir.path(), "fp32-model-falsifier.jsonl", bad.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &bad);
+        assert!(fp32_serving::reduce(&config, &pin).is_err());
+        let headers = scale_native_runner::scale_reducer_retry_header_fixture(dir.path()).unwrap();
+        let mut s3 = rows.clone();
+        let header_rows = std::fs::read_to_string(headers).unwrap().lines().take(2)
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        s3[..2].clone_from_slice(&header_rows);
+        let binding_index = s3.iter().position(|r| r["phase"] == "source_binding").unwrap();
+        let root: Value = serde_json::from_str(s3[binding_index]["generation_authority"]["root_manifest"].as_str().unwrap()).unwrap();
+        s3[1]["backend"]["sq8_object_key"] = root["sq8_object_key"].clone();
+        s3[1]["backend"]["sq8_etag"] = root["sq8_etag"].clone();
+        let binding = json!({"submitted_gets":3,"verified_bytes":1,"failed_gets":0});
+        s3[binding_index]["charges"] = binding.clone();
+        let mut stats = json!({"attempts":0,"method_counts":[0,0,0,0,0,0,0,0,0,0],"status_counts":[],
+            "transport_failures":0,"stream_failures":0,"consumed_payload_bytes":0,"dropped_error_bodies":0});
+        for row in &mut s3 {
+            if row["phase"] == "startup" {
+                let before = stats.clone();
+                stats["attempts"] = json!(stats["attempts"].as_u64().unwrap()+1);
+                stats["method_counts"][1] = json!(1);
+                stats["status_counts"] = json!([[200,stats["attempts"]]]);
+                row["fp32_rerank"]["transport"] = json!({"stage":"canonical_open","ordinal":null,"before":before,"after":stats});
+            } else if row.get("transport").is_some() {
+                row["transport"]["before"] = stats.clone();
+                row["transport"]["after"] = stats.clone();
+            }
+        }
+        let last: TransportSpan = serde_json::from_value(
+            s3.iter().rfind(|r| r["phase"] == "query").unwrap()["transport"].clone()).unwrap();
+        s3.last_mut().unwrap()["summary"]["binding_charge"] = binding;
+        s3.last_mut().unwrap()["summary"]["transport_last_boundary"] = last.compact();
+        let (path, _) = write_fixture(dir.path(), "fp32-s3-counter-fixture.jsonl", s3.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &s3);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        for case in ["zero-head", "counter-gap", "two-success-heads"] {
+            let mut bad = s3.clone();
+            let span = &mut bad[startup]["fp32_rerank"]["transport"];
+            if case == "zero-head" {
+                span["after"] = span["before"].clone();
+            } else {
+                let boundary = if case == "counter-gap" { "before" } else { "after" };
+                let n = span[boundary]["attempts"].as_u64().unwrap() + 1;
+                span[boundary]["attempts"] = json!(n);
+                span[boundary]["method_counts"][1] = json!(n);
+                span[boundary]["status_counts"] = json!([[200,n]]);
+                if case == "counter-gap" {
+                    span["after"]["attempts"] = json!(n+1);
+                    span["after"]["method_counts"][1] = json!(n+1);
+                    span["after"]["status_counts"] = json!([[200,n+1]]);
+                }
+            }
+            let (path, _) = write_fixture(dir.path(), "fp32-resealed-head-falsifier.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+        }
+    }
+    #[test]
+    fn fp32_canonical_head_and_serial_continuity_are_exact() {
+        fn stats(heads: u64, gets: u64, payload: u64) -> Value {
+            json!({"attempts":heads+gets,"method_counts":[gets,heads,0,0,0,0,0,0,0,0],
+                "status_counts":if heads+gets==0 {json!([])} else {json!([[200,heads+gets]])},
+                "transport_failures":0,"stream_failures":0,
+                "consumed_payload_bytes":payload,"dropped_error_bodies":0})
+        }
+        let span = |stage: &str, before: Value, after: Value| {
+            serde_json::to_vec(&json!({"transport":{"stage":stage,"ordinal":null,"before":before,"after":after}})).unwrap()
+        };
+        for (before, after, valid) in [
+            (stats(1,0,0),stats(2,0,0),true),
+            (stats(1,0,0),stats(1,0,0),false),
+            (stats(2,0,0),stats(3,0,0),false),
+            (stats(1,0,0),stats(2,1,1),false),
+            (stats(1,0,0),stats(3,0,0),false),
+        ] {
+            let mut evidence = CompletedEvidence::new(Charge::default());
+            evidence.fp32_head_attempt_cap = Some(1);
+            evidence.transport(&span("generation_open",stats(0,0,0),stats(1,0,0)), "generation_open",None).unwrap();
+            assert_eq!(evidence.transport(&span("canonical_open",before,after),"canonical_open",None).is_ok(),valid);
+        }
+        let mut evidence = CompletedEvidence::new(Charge::default());
+        evidence.fp32_head_attempt_cap = Some(2);
+        assert!(evidence.transport(&span("canonical_open",stats(0,0,0),stats(2,0,0)),"canonical_open",None).is_err());
+        let mut retried = stats(2,0,0);
+        retried["status_counts"] = json!([[200,1],[503,1]]);
+        retried["dropped_error_bodies"] = json!(1);
+        evidence.transport(&span("canonical_open",stats(0,0,0),retried),"canonical_open",None).unwrap();
+    }
+    #[test]
     fn v12_library_scheduler_startup_and_protocol_binding_are_strict() {
         let (dir, result) = scale_native_runner::scale_reducer_native_fixture(false, true).unwrap();
         let rows = assert_current_native(dir.path(), &result);
@@ -16448,7 +16786,8 @@ mod tests {
                     "physical-ordinal" => "v10 unique bounded physical ordinal",
                     "logical-count" => "v10 logical range count",
                     "split" => "v10 split caps",
-                    "unknown" | "missing" => "unknown/missing v2 field",
+                    "unknown" => r#"unknown/missing v2 field: missing=[] extra=["unknown_current_field"]"#,
+                    "missing" => r#"unknown/missing v2 field: missing=["returned_physical_ordinals"] extra=[]"#,
                     _ => unreachable!(),
                 };
                 let path = dir.path().join(case);
@@ -20102,3 +20441,6 @@ mod tests {
         assert!(execute(&inputs, &parent_link.join("report")).is_err());
     }
 }
+
+#[path = "compare_native_replay/fp32_serving.rs"]
+mod fp32_serving;

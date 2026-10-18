@@ -148,6 +148,89 @@ impl TwoBitIndex {
         Ok(self)
     }
 
+    /// Pin canonical conditional reads for the populated base; empty roots need no I/O.
+    pub async fn enable_fp32_rerank(
+        &mut self,
+        store: &dyn ObjectStore,
+    ) -> Result<crate::fp32_rerank::Fp32RerankOpenStats, TwoBitGenerationError> {
+        match &mut self.base {
+            Some(base) => base.enable_fp32_rerank(store).await,
+            None => Ok(Default::default()),
+        }
+    }
+
+    /// Exact refinement with the same live logical-ID visibility for populated,
+    /// mutation-only and empty generations.
+    pub async fn search_fp32(
+        &self,
+        reader: &OneAttemptS3,
+        query: &[f32],
+        top_k: usize,
+        mutations: Option<&TwoBitMutationSnapshot>,
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+    ) -> Result<crate::fp32_rerank::Fp32RerankResult, TwoBitGenerationError> {
+        let bad = TwoBitGenerationError::Invalid;
+        if top_k == 0
+            || top_k > limits.shortlist
+            || query.len() != self.head.dimensions()
+            || mutations.is_some_and(|m| {
+                !m.binds_head(&self.head)
+                    || m.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
+            })
+        {
+            return Err(bad("FP32 index binding/admission"));
+        }
+        let extra = crate::fp32_rerank::query_bytes(self.head.dimensions(), limits)
+            .ok_or(bad("FP32 index limits"))? as u64;
+        if extra
+            .checked_mul(self.limits.max_active_queries as u64)
+            .and_then(|n| n.checked_add(self.modeled_bytes))
+            .is_none_or(|n| n > self.limits.max_memory_bytes)
+        {
+            return Err(bad("FP32 index memory"));
+        }
+        let _slot = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| bad("index query admission"))?;
+        if let Some(base) = &self.base {
+            return base
+                .search_fp32_with_store(reader.store(), query, top_k, mutations, limits)
+                .await;
+        }
+        let started = std::time::Instant::now();
+        let normalized =
+            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        let candidates =
+            crate::fp32_rerank::merge(Vec::new(), normalized.as_ref(), top_k, mutations)
+                .map_err(|_| bad("FP32 pending scoring"))?;
+        Ok(crate::fp32_rerank::Fp32RerankResult {
+            base: crate::two_bit_generation::TwoBitSearchResult {
+                plan: BudgetedPagePlan {
+                    page_rows: crate::sq8_page_authority::SQ8_PAGE_ROWS,
+                    selected_pages: Vec::new(),
+                    ranges: Vec::new(),
+                    planned_bytes: 0,
+                    primary_pages_retained: 0,
+                    target_pages: 0,
+                    target_shortfall: 0,
+                },
+                ranked: crate::sq8_s3_range::RankedSq8 {
+                    candidates: Vec::new(),
+                    stats: Default::default(),
+                },
+                source_stats: Default::default(),
+                router_stats: Default::default(),
+                stages: Default::default(),
+                source_nomination_skipped: false,
+            },
+            candidates,
+            canonical_stats: Default::default(),
+            rerank_wall_ns: started.elapsed().as_nanos(),
+        })
+    }
+
     /// Up to k logical IDs, including a truly empty result. The same query slot
     /// spans nomination, I/O and pending scoring. No base GET on an empty root.
     /// Snapshot namespace/root/dimensions must match this index; charge all pins.

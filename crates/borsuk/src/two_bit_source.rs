@@ -356,6 +356,36 @@ pub(crate) fn read_authenticated(
     Ok(bytes)
 }
 
+impl SourcePlaneReceipt {
+    pub(crate) fn validate_identity(&self, expected_sq8_sha256: &str) -> Result<(), SourceBuildError> {
+        let bad = SourceBuildError::Invalid;
+        if self.schema != "borsuk-two-bit-plane-v3"
+            || self.page_rows != 32
+            || self.seed != 20260923
+            || self.rows == 0
+            || self.query_or_truth_used
+            || self.sq8_sha256 != expected_sq8_sha256
+            || [
+                &self.source_sha256,
+                &self.sq8_sha256,
+                &self.source_order_sha256,
+                &self.mean_sha256,
+                &self.records_sha256,
+                &self.page_digest_sha256,
+            ]
+            .iter()
+            .any(|s| !valid_digest(s))
+        {
+            return Err(bad("manifest identity"));
+        }
+        let padded = RotatedTwoBitCodec::padded_dimensions(self.dimensions)?;
+        if self.record_bytes != padded.div_ceil(4) + 8 {
+            return Err(bad("record geometry"));
+        }
+        Ok(())
+    }
+}
+
 impl TwoBitPlane {
     /// Reload immutable metadata under a payload memory cap. Includes manifest,
     /// records, mean and codec working storage; excludes runtime/allocator and OS
@@ -423,29 +453,8 @@ impl TwoBitPlane {
         let body = read_authenticated(&manifest_path, size, trusted_manifest_sha256)?;
         let receipt: SourcePlaneReceipt =
             serde_json::from_slice(&body).map_err(|_| bad("manifest schema"))?;
-        if receipt.schema != "borsuk-two-bit-plane-v3"
-            || receipt.page_rows != 32
-            || receipt.seed != 20260923
-            || receipt.rows == 0
-            || receipt.query_or_truth_used
-            || receipt.sq8_sha256 != expected_sq8_sha256
-            || [
-                &receipt.source_sha256,
-                &receipt.sq8_sha256,
-                &receipt.source_order_sha256,
-                &receipt.mean_sha256,
-                &receipt.records_sha256,
-                &receipt.page_digest_sha256,
-            ]
-            .iter()
-            .any(|s| !valid_digest(s))
-        {
-            return Err(bad("manifest identity"));
-        }
+        receipt.validate_identity(expected_sq8_sha256)?;
         let padded = RotatedTwoBitCodec::padded_dimensions(receipt.dimensions)?;
-        if receipt.record_bytes != padded.div_ceil(4) + 8 {
-            return Err(bad("record geometry"));
-        }
         let record_size = receipt
             .rows
             .checked_mul(receipt.record_bytes)

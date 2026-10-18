@@ -81,6 +81,13 @@ pub enum TwoBitGenerationError {
         /// Underlying error and incurred I/O charges.
         error: Box<TwoBitGenerationError>,
     },
+    /// Exact canonical failure retaining all earlier physical charges.
+    Fp32Read {
+        source: Sq8ReadStats,
+        sq8: Sq8ReadStats,
+        router: Sq8ReadStats,
+        failure: RankedSq8Failure,
+    },
     /// Source HEAD transport failure during startup.
     SourceHead(object_store::Error),
 }
@@ -89,6 +96,7 @@ impl TwoBitGenerationError {
     pub fn read_stats(&self) -> (Sq8ReadStats, Sq8ReadStats) {
         match self {
             Self::RouterCharged { error, .. } | Self::Query { error, .. } => error.read_stats(),
+            Self::Fp32Read { source, sq8, .. } => (*source, *sq8),
             Self::Read(failure) => (Sq8ReadStats::default(), failure.stats),
             Self::SourceRead(failure) => (failure.stats, Sq8ReadStats::default()),
             Self::PagedRead { source, sq8 } => (*source, sq8.stats),
@@ -96,9 +104,20 @@ impl TwoBitGenerationError {
             _ => (Sq8ReadStats::default(), Sq8ReadStats::default()),
         }
     }
+    /// Additional exact canonical charges, including authenticated siblings on failure.
+    pub fn canonical_stats(&self) -> Sq8ReadStats {
+        match self {
+            Self::Fp32Read { failure, .. } => failure.stats,
+            Self::Query { error, .. } | Self::RouterCharged { error, .. } => {
+                error.canonical_stats()
+            }
+            _ => Sq8ReadStats::default(),
+        }
+    }
     /// Selected-leaf logical requests and authenticated bytes, including failures.
     pub fn router_stats(&self) -> Sq8ReadStats {
         match self {
+            Self::Fp32Read { router, .. } => *router,
             Self::RouterCharged { stats, .. } => *stats,
             Self::Query { error, .. } => error.router_stats(),
             _ => Sq8ReadStats::default(),
@@ -244,7 +263,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v12";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v13";
 /// Explicit SOURCE storage choice; existing builders retain the flat control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -300,7 +319,209 @@ impl SourceLayout {
         matches!(self, Self::LeafCapsulesV2 { .. })
     }
 }
+pub(crate) fn generation_memory(
+    manifest: &Manifest, mut limits: TwoBitGenerationLimits, paged: bool,
+    validate_local_records: bool, disk: u64, router_bytes: u64,
+) -> Result<(u64, usize, usize)> {
+    let bad = TwoBitGenerationError::Invalid;
+    let rows = manifest.canonical.rows;
+    let dimensions = manifest.canonical.dimensions;
+    let padded = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(dimensions)
+        .map_err(|_| bad("model dimensions"))?;
+    let expected_records = rows.checked_mul(padded.div_ceil(4) + 8).ok_or(bad("record size"))?;
+    let capsule_metadata = manifest.capsule_metadata_bytes()?;
+    if manifest.discovery.mode() == DiscoveryMode::Semantic {
+        limits.max_source_bytes = limits.max_source_bytes.min(64 * 1024 * 1024);
+        limits.max_source_gets = limits.max_source_gets.min(128);
+    }
+        // Scale reserves 3MiB for its full closure/scoring geometry; historical
+        // profiles retain 1MiB. Retained diagnostic arrays are charged separately.
+        let planner_reserve = query_planner_reserve(manifest.discovery.semantic_profile());
+        let block_scratch = TwoBitScoreBlock::scratch_bytes()
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(bad("query memory"))?;
+        let planner_bytes = (limits.max_query_scratch_bytes as u64)
+            .checked_add(planner_reserve)
+            .and_then(|bytes| bytes.checked_add(block_scratch))
+            .ok_or(bad("query memory"))?;
+        let scheduler_memory = range_scheduler_memory(limits, paged, limits.max_query_gets)?;
+        let query_memory = crate::returned_sq8::query_payload_bytes(
+            crate::exact_sq8_nominee::Sq8Geometry {
+                rows: rows,
+                dimensions: dimensions,
+            },
+            limits.max_query_bytes as u64,
+            planner_bytes,
+            limits.max_active_queries as u64,
+        )
+        .map_err(|_| bad("query memory"))?;
+        // Mean is 4D bytes. 64 times its admitted length conservatively covers
+        // padded codec metadata and its temporary copies, including tiny-N/high-D.
+        let codec_memory = (dimensions.checked_mul(4).ok_or(bad("mean size"))? as u64)
+            .checked_mul(64)
+            .ok_or(bad("codec memory"))?;
+        let source_payload_bytes = match &manifest.source_layout {
+            SourceLayout::FlatRecords => expected_records,
+            SourceLayout::LeafCapsulesV2 { blob_bytes, .. }
+            | SourceLayout::FramedRecordsV1 { blob_bytes, .. } => {
+                usize::try_from(*blob_bytes).map_err(|_| bad("capsule blob length"))?
+            }
+        };
+        // Page references, selected descriptors and their actual capacities are
+        // separate from the two framed transport copies. Flat models stay exact.
+        let capsule_query_memory = if let Some(profile) = manifest.discovery.semantic_profile()
+            && manifest.source_layout.is_capsules()
+        {
+            rows
+                .div_ceil(32)
+                .min(profile.selected_leaf_limit() * 64)
+                .checked_mul(128)
+                .and_then(|n| {
+                    n.checked_add(profile.selected_leaf_limit().checked_mul(
+                        512 + std::mem::size_of::<usize>()
+                            + std::mem::size_of::<std::ops::Range<usize>>(),
+                    )?)
+                })
+                .and_then(|n| {
+                    n.checked_add(
+                        profile
+                            .walk_unit_limit()
+                            .checked_mul(std::mem::size_of::<usize>())?,
+                    )
+                })
+                .and_then(|n| {
+                    n.checked_add(crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
+                        crate::source_capsule::VerifiedPageSpan<'_, '_>,
+                    >(profile.selected_leaf_limit())?)
+                })
+                .and_then(|n| n.checked_add(4096))
+                .ok_or(bad("capsule query memory"))?
+        } else {
+            0
+        };
+        let source_query_memory = if paged {
+            limits
+                .max_source_bytes
+                .min(source_payload_bytes)
+                .checked_mul(2)
+                .and_then(|n| n.checked_mul(limits.max_active_queries))
+                .ok_or(bad("source query memory"))? as u64
+        } else {
+            0
+        };
+        let frame_scratch = if manifest.source_layout.mode() == SourceLayoutMode::FramedRecordsV1 {
+            let f = crate::source_frame::frame_bytes(rows, padded.div_ceil(4) + 8)
+                .map_err(TwoBitGenerationError::Io)?;
+            let codec = f
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(crate::source_frame::DECODER_CONTEXT_BYTES))
+                .and_then(|n| n.checked_mul(2))
+                .ok_or(bad("frame context memory"))?;
+            let descriptors = crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<VerifiedRange>(
+                limits.max_source_gets,
+            )
+            .and_then(|n| n.checked_add(limits.max_source_gets.checked_mul(64)?))
+            .and_then(|n| n.checked_add(4096))
+            .ok_or(bad("frame descriptor memory"))?;
+            limits
+                .max_source_bytes
+                .min(expected_records)
+                .checked_add(codec)
+                .and_then(|n| n.checked_add(descriptors))
+                .and_then(|n| n.checked_mul(limits.max_active_queries))
+                .ok_or(bad("frame query memory"))? as u64
+        } else {
+            0
+        };
+        let validation_page_bytes = if validate_local_records {
+            rows
+                .min(32)
+                .checked_mul(padded.div_ceil(4) + 8)
+                .ok_or(bad("validation page memory"))? as u64
+        } else {
+            0
+        };
+        let modeled = disk
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(codec_memory))
+            .and_then(|n| n.checked_add(131072))
+            // Shared SOURCE authority/directory allocation headers; payloads are already charged.
+            .and_then(|n| n.checked_add(if paged { 128 } else { 0 }))
+            .and_then(|n| n.checked_add(manifest.discovery.graph_memory()?))
+            .and_then(|n| {
+                n.checked_add(if manifest.discovery.mode() == DiscoveryMode::Semantic {
+                    // Root geometry is authenticated by the generation descriptor.
+                    // Charge directory capacities, including construction scratch,
+                    // before open allocates them. Retired generations are added below.
+                    let root = router_bytes;
+                    let Discovery::Semantic { root_bytes, .. } = &manifest.discovery else {
+                        unreachable!()
+                    };
+                    let leaves = (*root_bytes - 512) / (64 + 4 * dimensions);
+                    let (_, directory_peak) =
+                        crate::semantic_unit_router::directory_allocation_bytes(
+                            rows.div_ceil(32),
+                            leaves,
+                        )
+                        .ok()?;
+                    root.checked_mul(32)?
+                        .checked_add(directory_peak as u64)?
+                        .checked_add(
+                            (1024 * 1024_u64).checked_mul(limits.max_active_queries as u64)?,
+                        )?
+                } else {
+                    0
+                })
+            })
+            .and_then(|n| n.checked_add(query_memory))
+            .and_then(|n| n.checked_add(scheduler_memory))
+            .and_then(|n| n.checked_add(source_query_memory))
+            .and_then(|n| n.checked_add(frame_scratch))
+            .and_then(|n| n.checked_add(capsule_metadata as u64))
+            .and_then(|n| {
+                n.checked_add(
+                    (capsule_query_memory as u64).checked_mul(limits.max_active_queries as u64)?,
+                )
+            })
+            .and_then(|n| n.checked_add(validation_page_bytes))
+            .and_then(|n| n.checked_add(limits.already_pinned_bytes))
+            .ok_or(bad("memory overflow"))?;
+    Ok((modeled, source_payload_bytes, capsule_query_memory))
+}
+
+#[cfg(test)]
+thread_local! {
+    static FP32_NORMALIZED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 impl Manifest {
+    pub(crate) fn valid_descriptor(&self) -> bool {
+        let key = self.sq8_object_key.split('/').collect::<Vec<_>>();
+        !(self.schema != SCHEMA
+            || self.generation == 0
+            || !self
+                .discovery
+                .valid(self.canonical.rows, self.canonical.dimensions)
+            || self.sq8_etag.is_empty()
+            || self.sq8_etag.starts_with("W/")
+            || self.sq8_etag.chars().any(char::is_control)
+            || key.len() < 2
+            || key[key.len() - 2] != "objects"
+            || key[key.len() - 1] != self.sq8_object_sha256
+            || key.iter().any(|s| {
+                s.is_empty()
+                    || *s == "."
+                    || *s == ".."
+                    || !s
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+            })
+            || self.low.is_empty()
+            || self.low.len() != self.step.len()
+            || self.low.iter().any(|v| !v.is_finite())
+            || self.step.iter().any(|v| !v.is_finite() || *v <= 0.)
+            || !self.canonical.valid())
+    }
+
     pub(crate) fn files(&self, startup: bool) -> Vec<&'static str> {
         let mut files = self.discovery.files(startup);
         if let Some(directory) = self.source_layout.directory_name() {
@@ -415,10 +636,11 @@ impl Manifest {
         Ok(bound)
     }
 }
-pub(crate) const METADATA_FILES: [&str; 10] = [
+pub(crate) const METADATA_FILES: [&str; 11] = [
     "manifest.json",
     "page_manifest.json",
     "page_digests.bin",
+    "canonical_row_digests.bin",
     "centroids.bin",
     "graph.bin",
     "diverse_graph.bin",
@@ -1164,6 +1386,8 @@ pub struct TwoBitGeneration {
     pages: PageAuthority,
     discovery: LoadedDiscovery,
     manifest: Manifest,
+    canonical_row_digests: Vec<u8>,
+    canonical_etag: Option<String>,
     limits: TwoBitGenerationLimits,
     slots: Semaphore,
     remote_open_stats: Option<RemoteOpenStats>,
@@ -1739,7 +1963,7 @@ pub(crate) fn capsule_closures(router: &SemanticUnitRouter, cap: usize) -> Resul
 }
 
 // SOURCE and SQ8 drains are sequential; retain the larger bound for every active query.
-fn range_scheduler_memory(
+pub(crate) fn range_scheduler_memory(
     limits: TwoBitGenerationLimits,
     paged: bool,
     sq8_gets: usize,
@@ -2332,32 +2556,7 @@ impl TwoBitGeneration {
         )
         .map_err(TwoBitGenerationError::Plane)?;
         let manifest: Manifest = serde_json::from_slice(&body).map_err(|_| bad("root schema"))?;
-        let key = manifest.sq8_object_key.split('/').collect::<Vec<_>>();
-        if manifest.schema != SCHEMA
-            || manifest.generation == 0
-            || !manifest
-                .discovery
-                .valid(manifest.canonical.rows, manifest.canonical.dimensions)
-            || manifest.sq8_etag.is_empty()
-            || manifest.sq8_etag.starts_with("W/")
-            || manifest.sq8_etag.chars().any(char::is_control)
-            || key.len() < 2
-            || key[key.len() - 2] != "objects"
-            || key[key.len() - 1] != manifest.sq8_object_sha256
-            || key.iter().any(|s| {
-                s.is_empty()
-                    || *s == "."
-                    || *s == ".."
-                    || !s
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-            })
-            || manifest.low.is_empty()
-            || manifest.low.len() != manifest.step.len()
-            || manifest.low.iter().any(|v| !v.is_finite())
-            || manifest.step.iter().any(|v| !v.is_finite() || *v <= 0.)
-            || !manifest.canonical.valid()
-        {
+        if !manifest.valid_descriptor() {
             return Err(bad("root identity"));
         }
         let capsule_metadata = manifest.capsule_metadata_bytes()?;
@@ -2442,160 +2641,12 @@ impl TwoBitGeneration {
         {
             return Err(bad("plane file geometry"));
         }
-        // Scale reserves 3MiB for its full closure/scoring geometry; historical
-        // profiles retain 1MiB. Retained diagnostic arrays are charged separately.
-        let planner_reserve = query_planner_reserve(manifest.discovery.semantic_profile());
-        let block_scratch = TwoBitScoreBlock::scratch_bytes()
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or(bad("query memory"))?;
-        let planner_bytes = (limits.max_query_scratch_bytes as u64)
-            .checked_add(planner_reserve)
-            .and_then(|bytes| bytes.checked_add(block_scratch))
-            .ok_or(bad("query memory"))?;
-        let scheduler_memory = range_scheduler_memory(limits, paged, limits.max_query_gets)?;
-        let query_memory = crate::returned_sq8::query_payload_bytes(
-            crate::exact_sq8_nominee::Sq8Geometry {
-                rows: geometry.rows,
-                dimensions: geometry.dimensions,
-            },
-            limits.max_query_bytes as u64,
-            planner_bytes,
-            limits.max_active_queries as u64,
-        )
-        .map_err(|_| bad("query memory"))?;
-        // Mean is 4D bytes. 64 times its admitted length conservatively covers
-        // padded codec metadata and its temporary copies, including tiny-N/high-D.
-        let codec_memory = (admitted_size("plane/mean.bin")? as u64)
-            .checked_mul(64)
-            .ok_or(bad("codec memory"))?;
-        let source_payload_bytes = match &manifest.source_layout {
-            SourceLayout::FlatRecords => expected_records,
-            SourceLayout::LeafCapsulesV2 { blob_bytes, .. }
-            | SourceLayout::FramedRecordsV1 { blob_bytes, .. } => {
-                usize::try_from(*blob_bytes).map_err(|_| bad("capsule blob length"))?
-            }
-        };
-        // Page references, selected descriptors and their actual capacities are
-        // separate from the two framed transport copies. Flat models stay exact.
-        let capsule_query_memory = if let Some(profile) = manifest.discovery.semantic_profile()
-            && manifest.source_layout.is_capsules()
-        {
-            geometry
-                .rows
-                .div_ceil(32)
-                .min(profile.selected_leaf_limit() * 64)
-                .checked_mul(128)
-                .and_then(|n| {
-                    n.checked_add(profile.selected_leaf_limit().checked_mul(
-                        512 + std::mem::size_of::<usize>()
-                            + std::mem::size_of::<std::ops::Range<usize>>(),
-                    )?)
-                })
-                .and_then(|n| {
-                    n.checked_add(
-                        profile
-                            .walk_unit_limit()
-                            .checked_mul(std::mem::size_of::<usize>())?,
-                    )
-                })
-                .and_then(|n| {
-                    n.checked_add(crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
-                        crate::source_capsule::VerifiedPageSpan<'_, '_>,
-                    >(profile.selected_leaf_limit())?)
-                })
-                .and_then(|n| n.checked_add(4096))
-                .ok_or(bad("capsule query memory"))?
-        } else {
-            0
-        };
-        let source_query_memory = if paged {
-            limits
-                .max_source_bytes
-                .min(source_payload_bytes)
-                .checked_mul(2)
-                .and_then(|n| n.checked_mul(limits.max_active_queries))
-                .ok_or(bad("source query memory"))? as u64
-        } else {
-            0
-        };
-        let frame_scratch = if manifest.source_layout.mode() == SourceLayoutMode::FramedRecordsV1 {
-            let f = crate::source_frame::frame_bytes(geometry.rows, padded.div_ceil(4) + 8)
-                .map_err(TwoBitGenerationError::Io)?;
-            let codec = f
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(crate::source_frame::DECODER_CONTEXT_BYTES))
-                .and_then(|n| n.checked_mul(2))
-                .ok_or(bad("frame context memory"))?;
-            let descriptors = crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<VerifiedRange>(
-                limits.max_source_gets,
-            )
-            .and_then(|n| n.checked_add(limits.max_source_gets.checked_mul(64)?))
-            .and_then(|n| n.checked_add(4096))
-            .ok_or(bad("frame descriptor memory"))?;
-            limits
-                .max_source_bytes
-                .min(expected_records)
-                .checked_add(codec)
-                .and_then(|n| n.checked_add(descriptors))
-                .and_then(|n| n.checked_mul(limits.max_active_queries))
-                .ok_or(bad("frame query memory"))? as u64
-        } else {
-            0
-        };
-        let validation_page_bytes = if validate_local_records {
-            geometry
-                .rows
-                .min(32)
-                .checked_mul(padded.div_ceil(4) + 8)
-                .ok_or(bad("validation page memory"))? as u64
-        } else {
-            0
-        };
-        let modeled = disk
-            .checked_mul(3)
-            .and_then(|n| n.checked_add(codec_memory))
-            .and_then(|n| n.checked_add(131072))
-            // Shared SOURCE authority/directory allocation headers; payloads are already charged.
-            .and_then(|n| n.checked_add(if paged { 128 } else { 0 }))
-            .and_then(|n| n.checked_add(manifest.discovery.graph_memory()?))
-            .and_then(|n| {
-                n.checked_add(if manifest.discovery.mode() == DiscoveryMode::Semantic {
-                    // Root geometry is authenticated by the generation descriptor.
-                    // Charge directory capacities, including construction scratch,
-                    // before open allocates them. Retired generations are added below.
-                    let root = admitted_size("router/root.bin").ok()? as u64;
-                    let Discovery::Semantic { root_bytes, .. } = &manifest.discovery else {
-                        unreachable!()
-                    };
-                    let leaves = (*root_bytes - 512) / (64 + 4 * geometry.dimensions);
-                    let (_, directory_peak) =
-                        crate::semantic_unit_router::directory_allocation_bytes(
-                            geometry.rows.div_ceil(32),
-                            leaves,
-                        )
-                        .ok()?;
-                    root.checked_mul(32)?
-                        .checked_add(directory_peak as u64)?
-                        .checked_add(
-                            (1024 * 1024_u64).checked_mul(limits.max_active_queries as u64)?,
-                        )?
-                } else {
-                    0
-                })
-            })
-            .and_then(|n| n.checked_add(query_memory))
-            .and_then(|n| n.checked_add(scheduler_memory))
-            .and_then(|n| n.checked_add(source_query_memory))
-            .and_then(|n| n.checked_add(frame_scratch))
-            .and_then(|n| n.checked_add(capsule_metadata as u64))
-            .and_then(|n| {
-                n.checked_add(
-                    (capsule_query_memory as u64).checked_mul(limits.max_active_queries as u64)?,
-                )
-            })
-            .and_then(|n| n.checked_add(validation_page_bytes))
-            .and_then(|n| n.checked_add(limits.already_pinned_bytes))
-            .ok_or(bad("memory overflow"))?;
+        let router_bytes = if manifest.discovery.mode() == DiscoveryMode::Semantic {
+            admitted_size("router/root.bin")? as u64
+        } else { 0 };
+        let (modeled, source_payload_bytes, capsule_query_memory) = generation_memory(
+            &manifest, limits, paged, validate_local_records, disk, router_bytes,
+        )?;
         if modeled > limits.max_memory_bytes {
             return Err(bad("memory cap"));
         }
@@ -2653,6 +2704,13 @@ impl TwoBitGeneration {
             read_authenticated(&root.join(name), length, digest)
                 .map_err(TwoBitGenerationError::Plane)
         };
+        if admitted_size("canonical_row_digests.bin")? != manifest.canonical.row_digests_bytes {
+            return Err(bad("canonical row digest length"));
+        }
+        let canonical_row_digests = read(
+            "canonical_row_digests.bin",
+            &manifest.canonical.row_digests_sha256,
+        )?;
         let page_size = admitted_size("page_manifest.json")?;
         if page_size > 65536 {
             return Err(bad("page manifest size"));
@@ -2907,6 +2965,8 @@ impl TwoBitGeneration {
             pages,
             discovery,
             manifest,
+            canonical_row_digests,
+            canonical_etag: None,
             limits,
             slots: Semaphore::new(limits.max_active_queries),
             remote_open_stats: None,
@@ -3689,6 +3749,202 @@ impl TwoBitGeneration {
             ))
         }
     }
+
+    /// Pin the canonical object's strong ETag once at startup. Its content is
+    /// authenticated against the root-pinned row hashes on every query.
+    pub async fn enable_fp32_rerank(
+        &mut self,
+        store: &dyn ObjectStore,
+    ) -> Result<crate::fp32_rerank::Fp32RerankOpenStats> {
+        let started = std::time::Instant::now();
+        let head = store
+            .head(&ObjectPath::from(
+                self.manifest.canonical.object_key.clone(),
+            ))
+            .await
+            .map_err(TwoBitGenerationError::SourceHead)?;
+        if head.size != self.manifest.canonical.bytes {
+            return Err(TwoBitGenerationError::Invalid("canonical HEAD geometry"));
+        }
+        let etag = head
+            .e_tag
+            .filter(|s| {
+                !s.is_empty()
+                    && s.len() <= 1024
+                    && !s.starts_with("W/")
+                    && !s.chars().any(char::is_control)
+            })
+            .ok_or(TwoBitGenerationError::Invalid("canonical strong ETag"))?;
+        self.canonical_etag = Some(etag);
+        Ok(crate::fp32_rerank::Fp32RerankOpenStats {
+            head_requests: 1,
+            head_wall_ns: started.elapsed().as_nanos(),
+            row_digest_bytes: self.canonical_row_digests.len(),
+        })
+    }
+
+    /// Whole model including startup metadata copies, retired pins and every
+    /// concurrently active exact query; no credit is taken for baseline buffers.
+    pub fn fp32_rerank_memory(&self, limits: crate::fp32_rerank::Fp32RerankLimits) -> Result<u64> {
+        let query = crate::fp32_rerank::query_bytes(self.pages.dimensions(), limits)
+            .ok_or(TwoBitGenerationError::Invalid("FP32 rerank limits"))?;
+        (query as u64)
+            .checked_mul(self.limits.max_active_queries as u64)
+            .and_then(|n| n.checked_add(self.modeled_memory_bytes))
+            .ok_or(TwoBitGenerationError::Invalid("FP32 rerank memory"))
+    }
+
+    /// Exact refinement over the unchanged control fetch population. Visibility
+    /// is applied during SQ8 ranking, before the shortlist is truncated.
+    pub async fn search_fp32_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        mutations: Option<&TwoBitMutationSnapshot>,
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+    ) -> Result<crate::fp32_rerank::Fp32RerankResult> {
+        self.search_fp32_inner(store, query, top_k, mutations, limits, None)
+            .await
+    }
+
+    /// Same exact serving path with its existing control plan trace.
+    #[doc(hidden)]
+    pub async fn diagnostic_search_fp32_with_store(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+    ) -> Result<(crate::fp32_rerank::Fp32RerankResult, TwoBitPlanTrace)> {
+        if TwoBitPlanTrace::scratch_bytes(self.rows()) > self.limits.max_query_scratch_bytes {
+            return Err(TwoBitGenerationError::Invalid("diagnostic scratch"));
+        }
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .search_fp32_inner(store, query, top_k, None, limits, Some(&mut trace))
+            .await?;
+        Ok((result, trace))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn search_fp32_inner(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        mutations: Option<&TwoBitMutationSnapshot>,
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+        trace: Option<&mut TwoBitPlanTrace>,
+    ) -> Result<crate::fp32_rerank::Fp32RerankResult> {
+        use crate::fp32_rerank::Fp32RerankResult;
+        let bad = TwoBitGenerationError::Invalid;
+        if top_k == 0
+            || top_k > limits.shortlist
+            || query.len() != self.pages.dimensions()
+            || mutations.is_some_and(|m| {
+                !m.binds(&self.root_sha256, self.pages.dimensions())
+                    || m.resident_payload_bytes() as u64 > self.limits.already_pinned_bytes
+            })
+        {
+            return Err(bad("FP32 query binding/admission"));
+        }
+        if self.fp32_rerank_memory(limits)? > self.limits.max_memory_bytes {
+            return Err(bad("FP32 rerank memory cap"));
+        }
+        if self
+            .byte_window
+            .as_ref()
+            .is_some_and(|window| !window.admits_record(self.pages.dimensions() * 4 + 8))
+        {
+            return Err(bad("FP32 byte window"));
+        }
+        let etag = self
+            .canonical_etag
+            .as_deref()
+            .ok_or(bad("FP32 rerank not enabled"))?;
+        let _permit = self
+            .slots
+            .acquire()
+            .await
+            .map_err(|_| bad("query admission"))?;
+        let normalized =
+            crate::sq8_source::cosine_vector(query).map_err(TwoBitGenerationError::Plane)?;
+        #[cfg(test)]
+        if let std::borrow::Cow::Owned(ref values) = normalized {
+            FP32_NORMALIZED_BYTES.with(|n| n.set(n.get() + values.capacity() * 4));
+        }
+        let base = self
+            .search_store_shortlist_unadmitted(
+                store,
+                query,
+                top_k.min(self.rows()),
+                limits.shortlist.min(self.rows()),
+                Some(mutations.map_or(&[], |m| m.excluded_ids())),
+                trace,
+                None,
+            )
+            .await?;
+        let started = std::time::Instant::now();
+        let charged = |failure: RankedSq8Failure| TwoBitGenerationError::Fp32Read {
+            source: base.source_stats,
+            sq8: base.ranked.stats,
+            router: base.router_stats,
+            failure,
+        };
+        let width = self.pages.dimensions() * 4 + 8;
+        let mut nominees = base.ranked.candidates.clone();
+        nominees.sort_unstable_by_key(|h| h.ordinal);
+        let ranges = nominees
+            .iter()
+            .map(|h| h.ordinal * width..(h.ordinal + 1) * width)
+            .collect::<Vec<_>>();
+        let (exact, canonical_stats) = if ranges.is_empty() {
+            (Vec::new(), Sq8ReadStats::default())
+        } else {
+            crate::sq8_s3_range::fetch_capsule_ranges_traced(
+                store,
+                &ObjectPath::from(self.manifest.canonical.object_key.clone()),
+                usize::try_from(self.manifest.canonical.bytes)
+                    .map_err(|_| bad("canonical object width"))?,
+                &ranges,
+                etag,
+                limits.max_gets,
+                limits.max_bytes,
+                limits.max_parallel_gets,
+                self.byte_window.as_ref(),
+                None,
+                |offset, bytes| {
+                    let ordinal = offset / width;
+                    let expected = nominees
+                        .binary_search_by_key(&ordinal, |h| h.ordinal)
+                        .map_err(|_| crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata)?;
+                    crate::fp32_rerank::authenticate(
+                        &bytes,
+                        &nominees[expected],
+                        &self.canonical_row_digests[ordinal * 32..(ordinal + 1) * 32],
+                        normalized.as_ref(),
+                    )
+                },
+            )
+            .await
+            .map_err(charged)?
+        };
+        let candidates = crate::fp32_rerank::merge(exact, normalized.as_ref(), top_k, mutations)
+            .map_err(|error| {
+                charged(RankedSq8Failure {
+                    error,
+                    stats: canonical_stats,
+                })
+            })?;
+        Ok(Fp32RerankResult {
+            base,
+            candidates,
+            canonical_stats,
+            rerank_wall_ns: started.elapsed().as_nanos(),
+        })
+    }
+
     /// Plan, fetch authenticated conditional ranges in one bounded wave, and rank.
     /// Reader errors retain physical request/byte/error accounting.
     pub async fn search(
@@ -3984,6 +4240,29 @@ impl TwoBitGeneration {
         trace: Option<&mut TwoBitPlanTrace>,
         mut range_trace: Option<&mut QueryProfile>,
     ) -> Result<TwoBitSearchResult> {
+        self.search_store_shortlist_unadmitted(
+            store,
+            query,
+            top_k,
+            top_k,
+            excluded_ids,
+            trace,
+            range_trace,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn search_store_shortlist_unadmitted(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        rank_k: usize,
+        excluded_ids: Option<&[i64]>,
+        trace: Option<&mut TwoBitPlanTrace>,
+        mut range_trace: Option<&mut QueryProfile>,
+    ) -> Result<TwoBitSearchResult> {
         let started = std::time::Instant::now();
         if let Some(range_trace) = range_trace.as_deref_mut() {
             range_trace.begin(started);
@@ -3994,6 +4273,7 @@ impl TwoBitGeneration {
                 store,
                 query,
                 top_k,
+                rank_k,
                 excluded_ids,
                 trace,
                 &mut stages,
@@ -4019,6 +4299,7 @@ impl TwoBitGeneration {
         store: &dyn ObjectStore,
         query: &[f32],
         top_k: usize,
+        rank_k: usize,
         excluded_ids: Option<&[i64]>,
         trace: Option<&mut TwoBitPlanTrace>,
         stages: &mut QueryStages,
@@ -4092,7 +4373,7 @@ impl TwoBitGeneration {
             normalized.as_ref(),
             &self.manifest.low,
             &self.manifest.step,
-            top_k,
+            rank_k,
             self.limits.max_query_gets,
             self.limits.max_query_bytes,
             self.limits.max_parallel_gets,
@@ -5660,7 +5941,7 @@ mod source_walk_tests {
             let expected_trace = serde_json::to_value(&trace).unwrap();
             drop(local);
             let mut objects = BTreeMap::from([(key.to_string(), sq8)]);
-            for name in ["manifest.json", "page_manifest.json", "page_digests.bin", "plane/manifest.json", "plane/mean.bin", "plane/page_digests.bin", "plane/records.bin", "router/root.bin", "router/membership.bin", "router/leaves.bin"] {
+            for name in ["manifest.json", "page_manifest.json", "page_digests.bin", "canonical_row_digests.bin", "plane/manifest.json", "plane/mean.bin", "plane/page_digests.bin", "plane/records.bin", "router/root.bin", "router/membership.bin", "router/leaves.bin"] {
                 objects.insert(metadata_location(&prefix, name).to_string(), fs::read(root.join(name)).unwrap());
             }
             assert!(Instant::now() < deadline, "fixture construction deadline");
@@ -6372,7 +6653,11 @@ mod source_walk_tests {
                     for d in 0..dimensions {
                         inner += f32::from(record[12 + d]) * (normalized[d] * step[d]);
                     }
-                    (ordinal, id, 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.))
+                    (
+                        ordinal,
+                        id,
+                        1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.),
+                    )
                 })
                 .collect::<Vec<_>>();
             oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
@@ -6457,10 +6742,23 @@ mod source_walk_tests {
             }
             assert_eq!(direct_reads.len(), 2);
             // A norm sentinel need not win top-10 for a negative dot under cosine.
-            let full = remote.search_with_store(&store, query, rows, None).await.unwrap();
-            assert_eq!(bits(&full), oracle.iter()
-                .map(|&(ordinal, id, score)| (ordinal, id, score.to_bits())).collect::<Vec<_>>());
-            let tail = full.ranked.candidates.iter().find(|h| h.ordinal == rows - 1).unwrap();
+            let full = remote
+                .search_with_store(&store, query, rows, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                bits(&full),
+                oracle
+                    .iter()
+                    .map(|&(ordinal, id, score)| (ordinal, id, score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            let tail = full
+                .ranked
+                .candidates
+                .iter()
+                .find(|h| h.ordinal == rows - 1)
+                .unwrap();
             let record = &sq8[(rows - 1) * (dimensions + 12)..];
             let (mut decoded_norm, mut inner) = (0_f32, 0_f32);
             for d in 0..dimensions {
@@ -6468,7 +6766,8 @@ mod source_walk_tests {
                 decoded_norm += value * value;
                 inner += f32::from(record[12 + d]) * (normalized[d] * step[d]);
             }
-            let recomputed = 1. - ((inner + shift) / (qnorm.sqrt() * decoded_norm.sqrt())).clamp(-1., 1.);
+            let recomputed =
+                1. - ((inner + shift) / (qnorm.sqrt() * decoded_norm.sqrt())).clamp(-1., 1.);
             assert_ne!(tail.score.to_bits(), recomputed.to_bits());
         }
 
@@ -6813,6 +7112,7 @@ mod source_walk_tests {
             "plane/page_digests.bin",
             "plane/mean.bin",
             "page_digests.bin",
+            "canonical_row_digests.bin",
             "router/root.bin",
             "router/membership.bin",
         ] {
@@ -7000,6 +7300,7 @@ mod source_walk_tests {
             "plane/records.bin",
             "plane/mean.bin",
             "page_digests.bin",
+            "canonical_row_digests.bin",
             "router/leaves.bin",
             "canonical.bin",
             "centroids.bin",
@@ -7246,13 +7547,14 @@ mod source_walk_tests {
         assert_eq!(startup.source_head_requests, 1);
         assert_eq!(startup.router_head_requests, 0);
         assert_eq!(startup.router_head_wall_ns, 0);
-        assert_eq!(startup.metadata.len(), 8);
+        assert_eq!(startup.metadata.len(), 9);
         assert_metadata_waves(
             startup,
             &[
                 "manifest.json",
                 "page_manifest.json",
                 "page_digests.bin",
+                "canonical_row_digests.bin",
                 "plane/manifest.json",
                 "plane/mean.bin",
                 "plane/page_digests.bin",
@@ -7266,7 +7568,7 @@ mod source_walk_tests {
                 .iter()
                 .map(|r| r.logical_get_requests)
                 .sum::<u64>(),
-            8
+            9
         );
         assert_eq!(
             startup
@@ -7286,7 +7588,7 @@ mod source_walk_tests {
         }
         {
             let reads = store.reads.lock().unwrap();
-            assert_eq!(reads.iter().filter(|(_, head, _, _)| !head).count(), 8);
+            assert_eq!(reads.iter().filter(|(_, head, _, _)| !head).count(), 9);
             assert_eq!(reads.iter().filter(|(_, head, _, _)| *head).count(), 4);
         }
         assert!(
@@ -8261,13 +8563,14 @@ mod source_walk_tests {
                 .unwrap();
         assert!(remote.plane.record(0).is_none());
         let startup = remote.remote_open_stats().unwrap();
-        assert_eq!(startup.metadata.len(), 9);
+        assert_eq!(startup.metadata.len(), 10);
         assert_metadata_waves(
             startup,
             &[
                 "manifest.json",
                 "page_manifest.json",
                 "page_digests.bin",
+                "canonical_row_digests.bin",
                 "centroids.bin",
                 "graph.bin",
                 "diverse_graph.bin",
@@ -8288,6 +8591,7 @@ mod source_walk_tests {
         for entry in &startup.metadata {
             if [
                 "page_digests.bin",
+                "canonical_row_digests.bin",
                 "plane/mean.bin",
                 "plane/page_digests.bin",
             ]
@@ -9934,7 +10238,11 @@ mod source_walk_tests {
             for d in 0..dimensions {
                 inner += f32::from(row[12 + d]) * (unit_query[d] * step[d]);
             }
-            scored.push((ordinal, id, 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.)));
+            scored.push((
+                ordinal,
+                id,
+                1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.),
+            ));
         }
         scored.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
         scored
@@ -10070,25 +10378,27 @@ mod source_walk_tests {
             assert_eq!(fetched.len(), bytes / row_bytes);
             // This pure bridge test intentionally exercises the preserved L2 API.
             let qnorm = unit.iter().fold(0_f32, |s, &q| s + q * q);
-            let shift = unit.iter().zip(&low).fold(0_f32, |s, (&q, &l)| s + q * l)
-                - qnorm / 2.;
-            let mut oracle = fetched.into_iter().map(|ordinal| {
-                let row = &object[ordinal * row_bytes..(ordinal + 1) * row_bytes];
-                let id = i64::from_le_bytes(row[..8].try_into().unwrap());
-                let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
-                let mut inner = 0_f32;
-                let (mut dot, mut qq) = (0_f64, 0_f64);
-                for d in 0..dimensions {
-                    inner += f32::from(row[12 + d]) * (unit[d] * step[d]);
-                    let decoded = f64::from(low[d])
-                        + f64::from(row[12 + d]) * f64::from(step[d]);
-                    dot += f64::from(unit[d]) * decoded;
-                    qq += f64::from(unit[d]).powi(2);
-                }
-                let score = norm - 2. * (inner + shift);
-                assert!((f64::from(score) - (f64::from(norm) - 2. * dot + qq)).abs() < 1e-3);
-                (ordinal, id, score)
-            }).collect::<Vec<_>>();
+            let shift = unit.iter().zip(&low).fold(0_f32, |s, (&q, &l)| s + q * l) - qnorm / 2.;
+            let mut oracle = fetched
+                .into_iter()
+                .map(|ordinal| {
+                    let row = &object[ordinal * row_bytes..(ordinal + 1) * row_bytes];
+                    let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                    let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                    let mut inner = 0_f32;
+                    let (mut dot, mut qq) = (0_f64, 0_f64);
+                    for d in 0..dimensions {
+                        inner += f32::from(row[12 + d]) * (unit[d] * step[d]);
+                        let decoded =
+                            f64::from(low[d]) + f64::from(row[12 + d]) * f64::from(step[d]);
+                        dot += f64::from(unit[d]) * decoded;
+                        qq += f64::from(unit[d]).powi(2);
+                    }
+                    let score = norm - 2. * (inner + shift);
+                    assert!((f64::from(score) - (f64::from(norm) - 2. * dot + qq)).abs() < 1e-3);
+                    (ordinal, id, score)
+                })
+                .collect::<Vec<_>>();
             oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
             assert_hits_match(&production, &oracle);
             top.push(production);
@@ -10193,6 +10503,7 @@ mod source_walk_tests {
             "manifest.json",
             "page_manifest.json",
             "page_digests.bin",
+            "canonical_row_digests.bin",
             "plane/manifest.json",
             "plane/mean.bin",
             "plane/page_digests.bin",
@@ -10746,7 +11057,8 @@ mod source_walk_tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(fetched.len(), planned / row_bytes);
-            let oracle = scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+            let oracle =
+                scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
             assert_eq!(result.ranked.candidates.len(), 50);
             assert_hits_match(&result.ranked.candidates, &oracle);
             assert_cosine_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
@@ -11173,7 +11485,8 @@ mod source_walk_tests {
                     .iter()
                     .flat_map(|r| r.start / row_bytes..r.end / row_bytes)
                     .collect::<Vec<_>>();
-                let oracle = scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+                let oracle =
+                    scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
                 assert_eq!(ranked.candidates.len(), 20);
                 assert_hits_match(&ranked.candidates, &oracle);
                 assert_cosine_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
@@ -12387,10 +12700,13 @@ mod source_walk_tests {
             assert_eq!(trace.semantic_leaves, vec![0]);
             assert_eq!(trace.semantic_units, (0..17).collect::<Vec<_>>());
             assert!(trace.semantic_seed_additions.is_empty());
-            let oracle = scalar_cosine_rank(&tiny.sq8, dimensions, 0..rows, &unit, &tiny.low, &tiny.step);
+            let oracle =
+                scalar_cosine_rank(&tiny.sq8, dimensions, 0..rows, &unit, &tiny.low, &tiny.step);
             assert_eq!(result.ranked.candidates.len(), rows);
             assert_hits_match(&result.ranked.candidates, &oracle);
-            assert_cosine_geometry_agrees(&tiny.sq8, dimensions, &oracle, &unit, &tiny.low, &tiny.step);
+            assert_cosine_geometry_agrees(
+                &tiny.sq8, dimensions, &oracle, &unit, &tiny.low, &tiny.step,
+            );
             assert!(oracle.iter().any(|r| r.0 == rows - 1));
             assert!(has_id_tie_against_ordinal_order(&oracle));
             assert!(
@@ -12648,6 +12964,658 @@ mod source_walk_tests {
         }
     }
 
+    #[tokio::test]
+    async fn fp32_http_control_plan_scalar_oracle_and_failure_charges() {
+        use crate::fp32_rerank::Fp32RerankLimits;
+        use futures_util::TryStreamExt;
+        use sha2::{Digest, Sha256};
+        let tiny = tiny_direct(33, 7).await;
+        let mut objects = std::collections::BTreeMap::new();
+        let mut listed = tiny.store.list(None);
+        while let Some(meta) = listed.try_next().await.unwrap() {
+            objects.insert(
+                meta.location.to_string(),
+                tiny.store
+                    .get(&meta.location)
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            );
+        }
+        let root_key = metadata_location(&tiny.prefix, "manifest.json").to_string();
+        let mut root: serde_json::Value = serde_json::from_slice(&objects[&root_key]).unwrap();
+        root["sq8_etag"] = DIRECT_ETAG.into();
+        let canonical_key = root["canonical"]["object_key"].as_str().unwrap().to_owned();
+        let canonical = objects[&canonical_key].clone();
+        let root_body = serde_json::to_vec(&root).unwrap();
+        let root_sha = format!("{:x}", Sha256::digest(&root_body));
+        objects.insert(root_key, root_body);
+        let fixture = DirectHttp::new(objects.clone(), Instant::now() + Duration::from_secs(90));
+        let mut generation = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &tiny.prefix,
+            &root_sha,
+            tiny.limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let opened = generation
+            .enable_fp32_rerank(fixture.reader.store())
+            .await
+            .unwrap();
+        assert_eq!(opened.row_digest_bytes, 33 * 32);
+        assert_eq!(opened.head_requests, 1);
+        let query = tiny_query(7);
+        let unit = cosine_unit(&query);
+        let (control, control_trace) = generation
+            .diagnostic_search_with_store(fixture.reader.store(), &query, 10)
+            .await
+            .unwrap();
+        let limits = Fp32RerankLimits {
+            shortlist: 16,
+            max_bytes: 16 * 36,
+            max_gets: 16,
+            max_parallel_gets: 3,
+        };
+        let before = fixture.snapshot().requests.len();
+        let (exact, trace) = generation
+            .diagnostic_search_fp32_with_store(fixture.reader.store(), &query, 10, limits)
+            .await
+            .unwrap();
+        assert_eq!(exact.base.plan, control.plan);
+        assert_eq!(exact.base.source_stats, control.source_stats);
+        assert_eq!(exact.base.router_stats, control.router_stats);
+        assert_eq!(exact.base.ranked.stats, control.ranked.stats);
+        assert_eq!(
+            serde_json::to_value(trace).unwrap(),
+            serde_json::to_value(control_trace).unwrap()
+        );
+        let requests = fixture.snapshot().requests;
+        let rows = requests[before..]
+            .iter()
+            .filter(|r| r.0 == canonical_key)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 16);
+        for r in rows {
+            assert!(!r.1);
+            let (start, end) = r.2.unwrap();
+            assert_eq!(end - start, 36);
+            assert_eq!(start % 36, 0);
+            assert_eq!(r.3.as_deref(), Some(DIRECT_ETAG));
+            assert!(
+                exact
+                    .base
+                    .ranked
+                    .candidates
+                    .iter()
+                    .any(|h| h.ordinal == start / 36)
+            );
+        }
+        let mut oracle = exact
+            .base
+            .ranked
+            .candidates
+            .iter()
+            .map(|h| {
+                let row = &canonical[h.ordinal * 36 + 8..(h.ordinal + 1) * 36];
+                let (mut dot, mut qq, mut vv) = (0_f64, 0_f64, 0_f64);
+                for (&q, word) in unit.iter().zip(row.chunks_exact(4)) {
+                    let v = f64::from(f32::from_le_bytes(word.try_into().unwrap()));
+                    let q = f64::from(q);
+                    dot += q * v;
+                    qq += q * q;
+                    vv += v * v;
+                }
+                let score = 1. - (dot / (qq.sqrt() * vv.sqrt())).clamp(-1., 1.);
+                (h.id, if score == 0. { 0. } else { score })
+            })
+            .collect::<Vec<_>>();
+        oracle.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        for (hit, want) in exact.candidates.iter().zip(oracle) {
+            assert_eq!((hit.id, hit.score.to_bits()), (want.0, want.1.to_bits()));
+        }
+        let model = generation.fp32_rerank_memory(limits).unwrap();
+        generation.limits.max_memory_bytes = model - 1;
+        let before = fixture.snapshot().requests.len();
+        assert!(matches!(
+            generation
+                .search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits)
+                .await,
+            Err(TwoBitGenerationError::Invalid("FP32 rerank memory cap"))
+        ));
+        assert_eq!(fixture.snapshot().requests.len(), before);
+        generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
+        for shortlist in [1, 3, 16, 33] {
+            let limits = Fp32RerankLimits {
+                shortlist,
+                max_bytes: 36 * shortlist,
+                max_gets: shortlist,
+                ..limits
+            };
+            let result = generation
+                .search_fp32_with_store(
+                    fixture.reader.store(),
+                    &query,
+                    shortlist.min(10),
+                    None,
+                    limits,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.canonical_stats.submitted_gets, shortlist);
+            assert_eq!(result.candidates.len(), shortlist.min(10));
+        }
+
+        for fault in ["auth", "200", "etag", "size", "range", "short", "long"] {
+            fixture.response_fault(Some((canonical_key.clone(), fault)));
+            let error = generation
+                .search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.read_stats(),
+                (control.source_stats, control.ranked.stats),
+                "{fault}"
+            );
+            assert_eq!(error.canonical_stats().submitted_gets, 16, "{fault}");
+            assert_eq!(error.canonical_stats().failed_gets, 16, "{fault}");
+            assert_eq!(generation.slots.available_permits(), 1);
+        }
+        fixture.response_fault(None);
+        fixture.arm(None);
+        fixture.release(0);
+        let mut first = Box::pin(generation.search_fp32_with_store(
+            fixture.reader.store(),
+            &query,
+            10,
+            None,
+            limits,
+        ));
+        tokio::select! {
+            _=fixture.wait(|s|s.active[1]>0)=>{},
+            result=&mut first=>panic!("query completed before body release: {}",result.is_ok()),
+        }
+        assert_eq!(generation.slots.available_permits(), 0);
+        let nonunit = query.iter().map(|v| v * 3.0).collect::<Vec<_>>();
+        let allocations = FP32_NORMALIZED_BYTES.with(|n| n.get());
+        let mut second = Box::pin(generation.search_fp32_with_store(
+            fixture.reader.store(),
+            &nonunit,
+            10,
+            None,
+            limits,
+        ));
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        assert_eq!(FP32_NORMALIZED_BYTES.with(|n| n.get()), allocations);
+        let before = fixture.snapshot().requests.len();
+        drop(first);
+        assert_eq!(fixture.snapshot().requests.len(), before);
+        drop(second);
+        assert_eq!(generation.slots.available_permits(), 1);
+        fixture.release(1);
+        fixture.wait(|s| s.active[1] == 0).await;
+        let recovered = generation
+            .search_fp32_with_store(fixture.reader.store(), &nonunit, 10, None, limits)
+            .await
+            .unwrap();
+        assert_eq!(recovered.canonical_stats.submitted_gets, 16);
+        assert!(FP32_NORMALIZED_BYTES.with(|n| n.get()) > allocations);
+        assert_eq!(generation.slots.available_permits(), 1);
+        fixture.finish();
+        // Authenticated root and ETag are unchanged while every canonical body row is corrupted.
+        for row in objects
+            .get_mut(&canonical_key)
+            .unwrap()
+            .chunks_exact_mut(36)
+        {
+            row[8] ^= 1;
+        }
+        let fixture = DirectHttp::new(objects, Instant::now() + Duration::from_secs(90));
+        let mut generation = TwoBitGeneration::open_remote(
+            fixture.reader.store(),
+            &tiny.prefix,
+            &root_sha,
+            tiny.limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        generation
+            .enable_fp32_rerank(fixture.reader.store())
+            .await
+            .unwrap();
+        let error = generation
+            .search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.canonical_stats(),
+            Sq8ReadStats {
+                submitted_gets: 16,
+                verified_bytes: 0,
+                failed_gets: 16
+            }
+        );
+        assert_eq!(
+            error.read_stats(),
+            (control.source_stats, control.ranked.stats)
+        );
+        assert_eq!(error.router_stats(), control.router_stats);
+        assert_eq!(generation.slots.available_permits(), 1);
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn fp32_prepare_authenticates_legacy_input_without_mutating_it() {
+        use crate::two_bit_build::authenticate_canonical_generation as prepare;
+        use sha2::{Digest, Sha256};
+        let tiny = tiny_direct(33, 7).await;
+        let input = tiny.temp.path().join("generation");
+        let sq8 = tiny.temp.path().join("sq8");
+        let original = fs::read(input.join("manifest.json")).unwrap();
+        let mut old: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        old["schema"] = "borsuk-two-bit-generation-v12".into();
+        old["canonical"]
+            .as_object_mut()
+            .unwrap()
+            .remove("row_digests_bytes");
+        old["canonical"]
+            .as_object_mut()
+            .unwrap()
+            .remove("row_digests_sha256");
+        let body = serde_json::to_vec(&old).unwrap();
+        let sha = format!("{:x}", Sha256::digest(&body));
+        fs::write(input.join("manifest.json"), &body).unwrap();
+        let output = tiny.temp.path().join("authenticated");
+        let model = 33 * (3 * 32 + 8) + 7 * 32 + 4 * 1024 * 1024;
+        fs::rename(input.join("canonical.bin"), input.join("held")).unwrap();
+        let failure = prepare(&input, &sha, &sq8, &output, model - 1).unwrap_err();
+        assert!(matches!(
+            failure,
+            TwoBitGenerationError::Invalid("FP32 prep memory cap")
+        ));
+        assert!(!output.exists());
+        for (key, value) in [
+            ("low", serde_json::json!([])),
+            ("step", serde_json::json!(vec![0.0; 7])),
+            ("sq8_etag", serde_json::json!("")),
+        ] {
+            let mut invalid = old.clone();
+            invalid[key] = value;
+            let encoded = serde_json::to_vec(&invalid).unwrap();
+            fs::write(input.join("manifest.json"), &encoded).unwrap();
+            let pin = format!("{:x}", Sha256::digest(&encoded));
+            let error = prepare(&input, &pin, &sq8, &output, model).unwrap_err();
+            assert!(!matches!(error, TwoBitGenerationError::Io(_)), "{key}: {error:?}");
+            assert!(!output.exists());
+        }
+        let plane_path = input.join("plane/manifest.json");
+        let plane_saved = fs::read(&plane_path).unwrap();
+        for (key, value) in [
+            ("schema", serde_json::json!("invalid")),
+            ("seed", serde_json::json!(0)),
+            ("record_bytes", serde_json::json!(1)),
+            ("query_or_truth_used", serde_json::json!(true)),
+        ] {
+            let mut plane: serde_json::Value = serde_json::from_slice(&plane_saved).unwrap();
+            plane[key] = value;
+            let encoded = serde_json::to_vec(&plane).unwrap();
+            fs::write(&plane_path, &encoded).unwrap();
+            let mut invalid = old.clone();
+            invalid["plane_manifest_sha256"] = format!("{:x}", Sha256::digest(&encoded)).into();
+            let encoded = serde_json::to_vec(&invalid).unwrap();
+            fs::write(input.join("manifest.json"), &encoded).unwrap();
+            let pin = format!("{:x}", Sha256::digest(&encoded));
+            assert!(prepare(&input, &pin, &sq8, &output, model).is_err(), "{key}");
+            assert!(!output.exists(), "{key}");
+        }
+        fs::write(&plane_path, plane_saved).unwrap();
+        let page_path = input.join("page_manifest.json");
+        let saved = fs::read(&page_path).unwrap();
+        let mut page: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        page["schema"] = serde_json::json!("invalid");
+        let encoded = serde_json::to_vec(&page).unwrap();
+        fs::write(&page_path, &encoded).unwrap();
+        let mut invalid = old.clone();
+        invalid["page_manifest_sha256"] = format!("{:x}", Sha256::digest(&encoded)).into();
+        let encoded = serde_json::to_vec(&invalid).unwrap();
+        fs::write(input.join("manifest.json"), &encoded).unwrap();
+        let pin = format!("{:x}", Sha256::digest(&encoded));
+        assert!(prepare(&input, &pin, &sq8, &output, model).is_err());
+        assert!(!output.exists());
+        fs::write(&page_path, saved).unwrap();
+        fs::write(input.join("manifest.json"), &body).unwrap();
+        fs::rename(input.join("held"), input.join("canonical.bin")).unwrap();
+        assert!(prepare(&input, &"0".repeat(64), &sq8, &output, model).is_err());
+        assert!(!output.exists());
+        let root = prepare(&input, &sha, &sq8, &output, model).unwrap();
+        let opened = TwoBitGeneration::open(&output, &root, tiny.limits).unwrap();
+        assert_eq!(opened.manifest.generation, 2);
+        assert_eq!(opened.canonical_row_digests.len(), 33 * 32);
+        assert_eq!(fs::read(input.join("manifest.json")).unwrap(), body);
+        assert_eq!(
+            fs::read(input.join("canonical.bin")).unwrap(),
+            fs::read(output.join("canonical.bin")).unwrap()
+        );
+        assert!(prepare(&input, &sha, &sq8, &output, model).is_err());
+        for name in ["canonical.bin", "plane/mean.bin"] {
+            let path = input.join(name);
+            let saved = fs::read(&path).unwrap();
+            let mut corrupt = saved.clone();
+            corrupt[0] ^= 1;
+            fs::write(&path, corrupt).unwrap();
+            let bad = tiny.temp.path().join(name.replace('/', "_") + "-bad");
+            assert!(prepare(&input, &sha, &sq8, &bad, model).is_err());
+            assert!(!bad.join("manifest.json").exists());
+            fs::write(&path, saved).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fp32_mutation_visibility_and_canonical_transport_refusals() {
+        use crate::fp32_rerank::Fp32RerankLimits;
+        use crate::two_bit_mutations::{
+            TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations,
+        };
+        let mut tiny = tiny_direct(33, 7).await;
+        let mut limits = tiny.limits;
+        limits.already_pinned_bytes = 1_000_000;
+        let mut generation = TwoBitGeneration::open_remote(
+            &tiny.store,
+            &tiny.prefix,
+            &tiny.root_sha,
+            limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        generation.enable_fp32_rerank(&tiny.store).await.unwrap();
+        let query = tiny_query(7);
+        let exact = Fp32RerankLimits {
+            shortlist: 16,
+            max_bytes: 576,
+            max_gets: 16,
+            max_parallel_gets: 3,
+        };
+        let baseline = generation
+            .search_fp32_with_store(&tiny.store, &query, 10, None, exact)
+            .await
+            .unwrap();
+        let delete = baseline.candidates[0].id;
+        let update = baseline.candidates[1].id;
+        let head =
+            crate::two_bit_store::read_two_bit_head(&tiny.store, &ObjectPath::from("tiny/index"))
+                .await
+                .unwrap()
+                .unwrap();
+        let mut changes = vec![
+            TwoBitMutation {
+                id: delete,
+                vector: None,
+            },
+            TwoBitMutation {
+                id: update,
+                vector: Some(query.clone()),
+            },
+            TwoBitMutation {
+                id: -91,
+                vector: Some(query.clone()),
+            },
+        ];
+        changes.sort_by_key(|r| r.id);
+        let snapshot = apply_two_bit_mutations(
+            &tiny.store,
+            &head,
+            7,
+            None,
+            &changes,
+            TwoBitMutationLimits {
+                max_snapshot_bytes: 16384,
+                max_memory_bytes: 1_000_000,
+            },
+        )
+        .await
+        .unwrap();
+        let result = generation
+            .search_fp32_with_store(&tiny.store, &query, 10, Some(&snapshot), exact)
+            .await
+            .unwrap();
+        assert_eq!(result.base.plan, baseline.base.plan);
+        assert_eq!(result.base.ranked.candidates.len(), 16);
+        assert!(
+            result
+                .base
+                .ranked
+                .candidates
+                .iter()
+                .all(|r| r.id != delete && r.id != update && r.id != -91)
+        );
+        assert!(result.candidates.iter().all(|r| r.id != delete));
+        let exact_pending = crate::fp32_rerank::cosine(
+            crate::sq8_source::cosine_vector(&query).unwrap().as_ref(),
+            snapshot
+                .rows()
+                .iter()
+                .find(|r| r.id == -91)
+                .unwrap()
+                .vector
+                .as_ref()
+                .unwrap()
+                .iter()
+                .copied(),
+        )
+        .unwrap();
+        for id in [-91, update] {
+            let hit = result.candidates.iter().find(|r| r.id == id).unwrap();
+            assert_eq!(hit.ordinal, None);
+            assert_eq!(hit.score.to_bits(), exact_pending.to_bits());
+        }
+        assert!(result.candidates.windows(2).all(|w| w[0] <= w[1]));
+        tiny.store.sq8_path = generation.manifest.canonical.object_key.clone();
+        for fault in [
+            "precondition",
+            "etag",
+            "size",
+            "range",
+            "short",
+            "long",
+            "corrupt",
+        ] {
+            *tiny.store.fault.lock().unwrap() = fault;
+            let failure = generation
+                .search_fp32_with_store(&tiny.store, &query, 10, None, exact)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(
+                failure.read_stats(),
+                (baseline.base.source_stats, baseline.base.ranked.stats),
+                "{fault}"
+            );
+            assert_eq!(failure.canonical_stats().submitted_gets, 16, "{fault}");
+            assert_eq!(failure.canonical_stats().failed_gets, 16, "{fault}");
+            assert_eq!(generation.slots.available_permits(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn fp32_compaction_empty_pending_reopen_and_gc_roster() {
+        use crate::{
+            canonical_source::TwoBitCompactionLimits,
+            fp32_rerank::Fp32RerankLimits,
+            two_bit_compaction::{TwoBitCompactionOptions, compact_two_bit_index},
+            two_bit_gc::{TwoBitGcLimits, TwoBitGcSession, collect_two_bit_garbage},
+            two_bit_index::TwoBitIndex,
+            two_bit_mutations::{TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations},
+            two_bit_store::read_two_bit_head,
+        };
+        let tiny = tiny_direct(33, 7).await;
+        let store = std::sync::Arc::new(tiny.store);
+        let prefix = ObjectPath::from("tiny/index");
+        let maintenance = tiny.temp.path().join("maintenance");
+        fs::create_dir(&maintenance).unwrap();
+        let limits = TwoBitGenerationLimits {
+            already_pinned_bytes: 32 * 1024 * 1024,
+            ..tiny.limits
+        };
+        let pinned = TwoBitIndex::open_coordinated(
+            store.as_ref(),
+            &prefix,
+            &maintenance,
+            limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        let head = read_two_bit_head(store.as_ref(), &prefix)
+            .await
+            .unwrap()
+            .unwrap();
+        let old_sidecar = metadata_location(&head.metadata_prefix(), "canonical_row_digests.bin");
+        let mutations = TwoBitMutationLimits {
+            max_snapshot_bytes: 16384,
+            max_memory_bytes: 1_000_000,
+        };
+        let query = tiny_query(7);
+        let deleted = i64::from_le_bytes(tiny.sq8[..8].try_into().unwrap());
+        let updated = i64::from_le_bytes(tiny.sq8[19..27].try_into().unwrap());
+        let mut changes = vec![
+            TwoBitMutation {
+                id: -91,
+                vector: Some(query.clone()),
+            },
+            TwoBitMutation {
+                id: deleted,
+                vector: None,
+            },
+            TwoBitMutation {
+                id: updated,
+                vector: Some(query.clone()),
+            },
+        ];
+        changes.sort_by_key(|r| r.id);
+        let snapshot = apply_two_bit_mutations(store.as_ref(), &head, 7, None, &changes, mutations)
+            .await
+            .unwrap();
+        let options = TwoBitCompactionOptions {
+            mutations,
+            source: TwoBitCompactionLimits {
+                max_memory_bytes: 128_000_000,
+                max_disk_bytes: 128_000_000,
+                max_source_chunk_bytes: 65536,
+            },
+            generation: limits,
+        };
+        let compacted = compact_two_bit_index(store.clone(), &prefix, &maintenance, options)
+            .await
+            .unwrap();
+        assert_eq!(compacted.generation(), 2);
+        let mut generation = TwoBitGeneration::open_remote(
+            store.as_ref(),
+            &compacted.metadata_prefix(),
+            compacted.root_sha256(),
+            limits,
+            tiny.temp.path(),
+        )
+        .await
+        .unwrap();
+        generation.enable_fp32_rerank(store.as_ref()).await.unwrap();
+        let exact = Fp32RerankLimits {
+            shortlist: 33,
+            max_bytes: 33 * 36,
+            max_gets: 33,
+            max_parallel_gets: 3,
+        };
+        let result = generation
+            .search_fp32_with_store(store.as_ref(), &query, 33, None, exact)
+            .await
+            .unwrap();
+        assert_eq!(result.candidates.len(), 33);
+        assert!(result.candidates.iter().all(|r| r.id != deleted));
+        assert_eq!(result.candidates[0].id, -91);
+        assert!(
+            result
+                .candidates
+                .iter()
+                .find(|r| r.id == updated)
+                .unwrap()
+                .score
+                <= 1e-15
+        );
+        let mut deletes = result
+            .candidates
+            .iter()
+            .map(|r| TwoBitMutation {
+                id: r.id,
+                vector: None,
+            })
+            .collect::<Vec<_>>();
+        deletes.sort_by_key(|r| r.id);
+        apply_two_bit_mutations(store.as_ref(), &compacted, 7, None, &deletes, mutations)
+            .await
+            .unwrap();
+        let empty = compact_two_bit_index(store.clone(), &prefix, &maintenance, options)
+            .await
+            .unwrap();
+        assert!(empty.is_empty());
+        let index = TwoBitIndex::open_remote(store.as_ref(), empty, limits, tiny.temp.path())
+            .await
+            .unwrap();
+        let fixture = DirectHttp::new(Default::default(), Instant::now() + Duration::from_secs(30));
+        let nothing = index
+            .search_fp32(&fixture.reader, &query, 10, None, exact)
+            .await
+            .unwrap();
+        assert!(nothing.candidates.is_empty());
+        let pending = apply_two_bit_mutations(
+            store.as_ref(),
+            index.head(),
+            7,
+            None,
+            &[TwoBitMutation {
+                id: -101,
+                vector: Some(query.clone()),
+            }],
+            mutations,
+        )
+        .await
+        .unwrap();
+        let only = index
+            .search_fp32(&fixture.reader, &query, 10, Some(&pending), exact)
+            .await
+            .unwrap();
+        assert_eq!(only.candidates.len(), 1);
+        assert_eq!(only.candidates[0].id, -101);
+        assert_eq!(only.candidates[0].ordinal, None);
+        assert!(only.candidates[0].score <= 1e-15);
+        assert_eq!(only.canonical_stats, Sq8ReadStats::default());
+        assert!(fixture.snapshot().requests.is_empty());
+        fixture.finish();
+        let mut gc = TwoBitGcSession::new(store.clone(), &prefix, &maintenance).unwrap();
+        let caps = TwoBitGcLimits {
+            max_memory_bytes: 4_000_000,
+            mutations,
+            max_objects_scanned: 10000,
+            max_objects_deleted: 10000,
+            max_deleted_object_bytes: 128_000_000,
+        };
+        assert!(collect_two_bit_garbage(&mut gc, caps).await.is_err());
+        assert!(store.head(&old_sidecar).await.is_ok());
+        drop(pinned);
+        drop(generation);
+        drop(index);
+        drop(snapshot);
+        let report = collect_two_bit_garbage(&mut gc, caps).await.unwrap();
+        assert!(report.scan_complete);
+        assert!(report.objects_deleted > 0);
+        assert!(store.head(&old_sidecar).await.is_err());
+    }
     fn tiny_query(dimensions: usize) -> Vec<f32> {
         (0..dimensions)
             .map(|d| 0.75 + 0.25 * ((d * 5) % 7) as f32 - if d % 3 == 0 { 1. } else { 0. })
@@ -13864,6 +14832,7 @@ mod source_walk_tests {
                 "router/membership.bin",
                 "router/leaves.bin",
                 "page_digests.bin",
+                "canonical_row_digests.bin",
             ] {
                 assert_eq!(
                     fs::read(current.join(name)).unwrap(),
@@ -13879,7 +14848,7 @@ mod source_walk_tests {
                 serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
             assert_eq!(manifest.schema, SCHEMA);
             assert_eq!(manifest.generation, 2);
-            assert_eq!(manifest.files(true).len(), 9);
+            assert_eq!(manifest.files(true).len(), 10);
             for name in manifest.files(false) {
                 tiny.store
                     .put(
@@ -13900,8 +14869,13 @@ mod source_walk_tests {
             .await
             .unwrap();
             let startup = remote.remote_open_stats().unwrap();
-            assert_eq!(startup.metadata.len(), 9);
-            assert!(startup.metadata[1..].iter().all(|m| m.metadata_wave == 1));
+            assert_eq!(startup.metadata.len(), 10);
+            assert!(
+                startup.metadata[1..]
+                    .iter()
+                    .enumerate()
+                    .all(|(i, m)| m.metadata_wave == 1 + (i / 8) as u64)
+            );
             assert!(
                 tiny.store
                     .inner

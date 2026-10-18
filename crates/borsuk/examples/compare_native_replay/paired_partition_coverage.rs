@@ -3156,6 +3156,7 @@ mod tests {
             failed_gets: 0,
         };
         let charges = Charges {
+            canonical: None,
             router: Charge::default(),
             source,
             sq8,

@@ -506,6 +506,23 @@ pub(super) fn validate_row_envelope(
         _ => "",
     };
     let mut roster = format!("{} {extras}", super::v2_row_fields(phase)?);
+    if super::fp32_serving::enabled(&raw) {
+        super::fp32_serving::limits(&raw)?;
+        match phase {
+            "identity" => {
+                roster.push_str(" fp32_rerank_source_sha256 canonical_source_sha256");
+                for key in ["fp32_rerank_source_sha256", "canonical_source_sha256"] {
+                    require(
+                        raw[key].as_str().is_some_and(super::valid_sha),
+                        "FP32 source pin",
+                    )?;
+                }
+            }
+            "startup" => roster.push_str(" fp32_rerank"),
+            "query" => roster.push_str(" canonical_stage"),
+            _ => (),
+        }
+    }
     if source_layout {
         match phase {
             "identity" => roster.push_str(" source_capsule_source_sha256 source_layout source_byte_budget max_memory_bytes config_schema"),
@@ -646,8 +663,8 @@ pub(super) fn validate_row_envelope(
     }
     if matches!(phase, "identity" | "bound_inputs" | "startup" | "query") {
         require(
-            raw["serving"] == json!({"mode":"baseline"}),
-            "v10 baseline serving",
+            raw["serving"] == json!({"mode":"baseline"}) || super::fp32_serving::enabled(&raw),
+            "current serving selector",
         )?;
     }
     match phase {
@@ -1587,6 +1604,9 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
+    if super::fp32_serving::enabled(inputs) {
+        super::fp32_serving::validate_startup(raw, inputs)?;
+    }
     if concurrent_config(&inputs["config_schema"]) {
         let active = concurrent_queries(inputs)?;
         let r = &raw["concurrent_resources"];
@@ -1774,6 +1794,30 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
     )?;
     let super::UniqueJson(root) = serde_json::from_str(root_body)?;
     let super::UniqueJson(page) = serde_json::from_str(page_body)?;
+    if root["schema"] == "borsuk-two-bit-generation-v13" {
+        fields(
+            &root["canonical"],
+            "rows dimensions bytes sha256 object_key row_digests_bytes row_digests_sha256",
+        )?;
+        require(
+            root["canonical"]["rows"] == inputs["rows"]
+                && root["canonical"]["dimensions"] == inputs["dimensions"]
+                && number(&root["canonical"]["row_digests_bytes"])?
+                    == number(&inputs["rows"])?
+                        .checked_mul(32)
+                        .ok_or("FP32 sidecar geometry")?
+                && root["canonical"]["row_digests_sha256"]
+                    .as_str()
+                    .is_some_and(super::valid_sha),
+            "FP32 root sidecar authority",
+        )?;
+    } else {
+        require(
+            !super::fp32_serving::enabled(inputs),
+            "FP32 requires authenticated v13 generation",
+        )?;
+    }
+
     fields(
         &root,
         "schema generation base_epoch plane_manifest_sha256 page_manifest_sha256 discovery source_layout sq8_object_sha256 sq8_object_key sq8_etag canonical low step",
@@ -1792,7 +1836,9 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
                     .as_str()
                     .ok_or("v13 page manifest SHA")?
             && root["schema"]
-                == if framed_config(&inputs["config_schema"]) {
+                == if root["schema"] == "borsuk-two-bit-generation-v13" {
+                    "borsuk-two-bit-generation-v13"
+                } else if framed_config(&inputs["config_schema"]) {
                     "borsuk-two-bit-generation-v12"
                 } else if page_range_config(&inputs["config_schema"]) {
                     "borsuk-two-bit-generation-v11"
@@ -1899,6 +1945,9 @@ pub(super) fn validate_layout_startup(
             },
         );
     }
+    if root["schema"] == "borsuk-two-bit-generation-v13" {
+        names.insert(3, "canonical_row_digests.bin");
+    }
     let entries = raw["metadata"]["metadata"]
         .as_array()
         .ok_or("v13 startup metadata")?;
@@ -1930,6 +1979,7 @@ pub(super) fn validate_layout_startup(
             "page_digests.bin" | "plane/page_digests.bin" => {
                 Some(rows.div_ceil(32).checked_mul(32).ok_or("digest bytes")?)
             }
+            "canonical_row_digests.bin" => Some(rows.checked_mul(32).ok_or("FP32 digest bytes")?),
             "plane/mean.bin" => Some(dimensions.checked_mul(4).ok_or("mean bytes")?),
             "router/root.bin" => Some(number(&root["discovery"]["root_bytes"])?),
             "router/membership.bin" => Some(number(&root["discovery"]["membership_bytes"])?),
@@ -1943,8 +1993,13 @@ pub(super) fn validate_layout_startup(
                 && (!name.ends_with(".json") || bytes <= 65_536),
             "v13 authenticated startup bytes",
         )?;
-        let wave = usize::from(index > 0);
-        let wave_len = if index == 0 { 1 } else { entries.len() - 1 };
+        let wave = if index == 0 { 0 } else { (index - 1) / 8 + 1 };
+        let wave_start = if index == 0 { 0 } else { 1 + (wave - 1) * 8 };
+        let wave_len = if index == 0 {
+            1
+        } else {
+            (entries.len() - wave_start).min(8)
+        };
         let range_bytes = 4 * 1024 * 1024;
         let gets = bytes.div_ceil(range_bytes);
         let heads = u64::from(matches!(
@@ -1953,7 +2008,7 @@ pub(super) fn validate_layout_startup(
         ));
         require(
             entry["metadata_wave"] == wave
-                && entry["metadata_wave_wall_ns"] == entries[wave]["metadata_wave_wall_ns"]
+                && entry["metadata_wave_wall_ns"] == entries[wave_start]["metadata_wave_wall_ns"]
                 && entry["logical_head_requests"] == heads
                 && (heads != 0 || entry["head_wall_ns"] == 0)
                 && entry["logical_get_requests"] == gets
@@ -1967,6 +2022,9 @@ pub(super) fn validate_layout_startup(
                 && entry["local_copy_wall_ns"] == 0,
             "v13 deterministic startup GET/HEAD/wave/buffer reservations",
         )?;
+    }
+    if super::fp32_serving::enabled(inputs) {
+        super::fp32_serving::validate_model(raw, inputs, authority)?;
     }
     require(
         number(&raw["caller_pinned_bytes"])? >= (2 * SOURCE_BINDING_LINE_CAP) as u64

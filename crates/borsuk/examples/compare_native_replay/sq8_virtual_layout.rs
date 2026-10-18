@@ -447,7 +447,7 @@ mod mapped_quality_tests {
             .iter()
             .map(|&id| crate::Hit {
                 id,
-                score_bits: 1_f32.to_bits(),
+                score_bits: u64::from(1_f32.to_bits()),
             })
             .collect::<Vec<_>>();
         let arm = ShortlistArm {
@@ -491,7 +491,7 @@ mod mapped_quality_tests {
             .iter()
             .map(|&id| crate::Hit {
                 id,
-                score_bits: 1_f32.to_bits(),
+                score_bits: u64::from(1_f32.to_bits()),
             })
             .collect::<Vec<_>>();
         let arm = ShortlistArm {

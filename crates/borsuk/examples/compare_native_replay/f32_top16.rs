@@ -660,7 +660,7 @@ mod tests {
                 .take(10)
                 .map(|n| super::super::Hit {
                     id: n.id as u64,
-                    score_bits: n.score.to_bits(),
+                    score_bits: u64::from(n.score.to_bits()),
                 })
                 .collect(),
             returned_physical_ordinals: cosine.iter().take(10).map(|n| n.ordinal).collect(),

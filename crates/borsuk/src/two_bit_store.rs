@@ -455,7 +455,7 @@ fn publication_phase_budget(
 }
 
 // Physical SOURCE identities never replace the plane's original flat identity.
-fn source_artifacts<'a>(
+pub(crate) fn source_artifacts<'a>(
     manifest: &'a Manifest,
     plane: &'a SourcePlaneReceipt,
 ) -> Result<Vec<(&'static str, usize, &'a str)>> {
@@ -1258,6 +1258,11 @@ pub async fn republish_retained_two_bit_generation(
     let mut descriptors = Vec::with_capacity(roster_count - 3);
     descriptors.extend([
         (
+            "canonical_row_digests.bin",
+            Some(manifest.canonical.row_digests_bytes),
+            manifest.canonical.row_digests_sha256.as_str(),
+        ),
+        (
             "page_digests.bin",
             plane
                 .rows
@@ -1763,6 +1768,10 @@ pub async fn publish_two_bit_generation(
     drop(source);
     let mut roster = Vec::with_capacity(files.len());
     roster.extend([
+        (
+            "canonical_row_digests.bin",
+            manifest.canonical.row_digests_sha256.as_str(),
+        ),
         ("page_manifest.json", manifest.page_manifest_sha256.as_str()),
         (
             "page_digests.bin",

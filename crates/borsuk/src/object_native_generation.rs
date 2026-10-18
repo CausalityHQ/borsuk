@@ -483,6 +483,7 @@ async fn stage_metadata(
                 let dimensions = root.canonical.dimensions;
                 let overflow = ObjectNativeOpenError::Invalid("descriptor metadata length");
                 match name {
+                    "canonical_row_digests.bin" => Some(root.canonical.row_digests_bytes),
                     "plane/mean.bin" => Some(dimensions.checked_mul(4).ok_or(overflow)?),
                     "plane/page_digests.bin" => {
                         Some(rows.div_ceil(32).checked_mul(32).ok_or(overflow)?)
@@ -1426,11 +1427,21 @@ mod tests {
         let mut query = [0_f32; 64];
         query[0] = 1.;
         for generation in [&opened, &remote] {
-            let hits = generation.rank_pages(&http.reader, &[(0, 0)], &query, 3)
-                .await.unwrap().candidates;
-            assert_eq!(hits.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
-                [(41, 2, 0_f32.to_bits()), (90, 0, 0_f32.to_bits()),
-                 (7, 1, (1. - 4_f32 / 17_f32.sqrt()).to_bits())]);
+            let hits = generation
+                .rank_pages(&http.reader, &[(0, 0)], &query, 3)
+                .await
+                .unwrap()
+                .candidates;
+            assert_eq!(
+                hits.iter()
+                    .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                [
+                    (41, 2, 0_f32.to_bits()),
+                    (90, 0, 0_f32.to_bits()),
+                    (7, 1, (1. - 4_f32 / 17_f32.sqrt()).to_bits())
+                ]
+            );
         }
         http.finish();
         assert!(matches!(

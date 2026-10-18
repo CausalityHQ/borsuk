@@ -950,3 +950,5 @@ pub mod two_bit_compaction;
 pub mod two_bit_gc;
 
 pub mod source_frame;
+
+pub mod fp32_rerank;

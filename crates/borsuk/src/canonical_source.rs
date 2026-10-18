@@ -1,4 +1,4 @@
-//! Durable normalized FP32 source for maintenance, never hydrated by queries.
+//! Durable normalized FP32 source with authenticated individual serving records.
 use crate::{
     object_native_generation::valid_object_key,
     resident_graph_generation::valid_sha256,
@@ -27,6 +27,8 @@ pub(crate) struct CanonicalSource {
     pub(crate) bytes: u64,
     pub(crate) sha256: String,
     pub(crate) object_key: String,
+    pub(crate) row_digests_bytes: usize,
+    pub(crate) row_digests_sha256: String,
 }
 impl CanonicalSource {
     pub(crate) fn valid(&self) -> bool {
@@ -39,6 +41,8 @@ impl CanonicalSource {
                 .and_then(|n| n.checked_mul(self.rows))
                 .map(|n| n as u64)
                 == Some(self.bytes)
+            && self.rows.checked_mul(32) == Some(self.row_digests_bytes)
+            && valid_sha256(&self.row_digests_sha256)
             && valid_sha256(&self.sha256)
             && valid_object_key(&self.object_key, &self.sha256)
     }
@@ -86,6 +90,14 @@ pub(crate) fn write_canonical_source(
             .create_new(true)
             .open(output)?,
     );
+    let mut row_digests = BufWriter::with_capacity(
+        65536,
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output.with_file_name("canonical_row_digests.bin"))?,
+    );
+    let mut row_digests_hash = Sha256::new();
     let mut digest = Sha256::new();
     let mut sq8_digest = Sha256::new();
     for physical in 0..source.rows {
@@ -117,6 +129,12 @@ pub(crate) fn write_canonical_source(
         out.write_all(&row)?;
         digest.update(&sq8_row[..8]);
         digest.update(&row);
+        let mut record_hash = Sha256::new();
+        record_hash.update(&sq8_row[..8]);
+        record_hash.update(&row);
+        let record_hash = record_hash.finalize();
+        row_digests.write_all(&record_hash)?;
+        row_digests_hash.update(record_hash);
     }
     if sq8.read(&mut [0])? != 0 || format!("{:x}", sq8_digest.finalize()) != source.sq8_sha256 {
         return Err(bad("canonical SQ8 identity"));
@@ -134,6 +152,8 @@ pub(crate) fn write_canonical_source(
     if format!("{:x}", raw_digest.finalize()) != source.raw_sha256 {
         return Err(bad("canonical raw identity"));
     }
+    row_digests.flush()?;
+    row_digests.get_ref().sync_all()?;
     out.flush()?;
     out.get_ref().sync_all()?;
     let sha256 = format!("{:x}", digest.finalize());
@@ -145,6 +165,11 @@ pub(crate) fn write_canonical_source(
         rows: source.rows,
         dimensions: source.dimensions,
         bytes: bytes as u64,
+        row_digests_bytes: source
+            .rows
+            .checked_mul(32)
+            .ok_or(bad("canonical digest geometry"))?,
+        row_digests_sha256: format!("{:x}", row_digests_hash.finalize()),
         object_key: format!("{parent}/{sha256}"),
         sha256,
     })
@@ -238,6 +263,8 @@ async fn recover_canonical(
                 bytes: 0,
                 sha256: format!("{:x}", Sha256::digest([])),
                 object_key: String::new(),
+                row_digests_bytes: 0,
+                row_digests_sha256: format!("{:x}", Sha256::digest([])),
             });
         }
         let manifest: Manifest =
@@ -576,4 +603,54 @@ async fn prepare_compaction(
     }
     .await;
     result.map_err(|error| CanonicalRecoveryFailure { error, stats })
+}
+
+#[cfg(test)]
+mod row_digest_tests {
+    use super::*;
+    #[test]
+    fn canonical_build_authenticates_each_full_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let raw_path = temp.path().join("raw");
+        let sq8_path = temp.path().join("sq8");
+        let raw = [1_f32, 0., 0., 0., 0., 0., 0.]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let mut sq8 = (-91_i64).to_le_bytes().to_vec();
+        sq8.extend(1_f32.to_le_bytes());
+        sq8.extend([255, 0, 0, 0, 0, 0, 0]);
+        std::fs::write(&raw_path, &raw).unwrap();
+        std::fs::write(&sq8_path, &sq8).unwrap();
+        let raw_sha = format!("{:x}", Sha256::digest(&raw));
+        let sq8_sha = format!("{:x}", Sha256::digest(&sq8));
+        let output = temp.path().join("canonical.bin");
+        let descriptor = write_canonical_source(
+            &TwoBitSource {
+                raw: &raw_path,
+                raw_sha256: &raw_sha,
+                sq8: &sq8_path,
+                sq8_sha256: &sq8_sha,
+                rows: 1,
+                dimensions: 7,
+            },
+            Some(&[0]),
+            &output,
+            &format!("test/objects/{sq8_sha}"),
+        )
+        .unwrap();
+        let digests = std::fs::read(temp.path().join("canonical_row_digests.bin"))
+            .expect("canonical build must stream the authenticated row sidecar");
+        assert_eq!(digests.len(), 32);
+        assert_eq!(
+            &digests[..],
+            &Sha256::digest(std::fs::read(output).unwrap())[..]
+        );
+        let value = serde_json::to_value(descriptor).unwrap();
+        assert_eq!(value["row_digests_bytes"], 32);
+        assert_eq!(
+            value["row_digests_sha256"],
+            format!("{:x}", Sha256::digest(&digests))
+        );
+    }
 }

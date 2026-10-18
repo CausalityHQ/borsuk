@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v12");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v13");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {
@@ -710,7 +710,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     .unwrap();
     assert_eq!(
         metadata_ops.count_matching(|op, _| op == common::StoreOperation::Get),
-        9
+        10
     );
     assert_eq!(
         metadata_ops.count_matching(|op, path| op == common::StoreOperation::Get
@@ -4305,6 +4305,7 @@ async fn assert_layout_roster(
         "manifest.json",
         "page_manifest.json",
         "page_digests.bin",
+        "canonical_row_digests.bin",
         "plane/manifest.json",
         "plane/mean.bin",
         "plane/page_digests.bin",
@@ -4383,7 +4384,7 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
             let root: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(local.join("manifest.json")).unwrap())
                     .unwrap();
-            assert_eq!(root["schema"], "borsuk-two-bit-generation-v12");
+            assert_eq!(root["schema"], "borsuk-two-bit-generation-v13");
             assert_eq!(
                 root["source_layout"]["layout"],
                 serde_json::to_value(layout).unwrap()
@@ -4736,7 +4737,7 @@ async fn page_range_v2_old_root_refuses_before_payload_reads_or_gc_deletes() {
     assert!(
         matches!(
             error,
-            borsuk::two_bit_store::TwoBitStoreError::Invalid("unsupported generation schema")
+            borsuk::two_bit_store::TwoBitStoreError::Invalid("root schema")
         ),
         "{error}"
     );
@@ -4758,7 +4759,7 @@ async fn page_range_v2_old_root_refuses_before_payload_reads_or_gc_deletes() {
     .unwrap_err();
     assert!(matches!(
         failure.error,
-        borsuk::two_bit_store::TwoBitStoreError::Invalid("unsupported generation schema")
+        borsuk::two_bit_store::TwoBitStoreError::Invalid("root schema")
     ));
     assert_eq!(failure.report.delete_attempts, 0);
     assert_eq!(failure.report.objects_scanned, 0);
