@@ -3478,15 +3478,21 @@ pub(crate) fn scale_reducer_native_fixture(
     prefix: bool,
     panel: bool,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
-    let shape = Shape {
-        count: if prefix { 1 } else { 2 },
-        ..Shape::tiny(32)
-    };
+    scale_reducer_native_fixture_count(if prefix { 1 } else { 2 },
+        panel.then_some(if prefix { 0 } else { 1 }))
+}
+
+#[cfg(test)]
+pub(crate) fn scale_reducer_native_fixture_count(
+    count: usize,
+    panel_ordinal: Option<usize>,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    let shape = Shape { count, ..Shape::tiny(32) };
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
-    value["reserved_query_interval"] = json!({"start":32,"end":34});
-    if panel {
-        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[if prefix { 0 } else { 1 }],"trace":false});
+    value["reserved_query_interval"] = json!({"start":32,"end":32+count.max(2)});
+    if let Some(ordinal) = panel_ordinal {
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[ordinal],"trace":false});
     }
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("scale-native-result.jsonl");
