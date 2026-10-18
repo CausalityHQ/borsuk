@@ -15,21 +15,155 @@ pub(super) const PAGE_RANGE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline
 pub(super) const CPU_PROFILE_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
 pub(super) const CPU_PROFILE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
 
+pub(super) const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v17";
+pub(super) const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v16";
+
+pub(super) fn concurrent_queries(inputs: &Value) -> Result<usize> {
+    let active = number(&inputs["max_active_queries"])?;
+    require(
+        inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA
+            && matches!(active, 1 | 2)
+            && inputs["fetch_parallelism"] == 64
+            && inputs["source_authentication"] == "offload2"
+            && inputs["execution"] == json!({"mode":"full"})
+            && inputs["serving"] == json!({"mode":"baseline"})
+            && inputs.get("shared_byte_window").is_none()
+            && inputs["sq8_range_split"].is_null(),
+        "explicit closed-loop batch Q1/Q2 configuration",
+    )?;
+    if inputs["phase"] == "bound_inputs" && number(&inputs["rows"])? >= 100_000 {
+        require(
+            inputs["rows"] == 1_000_000
+                && inputs["profile"] == "scale1m"
+                && inputs["semantic_leaf_limit"] == 40
+                && inputs["max_memory_bytes"] == 2_u64 * 1024 * 1024 * 1024,
+            "fixed40 one-million-row concurrent operating point",
+        )?;
+    }
+    Ok(active as usize)
+}
+
+pub(super) fn validate_cohort(raw: &Value) -> Result<()> {
+    fields(
+        raw,
+        "phase attempted_count successful_count max_active_queries elapsed_ns process_cpu_ns process_cpu_start_ns process_cpu_end_ns sum_query_wall_ns qps transport truth_opened",
+    )?;
+    let count = number(&raw["successful_count"])?;
+    let elapsed = number(&raw["elapsed_ns"])?;
+    let active = number(&raw["max_active_queries"])?;
+    let wall = number(&raw["sum_query_wall_ns"])?;
+    require(
+        raw["phase"] == "query_cohort"
+            && raw["truth_opened"] == false
+            && count > 0
+            && raw["attempted_count"] == count
+            && matches!(active, 1 | 2)
+            && elapsed > 0
+            && wall > 0
+            && wall <= elapsed.saturating_mul(active)
+            && raw["qps"].as_f64() == Some(count as f64 * 1e9 / elapsed as f64),
+        "cohort counts, elapsed and QPS (never sum overlapping process counters)",
+    )?;
+    require(
+        number(&raw["process_cpu_end_ns"])?.checked_sub(number(&raw["process_cpu_start_ns"])?)
+            == Some(number(&raw["process_cpu_ns"])?),
+        "one cohort CPU delta",
+    )?;
+    fields(&raw["transport"], "stage ordinal before after")?;
+    require(
+        raw["transport"]["stage"] == "query_cohort" && raw["transport"]["ordinal"].is_null(),
+        "cohort transport captured once",
+    )
+}
+
+// Validate the explicit new fields, then reuse the frozen envelope checks for
+// unchanged fields. Authentication always hashes original bytes, never this view.
+pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
+    let super::UniqueJson(mut raw) = serde_json::from_slice(line)?;
+    require(raw["phase"] == phase, "concurrent phase")?;
+    match phase {
+        "identity" | "bound_inputs" => {
+            concurrent_queries(&raw)?;
+            if phase == "identity" {
+                require(
+                    raw["schema"] == CONCURRENT_RESULT_SCHEMA,
+                    "concurrent result schema",
+                )?;
+                raw["schema"] = json!(CPU_PROFILE_RESULT_SCHEMA);
+            }
+            raw["config_schema"] = json!(CPU_PROFILE_CONFIG_SCHEMA);
+            raw.as_object_mut().unwrap().remove("max_active_queries");
+        }
+        "startup" => {
+            let r = &raw["concurrent_resources"];
+            fields(
+                r,
+                "query_slots downloads_per_query downloads_global_bound compute_workers_global compute_slots_global query_future_bytes_per_query modeled_memory_bound_bytes external_memory_limit_bytes source_bytes_per_query sq8_bytes_per_query query_bytes_global_bound scheduler_bytes_global cohort_record_bytes",
+            )?;
+            let active = number(&r["query_slots"])?;
+            require(
+                matches!(active, 1 | 2)
+                    && r["downloads_per_query"] == 64
+                    && r["downloads_global_bound"] == active * 64
+                    && r["compute_workers_global"] == 2
+                    && r["compute_slots_global"] == 2
+                    && r["query_future_bytes_per_query"] == 512 * 1024
+                    && r["cohort_record_bytes"] == 1024 * 1024
+                    && r["query_bytes_global_bound"]
+                        == active
+                            * plus(
+                                number(&r["source_bytes_per_query"])?,
+                                number(&r["sq8_bytes_per_query"])?,
+                            )?
+                    && number(&r["scheduler_bytes_global"])? > 0
+                    && r["modeled_memory_bound_bytes"] == raw["library_cap_bytes"]
+                    && r["external_memory_limit_bytes"] == 8_u64 * 1024 * 1024 * 1024,
+                "concurrent resource bounds",
+            )?;
+            raw.as_object_mut().unwrap().remove("concurrent_resources");
+        }
+        "query" => {
+            require(
+                raw.get("query_process_cpu_ns") == Some(&Value::Null)
+                    && raw.get("transport") == Some(&Value::Null),
+                "overlapping process counters must be null, never summed or zero",
+            )?;
+            raw["query_process_cpu_ns"] = json!(0);
+            raw["transport"] =
+                json!({"stage":"query","ordinal":raw["ordinal"],"before":null,"after":null});
+        }
+        "query_cohort" => return validate_cohort(&raw),
+        "terminal" => {
+            validate_cohort(&raw["summary"]["query_cohort"])?;
+            raw["summary"]
+                .as_object_mut()
+                .ok_or("terminal")?
+                .remove("query_cohort");
+        }
+        "diagnostic_admission" => return Err("concurrent trace is unsupported".into()),
+        _ => (),
+    }
+    validate_row_envelope(&serde_json::to_vec(&raw)?, phase, true, true, true)
+}
+
 fn cpu_profile_config(inputs: &Value) -> bool {
-    inputs["config_schema"] == CPU_PROFILE_CONFIG_SCHEMA
+    matches!(
+        inputs["config_schema"].as_str(),
+        Some(CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA)
+    )
 }
 
 fn page_range_config(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA)
+        Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA)
     )
 }
 
 fn page_range_result(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(PAGE_RANGE_RESULT_SCHEMA | CPU_PROFILE_RESULT_SCHEMA)
+        Some(PAGE_RANGE_RESULT_SCHEMA | CPU_PROFILE_RESULT_SCHEMA | CONCURRENT_RESULT_SCHEMA)
     )
 }
 
@@ -62,6 +196,7 @@ pub(super) fn is_result_schema(schema: &str) -> bool {
             | ONEPASS_RESULT_SCHEMA
             | PAGE_RANGE_RESULT_SCHEMA
             | CPU_PROFILE_RESULT_SCHEMA
+            | CONCURRENT_RESULT_SCHEMA
     )
 }
 
@@ -73,6 +208,7 @@ pub(super) fn is_source_layout_schema(schema: &Value) -> bool {
                 | ONEPASS_RESULT_SCHEMA
                 | PAGE_RANGE_RESULT_SCHEMA
                 | CPU_PROFILE_RESULT_SCHEMA
+                | CONCURRENT_RESULT_SCHEMA
         )
     )
 }
@@ -85,6 +221,7 @@ pub(super) fn is_source_layout_config(header: &Value) -> bool {
                 | ONEPASS_CONFIG_SCHEMA
                 | PAGE_RANGE_CONFIG_SCHEMA
                 | CPU_PROFILE_CONFIG_SCHEMA
+                | CONCURRENT_CONFIG_SCHEMA
         )
     )
 }
@@ -132,7 +269,10 @@ pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
             && header["range_scheduler_owner"] == "library"
             && (1..=48).contains(&limit)
             && match header["phase"].as_str() {
-                Some("identity") => header["schema"] == CPU_PROFILE_RESULT_SCHEMA,
+                Some("identity") => matches!(
+                    header["schema"].as_str(),
+                    Some(CPU_PROFILE_RESULT_SCHEMA | CONCURRENT_RESULT_SCHEMA)
+                ),
                 Some("bound_inputs") => header["profile"] == "scale1m",
                 _ => false,
             },
@@ -160,7 +300,11 @@ fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
             .additional_memory_bytes(
                 usize::try_from(number(&inputs["fetch_parallelism"])?)?,
                 usize::try_from(number(&inputs["source_get_budget"])?)?,
-                1,
+                if inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA {
+                    concurrent_queries(inputs)?
+                } else {
+                    1
+                },
             )
             .ok_or("SOURCE authentication memory overflow")?,
     ))
@@ -506,13 +650,17 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         let bytes = serde_json::to_vec(v)?;
         require(bytes.len() < 65536, "v10 header cap")?;
         let layout = is_source_layout_schema(&c.expected_identity["schema"]);
-        validate_row_envelope(
-            &bytes,
-            phase,
-            layout || c.expected_identity["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA,
-            layout,
-            c.expected_identity["schema"] == CPU_PROFILE_RESULT_SCHEMA,
-        )?;
+        if c.expected_identity["schema"] == CONCURRENT_RESULT_SCHEMA {
+            validate_concurrent_row(&bytes, phase)?;
+        } else {
+            validate_row_envelope(
+                &bytes,
+                phase,
+                layout || c.expected_identity["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA,
+                layout,
+                c.expected_identity["schema"] == CPU_PROFILE_RESULT_SCHEMA,
+            )?;
+        }
     }
     let i = &c.expected_identity;
     let b = &c.expected_bound_inputs;
@@ -539,6 +687,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "source_capsule_verification_policy",
         "source_authentication",
         "semantic_leaf_limit",
+        "max_active_queries",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }
@@ -1310,6 +1459,19 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
+    if inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA {
+        let active = concurrent_queries(inputs)?;
+        let r = &raw["concurrent_resources"];
+        require(
+            r["query_slots"] == active
+                && r["source_bytes_per_query"] == inputs["source_byte_budget"]
+                && r["sq8_bytes_per_query"] == inputs["sq8_byte_budget"]
+                && r["scheduler_bytes_global"] == active * library_scheduler_bytes(inputs)?
+                && number(&raw["caller_pinned_bytes"])?
+                    >= (active * 512 * 1024 + 1024 * 1024) as u64,
+            "startup query resources match headers",
+        )?;
+    }
     validate_source_authentication_charge(raw, inputs)?;
     require(
         if inputs["range_scheduler_owner"] == "library" {
@@ -1368,9 +1530,9 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
     )?;
     require(
         match raw["config_schema"].as_str() {
-            Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA) => {
-                raw["source_capsule_verification_policy"] == PAGE_RANGE_VERIFICATION_POLICY
-            }
+            Some(
+                PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA,
+            ) => raw["source_capsule_verification_policy"] == PAGE_RANGE_VERIFICATION_POLICY,
             Some(ONEPASS_CONFIG_SCHEMA) => {
                 raw["source_capsule_verification_policy"] == SOURCE_CAPSULE_VERIFICATION_POLICY
             }

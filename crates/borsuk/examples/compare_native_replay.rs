@@ -1412,7 +1412,7 @@ struct Query {
     sum: Charge,
     stages: Stages,
     query_wall_ns: u64,
-    query_process_cpu_ns: u64,
+    query_process_cpu_ns: Option<u64>,
     #[serde(rename = "trace")]
     _trace: IgnoredAny,
 }
@@ -1567,6 +1567,7 @@ struct Rows {
     library_scheduler: bool,
     source_layout: bool,
     cpu_profile: bool,
+    concurrent: bool,
     policy: ReadPolicy,
     line_cap: usize,
 }
@@ -1592,6 +1593,7 @@ impl Rows {
             library_scheduler: false,
             source_layout: false,
             cpu_profile: false,
+            concurrent: false,
             policy: ReadPolicy::Existing,
             line_cap: LINE_CAP,
         })
@@ -1626,7 +1628,9 @@ impl Rows {
             header.phase == phase,
             &format!("expected {phase}, got {}", header.phase),
         )?;
-        if self.policy == ReadPolicy::Sq8SplitPanel {
+        if self.concurrent {
+            current_v10::validate_concurrent_row(&self.line, phase)?;
+        } else if self.policy == ReadPolicy::Sq8SplitPanel {
             sq8_split_panel::validate_row(&self.line, phase)?;
         } else if self.v10 {
             current_v10::validate_row_envelope(
@@ -1755,6 +1759,13 @@ fn read_run_observed_policy(
             "parity run changed before first content read",
         )?;
     }
+    let concurrent = expected
+        .is_some_and(|c| c.expected_identity["schema"] == current_v10::CONCURRENT_RESULT_SCHEMA);
+    require(
+        !concurrent || policy == ReadPolicy::Existing,
+        "concurrent completed reader policy",
+    )?;
+    rows.concurrent = concurrent;
     rows.policy = policy;
     rows.v10 = v10;
     rows.source_layout = expected
@@ -2167,7 +2178,9 @@ fn read_run_observed_policy(
         charges.add(q.charges)?;
         stages.add(&q.stages, q.query_wall_ns)?;
         if let Some(e) = &mut completed {
-            e.transport_scale(&rows.line, "query", Some(ordinal), local)?;
+            if !concurrent {
+                e.transport_scale(&rows.line, "query", Some(ordinal), local)?;
+            }
             for (samples, interval) in e.stage_samples.iter_mut().zip([
                 &q.stages.discovery,
                 &q.stages.source,
@@ -2178,7 +2191,12 @@ fn read_run_observed_policy(
             }
         }
         wall = plus(wall, q.query_wall_ns)?;
-        cpu = plus(cpu, q.query_process_cpu_ns)?;
+        if !concurrent {
+            cpu = plus(
+                cpu,
+                q.query_process_cpu_ns.ok_or("serial query CPU required")?,
+            )?;
+        }
         query(&rows.line, &q, &inputs)?;
         samples.push(Sample {
             returned: q.returned,
@@ -2189,6 +2207,24 @@ fn read_run_observed_policy(
             physical_plan_sha256,
         });
     }
+    let cohort = if concurrent {
+        let cohort: Value = rows.row("query_cohort")?;
+        let inputs = &expected.ok_or("concurrent headers")?.expected_bound_inputs;
+        require(
+            cohort["attempted_count"] == count
+                && cohort["successful_count"] == count
+                && cohort["max_active_queries"] == current_v10::concurrent_queries(inputs)?
+                && cohort["sum_query_wall_ns"] == wall,
+            "cohort conservation",
+        )?;
+        cpu = cohort["process_cpu_ns"].as_u64().ok_or("cohort CPU")?;
+        if let Some(e) = &mut completed {
+            e.transport_scale(&rows.line, "query_cohort", None, local)?;
+        }
+        Some(cohort)
+    } else {
+        None
+    };
     let (prefix_bytes, prefix_sha) = (rows.bytes, rows.sha());
     let seal: Seal = rows.row("all_queries_sealed")?;
     require(
@@ -2270,13 +2306,20 @@ fn read_run_observed_policy(
             && t.sum == charges.sum()?
             && t.query_wall_ns == wall
             && t.query_process_cpu_ns == cpu
-            && t.process_wall_ns >= wall
+            && t.process_wall_ns
+                >= cohort
+                    .as_ref()
+                    .map_or(wall, |c| c["elapsed_ns"].as_u64().unwrap())
             && t.process_cpu_ns >= cpu,
         "terminal charge/time totals",
     )?;
     if let Some(e) = &mut completed {
         let raw: Value = serde_json::from_slice(&rows.line)?;
         e.terminal = raw["summary"].clone();
+        require(
+            e.terminal.get("query_cohort") == cohort.as_ref(),
+            "sealed cohort equals terminal cohort",
+        )?;
         if scale {
             let t = &e.terminal;
             let c = expected.ok_or("scale config")?;
@@ -4243,6 +4286,23 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
         "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false});
+    if c.expected_identity["schema"] == current_v10::CONCURRENT_RESULT_SCHEMA {
+        report["schema"] = json!("borsuk-concurrent-query-completed-v1");
+        report["statistics"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sequential_qps");
+        report
+            .as_object_mut()
+            .unwrap()
+            .remove("sequential_qps_definition");
+        report["query_cohort"] = e.terminal["query_cohort"].clone();
+        report["qps_definition"] = json!(
+            "successful_count * 1e9 / cohort elapsed_ns; closed-loop ordered batches, not rolling or service-peak QPS"
+        );
+        report["query_cpu_definition"] =
+            json!("one cohort process CPU delta, never sum overlapping per-query snapshots");
+    }
     if c.schema == SCALE_CONFIG_SCHEMA {
         report["reduction_reads_local_files_only"] = json!(true);
         report["producer_backend_kind"] = c.expected_bound_inputs["backend"]["kind"].clone();
@@ -13709,6 +13769,62 @@ mod tests {
                         .collect(),
                 );
                 row["diagnostic"] = old;
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_probe_reader_aggregate_not_sum_and_resealed_mutations() {
+        for active in [1, 2] {
+            let (dir, rows) = scale_native_runner::concurrent_reducer_fixture(active);
+            let check = |records: &[Value]| {
+                let (path, _) =
+                    write_fixture(dir.path(), "concurrent-reader.jsonl", records.to_vec());
+                let (config, pin) = scale_config(dir.path(), &path, records);
+                reduce_scale(&config, &pin)
+            };
+            let good = check(&rows).unwrap();
+            assert!(good["statistics"].get("sequential_qps").is_none());
+            let cohort = rows
+                .iter()
+                .position(|r| r["phase"] == "query_cohort")
+                .unwrap();
+            let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+            let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+            for mutation in 0..14 {
+                let mut bad = rows.clone();
+                match mutation {
+                    0 => bad[query]["query_process_cpu_ns"] = json!(0),
+                    1 => {
+                        bad[query]["transport"] =
+                            json!({"stage":"query","ordinal":0,"before":null,"after":null})
+                    }
+                    2 => bad[cohort]["attempted_count"] = json!(1),
+                    3 => bad[cohort]["sum_query_wall_ns"] = json!(1),
+                    4 => bad[cohort]["qps"] = json!(1.0),
+                    5 => bad[cohort]["max_active_queries"] = json!(3),
+                    6 => bad.last_mut().unwrap()["summary"]["query_process_cpu_ns"] = json!(1),
+                    7 => {
+                        bad.last_mut().unwrap()["summary"]["query_cohort"]["elapsed_ns"] = json!(1)
+                    }
+                    8 => bad[startup]["concurrent_resources"]["compute_slots_global"] = json!(4),
+                    9 => bad[1]["max_active_queries"] = json!(3),
+                    10 => {
+                        let other = 3 - active;
+                        bad[startup]["concurrent_resources"]["query_slots"] = json!(other);
+                        bad[startup]["concurrent_resources"]["downloads_global_bound"] =
+                            json!(other * 64);
+                        let old = &rows[startup]["concurrent_resources"];
+                        for key in ["query_bytes_global_bound", "scheduler_bytes_global"] {
+                            bad[startup]["concurrent_resources"][key] =
+                                json!(old[key].as_u64().unwrap() / active as u64 * other as u64);
+                        }
+                    }
+                    11 => bad[startup]["concurrent_resources"]["source_bytes_per_query"] = json!(1),
+                    12 => bad[startup]["concurrent_resources"]["scheduler_bytes_global"] = json!(1),
+                    _ => bad[cohort]["process_cpu_start_ns"] = json!(0),
+                }
+                assert!(check(&bad).is_err(), "mutation {mutation}");
             }
         }
     }

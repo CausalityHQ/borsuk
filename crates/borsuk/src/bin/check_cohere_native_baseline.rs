@@ -48,6 +48,12 @@ const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // CPU-profile admission and diagnostics have their own config/result protocol.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
 const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
+const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v16";
+const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v17";
+// Checked against each unpolled future, plus bounded join/result bookkeeping.
+const QUERY_FUTURE_BYTES: usize = 512 * 1024;
+// Cohort snapshot JSON and its terminal copy can coexist after query futures drain.
+const COHORT_RECORD_BYTES: usize = 1024 * 1024;
 const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
 const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v5";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
@@ -295,6 +301,8 @@ struct DerivationReceipt {
 #[serde(deny_unknown_fields)]
 struct Config {
     schema: String,
+    #[serde(default)]
+    max_active_queries: Option<usize>,
     dataset: String,
     revision: String,
     metric: String,
@@ -763,7 +771,41 @@ fn bounded_path(path: &Path) -> Result<()> {
         "absolute bounded path",
     )
 }
+fn concurrent_config(c: &Config) -> bool {
+    c.max_active_queries.is_some()
+}
+fn active_queries(c: &Config) -> usize {
+    c.max_active_queries.unwrap_or(1)
+}
+fn config_schema(c: &Config) -> bool {
+    match c.max_active_queries {
+        None => c.schema == CONFIG_SCHEMA,
+        Some(1 | 2) => c.schema == CONCURRENT_CONFIG_SCHEMA,
+        _ => false,
+    }
+}
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    if c.max_active_queries.is_some() {
+        require(
+            config_schema(c)
+                && !c.execution.panel()
+                && c.serving == Serving::Baseline {}
+                && c.fetch_parallelism == 64
+                && c.source_authentication == borsuk::sq8_s3_range::SourceAuthentication::Offload2
+                && c.shared_byte_window.is_none()
+                && c.sq8_range_split.is_none(),
+            "concurrent probe requires explicit Q1/Q2, full baseline, fetch64, Offload2",
+        )?;
+        if !cfg!(test) || c.rows == 1_000_000 {
+            require(
+                c.rows == 1_000_000
+                    && c.profile == SemanticProfile::Scale1m
+                    && c.semantic_leaf_limit == Some(40)
+                    && c.max_memory_bytes == 2 * 1024 * 1024 * 1024,
+                "concurrent production probe requires fixed40 and 2 GiB",
+            )?;
+        }
+    }
     if let Some(limit) = c.semantic_leaf_limit {
         require(
             c.profile == SemanticProfile::Scale1m && (1..=48).contains(&limit),
@@ -827,7 +869,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         require(
             (1..=usize::try_from(c.max_memory_bytes)?).contains(&window.max_bytes)
                 && c.fetch_parallelism
-                    .checked_mul(ACTIVE_QUERIES)
+                    .checked_mul(active_queries(c))
                     .is_some_and(|requests| window.max_waiters >= requests)
                 && (1..=usize::try_from(c.max_memory_bytes)?).contains(&window.max_state_bytes)
                 && InFlightBytes::modeled_state_bytes(window.max_waiters)
@@ -836,8 +878,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         )?;
     }
     require(
-        c.schema == CONFIG_SCHEMA,
-        "config format marker must be borsuk-cohere-native-baseline-config-v15; older formats refuse",
+        config_schema(c),
+        "config format marker must match serial v15 or explicit concurrent v16",
     )?;
     require(
         c.s3_read_retry.is_none() || matches!(&c.backend, Backend::S3 { .. }),
@@ -861,7 +903,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         )?;
     }
     require(
-        c.schema == CONFIG_SCHEMA
+        config_schema(c)
             && c.dataset == DATASET
             && c.revision == REVISION
             && c.metric == "cosine"
@@ -1288,7 +1330,13 @@ fn caller_bytes(c: &Config) -> usize {
         + 2 * c.rows.div_ceil(256) * (size_of::<usize>() + size_of::<std::ops::Range<usize>>())
         + K * (size_of::<ScoredNominee>() + size_of::<Hit>())
         + size_of::<[usize; K]>();
-    let query = c.requests.bytes + size_of::<[f32; D]>() + returned;
+    let query = c.requests.bytes
+        + active_queries(c) * (size_of::<[f32; D]>() + returned)
+        + if c.max_active_queries.is_some() {
+            active_queries(c) * QUERY_FUTURE_BYTES + COHORT_RECORD_BYTES
+        } else {
+            0
+        };
     // Reduction drops generation/requests first: one capped JSONL line, one truth body,
     // 8KiB reader, k hits. Authentication uses one 64KiB stack block.
     let reduction = SOURCE_BINDING_LINE_CAP + 1 + c.truth.bytes + 8192 + 2 * K * size_of::<Hit>();
@@ -1315,7 +1363,6 @@ fn caller_bytes(c: &Config) -> usize {
         + 4 * D * size_of::<u32>()
         + query.max(reduction)
 }
-const ACTIVE_QUERIES: usize = 1;
 // SQ8 ranges one traced query can plan: the baseline SQ8 cap or the explicit direct cap.
 fn trace_ranges(c: &Config) -> usize {
     if let Some(split) = c.sq8_range_split {
@@ -1347,7 +1394,7 @@ fn range_scheduler_bytes(c: &Config) -> Result<usize> {
 }
 fn source_authentication_bytes(c: &Config) -> Result<u64> {
     c.source_authentication
-        .additional_memory_bytes(c.fetch_parallelism, c.source_get_budget, ACTIVE_QUERIES)
+        .additional_memory_bytes(c.fetch_parallelism, c.source_get_budget, active_queries(c))
         .ok_or_else(|| "SOURCE authentication memory".into())
 }
 // Bytes one active diagnostic query holds on top of the production model, charged before
@@ -1409,12 +1456,12 @@ fn uninstrumented_pinned_bytes(c: &Config) -> u64 {
     caller_bytes(c) as u64
 }
 fn pinned_bytes(c: &Config) -> Result<u64> {
-    Ok(caller_bytes(c) as u64 + (diagnostic_pinned_bytes(c)? as u64) * ACTIVE_QUERIES as u64)
+    Ok(caller_bytes(c) as u64 + (diagnostic_pinned_bytes(c)? as u64) * active_queries(c) as u64)
 }
 fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
     Ok(TwoBitGenerationLimits {
         max_memory_bytes: c.max_memory_bytes,
-        max_active_queries: ACTIVE_QUERIES,
+        max_active_queries: active_queries(c),
         max_query_bytes: c.sq8_byte_budget,
         max_query_gets: c.sq8_get_budget,
         max_parallel_gets: c.fetch_parallelism,
@@ -2062,6 +2109,7 @@ struct Progress {
     query_cpu_ns: i128,
     transport: TransportSpan,
     direct_memory: Option<DirectClosureMemory>,
+    cohort: Option<Value>,
 }
 
 #[derive(Default, Serialize)]
@@ -2114,6 +2162,7 @@ impl Default for Progress {
             query_cpu_ns: 0,
             transport: TransportSpan::default(),
             direct_memory: None,
+            cohort: None,
         }
     }
 }
@@ -2292,6 +2341,19 @@ async fn query_and_seal_with(
     if let Some(bytes) = generation.byte_window_state_bytes() {
         startup["shared_byte_window_state_bytes"] = json!(bytes);
     }
+    if concurrent_config(c) {
+        startup["concurrent_resources"] = json!({
+            "query_slots":active_queries(c),"downloads_per_query":c.fetch_parallelism,
+            "downloads_global_bound":active_queries(c) * c.fetch_parallelism,
+            "source_bytes_per_query":c.source_byte_budget,"sq8_bytes_per_query":c.sq8_byte_budget,
+            "query_bytes_global_bound":active_queries(c) * (c.source_byte_budget + c.sq8_byte_budget),
+            "scheduler_bytes_global":active_queries(c) * range_scheduler_bytes(c)?,
+            "cohort_record_bytes":COHORT_RECORD_BYTES,
+            "compute_workers_global":2,"compute_slots_global":2,
+            "query_future_bytes_per_query":QUERY_FUTURE_BYTES,
+            "modeled_memory_bound_bytes":c.max_memory_bytes,
+            "external_memory_limit_bytes":8_u64 * 1024 * 1024 * 1024});
+    }
     out.emit(&startup)?;
     if let Some(direct) = c.serving.direct() {
         // Exact modeled memory must fit before any direct query: the existing model is kept
@@ -2304,8 +2366,8 @@ async fn query_and_seal_with(
         // pinned plus the library-owned trace reservation it adds at traced admission. A cap
         // exceeded only by the complete total is a diagnostic error (INVALID) found here,
         // before any payload opens, never a rejection of the candidate.
-        let diagnostic_pinned = diagnostic_pinned_bytes(c)? as u64 * ACTIVE_QUERIES as u64;
-        let library_trace = library_trace_bytes(c) as u64 * ACTIVE_QUERIES as u64;
+        let diagnostic_pinned = diagnostic_pinned_bytes(c)? as u64 * active_queries(c) as u64;
+        let library_trace = library_trace_bytes(c) as u64 * active_queries(c) as u64;
         let algorithm_total = memory
             .total_bytes
             .saturating_sub(admission.already_pinned_bytes)
@@ -2334,8 +2396,43 @@ async fn query_and_seal_with(
             "diagnostic memory: the algorithm model fits the cap but the instrumented total does not",
         )?;
     }
+    let concurrent = c.max_active_queries.is_some();
+    let mut pending = std::collections::VecDeque::new();
+    let mut first_error: Option<Box<dyn Error + Send + Sync>> = None;
+    let mut attempted = 0;
+    let cohort_wall = Instant::now();
+    let cohort_cpu = concurrent.then(cpu_ns);
+    if concurrent {
+        p.transport.begin(&reader, "query_cohort", None);
+    }
     for slot in 0..selected_len(c) {
         // The ORIGINAL ordinal indexes the request row here and the truth row later.
+        if concurrent && pending.is_empty() {
+            if first_error.is_some() {
+                break;
+            }
+            let end = (slot + active_queries(c)).min(selected_len(c));
+            let mut futures = Vec::with_capacity(active_queries(c));
+            for next in slot..end {
+                let query = request_row(&requests, ordinal_at(c, next))?;
+                let generation = &generation;
+                let future = async move {
+                    let wall = Instant::now();
+                    let result = generation
+                        .diagnostic_search_with_store(store, &query, K)
+                        .await;
+                    (result, wall.elapsed().as_nanos())
+                };
+                require(
+                    std::mem::size_of_val(&future) + 4096 <= QUERY_FUTURE_BYTES,
+                    "concurrent query future exceeds precharged reservation",
+                )?;
+                futures.push(Box::pin(future));
+            }
+            attempted += futures.len();
+            // Join, never try_join: a failed query cannot cancel its sibling.
+            pending = futures_util::future::join_all(futures).await.into();
+        }
         let ordinal = ordinal_at(c, slot);
         p.stage = "query";
         let query = request_row(&requests, ordinal)?;
@@ -2345,42 +2442,56 @@ async fn query_and_seal_with(
             diag.sampler.take_before();
             diag.trace.begin(Instant::now());
         }
-        p.transport.begin(&reader, p.stage, Some(ordinal));
+        if !concurrent {
+            p.transport.begin(&reader, p.stage, Some(ordinal));
+        }
         let monotonic_start = diag.as_ref().and_then(|_| monotonic_ns());
         let wall = Instant::now();
-        let cpu = cpu_ns();
-        let result = match (c.serving.direct(), diag.as_mut()) {
-            (None, None) => {
-                generation
-                    .diagnostic_search_with_store(store, &query, K)
-                    .await
-            }
-            (None, Some(diag)) => {
-                generation
-                    .diagnostic_search_with_store_traced(store, &query, K, &mut diag.trace)
-                    .await
-            }
-            (Some(direct), None) => {
-                generation
-                    .diagnostic_direct_closure_search_with_store(store, &query, K, direct)
-                    .await
-            }
-            (Some(direct), Some(diag)) => {
-                generation
-                    .diagnostic_direct_closure_search_with_store_traced(
-                        store,
-                        &query,
-                        K,
-                        direct,
-                        &mut diag.trace,
-                    )
-                    .await
+        let cpu = if concurrent { 0 } else { cpu_ns() };
+        let prefetched = if concurrent {
+            pending.pop_front()
+        } else {
+            None
+        };
+        let prefetched_wall = prefetched.as_ref().map(|(_, wall)| *wall);
+        let result = if let Some((result, _)) = prefetched {
+            result
+        } else {
+            match (c.serving.direct(), diag.as_mut()) {
+                (None, None) => {
+                    generation
+                        .diagnostic_search_with_store(store, &query, K)
+                        .await
+                }
+                (None, Some(diag)) => {
+                    generation
+                        .diagnostic_search_with_store_traced(store, &query, K, &mut diag.trace)
+                        .await
+                }
+                (Some(direct), None) => {
+                    generation
+                        .diagnostic_direct_closure_search_with_store(store, &query, K, direct)
+                        .await
+                }
+                (Some(direct), Some(diag)) => {
+                    generation
+                        .diagnostic_direct_closure_search_with_store_traced(
+                            store,
+                            &query,
+                            K,
+                            direct,
+                            &mut diag.trace,
+                        )
+                        .await
+                }
             }
         };
-        let wall_ns = wall.elapsed().as_nanos();
-        let cpu_ns = cpu_ns() - cpu;
+        let wall_ns = prefetched_wall.unwrap_or_else(|| wall.elapsed().as_nanos());
+        let cpu_ns = if concurrent { 0 } else { cpu_ns() - cpu };
         let monotonic_end = diag.as_ref().and_then(|_| monotonic_ns());
-        p.transport.finish(&reader);
+        if !concurrent {
+            p.transport.finish(&reader);
+        }
         if let Some(diag) = diag.as_mut() {
             diag.sampler.take_after();
         }
@@ -2404,21 +2515,32 @@ async fn query_and_seal_with(
                 } else {
                     error_text
                 };
-                let failure = json!({"phase":"query_failure","ordinal":ordinal,"error":error_text,
+                let mut failure = json!({"phase":"query_failure","ordinal":ordinal,"error":error_text,
                     "resource_rejection":rejection,
                     "charges_so_far":p.charges,"sum_so_far":p.charges.sum(),"stages":e.stages(),
                     "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false,
                     "transport":p.transport});
+                if concurrent {
+                    failure["query_process_cpu_ns"] = Value::Null;
+                    failure["transport"] = Value::Null;
+                }
                 let diagnostic = diag
                     .as_ref()
                     .map(|diag| serde_json::to_value(diag.query(&anchors)))
                     .transpose()?;
                 emit_failure(out, failure, diagnostic)?;
                 let message = format!("native query {ordinal}: {error_text}");
-                return Err(match rejection {
+                let error = match rejection {
                     Some(reason) => ResourceReject { reason, message }.into(),
                     None => message.into(),
-                });
+                };
+                if !concurrent {
+                    return Err(error);
+                }
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                continue;
             }
         };
         if c.serving.direct().is_some() {
@@ -2519,9 +2641,9 @@ async fn query_and_seal_with(
             plan: PlanRecord<'a>,
             stages: &'a borsuk::two_bit_generation::QueryStages,
             query_wall_ns: u128,
-            query_process_cpu_ns: i128,
+            query_process_cpu_ns: Option<i128>,
             trace: &'a TwoBitPlanTrace,
-            transport: &'a TransportSpan,
+            transport: Option<&'a TransportSpan>,
             // Panels only: where this ordinal sits in the executed sequence.
             #[serde(skip_serializing_if = "Option::is_none")]
             selected_slot: Option<usize>,
@@ -2557,15 +2679,32 @@ async fn query_and_seal_with(
             plan,
             stages: &result.stages,
             query_wall_ns: wall_ns,
-            query_process_cpu_ns: cpu_ns,
+            query_process_cpu_ns: (!concurrent).then_some(cpu_ns),
             trace: &trace,
-            transport: &p.transport,
+            transport: (!concurrent).then_some(&p.transport),
             selected_slot: c.execution.panel().then_some(slot),
             diagnostic: diag.as_ref().map(|diag| diag.query(&anchors)),
         })?;
         p.completed += 1;
         p.underfilled += usize::from(underfill);
         // result, trace and decoded row drop here; no panel-sized retained traces.
+    }
+    if let Some(cpu_start) = cohort_cpu {
+        let elapsed = cohort_wall.elapsed().as_nanos();
+        p.query_cpu_ns = cpu_ns() - cpu_start;
+        p.transport.finish(&reader);
+        let cohort = json!({"phase":"query_cohort","attempted_count":attempted,
+            "successful_count":p.completed,"max_active_queries":active_queries(c),
+            "elapsed_ns":elapsed,"process_cpu_ns":p.query_cpu_ns,
+            "process_cpu_start_ns":cpu_start,"process_cpu_end_ns":cpu_start+p.query_cpu_ns,
+            "sum_query_wall_ns":p.query_wall_ns,
+            "qps":p.completed as f64 * 1e9 / elapsed as f64,
+            "transport":p.transport,"truth_opened":false});
+        out.emit(&cohort)?;
+        p.cohort = Some(cohort);
+    }
+    if let Some(error) = first_error {
+        return Err(error);
     }
     drop(generation);
     drop(requests);
@@ -2727,6 +2866,9 @@ fn reduce(c: &Config, out: &mut Output, seal: &Seal, p: &mut Progress) -> Result
         "query_wall_ns":p.query_wall_ns,"query_process_cpu_ns":p.query_cpu_ns,
         "physical_s3_measured":false,"external_gate_required":true});
     // Added after the literal: json! recursion depth grows with the entry count.
+    if let Some(cohort) = &p.cohort {
+        summary["query_cohort"] = cohort.clone();
+    }
     summary["execution"] = json!(c.execution);
     summary["selected_count"] = json!(selected);
     summary["executed_count"] = json!(queries);
@@ -2834,7 +2976,16 @@ fn execute_paths_status(
         // Added after the literal: json! recursion depth grows with the entry count.
         identity["source_capsule_source_sha256"] =
             json!(hash(include_bytes!("../source_capsule.rs")));
-        identity["config_schema"] = json!(CONFIG_SCHEMA);
+        identity["config_schema"] = json!(
+            configured
+                .as_ref()
+                .map(|c| c.schema.as_str())
+                .unwrap_or(CONFIG_SCHEMA)
+        );
+        if let Some(active) = configured.as_ref().ok().and_then(|c| c.max_active_queries) {
+            identity["schema"] = json!(CONCURRENT_RESULT_SCHEMA);
+            identity["max_active_queries"] = json!(active);
+        }
         identity["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
         identity["source_authentication"] =
             json!(configured.as_ref().ok().map(|c| c.source_authentication));
@@ -2889,7 +3040,10 @@ fn execute_paths_status(
             bound["semantic_leaf_limit"] = json!(limit);
         }
         bound["source_layout"] = json!(c.source_layout);
-        bound["config_schema"] = json!(CONFIG_SCHEMA);
+        bound["config_schema"] = json!(c.schema);
+        if let Some(active) = c.max_active_queries {
+            bound["max_active_queries"] = json!(active);
+        }
         bound["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
         bound["range_scheduler_owner"] = json!("library");
         bound["sq8_range_split"] = json!(c.sq8_range_split);
@@ -3234,6 +3388,10 @@ pub(crate) fn scale_reducer_retry_header_fixture(dir: &Path) -> Result<PathBuf> 
     Ok(result)
 }
 
+#[cfg(test)]
+pub(crate) fn concurrent_reducer_fixture(active: usize) -> (tempfile::TempDir, Vec<Value>) {
+    tests::concurrent_fixture(active)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6077,6 +6235,358 @@ mod tests {
         }
     }
 
+    pub(super) fn concurrent_fixture(active: usize) -> (tempfile::TempDir, Vec<Value>) {
+        let shape = Shape::tiny(32);
+        let (dir, mut value) = query_runtime(64).unwrap().block_on(fixture(shape));
+        value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+        value["max_active_queries"] = json!(active);
+        value["fetch_parallelism"] = json!(64);
+        value["source_authentication"] = json!("offload2");
+        let (status, rows) = run_status(dir.path(), "concurrent.jsonl", &value, shape);
+        assert_eq!(status, Status::Measured);
+        (dir, rows)
+    }
+
+    #[test]
+    fn concurrent_probe_configuration_refuses_widening_and_preserves_serial_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let shape = Shape::tiny(32);
+        let original = config_value(dir.path(), shape);
+        let serial: Config = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(active_queries(&serial), 1);
+        assert!(config_schema(&serial));
+        let mut good = original;
+        good["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+        good["max_active_queries"] = json!(2);
+        good["fetch_parallelism"] = json!(64);
+        good["source_authentication"] = json!("offload2");
+        validate_config(&serde_json::from_value(good.clone()).unwrap(), shape).unwrap();
+        for (key, bad) in [
+            ("max_active_queries", json!(0)),
+            ("max_active_queries", json!(3)),
+            ("max_active_queries", Value::Null),
+            ("schema", json!(CONFIG_SCHEMA)),
+            ("fetch_parallelism", json!(128)),
+            ("source_authentication", json!("inline")),
+            (
+                "execution",
+                json!({"mode":"diagnostic_panel","ordinals":[0],"trace":true}),
+            ),
+        ] {
+            let mut value = good.clone();
+            value[key] = bad;
+            let parsed: Config = serde_json::from_value(value).unwrap();
+            assert!(validate_config(&parsed, shape).is_err(), "{key}");
+        }
+        let two: Config = serde_json::from_value(good.clone()).unwrap();
+        good["max_active_queries"] = json!(1);
+        let one: Config = serde_json::from_value(good).unwrap();
+        assert!(
+            pinned_bytes(&two).unwrap() >= pinned_bytes(&one).unwrap() + QUERY_FUTURE_BYTES as u64
+        );
+    }
+
+    #[test]
+    fn concurrent_probe_exact_results_plans_charges_and_cohort() {
+        let (_a, one) = concurrent_fixture(1);
+        let (_b, two) = concurrent_fixture(2);
+        let queries = |rows: &[Value]| {
+            rows.iter()
+                .filter(|r| r["phase"] == "query")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for (a, b) in queries(&one).iter().zip(queries(&two)) {
+            for key in [
+                "ordinal",
+                "returned",
+                "returned_physical_ordinals",
+                "plan",
+                "trace",
+                "charges",
+                "sum",
+            ] {
+                assert_eq!(a[key], b[key], "{key}");
+            }
+            assert!(a["query_process_cpu_ns"].is_null() && b["transport"].is_null());
+        }
+        for rows in [&one, &two] {
+            let cohort = rows.iter().find(|r| r["phase"] == "query_cohort").unwrap();
+            assert_eq!(cohort["attempted_count"], 2);
+            assert_eq!(cohort["successful_count"], 2);
+            assert_eq!(rows.last().unwrap()["summary"]["query_cohort"], *cohort);
+            assert_eq!(
+                rows.last().unwrap()["summary"]["query_process_cpu_ns"],
+                cohort["process_cpu_ns"]
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    struct HeldQueryStore {
+        inner: ChunkedStore,
+        key: String,
+        entered: std::sync::atomic::AtomicUsize,
+        release: tokio::sync::Semaphore,
+        fail_first: bool,
+    }
+    impl std::fmt::Display for HeldQueryStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("held-query-fixture")
+        }
+    }
+    #[async_trait::async_trait]
+    impl ObjectStore for HeldQueryStore {
+        async fn get_opts(
+            &self,
+            path: &ObjectPath,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            if !options.head && path.as_ref() == self.key {
+                let index = self
+                    .entered
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.release.acquire().await.unwrap().forget();
+                if self.fail_first && index == 0 {
+                    return Err(stub_error());
+                }
+            }
+            self.inner.get_opts(path, options).await
+        }
+        async fn put_opts(
+            &self,
+            p: &ObjectPath,
+            b: object_store::PutPayload,
+            o: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.inner.put_opts(p, b, o).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            p: &ObjectPath,
+            o: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_opts(p, o).await
+        }
+        async fn put_multipart_create(
+            &self,
+            p: &ObjectPath,
+            o: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            self.inner.put_multipart_create(p, o).await
+        }
+        fn delete_stream(
+            &self,
+            p: futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectPath>> {
+            self.inner.delete_stream(p)
+        }
+        fn list(
+            &self,
+            p: Option<&ObjectPath>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(p)
+        }
+        async fn list_with_delimiter(
+            &self,
+            p: Option<&ObjectPath>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(p).await
+        }
+        async fn copy_opts(
+            &self,
+            a: &ObjectPath,
+            b: &ObjectPath,
+            o: object_store::CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(a, b, o).await
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_probe_real_api_overlap_serialization_fault_cancel_and_model_boundary() {
+        use futures_util::FutureExt;
+        use std::sync::atomic::Ordering::SeqCst;
+        let shape = Shape::tiny(32);
+        let (dir, value) = fixture(shape).await;
+        let c: Config = serde_json::from_value(value).unwrap();
+        let root: Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("generation/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let query = request_row(&std::fs::read(&c.requests.path).unwrap(), 0).unwrap();
+        for active in [1, 2] {
+            for fault in [false, true] {
+                let store = HeldQueryStore {
+                    inner: ChunkedStore::new(
+                        Arc::new(
+                            LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap(),
+                        ),
+                        8192,
+                    ),
+                    key: root["sq8_object_key"].as_str().unwrap().into(),
+                    entered: Default::default(),
+                    release: tokio::sync::Semaphore::new(0),
+                    fail_first: fault,
+                };
+                let mut admission = limits(&c).unwrap();
+                admission.max_active_queries = active;
+                let generation = TwoBitGeneration::open_remote(
+                    &store,
+                    &ObjectPath::from(c.generation_prefix.clone()),
+                    &c.generation_root_sha256,
+                    admission,
+                    &c.scratch_parent,
+                )
+                .await
+                .unwrap()
+                .with_source_authentication(borsuk::sq8_s3_range::SourceAuthentication::Offload2)
+                .unwrap();
+                let mut joined = Box::pin(futures_util::future::join(
+                    generation.diagnostic_search_with_store(&store, &query, K),
+                    generation.diagnostic_search_with_store(&store, &query, K),
+                ));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        assert!(joined.as_mut().now_or_never().is_none());
+                        if store.entered.load(SeqCst) == active {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                    for _ in 0..20 {
+                        assert!(joined.as_mut().now_or_never().is_none());
+                        tokio::task::yield_now().await;
+                    }
+                    assert_eq!(store.entered.load(SeqCst), active);
+                    store.release.add_permits(2);
+                    let (first, second) = joined.await;
+                    assert_eq!(first.is_err(), fault);
+                    assert!(
+                        second.is_ok(),
+                        "failed sibling must not cancel successful query"
+                    );
+                    if let Ok((first, _)) = first {
+                        assert_eq!(first.plan.ranges, second.as_ref().unwrap().0.plan.ranges);
+                        assert_eq!(first.source_stats, second.as_ref().unwrap().0.source_stats);
+                    }
+                })
+                .await
+                .unwrap();
+                // Cancel a held API future, then demonstrate its slot and pins are reusable.
+                if !fault {
+                    let mut cancelled =
+                        Box::pin(generation.diagnostic_search_with_store(&store, &query, K));
+                    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        while store.entered.load(SeqCst) < 3 {
+                            assert!(cancelled.as_mut().now_or_never().is_none());
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .unwrap();
+                    drop(cancelled);
+                    store.release.add_permits(1);
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        generation.diagnostic_search_with_store(&store, &query, K),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                }
+                // Public memory witness: resident is the baseline model, without the direct extra.
+                let model = generation
+                    .direct_closure_memory(DirectClosureLimits {
+                        max_sq8_bytes: c.sq8_byte_budget,
+                        max_sq8_gets: c.sq8_get_budget,
+                    })
+                    .unwrap()
+                    .resident_bytes;
+                drop(generation);
+                let before = store.entered.load(SeqCst);
+                admission.max_memory_bytes = model - 1;
+                let opened = TwoBitGeneration::open_remote(
+                    &store,
+                    &ObjectPath::from(c.generation_prefix.clone()),
+                    &c.generation_root_sha256,
+                    admission,
+                    &c.scratch_parent,
+                )
+                .await
+                .unwrap();
+                assert!(
+                    opened
+                        .with_source_authentication(
+                            borsuk::sq8_s3_range::SourceAuthentication::Offload2
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    store.entered.load(SeqCst),
+                    before,
+                    "model-1 performs zero query payload IO"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_probe_runner_failure_drains_and_records_successful_sibling() {
+        let shape = Shape::tiny(32);
+        let (dir, mut value) = fixture(shape).await;
+        value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+        value["max_active_queries"] = json!(2);
+        value["fetch_parallelism"] = json!(64);
+        value["source_authentication"] = json!("offload2");
+        let c: Config = serde_json::from_value(value).unwrap();
+        let root: Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("generation/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let store = Arc::new(HeldQueryStore {
+            inner: ChunkedStore::new(
+                Arc::new(LocalFileSystem::new_with_prefix(dir.path().join("store")).unwrap()),
+                8192,
+            ),
+            key: root["sq8_object_key"].as_str().unwrap().into(),
+            entered: Default::default(),
+            release: tokio::sync::Semaphore::new(2),
+            fail_first: true,
+        });
+        let mut out = Output::create(&dir.path().join("failure.jsonl")).unwrap();
+        let mut progress = Progress::default();
+        let result = query_and_seal_with(&c, shape, &mut out, &mut progress, || {
+            Ok(Reader::Stub {
+                store: store.clone(),
+                stats: Arc::new(std::sync::Mutex::new(NativeTransportStats {
+                    attempts: 0,
+                    method_counts: [0; 10],
+                    status_counts: vec![],
+                    transport_failures: 0,
+                    stream_failures: 0,
+                    consumed_payload_bytes: 0,
+                    dropped_error_bodies: 0,
+                })),
+            })
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(store.entered.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(!progress.sealed && !progress.truth_opened);
+        let rows = records(&out.path);
+        let outcomes = rows
+            .iter()
+            .filter(|r| matches!(r["phase"].as_str(), Some("query" | "query_failure")))
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0]["ordinal"], 0);
+        assert_eq!(outcomes[1]["ordinal"], 1);
+        assert_eq!(outcomes.iter().filter(|r| r["phase"] == "query").count(), 1);
+        assert_eq!(progress.cohort.as_ref().unwrap()["successful_count"], 1);
+    }
+
     // ===== Direct-closure serving mode: explicit format, controls, resource outcomes =====
     fn with_direct(mut value: Value, bytes: usize, gets: usize) -> Value {
         value["serving"] =
@@ -7595,6 +8105,7 @@ mod tests {
             completed: 7,
             query_wall_ns: 123,
             query_cpu_ns: 45,
+            cohort: None,
             transport: TransportSpan {
                 stage: "query",
                 ordinal: Some(7),
