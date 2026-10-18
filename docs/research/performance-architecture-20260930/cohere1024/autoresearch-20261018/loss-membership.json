@@ -1,0 +1,93 @@
+{
+  "status": "AUTHENTICATED_STRUCTURAL_MEMBERSHIP",
+  "queries": 32,
+  "hits": 314,
+  "denominator": 320,
+  "missing": [
+    {
+      "ordinal": 1,
+      "truth_id": 99990,
+      "physical_row": 242963,
+      "source_unit": 7592,
+      "semantic_router_unit": true,
+      "semantic_seed_unit": false,
+      "source_scored": true,
+      "sq8_selected_page": true,
+      "sq8_fetched": true,
+      "returned": false,
+      "localization": "fetched_but_missing_ranking_quantization_normalization_ties_unresolved"
+    },
+    {
+      "ordinal": 8,
+      "truth_id": 382916,
+      "physical_row": 117932,
+      "source_unit": 3685,
+      "semantic_router_unit": true,
+      "semantic_seed_unit": false,
+      "source_scored": true,
+      "sq8_selected_page": true,
+      "sq8_fetched": true,
+      "returned": false,
+      "localization": "fetched_but_missing_ranking_quantization_normalization_ties_unresolved"
+    },
+    {
+      "ordinal": 14,
+      "truth_id": 575784,
+      "physical_row": 305009,
+      "source_unit": 9531,
+      "semantic_router_unit": false,
+      "semantic_seed_unit": false,
+      "source_scored": false,
+      "sq8_selected_page": false,
+      "sq8_fetched": false,
+      "returned": false,
+      "localization": "not_source_scored_and_not_sq8_fetched"
+    },
+    {
+      "ordinal": 20,
+      "truth_id": 397315,
+      "physical_row": 36868,
+      "source_unit": 1152,
+      "semantic_router_unit": true,
+      "semantic_seed_unit": false,
+      "source_scored": true,
+      "sq8_selected_page": true,
+      "sq8_fetched": true,
+      "returned": false,
+      "localization": "fetched_but_missing_ranking_quantization_normalization_ties_unresolved"
+    },
+    {
+      "ordinal": 25,
+      "truth_id": 323745,
+      "physical_row": 106990,
+      "source_unit": 3343,
+      "semantic_router_unit": true,
+      "semantic_seed_unit": false,
+      "source_scored": true,
+      "sq8_selected_page": true,
+      "sq8_fetched": true,
+      "returned": false,
+      "localization": "fetched_but_missing_ranking_quantization_normalization_ties_unresolved"
+    },
+    {
+      "ordinal": 30,
+      "truth_id": 518540,
+      "physical_row": 106281,
+      "source_unit": 3321,
+      "semantic_router_unit": true,
+      "semantic_seed_unit": false,
+      "source_scored": true,
+      "sq8_selected_page": true,
+      "sq8_fetched": true,
+      "returned": false,
+      "localization": "fetched_but_missing_ranking_quantization_normalization_ties_unresolved"
+    }
+  ],
+  "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1",
+  "source_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+  "all_misses_excluded_before_source_scoring": false,
+  "all_misses_excluded_from_sq8_fetch": false,
+  "native_scoring_replayed": false,
+  "quantization_attributed": false,
+  "production_change": false
+}

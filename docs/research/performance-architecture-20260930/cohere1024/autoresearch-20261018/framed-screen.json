@@ -1,0 +1,133 @@
+{
+  "schema": "borsuk-autoresearch-framed-screen-decision-v1",
+  "status": "VALID_SCREEN",
+  "query_membership": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "runs": [
+    {
+      "cell": "0-flat",
+      "sha256": "819fcb2c2df146f28e18b1826e2a46c371327153ddf4c2d546acdd19520fb049",
+      "query_wall_ns": 4013444018,
+      "query_cpu_ns": 2688445887,
+      "hits": 314,
+      "denominator": 320,
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 2826,
+        "verified_bytes": 749506560
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 851,
+        "verified_bytes": 153659520
+      },
+      "peak_rss_bytes": 62996480
+    },
+    {
+      "cell": "1-frame",
+      "sha256": "7a3830e6c5354792e3cca048fd1b3d0da4b1ca7c49d796bfe628d8f23336f6f4",
+      "query_wall_ns": 4191410493,
+      "query_cpu_ns": 4305676808,
+      "hits": 314,
+      "denominator": 320,
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 2826,
+        "verified_bytes": 714525570
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 851,
+        "verified_bytes": 153659520
+      },
+      "peak_rss_bytes": 77463552
+    },
+    {
+      "cell": "2-frame",
+      "sha256": "f6112f185ba1220ff0e9eecfcd1292603b3041763b63ff8a3cee9b087e239163",
+      "query_wall_ns": 4087706626,
+      "query_cpu_ns": 4174327310,
+      "hits": 314,
+      "denominator": 320,
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 2826,
+        "verified_bytes": 714525570
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 851,
+        "verified_bytes": 153659520
+      },
+      "peak_rss_bytes": 81645568
+    },
+    {
+      "cell": "3-flat",
+      "sha256": "eb08f26db048e99e0a6fc0c4e8b6bf84f970a31fd7b83067bca71d37fa296775",
+      "query_wall_ns": 3839889597,
+      "query_cpu_ns": 2691041244,
+      "hits": 314,
+      "denominator": 320,
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 2826,
+        "verified_bytes": 749506560
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 851,
+        "verified_bytes": 153659520
+      },
+      "peak_rss_bytes": 62894080
+    }
+  ],
+  "pairs": [
+    {
+      "candidate_over_control_wall": 1.0443425831285633,
+      "candidate_over_control_cpu": 1.6015486228754434,
+      "source_bytes_ratio": 0.9533279735403517
+    },
+    {
+      "candidate_over_control_wall": 1.0645375401401156,
+      "candidate_over_control_cpu": 1.5511941035118524,
+      "source_bytes_ratio": 0.9533279735403517
+    }
+  ],
+  "decision": "RETAIN_BYTE_PARETO_CANDIDATE_NO_DEFAULT_PROMOTION",
+  "reason": "Exact ordered score/plan parity; lower SOURCE bytes but both order pairs slower and more CPU. First32 only, not population or vendor evidence.",
+  "cache": "source_cache_off; fresh processes; backend cache unknown",
+  "production_ready": false,
+  "competitor_win": false
+}

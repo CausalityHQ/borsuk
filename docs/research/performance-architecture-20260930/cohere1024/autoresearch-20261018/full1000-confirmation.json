@@ -1,0 +1,182 @@
+{
+  "schema": "borsuk-autoresearch-full1000-decision-v1",
+  "status": "VALID_FULL1000_REGRESSION_CONFIRMATION",
+  "runs": [
+    {
+      "cell": "0-64",
+      "bytes": 32441945,
+      "sha256": "38d354a4e96eb1c0d3dae53aab2b20583f9dc3088253855ca4d8f506446cbfbe",
+      "hits": 9737,
+      "denominator": 10000,
+      "wall_ns": 136134156734,
+      "cpu_ns": 99002121592,
+      "percentiles_ns": {
+        "0.5": 129271653,
+        "0.9": 173327383,
+        "0.95": 191408123,
+        "0.99": 222527944
+      },
+      "sequential_qps": 7.345695040767431,
+      "peak_rss_bytes": 90877952,
+      "charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "underfill": 0
+    },
+    {
+      "cell": "1-128",
+      "bytes": 32441636,
+      "sha256": "4aaf718f2efb18cbb549e7a078335c7450f1bb6cea9d9e2dddd8274df4b1dbc7",
+      "hits": 9737,
+      "denominator": 10000,
+      "wall_ns": 123975938982,
+      "cpu_ns": 97080955603,
+      "percentiles_ns": {
+        "0.5": 115870695,
+        "0.9": 158980850,
+        "0.95": 176270203,
+        "0.99": 224000079
+      },
+      "sequential_qps": 8.066081275215746,
+      "peak_rss_bytes": 113471488,
+      "charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "underfill": 0
+    },
+    {
+      "cell": "2-128",
+      "bytes": 32441636,
+      "sha256": "66287cc5c6574c233db1033b363fadd0fdc119227b65a6b1209d2b690e23a5c6",
+      "hits": 9737,
+      "denominator": 10000,
+      "wall_ns": 123732205248,
+      "cpu_ns": 97105263108,
+      "percentiles_ns": {
+        "0.5": 115485630,
+        "0.9": 160422107,
+        "0.95": 174799157,
+        "0.99": 211840561
+      },
+      "sequential_qps": 8.081970235604153,
+      "peak_rss_bytes": 113856512,
+      "charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "underfill": 0
+    },
+    {
+      "cell": "3-64",
+      "bytes": 32442037,
+      "sha256": "ab8a568176e951f4a911021b320fc072de39094acfedf79677044a7350607e05",
+      "hits": 9737,
+      "denominator": 10000,
+      "wall_ns": 141196880283,
+      "cpu_ns": 98979035752,
+      "percentiles_ns": {
+        "0.5": 131875859,
+        "0.9": 178263134,
+        "0.95": 200774802,
+        "0.99": 302100429
+      },
+      "sequential_qps": 7.082309453266293,
+      "peak_rss_bytes": 97296384,
+      "charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "underfill": 0
+    }
+  ],
+  "pairs": [
+    {
+      "control": "0-64",
+      "candidate": "1-128",
+      "wall_ratio": 0.9106894401545631,
+      "cpu_ratio": 0.9805946987993109,
+      "p90_ratio": 0.9172286989413554,
+      "p95_ratio": 0.9209128653333066,
+      "p99_ratio": 1.0066155062305344,
+      "paired_query_bootstrap_95_wall_ratio": [
+        0.9023867136179435,
+        0.9199996641757096
+      ]
+    },
+    {
+      "control": "3-64",
+      "candidate": "2-128",
+      "wall_ratio": 0.8763097669013956,
+      "cpu_ratio": 0.9810689947647612,
+      "p90_ratio": 0.8999174613411655,
+      "p95_ratio": 0.8706229828581776,
+      "p99_ratio": 0.7012256212320704,
+      "paired_query_bootstrap_95_wall_ratio": [
+        0.86300237163468,
+        0.8887721349268258
+      ]
+    }
+  ],
+  "exact_per_query_plans_trace_scorebits_ids_logical_charges_recall": true,
+  "decision": "RECOMMEND_FETCH128_FOR_THIS_WORKLOAD",
+  "uncertainty": "paired query bootstrap conditional on this host and run order; two pairs do not prove host/time generalization",
+  "cache": "source cacheOFF;freshprocess;backend cacheUNKNOWN;not proven cold",
+  "throughput": "sequential reciprocal mean, not concurrent service capacity",
+  "untouched_holdout": false,
+  "competitor_win": false,
+  "production_ready": false
+}
