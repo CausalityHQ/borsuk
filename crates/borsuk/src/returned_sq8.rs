@@ -197,6 +197,22 @@ pub fn rank_returned_ranges_excluding_traced(
     rank_ranges_impl(geometry, ranges, query, low, step, top_k, max_bytes, excluded_ids, phases, false)
 }
 
+/// Rank visible rows by reconstructed cosine; phases only observe the shared core.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rank_returned_ranges_cosine_excluding_traced(
+    geometry: Sq8Geometry,
+    ranges: &[ReturnedRange<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_bytes: usize,
+    excluded_ids: &[i64],
+    phases: Option<&mut RankPhases>,
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    rank_ranges_impl(geometry, ranges, query, low, step, top_k, max_bytes, excluded_ids, phases, true)
+}
+
 /// Score all visible returned rows by reconstructed cosine, including bridges.
 /// All rows, including exclusions, are validated before filtering. The caller
 /// authenticates range bodies and the sorted unique exclusion snapshot.
@@ -717,6 +733,15 @@ mod cosine_tests {
             cosine.iter().map(|s| (s.id, s.ordinal)).collect::<Vec<_>>(),
             [(41, 5), (90, 3), (7, 4)]
         );
+        for traced in [false, true] {
+            let mut phases = RankPhases::default();
+            let top = rank_returned_ranges_cosine_excluding_traced(
+                g, &ranges, &[1., 0.], &[-1., -1.], &[0.25, 0.25], 2, 42, &[],
+                traced.then_some(&mut phases),
+            ).unwrap();
+            assert_eq!(top, cosine[..2]);
+            if traced { assert_eq!((phases.ranges, phases.rows), (1, 3)); }
+        }
         let l2 =
             rank_returned_ranges(g, &ranges, &[1., 0.], &[-1., -1.], &[0.25, 0.25], 3, 42).unwrap();
         assert_eq!(l2.iter().map(|s| s.id).collect::<Vec<_>>(), [7, 41, 90]);

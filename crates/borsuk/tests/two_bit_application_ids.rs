@@ -1110,6 +1110,8 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
         [i64::MAX, i64::MIN]
     );
     assert_eq!(hits.stats.submitted_gets, 0);
+    assert_eq!(hits.candidates.iter().map(|h| h.score.to_bits()).collect::<Vec<_>>(),
+        [0_f32.to_bits(), 1_f32.to_bits()]);
     for query in [&[][..], &[0., 0.], &[f32::NAN, 0.]] {
         assert!(
             index
@@ -3035,7 +3037,6 @@ async fn semantic_compaction_fixture(
             shift += normalized[d] * low[d];
             qnorm += normalized[d] * normalized[d];
         }
-        shift -= qnorm / 2.;
         let mut oracle = sq8
             .chunks_exact(dimensions + 12)
             .enumerate()
@@ -3046,7 +3047,7 @@ async fn semantic_compaction_fixture(
                 for d in 0..dimensions {
                     inner += f32::from(row[12 + d]) * (normalized[d] * step[d]);
                 }
-                (ordinal, id, norm - 2. * (inner + shift))
+                (ordinal, id, 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.))
             })
             .collect::<Vec<_>>();
         oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
@@ -4277,12 +4278,12 @@ async fn assert_layout_scores(
         .collect::<Vec<_>>();
     assert_eq!(
         actual,
-        // Squared distances between unit vectors are 0 for equal rows and 2 for orthogonal rows.
+        // Cosine distances are 0 for equal rows and 1 for orthogonal rows.
         [
             (i64::MIN + 3, 0_f32.to_bits()),
             (i64::MAX - 9, 0_f32.to_bits()),
-            (-19, 2_f32.to_bits()),
-            (71, 2_f32.to_bits()),
+            (-19, 1_f32.to_bits()),
+            (71, 1_f32.to_bits()),
         ]
     );
 }

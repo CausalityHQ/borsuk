@@ -1290,7 +1290,19 @@ mod tests {
         let root = std::env::temp_dir().join(format!("borsuk-object-native-{suffix}"));
         let router_dir = root.join("router");
         fs::create_dir_all(&router_dir).unwrap();
-        let sq8 = vec![0u8; 256 * (64 + 12)];
+        let mut sq8 = Vec::new();
+        for row in 0..256 {
+            let (id, codes, norm) = match row {
+                0 => (90_i64, [6_u8, 0], 36_f32),
+                1 => (7, [4, 1], 17.),
+                2 => (41, [6, 0], 36.),
+                _ => (100 + row as i64, [0, 1], 1.),
+            };
+            sq8.extend(id.to_le_bytes());
+            sq8.extend(norm.to_le_bytes());
+            sq8.extend(codes);
+            sq8.extend([0_u8; 62]);
+        }
         let sq8_hash = sha256(&sq8);
         let centroids_blob = UnitCentroidPages::build_from_sq8_reader(
             &mut sq8.as_slice(),
@@ -1361,7 +1373,7 @@ mod tests {
             "graph_sha256":sha256(&graph_blob),
             "graph_resident_bytes":graph_resident,
             "sq8_object_sha256":sq8_hash,
-            "sq8_object_key":format!("tenant/g1/objects/{sq8_hash}"), "sq8_etag":"etag-1",
+            "sq8_object_key":format!("tenant/g1/objects/{sq8_hash}"), "sq8_etag":crate::sq8_s3_range::cold_http_fixture::ETAG,
         }))
         .unwrap();
         fs::write(root.join("manifest.json"), &manifest).unwrap();
@@ -1407,6 +1419,20 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(remote.pages().object_sha256(), sq8_hash);
+        let http = crate::sq8_s3_range::cold_http_fixture::Fixture::new(
+            std::collections::BTreeMap::from([(opened.object_key().to_string(), sq8.clone())]),
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        );
+        let mut query = [0_f32; 64];
+        query[0] = 1.;
+        for generation in [&opened, &remote] {
+            let hits = generation.rank_pages(&http.reader, &[(0, 0)], &query, 3)
+                .await.unwrap().candidates;
+            assert_eq!(hits.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
+                [(41, 2, 0_f32.to_bits()), (90, 0, 0_f32.to_bits()),
+                 (7, 1, (1. - 4_f32 / 17_f32.sqrt()).to_bits())]);
+        }
+        http.finish();
         assert!(matches!(
             ObjectNativeGeneration::open_remote(&store, &prefix, &"f".repeat(64), limits, &root)
                 .await,

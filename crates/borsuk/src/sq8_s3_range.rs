@@ -3,7 +3,7 @@
 use crate::sq8_page_authority::{PageAuthority, PageError};
 use crate::{
     exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError},
-    returned_sq8::{RankPhases, ReturnedRange, rank_returned_ranges_excluding_traced},
+    returned_sq8::{RankPhases, ReturnedRange, rank_returned_ranges_cosine_excluding_traced},
 };
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, stream};
@@ -1516,7 +1516,7 @@ pub(crate) async fn rank_verified_sq8_pages_traced_with_split(
         })
         .collect::<Vec<_>>();
     let mut phases = trace.is_some().then(RankPhases::default);
-    let ranked = rank_returned_ranges_excluding_traced(
+    let ranked = rank_returned_ranges_cosine_excluding_traced(
         Sq8Geometry {
             rows: authority.rows(),
             dimensions: authority.dimensions(),
@@ -6546,12 +6546,69 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn authenticated_nonunit_cosine_order_bits_and_excluded_norm() {
+        for invalid in [false, true] {
+            let mut object = Vec::new();
+            for (id, codes, norm) in [
+                (90_i64, [10_u8, 4], if invalid { 0. } else { 2.25_f32 }),
+                (7, [8, 5], 1.0625),
+                (41, [10, 4], 2.25),
+            ] {
+                object.extend(id.to_le_bytes());
+                object.extend(norm.to_le_bytes());
+                object.extend(codes);
+            }
+            let sidecar = Sha256::digest(&object).to_vec();
+            let manifest = serde_json::to_vec(&serde_json::json!({
+                "schema":"borsuk-v115-sq8-page-authority-v2", "generation":7,
+                "rows":3,"dimensions":2,"page_rows":256,
+                "object_sha256":format!("{:x}", Sha256::digest(&object)),
+                "page_digest_sha256":format!("{:x}", Sha256::digest(&sidecar)),
+            })).unwrap();
+            let authority = PageAuthority::load(
+                &manifest, &format!("{:x}", Sha256::digest(&manifest)), &sidecar,
+            ).unwrap();
+            let store = InMemory::new();
+            let location = Path::from("nonunit");
+            let etag = store.put(&location, PutPayload::from(object.clone()))
+                .await.unwrap().e_tag.unwrap();
+            for traced in [false, true] {
+                let mut trace = Sq8RangeTrace::new(1).unwrap();
+                let result = rank_verified_sq8_pages_traced_with_split(
+                    &store, &location, &authority, &[(0, 0)], &etag,
+                    &[1., 0.], &[-1., -1.], &[0.25, 0.25], 3, 1, 42, 1,
+                    if invalid { &[90] } else { &[] },
+                    traced.then_some(&mut trace), None, None,
+                ).await;
+                if invalid {
+                    assert!(matches!(result.unwrap_err().error,
+                        RangeFetchError::Score(Sq8ScoreError::InvalidPlane)));
+                } else {
+                    let hits = result.unwrap().candidates;
+                    let expected = [(41, 2, 0_f32), (90, 0, 0.),
+                        (7, 1, 1. - (1_f32 / 1.0625_f32.sqrt()).clamp(-1., 1.))];
+                    assert_eq!(hits.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
+                        expected.map(|(id, ordinal, score)| (id, ordinal, score.to_bits())));
+                }
+            }
+        }
+    }
+
     fn split_object(rows: usize, dimensions: usize) -> (Vec<u8>, PageAuthority) {
         let mut object = Vec::new();
         for row in 0..rows {
             object.extend_from_slice(&(row as i64).to_le_bytes());
-            object.extend_from_slice(&(0.25 + row as f32 / rows as f32).to_le_bytes());
-            object.extend((0..dimensions).map(|dim| ((row * 17 + dim * 13) % 251) as u8));
+            let codes = (0..dimensions).map(|dim| {
+                let code = ((row * 17 + dim * 13) % 251) as u8;
+                if code == 15 { 16 } else { code }
+            }).collect::<Vec<_>>();
+            let norm = codes.iter().fold(0_f32, |sum, &code| {
+                let value = -0.3_f32 + f32::from(code) * 0.02;
+                sum + value * value
+            });
+            object.extend_from_slice(&norm.to_le_bytes());
+            object.extend(codes);
         }
         let sidecar = object
             .chunks(256 * (dimensions + 12))
@@ -6717,6 +6774,29 @@ mod tests {
             let step = vec![0.02; dimensions];
             for excluded in [&[][..], &[3, 7, 257, 1035][..]] {
                 for ranges in [&[(0, 4)][..], &[(0, 1), (3, 4)][..]] {
+                    let (mut shift, mut qnorm) = (0_f32, 0_f32);
+                    for d in 0..dimensions {
+                        shift += query[d] * low[d];
+                        qnorm += query[d] * query[d];
+                    }
+                    let mut oracle = Vec::new();
+                    for &(first, last) in ranges {
+                        let span = authority.byte_range(first, last).unwrap();
+                        for (slot, record) in object[span.clone()].chunks_exact(dimensions + 12).enumerate() {
+                            let id = i64::from_le_bytes(record[..8].try_into().unwrap());
+                            let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
+                            let mut inner = 0_f32;
+                            for d in 0..dimensions {
+                                inner += f32::from(record[12 + d]) * (query[d] * step[d]);
+                            }
+                            let score = 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.);
+                            if excluded.binary_search(&id).is_err() {
+                                oracle.push((id, span.start / (dimensions + 12) + slot, score));
+                            }
+                        }
+                    }
+                    assert!(oracle.iter().any(|s| s.2.to_bits() != oracle[0].2.to_bits()));
+                    oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)));
                     let plain = rank_verified_sq8_pages_traced_with_byte_window(
                         &store,
                         &location,
@@ -6736,6 +6816,8 @@ mod tests {
                     )
                     .await
                     .unwrap();
+                    assert_eq!(plain.candidates.iter().map(|h| (h.id, h.ordinal, h.score.to_bits())).collect::<Vec<_>>(),
+                        oracle[..10].iter().map(|&(id, ordinal, score)| (id, ordinal, score.to_bits())).collect::<Vec<_>>());
                     for blocks in [1, 2, 3] {
                         let split = Sq8RangeSplit {
                             max_physical_range_bytes: blocks * 256 * (dimensions + 12),
@@ -7034,7 +7116,7 @@ mod tests {
         let mut object = Vec::new();
         for id in 0..rows as i64 {
             object.extend_from_slice(&id.to_le_bytes());
-            object.extend_from_slice(&(id as f32).to_le_bytes());
+            object.extend_from_slice(&(1. + id as f32).to_le_bytes());
             object.push(0);
         }
         object
@@ -8361,7 +8443,7 @@ mod tests {
         let mut object = Vec::new();
         for id in 0_i64..273 {
             object.extend_from_slice(&id.to_le_bytes());
-            object.extend_from_slice(&(id as f32).to_le_bytes());
+            object.extend_from_slice(&(1. + id as f32).to_le_bytes());
             object.push(0);
         }
         store

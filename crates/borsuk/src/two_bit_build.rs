@@ -1676,7 +1676,7 @@ mod tests {
             ranges.iter().map(|r| r.len()).sum::<usize>()
         );
         // Sequential f32 formula, independent of the production scoring helper.
-        let expected_score = 1_f32 - 2. * (255_f32 * (1_f32 / 255.) - 0.5);
+        let expected_score = 1_f32 - (255_f32 * (1_f32 / 255.)).clamp(-1., 1.);
         let mut expected = ranges
             .iter()
             .flat_map(|r| r.start / 17..r.end / 17)

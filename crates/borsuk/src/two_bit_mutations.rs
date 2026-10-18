@@ -33,7 +33,7 @@ pub struct TwoBitMutation {
 pub struct TwoBitMutationHit {
     /// Signed application ID; pending puts have no base physical ordinal.
     pub id: i64,
-    /// Normalized squared-L2 score, smaller is better. Base SQ8 is approximate.
+    /// Cosine distance, smaller is better. Base SQ8 is approximate.
     pub score: f32,
 }
 
@@ -102,6 +102,11 @@ impl TwoBitMutationSnapshot {
             return Err(Sq8ScoreError::InvalidQuery);
         }
         let normalized = cosine_vector(query).map_err(|_| Sq8ScoreError::InvalidQuery)?;
+        let qnorm = normalized.iter().fold(0_f32, |sum, &q| sum + q * q);
+        if !qnorm.is_finite() || qnorm <= 0. {
+            return Err(Sq8ScoreError::InvalidQuery);
+        }
+        let query_norm = qnorm.sqrt();
         let capacity = top_k.min(
             base.len()
                 .checked_add(self.put_rows())
@@ -133,14 +138,25 @@ impl TwoBitMutationSnapshot {
             let Some(vector) = &row.vector else {
                 continue;
             };
-            let squared = normalized
-                .iter()
-                .zip(vector)
-                .map(|(&q, &v)| (f64::from(q) - f64::from(v)).powi(2))
-                .sum::<f64>() as f32;
+            let (mut dot, mut vnorm) = (0_f32, 0_f32);
+            for (&q, &v) in normalized.iter().zip(vector) {
+                dot += q * v;
+                vnorm += v * v;
+            }
+            let denominator = query_norm * vnorm.sqrt();
+            let ratio = dot / denominator;
+            if !vnorm.is_finite()
+                || vnorm <= 0.
+                || !dot.is_finite()
+                || !denominator.is_finite()
+                || denominator <= 0.
+                || !ratio.is_finite()
+            {
+                return Err(Sq8ScoreError::InvalidPlane);
+            }
             offer(TwoBitMutationHit {
                 id: row.id,
-                score: squared,
+                score: 1. - ratio.clamp(-1., 1.),
             });
         }
         Ok(heap.into_sorted_vec().into_iter().map(|h| h.0).collect())
@@ -584,4 +600,99 @@ async fn publish_mutation_state(
     snapshot.sealed = seal;
     snapshot.version = version;
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod cosine_tests {
+    use super::*;
+
+    #[test]
+    fn pending_cosine_norms_merge_empty_base_ties_and_validation() {
+        let mut snapshot = TwoBitMutationSnapshot {
+            base_root: String::new(),
+            dimensions: 3,
+            revision: 1,
+            serialized_bytes: 0,
+            sha256: String::new(),
+            prefix: Path::from("test"),
+            version: UpdateVersion {
+                e_tag: None,
+                version: None,
+            },
+            rows: vec![
+                TwoBitMutation {
+                    id: 7,
+                    vector: Some(vec![0., 1., 0.]),
+                },
+                TwoBitMutation {
+                    id: 41,
+                    vector: Some(vec![0.5, 0.5, 0.70710677]),
+                },
+                TwoBitMutation {
+                    id: 90,
+                    vector: Some(vec![0., 1., 0.]),
+                },
+                TwoBitMutation {
+                    id: 99,
+                    vector: None,
+                },
+            ],
+            excluded_ids: vec![7, 41, 90, 99],
+            sealed: false,
+        };
+        // Both query and put can be borrowed as near-unit without having norm exactly one.
+        let query = [1.0000002, 0., 0.];
+        assert!(matches!(
+            cosine_vector(&query).unwrap(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let vector = snapshot.rows[1].vector.as_ref().unwrap();
+        assert!(matches!(
+            cosine_vector(vector).unwrap(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        let qnorm = query.iter().fold(0_f32, |s, &q| s + q * q);
+        let vnorm = vector.iter().fold(0_f32, |s, &v| s + v * v);
+        let dot = query
+            .iter()
+            .zip(vector)
+            .fold(0_f32, |s, (&q, &v)| s + q * v);
+        let expected = 1. - (dot / (qnorm.sqrt() * vnorm.sqrt())).clamp(-1., 1.);
+        assert_ne!(expected.to_bits(), (1. - dot).to_bits());
+        let base = [ScoredNominee {
+            ordinal: 0,
+            id: 100,
+            score: 1.5,
+        }];
+        for base in [&base[..], &[][..]] {
+            let hits = snapshot.rank_with_base(base, &query, 8).unwrap();
+            assert_eq!(
+                hits.iter().map(|h| h.id).collect::<Vec<_>>(),
+                if base.is_empty() {
+                    vec![41, 7, 90]
+                } else {
+                    vec![41, 7, 90, 100]
+                }
+            );
+            assert_eq!(hits[0].score.to_bits(), expected.to_bits());
+            assert_eq!(hits[1].score.to_bits(), 1_f32.to_bits());
+            assert_eq!(snapshot.rank_with_base(base, &query, 1).unwrap(), hits[..1]);
+        }
+        assert!(snapshot.rank_with_base(&base, &[0.; 3], 1).is_err());
+        assert!(
+            snapshot
+                .rank_with_base(
+                    &[ScoredNominee {
+                        ordinal: 0,
+                        id: 7,
+                        score: 0.
+                    }],
+                    &query,
+                    1
+                )
+                .is_err()
+        );
+        snapshot.rows[0].vector = Some(vec![0.; 3]);
+        assert!(snapshot.rank_with_base(&base, &query, 1).is_err());
+    }
 }

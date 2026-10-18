@@ -4922,7 +4922,7 @@ mod source_walk_tests {
             assert_eq!(result.plan.ranges, vec![range.clone()]);
             assert_eq!(result.ranked.stats.submitted_gets, 1);
             assert_eq!(result.ranked.stats.verified_bytes, range.len());
-            let oracle = scalar_rank(
+            let oracle = scalar_cosine_rank(
                 &sq8,
                 dimensions,
                 range.start / width..range.end / width,
@@ -6362,7 +6362,6 @@ mod source_walk_tests {
                 shift += normalized[d] * low[d];
                 qnorm += normalized[d] * normalized[d];
             }
-            shift -= qnorm / 2.;
             let mut oracle = sq8
                 .chunks_exact(dimensions + 12)
                 .enumerate()
@@ -6373,7 +6372,7 @@ mod source_walk_tests {
                     for d in 0..dimensions {
                         inner += f32::from(record[12 + d]) * (normalized[d] * step[d]);
                     }
-                    (ordinal, id, norm - 2. * (inner + shift))
+                    (ordinal, id, 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.))
                 })
                 .collect::<Vec<_>>();
             oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
@@ -6409,13 +6408,6 @@ mod source_walk_tests {
             );
             assert_eq!(bits(&direct), bits(&local_result));
             assert_eq!(bits(&direct), bits(&diagnosed));
-            assert!(
-                direct
-                    .ranked
-                    .candidates
-                    .iter()
-                    .any(|hit| hit.ordinal == rows - 1)
-            );
             // The257-row fixture nominates the tail plus255 of the first256
             // rows: every32-row block is covered, not two SOURCE256 pages.
             assert_eq!(
@@ -6464,6 +6456,20 @@ mod source_walk_tests {
                 assert!(reads.iter().all(|read| !read.1 && read.3.is_some()));
             }
             assert_eq!(direct_reads.len(), 2);
+            // A norm sentinel need not win top-10 for a negative dot under cosine.
+            let full = remote.search_with_store(&store, query, rows, None).await.unwrap();
+            assert_eq!(bits(&full), oracle.iter()
+                .map(|&(ordinal, id, score)| (ordinal, id, score.to_bits())).collect::<Vec<_>>());
+            let tail = full.ranked.candidates.iter().find(|h| h.ordinal == rows - 1).unwrap();
+            let record = &sq8[(rows - 1) * (dimensions + 12)..];
+            let (mut decoded_norm, mut inner) = (0_f32, 0_f32);
+            for d in 0..dimensions {
+                let value = low[d] + f32::from(record[12 + d]) * step[d];
+                decoded_norm += value * value;
+                inner += f32::from(record[12 + d]) * (normalized[d] * step[d]);
+            }
+            let recomputed = 1. - ((inner + shift) / (qnorm.sqrt() * decoded_norm.sqrt())).clamp(-1., 1.);
+            assert_ne!(tail.score.to_bits(), recomputed.to_bits());
         }
 
         let query = &queries[0];
@@ -9903,8 +9909,8 @@ mod source_walk_tests {
     }
 
     // Sequential scalar f32 reference over complete rows of `sq8` (no production scorer,
-    // no blocked lanes): score = norm - 2 * (sum code * (q * step) + (sum q * low - |q|^2 / 2)).
-    fn scalar_rank(
+    // no blocked lanes): cosine uses the affine dot and sequential f32 squared norms.
+    fn scalar_cosine_rank(
         sq8: &[u8],
         dimensions: usize,
         rows: impl Iterator<Item = usize>,
@@ -9918,7 +9924,6 @@ mod source_walk_tests {
             shift += unit_query[d] * low[d];
             qnorm += unit_query[d] * unit_query[d];
         }
-        shift -= qnorm / 2.0;
         let width = dimensions + 12;
         let mut scored = Vec::new();
         for ordinal in rows {
@@ -9929,15 +9934,15 @@ mod source_walk_tests {
             for d in 0..dimensions {
                 inner += f32::from(row[12 + d]) * (unit_query[d] * step[d]);
             }
-            scored.push((ordinal, id, norm - 2.0 * (inner + shift)));
+            scored.push((ordinal, id, 1. - ((inner + shift) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.)));
         }
         scored.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
         scored
     }
 
-    // The same score as plain geometry, in f64: stored norm - 2 q.x + |q|^2 for
+    // The same cosine score as plain geometry, in f64, using the stored squared norm for
     // x = low + code * step. This pins the meaning of the f32 reference above.
-    fn geometric_score(
+    fn geometric_cosine_score(
         sq8: &[u8],
         dimensions: usize,
         ordinal: usize,
@@ -9954,7 +9959,7 @@ mod source_walk_tests {
             dot += f64::from(unit_query[d]) * x;
             qq += f64::from(unit_query[d]).powi(2);
         }
-        norm - 2. * dot + qq
+        1. - (dot / (qq.sqrt() * norm.sqrt())).clamp(-1., 1.)
     }
 
     fn assert_hits_match(hits: &[ScoredNominee], oracle: &[(usize, i64, f32)]) {
@@ -9968,7 +9973,7 @@ mod source_walk_tests {
         }
     }
 
-    fn assert_geometry_agrees(
+    fn assert_cosine_geometry_agrees(
         sq8: &[u8],
         dimensions: usize,
         oracle: &[(usize, i64, f32)],
@@ -9977,7 +9982,7 @@ mod source_walk_tests {
         step: &[f32],
     ) {
         for want in oracle.iter().take(8) {
-            let geometric = geometric_score(sq8, dimensions, want.0, unit_query, low, step);
+            let geometric = geometric_cosine_score(sq8, dimensions, want.0, unit_query, low, step);
             assert!(
                 (f64::from(want.2) - geometric).abs() < 1e-3,
                 "ordinal {}: {} vs {geometric}",
@@ -10063,9 +10068,29 @@ mod source_walk_tests {
                 .flat_map(|r| r.start / row_bytes..r.end / row_bytes)
                 .collect::<Vec<_>>();
             assert_eq!(fetched.len(), bytes / row_bytes);
-            let oracle = scalar_rank(&object, dimensions, fetched.into_iter(), &unit, &low, &step);
+            // This pure bridge test intentionally exercises the preserved L2 API.
+            let qnorm = unit.iter().fold(0_f32, |s, &q| s + q * q);
+            let shift = unit.iter().zip(&low).fold(0_f32, |s, (&q, &l)| s + q * l)
+                - qnorm / 2.;
+            let mut oracle = fetched.into_iter().map(|ordinal| {
+                let row = &object[ordinal * row_bytes..(ordinal + 1) * row_bytes];
+                let id = i64::from_le_bytes(row[..8].try_into().unwrap());
+                let norm = f32::from_le_bytes(row[8..12].try_into().unwrap());
+                let mut inner = 0_f32;
+                let (mut dot, mut qq) = (0_f64, 0_f64);
+                for d in 0..dimensions {
+                    inner += f32::from(row[12 + d]) * (unit[d] * step[d]);
+                    let decoded = f64::from(low[d])
+                        + f64::from(row[12 + d]) * f64::from(step[d]);
+                    dot += f64::from(unit[d]) * decoded;
+                    qq += f64::from(unit[d]).powi(2);
+                }
+                let score = norm - 2. * (inner + shift);
+                assert!((f64::from(score) - (f64::from(norm) - 2. * dot + qq)).abs() < 1e-3);
+                (ordinal, id, score)
+            }).collect::<Vec<_>>();
+            oracle.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.1.cmp(&b.1)));
             assert_hits_match(&production, &oracle);
-            assert_geometry_agrees(&object, dimensions, &oracle, &unit, &low, &step);
             top.push(production);
         }
         // The first cover's best twelve are all page-2 rows; the second cover cannot see them.
@@ -10721,10 +10746,10 @@ mod source_walk_tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(fetched.len(), planned / row_bytes);
-            let oracle = scalar_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+            let oracle = scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
             assert_eq!(result.ranked.candidates.len(), 50);
             assert_hits_match(&result.ranked.candidates, &oracle);
-            assert_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
+            assert_cosine_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
             assert!(has_id_tie_against_ordinal_order(&oracle[..50]));
             let direct_bits = result
                 .ranked
@@ -10834,7 +10859,7 @@ mod source_walk_tests {
             assert_eq!(single.plan.ranges, one_get);
             assert_eq!(single.plan.selected_pages, result.plan.selected_pages);
             assert_eq!(single.ranked.stats.submitted_gets, 1);
-            let single_oracle = scalar_rank(
+            let single_oracle = scalar_cosine_rank(
                 &sq8,
                 dimensions,
                 one_get[0].start / row_bytes..one_get[0].end / row_bytes,
@@ -11148,10 +11173,10 @@ mod source_walk_tests {
                     .iter()
                     .flat_map(|r| r.start / row_bytes..r.end / row_bytes)
                     .collect::<Vec<_>>();
-                let oracle = scalar_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
+                let oracle = scalar_cosine_rank(&sq8, dimensions, fetched.into_iter(), &unit, &low, &step);
                 assert_eq!(ranked.candidates.len(), 20);
                 assert_hits_match(&ranked.candidates, &oracle);
-                assert_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
+                assert_cosine_geometry_agrees(&sq8, dimensions, &oracle, &unit, &low, &step);
                 assert_eq!(
                     ranked.stats,
                     Sq8ReadStats {
@@ -12362,10 +12387,10 @@ mod source_walk_tests {
             assert_eq!(trace.semantic_leaves, vec![0]);
             assert_eq!(trace.semantic_units, (0..17).collect::<Vec<_>>());
             assert!(trace.semantic_seed_additions.is_empty());
-            let oracle = scalar_rank(&tiny.sq8, dimensions, 0..rows, &unit, &tiny.low, &tiny.step);
+            let oracle = scalar_cosine_rank(&tiny.sq8, dimensions, 0..rows, &unit, &tiny.low, &tiny.step);
             assert_eq!(result.ranked.candidates.len(), rows);
             assert_hits_match(&result.ranked.candidates, &oracle);
-            assert_geometry_agrees(&tiny.sq8, dimensions, &oracle, &unit, &tiny.low, &tiny.step);
+            assert_cosine_geometry_agrees(&tiny.sq8, dimensions, &oracle, &unit, &tiny.low, &tiny.step);
             assert!(oracle.iter().any(|r| r.0 == rows - 1));
             assert!(has_id_tie_against_ordinal_order(&oracle));
             assert!(
