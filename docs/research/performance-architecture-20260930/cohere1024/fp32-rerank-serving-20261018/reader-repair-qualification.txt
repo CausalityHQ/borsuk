@@ -1,0 +1,17 @@
+Qualified bounded FP32 reader CLI success-dispatch repair
+Commit 7a98b3d43472237437cbc64713cffc6044f7aaf3
+Parent fa07c40b4802ab9b20af5fa4914f851225ff952d
+One changed file: crates/borsuk/examples/compare_native_replay.rs
+Five production lines recognize fp32_serving::REPORT_SCHEMA after durable report publication. Success requires exact schema, boolean valid=true, and no status field; INVALID, wrong schema, false/mistyped valid and reducer failure cannot return success.
+Existing native FP32 test now invokes actual execute_report with the real synthetic reducer, verifies persisted output, and exercises writer refusal cases including INVALID with valid=true. No scorer/model/source-schema change.
+Original root repro was authenticated message1792363924065282581; child inspected source only, not actual admission data/results.
+Frozen/qualified patch SHA c4f6e035545e07e7deebf08f12e4c2c3a750c289ea4b6b283cc9de73f4a15fcd
+Native original SSM457b2182-939d-4ea4-b416-bba4d4c69296 terminalSuccess0
+Unit fp32-reader-exit-qualify1 inactive/MainPID0/Resultsuccess/ExecMainStatus0
+CPU8-15/800%/40GiB/swap0/tasks2048/jobs8/runtime600s, original cargo-target flock.
+affected: cargo test --locked -p borsuk --example compare_native_replay fp32_ -- --test-threads=4: 3PASS.
+clippy: cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious:0.
+testbuild: env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh:0; actual workspace/alltargets no-run,20s,22:54:33..22:54:53 UTC.
+release: cargo build --locked --release -p borsuk --example compare_native_replay:0,29.22s.
+Commit uses the established sparse write-tree --missing-ok/commit-tree path, preserves operator identity, exact parent, and complete index. Bundle verified, qualified.patch byte-identical frozen.patch, source tree clean, immutable ELF byte-compared with the qualified release output.
+Old fa07 packet/sourceproof/failure receipts preserved. No actualdata/result reads, preparation, cloud controls, native admission rerun, merge or push by child. Root alone reruns the repaired reader on its existing authenticated admission.

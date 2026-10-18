@@ -1,0 +1,27 @@
+QUALIFIED SOURCE AND SYNTHETIC NATIVE PATH ONLY
+Commit fa07c40b4802ab9b20af5fa4914f851225ff952d
+Base 2ef67284631927492eefa1ae41e3ad13bc3a65f5
+Source /mnt/borsuk-workspace/fp32-rerank-serving-source-a0001
+Frozen07 full patch SHA f69c3827cfae7e83ddc141fd0d85f07c4103ed1fdc319dfebb9c4678798d7592
+Frozen07 files manifest SHA 13bc9aab1ddf5dd53cd9533a05d3e6ebac9001bf71f2c3be242f98e3b2b0643a
+Source hashes rechecked, qualified.patch byte-identical to frozen07, source tree clean.
+Normal git commit hit the sparse export's missing unrelated .github/workflows/pages.yml blob; write-tree --missing-ok/commit-tree preserved the complete index, parent, and Roman Bartusiak operator identity. Bundle verified against the retained base.
+
+Final original controller: final4 / fp32-serving-native-final4
+SSM d1e1e5e8-28fe-4cb0-b463-e4a2a0aa0853 terminal Success0
+systemd inactive / MainPID0 / Resultsuccess / ExecMainStatus0
+compile10 native0: seven affected test ELF outputs.
+gates3 baseline reader guard PASS; scheduler guard PASS.
+gates3 Clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious:0 (58.73s).
+gates3 env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh:0; actual cargo test --locked --workspace --all-targets --no-run,110s,22:33:29..22:35:19 UTC.
+gates3 release --locked -p borsuk --bin check_cohere_native_baseline --bin publish_two_bit_generation --example build_sq8_source --example compare_native_replay:0 (2m47s).
+All jobs retained one controller under CPU8-15/800%/40GiB/swap0/tasks2048/jobs8 and the original cargo-target flock.
+
+Fresh unchanged affected passes reused from tests6 (final2 SSM e4dd905b-ba57-450c-be14-6d17aaafbab3):
+FP32 library5; runner FP32 precision1; canonical row digest1; build9; compaction6; object-native9; generation61; store3; range61/1ignored; IDs27/1ignored; actual GC integration24.
+tests6 aggregate1 is preserved: only publisher copied-file fixtures omitted the new sidecar.
+tests7 (final3 SSM1353de40-9070-4e7e-98e7-2c31779a12ae) reader3 and publication9 PASS after fixture repair; includes native FP32 positive, exact complete-model refusal, full resealed S3 zeroHEAD/counter-gap/two-successHEAD negatives and failed503 retry positive.
+gates2 repeated IDs27/1ignored PASS. final3 then stopped101 on pre-existing baseline exact-error-string fixture; only two expected strings corrected. Production refusal unchanged; gates3 baseline/scheduler checks pass.
+Frozen01..07, earlier native failure logs/statuses and the original two root review reports/reconciliation remain preserved. No new child review was started.
+
+No real corpus/requests/truth/results were read by child. No actual-data preparation/publication/admission, S3 performance claim, cloud controls, merge or push. Root owns actual paired first32/full1000 and authority.

@@ -1,0 +1,29 @@
+{
+  "schema": "borsuk-fp32-first32-serving-verification-v1",
+  "control_recall_numerator": 315,
+  "candidate_recall_numerator": 319,
+  "recall_denominator": 320,
+  "queries": 32,
+  "all_control_f32_and_candidate_f64_ids_bits_match_frozen_diagnostic": true,
+  "all_candidate_physical_ordinals_match": true,
+  "all_precanonical_plans_and_component_charges_equal": true,
+  "canonical_charges": {
+    "failed_gets": 0,
+    "submitted_gets": 512,
+    "verified_bytes": 2101248
+  },
+  "canonical_stage_median_ns": 50066033.0,
+  "diagnostic_query_wall_sum_ns": {
+    "control": 3762354356,
+    "candidate": 5194526624
+  },
+  "process_peak_bytes": {
+    "control": 104964096,
+    "candidate": 101335040
+  },
+  "population_latency_or_vendor_win_claim": false,
+  "full1000_abba": "UNRUN_launch_cutoff_missed",
+  "golden_sha256": "e8c6f01b86957473167b69bacef753a78eb56bd91b2c08208b8bd8230943dd0a",
+  "first32-control_sha256": "dff87d43646b73d49feede6890d1b50dd4339d6c31bcf57de31dcc575849ff7b",
+  "first32-candidate_sha256": "0c13859d966d72f0594116eebe2393083b0ded48989b54468457808eaf8be70f"
+}

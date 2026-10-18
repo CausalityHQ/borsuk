@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-fp32-serving-terminal-v1",
+  "source_commit": "7a98b3d43472237437cbc64713cffc6044f7aaf3",
+  "status": "QUALIFIED_INCREMENT_AND_FIRST32_SERVING_VERIFIED",
+  "instance_id": "i-0fed6bbcd929ac928",
+  "full1000_abba": "UNRUN_launch_cutoff_missed",
+  "validation_archive": {
+    "key": "research/semantic-router/20261018/fp32-rerank-serving-qualified-source-a0001/validation.tar.gz",
+    "bytes": 11330246,
+    "sha256": "d51a76b204f4a7fac9e9170f755ae812145196ac3498886d96119ba02f77d231",
+    "server_checksum_verified": true
+  },
+  "qualified_source_archive_sha256": "d22e63ef4ac2140fca70b88c658a800dc2373427087d083859cfb219b7d74122",
+  "first32_control_hits": 315,
+  "first32_candidate_hits": 319,
+  "first32_denominator": 320,
+  "vendor_win_claim": false
+}
