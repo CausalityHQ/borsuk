@@ -879,7 +879,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     require(
         config_schema(c),
-        "config format marker must match serial v15 or explicit concurrent v16",
+        "config format marker must match serial v15 or explicit concurrent v16; older formats refuse",
     )?;
     require(
         c.s3_read_retry.is_none() || matches!(&c.backend, Backend::S3 { .. }),
