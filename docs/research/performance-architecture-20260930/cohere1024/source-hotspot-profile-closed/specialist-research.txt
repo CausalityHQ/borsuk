@@ -1,0 +1,105 @@
+**Recommendation:** investigate the CPU that SOURCE spends receiving response bodies. That cost has never been broken down by function, and it is the largest unexplained cost in a query. The cheapest test is a flat `perf` profile plus syscall counts on the existing frozen 32-query panel. It needs no code change and uses the exact ELF, which is not stripped, so `perf` can name functions. A no-code check found no function-level sampling profile anywhere in `evidence/`; a directory-name search for perf, flame or sampling found nothing.
+
+Everything was read-only over SSM at main `58055c7` and runtime `a0463ed`. I edited no project files and ran no build, native run, data download or cloud change. The one local write was a memory note.
+
+## Existing profile evidence
+
+**`evidence/cpu-attribution-abba32-a0001/profile-summary.v1.json`** comes from source `6bcef79` and ELF `0621e025`. It covers 64 observations with tracing on (flat64), and these are scope timers, not sampling. Tracing on adds about 7.6% CPU (ratio 1.0759).
+
+| Phase | CPU ms per query | Breakdown |
+|---|---:|---|
+| Discovery | 1.54 | |
+| Planning | 32.73 | the "cover" scope inside it is only 0.040 |
+| SOURCE | 62.47 | authentication 16.93, copy 7.40, allocation 0.31, **unattributed 37.83** |
+| SQ8 | 25.59 | ranking 5.48, authentication 5.40, copy 1.85, unattributed 12.80 |
+
+- SOURCE body chunks: 220,222 chunks for 1,828,823,040 copied bytes, about **8.3 KB per chunk**.
+- Kernel (system) time is about 15–19% of process CPU: 0.55 of 3.73 s in `A1.resources`, and 24.6 of 128.7 s at the earlier `a8fd106` run.
+
+**Why a62 was null:** the cover scope it targeted measured 0.04 ms per query.
+
+**Current layout** (cover-selection40 A1, per query, tracing off):
+
+| Stage | Wall ms |
+|---|---:|
+| Discovery | 1.99 |
+| SOURCE | 70.73 |
+| Planning | 21.24 |
+| SQ8 | 50.97 |
+| **Whole query** | **145.0 wall, 98.1 CPU** |
+
+- The harness uses a single-threaded tokio runtime (`check_cohere_native_baseline.rs:613`), so TLS, HTTP, copying, SHA-256 and scoring all share one core.
+- SOURCE downloads every range before planning starts (`two_bit_generation.rs:2897–3060`).
+- Planning is `plan_two_bit_source_walks` (`two_bit_generation.rs:1227`), which scores every fetched row with `TwoBitScoreBlock::score` (`rotated_two_bit.rs:122`). That is about 93k rows per query, roughly 228 ns per row.
+
+**Inferred, not measured on one run:** comparing SOURCE CPU (about 62 ms with tracing on) against SOURCE wall (70–73 ms) suggests SOURCE keeps its core about 85% busy. That makes it CPU-bound, so cutting SOURCE CPU should cut wall time roughly 1:1 at one query at a time and also raise throughput. Most of the roughly 47 ms per query of idle time is in SQ8 (51 ms wall against about 25 ms CPU), which is waiting on the slowest parallel request, not CPU.
+
+## Simulated perspectives (not expert evidence)
+
+- **Systems performance engineer:** "Never optimize a bucket you haven't symbolized. 8 KB chunks plus 15–19% kernel time look like many small reads and many task wake-ups." They predict kernel receive, tokio/mio and hyper together take at least 15 ms per query.
+- **ANN kernel engineer:** "Planning is 64 scalar loads per byte step. Loading packed bytes 8 at a time keeps the same f64 addition order." They object that four-row was rejected and block32 already captured the easy win.
+- **Experimentalist:** "Instrumented and normal timing must not mix. Make decisions on tracing-off wall/CPU, and treat perf as attribution only. Preregister the family thresholds."
+- **Transport practitioner:** "TLS AES-GCM on about 34 MB per query should cost only about 6–10 ms. If it costs much more, it's the record and read granularity, not the cipher."
+
+## Hotspot hypotheses, ranked
+
+1. **SOURCE receive path.** This is the ~38 ms unattributed bucket plus kernel time: socket reads, TLS, hyper/reqwest/object_store stream layers, tokio wake-ups, at 8.3 KB per chunk.
+   - Potential is high: up to about 20–30 ms per query, on the critical path.
+   - Uncertainty is high: there are no function names yet.
+   - No retained attempt targeted it. The auth offload moved authentication work off the thread, and the aws-lc provider review expected about 0–5%.
+2. **Planning scoring kernel, keeping exact score bits.** Load each row's packed bytes as a u64, re-slice once to remove per-access bounds checks, and keep the same lane addition order.
+   - Potential is at most about 8 ms per query (about 5% of wall).
+   - The mechanism is known, but the repeat risk is high: four-row `fd2cb50` was rejected (primitive run exit 42) and block32/packed was adopted. Read the four-row rejection reason before trying this.
+3. **Overlapping SOURCE with planning** (score each range as it arrives).
+   - This saves wall time only; total CPU stays the same.
+   - On one thread it can only fill SOURCE idle time after the first byte arrives, likely 10 ms or less.
+   - With worker threads it is the source-auth-offload pattern, whose concurrency is unqualified because a process-wide batch lease serializes SOURCE batches across queries.
+   - Already excluded: SQ8 hedging (changes charges), changing the SHA-256 digest (provenance overhaul), and a62 unchanged.
+
+## Selected path and the cheapest causal test
+
+Run three single cells on the root's bounded benchmark host, using the same exact ELF (`3e86a3e8…`) and the frozen 32-query panel at leaf40.
+
+```
+# a) attribution, tracing OFF, no call graph (self-symbols suffice; minimal overhead)
+perf record -e cpu-clock -F 997 -o p40.data -- $ELF $CFG40_OFF $CFG_SHA p40.jsonl
+perf report -i p40.data --no-children --sort dso,sym --percent-limit 0.3 --stdio > p40.flat.txt
+# b) read granularity, tracing OFF
+perf stat -e task-clock,context-switches,syscalls:sys_enter_recvfrom,syscalls:sys_enter_read,\
+syscalls:sys_enter_readv,syscalls:sys_enter_epoll_wait -- $ELF $CFG40_OFF $CFG_SHA s40.jsonl
+# c) existing tracing-ON profile mode on this ELF -> SOURCE phase CPU vs wall
+```
+
+Kernel symbols need `perf_event_paranoid ≤ 1` and `kptr_restrict = 0` on the host, reverted afterwards. Convert sample shares to ms per query using task-clock divided by 32.
+
+**Function families to bucket:**
+
+| Family | Symbols |
+|---|---|
+| Kernel/syscalls | `tcp_recvmsg`, `copy_user*`, `entry_SYSCALL*`, `ep_poll` |
+| Tokio/mio | `tokio::runtime::scheduler::current_thread`, `mio::` |
+| HTTP/stream | `hyper::proto::h1`, `reqwest::`, `object_store::`, `bytes::BytesMut`, `futures_util::` |
+| TLS | `aws_lc*` / `ring*` / `rustls*` / `aes_*gcm*` / `gcm_*` |
+| Known buckets | `sha256*` (auth), `__memmove*` and malloc (copy), `TwoBitScoreBlock::score`, `VerifiedRows::record` / `binary_search` |
+
+**Preregistered decision:**
+
+| Result | Action |
+|---|---|
+| Kernel + tokio/mio + HTTP/stream ≥ 15 ms/q, and bytes per read < 32 KiB (34.23 GB/1000 queries ÷ reads per query) | Pursue **one** knob: a larger per-connection HTTP/TLS read size in the vendored object_store/hyper client path. A/B it on the 32-query panel, then run full1000 ABBA. |
+| TLS ≥ 8 ms/q | Report it only, with no implementation; fall back to hypothesis 2. |
+| The three receive-path families together < 10 ms/q and no single family ≥ 5 ms/q | Kill this path and go to hypothesis 2. |
+
+**Invariants for any follow-up change:**
+- **Output:** identical returned IDs/order/score bits, physical rows, plans, traces and logical charges at leaf40: SOURCE 97,797 GETs / 24,255,289,344 B, and SQ8 30,014 GETs / 9,974,177,024 B.
+- **Recall:** 97.37% at leaf40.
+- **Transport:** identical physical attempts and consumed bytes, and zero transport/stream failures.
+- **Resources:** larger buffers must be charged in admission (64 parallel GETs × buffer size; for example a 256 KiB buffer adds 16 MiB) and stay within RSS bounds. The current peak is about 82 MiB.
+- **Ordered errors:** the error reported for the first failing range in `drain_ordered`, and the 100 ms retry behaviour, stay unchanged.
+- **Drain:** on error or cancellation, every in-flight body is dropped and byte-window permits are released. Test this with a fault injected mid-stream.
+- **Timing:** decide from tracing-off wall and CPU only. perf and tracing-on runs are attribution and never a performance claim.
+
+**Caveats:**
+- The SOURCE CPU-busy fraction mixes revisions and tracing modes; run (c) confirms it.
+- The 32-query panel is a diagnostic sample, not population p95.
+- I did not read `VerifiedRows::verified_rows` (called in planning before scoring). The profile will show whether it does hash work inside the planning window.

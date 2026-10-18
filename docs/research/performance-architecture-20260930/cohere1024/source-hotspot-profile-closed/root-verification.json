@@ -1,0 +1,36 @@
+{
+  "status": "VALID_INSTRUMENTED_CPU_PROFILE",
+  "instance": "i-0518bef1e30d66437",
+  "native_source": "a0463ed097296c19539d05529ddad615be760fdd",
+  "original_ssm": "3b44a460-0073-4e9b-a99c-17feef832c94",
+  "samples": 8700,
+  "lost_samples": 0,
+  "event": "cpu-clock:u",
+  "frequency_hz": 99,
+  "scope": "whole-process user CPU, not SOURCE-only or kernel",
+  "canonical": {
+    "queries": 1000,
+    "hits": 9737,
+    "canonical_equal": true,
+    "instrumented": true,
+    "normal_latency_claim": false
+  },
+  "top_self_symbols": [
+    "33.39% check_cohere_native_baseline.A [.] sha2::sha256::x86::digest_blocks - -",
+    "19.74% check_cohere_native_baseline.A [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::score - -",
+    "4.66% check_cohere_native_baseline.A [.] borsuk::exact_sq8_nominee::score_nominees - -",
+    "4.61% check_cohere_native_baseline.A [.] aws_lc_0_45_0_aes_gcm_decrypt_avx512 - -",
+    "4.29% libc.so.6 [.] 0x0000000000198f89 - -",
+    "2.67% check_cohere_native_baseline.A [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::push - -",
+    "1.75% check_cohere_native_baseline.A [.] <borsuk::semantic_unit_router::SemanticUnitRouter>::select_leaves - -",
+    "0.78% check_cohere_native_baseline.A [.] bytes::bytes_mut::shared_v_drop - -",
+    "0.64% libc.so.6 [.] malloc - -",
+    "0.59% libc.so.6 [.] 0x0000000000198f2d - -",
+    "0.56% check_cohere_native_baseline.A [.] borsuk::two_bit_generation::plan_two_bit_source_walks::<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#11}::{closure#5}>::{closure#1} - -"
+  ],
+  "normal_latency_claim": false,
+  "competitor_win": false,
+  "consultation": "6e43c679ada54243",
+  "consultation_exit": 0,
+  "setup_failed_before_native": 70
+}

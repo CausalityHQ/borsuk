@@ -1,0 +1,14 @@
+{
+  "status": "VALID_LATENCY_CPU_PARETO_GAIN",
+  "default_changed": false,
+  "native_source": "a0463ed097296c19539d05529ddad615be760fdd",
+  "packet_source": "fa5c6d756a736c6b1ebeccf230d73beed5ae5acb",
+  "original_run_ssm": "27eebaba-93b6-43ae-bf31-244197132bcb",
+  "original_collect_ssm": "a65b5ecb-5152-4c07-89cd-628c969d9abb",
+  "all_cells_readers_resources_checkpoints_zero": true,
+  "physical_counts_equal": true,
+  "physical_attempts": 127829,
+  "physical_consumed_payload_bytes": 34234731161,
+  "competitor_win": false,
+  "concurrent_qps_claim": false
+}
