@@ -32,6 +32,8 @@
 //! NEW_REPORT. Rebinds proof metadata; no canonical publication or serving claim.
 #![recursion_limit = "256"]
 
+#[path = "compare_native_replay/f32_top16.rs"]
+mod f32_top16;
 #[path = "compare_native_replay/fetched_f32.rs"]
 mod fetched_f32;
 #[path = "compare_native_replay/sq8_cosine.rs"]
@@ -6093,6 +6095,7 @@ fn report_cap(schema: &str) -> u64 {
     } else if schema == sq8_subpage_shortlist::VIRTUAL_LAYOUT_SCHEMA
         || schema == sq8_subpage_shortlist::COUNT_CURVE_SCHEMA
         || schema == sq8_cosine::REPORT_SCHEMA
+        || schema == f32_top16::REPORT_SCHEMA
     {
         16 * 1024 * 1024
     } else {
@@ -6190,6 +6193,9 @@ fn execute_report_with_sync(
             "supervisor_resources_cost_and_cache_qualified":false,"vendor_or_scientific_win_claim":false})
         }
     };
+    if schema == f32_top16::REPORT_SCHEMA {
+        return f32_top16::publish(output, &report, dir, file, sync);
+    }
     let mut out = Output {
         file,
         bytes: 0,
@@ -9787,6 +9793,17 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--f32-top16") {
+        let result = if args.len() == 5 {
+            args[3].to_str().ok_or_else(|| "f32-top16 SHA UTF-8".into()).and_then(|sha| {
+                execute_report(Path::new(&args[4]), f32_top16::REPORT_SCHEMA,
+                    || f32_top16::reduce(Path::new(&args[2]), sha))
+            })
+        } else { Err("usage: compare_native_replay --f32-top16 CONFIG CONFIG_SHA NEW_REPORT".into()) };
+        match result { Ok(true) => (), Ok(false) => std::process::exit(2),
+            Err(e) => { eprintln!("INVALID: {e}"); std::process::exit(2); } }
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--sq8-cosine") {
         let result = if args.len() == 5 {
             args[3].to_str().ok_or_else(|| "sq8-cosine SHA UTF-8".into()).and_then(|sha| {
@@ -10600,6 +10617,41 @@ mod scale_native_runner;
 
 #[cfg(test)]
 mod tests {
+    // Current producer scores cosine; legacy diagnostic controls explicitly require L2 bits.
+    pub(super) fn legacy_l2_fixture(dir: &Path, result: &Path) {
+        use borsuk::{exact_sq8_nominee::Sq8Geometry, returned_sq8::{ReturnedRange,rank_returned_ranges},
+            two_bit_generation::normalize_two_bit_diagnostic_query};
+        let original=std::fs::read_to_string(result).unwrap();
+        let mut rows=original.lines().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let dimensions=rows[1]["dimensions"].as_u64().unwrap() as usize;
+        let population=rows[1]["rows"].as_u64().unwrap() as usize;
+        let k=rows[1]["k"].as_u64().unwrap() as usize;
+        let body=std::fs::read(dir.join("sq8")).unwrap();
+        let requests=std::fs::read(dir.join("requests.f32")).unwrap();
+        let generation:Value=serde_json::from_slice(&std::fs::read(dir.join("generation/manifest.json")).unwrap()).unwrap();
+        let low:Vec<f32>=serde_json::from_value(generation["low"].clone()).unwrap();
+        let step:Vec<f32>=serde_json::from_value(generation["step"].clone()).unwrap();
+        for q in rows.iter_mut().filter(|q|q["phase"]=="query") {
+            let ordinal=q["ordinal"].as_u64().unwrap() as usize;
+            let mut query=vec![0f32;dimensions];
+            super::fetched_f32::floats(&requests[ordinal*dimensions*4..(ordinal+1)*dimensions*4],&mut query).unwrap();
+            let query=normalize_two_bit_diagnostic_query(&query).unwrap();
+            let ranges=q["plan"]["ranges"].as_array().unwrap().iter().map(|r|{
+                let start=r[0].as_u64().unwrap() as usize;
+                let end=r[1].as_u64().unwrap() as usize;
+                ReturnedRange{start,bytes:&body[start..end]}
+            }).collect::<Vec<_>>();
+            let scores=rank_returned_ranges(Sq8Geometry{rows:population,dimensions},&ranges,&query,&low,&step,k,body.len()).unwrap();
+            for (j,n) in scores.iter().enumerate() {
+                assert_eq!(q["returned"][j]["id"],n.id);
+                assert_eq!(q["returned_physical_ordinals"][j],n.ordinal);
+                q["returned"][j]["score_bits"]=json!(n.score.to_bits());
+            }
+        }
+        authenticate(&mut rows);
+        std::fs::write(result,encode(&rows)).unwrap();
+    }
+
     use super::*;
     use serde_json::json;
     use std::os::unix::{ffi::OsStringExt, fs::symlink};

@@ -211,12 +211,12 @@ fn replay_matches(scores: &[ScoredNominee], selected: &Selected, k: usize) -> Re
     )
 }
 #[derive(Clone, Copy)]
-struct Exact {
-    id: i64,
-    ordinal: usize,
-    cosine: f64,
+pub(super) struct Exact {
+    pub(super) id: i64,
+    pub(super) ordinal: usize,
+    pub(super) cosine: f64,
 }
-fn canonical_score(
+pub(super) fn canonical_score(
     bytes: &[u8],
     expected: &ScoredNominee,
     query: &[f32],
@@ -235,7 +235,7 @@ fn canonical_score(
         cosine: super::neighborhood_cosine(query, query_norm, values, norm),
     })
 }
-fn exact_order(rows: &mut [Exact]) {
+pub(super) fn exact_order(rows: &mut [Exact]) {
     rows.sort_unstable_by(|a, b| a.cosine.total_cmp(&b.cosine).then(a.id.cmp(&b.id)));
 }
 fn summary(native: &[ScoredNominee], exact: &[Exact], truth: &[i64], k: usize) -> Value {
@@ -660,6 +660,7 @@ mod tests {
         let (dir, paths) =
             scale_native_runner::source_layout_reducer_native_fixture_with(96, 2, false, false)
                 .unwrap();
+        native::legacy_l2_fixture(dir.path(), &paths[0]);
         let original = native::assert_current_native(dir.path(), &paths[0]);
         let original_root =
             std::fs::read_to_string(dir.path().join("generation/manifest.json")).unwrap();

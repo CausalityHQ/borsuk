@@ -28,16 +28,16 @@ struct Config {
     max_workspace_bytes: u64,
 }
 #[derive(Deserialize)]
-struct Plan {
-    ranges: Vec<[u64; 2]>,
-    bridge_pages: usize,
+pub(super) struct Plan {
+    pub(super) ranges: Vec<[u64; 2]>,
+    pub(super) bridge_pages: usize,
 }
 #[derive(Deserialize)]
-struct Selected {
-    ordinal: usize,
-    returned: Vec<super::Hit>,
-    returned_physical_ordinals: Vec<usize>,
-    plan: Plan,
+pub(super) struct Selected {
+    pub(super) ordinal: usize,
+    pub(super) returned: Vec<super::Hit>,
+    pub(super) returned_physical_ordinals: Vec<usize>,
+    pub(super) plan: Plan,
 }
 fn number(v: &Value) -> Result<u64> {
     v.as_u64()
@@ -94,7 +94,7 @@ fn bind(c: &Config, g: &Value) -> Result<(usize, usize, usize)> {
         usize::try_from(k)?,
     ))
 }
-fn metadata_charge(
+pub(super) fn metadata_charge(
     selected: &[Selected],
     selected_capacity: usize,
     report_capacity: usize,
@@ -120,12 +120,12 @@ fn metadata_charge(
     }
     Ok(bytes)
 }
-fn with_metadata(workspace: u64, metadata: u64, cap: u64) -> Result<u64> {
+pub(super) fn with_metadata(workspace: u64, metadata: u64, cap: u64) -> Result<u64> {
     let total = super::plus(workspace, metadata)?;
     require(total <= cap, "sq8-cosine aggregate workspace cap")?;
     Ok(total)
 }
-fn replay_matches(native: &[ScoredNominee], s: &Selected, k: usize) -> Result<()> {
+pub(super) fn replay_matches(native: &[ScoredNominee], s: &Selected, k: usize) -> Result<()> {
     require(
         s.returned.len() == k
             && s.returned_physical_ordinals.len() == k
@@ -431,6 +431,7 @@ mod tests {
     fn sq8_cosine_actual_tiny_sealed_end_to_end_and_tampering() {
         let (dir, result) =
             super::super::scale_native_runner::scale_reducer_native_fixture(false, false).unwrap();
+        super::super::tests::legacy_l2_fixture(dir.path(), &result);
         let original = std::fs::read(&result).unwrap();
         let rows = std::str::from_utf8(&original)
             .unwrap()
@@ -551,6 +552,7 @@ mod tests {
     #[test]
     fn full_prefix_over32_first32_partial_refusal_and_metadata_charge() {
         let (dir,result)=super::super::scale_native_runner::scale_reducer_native_fixture_count(35,None).unwrap();
+        super::super::tests::legacy_l2_fixture(dir.path(), &result);
         let original=std::fs::read(&result).unwrap();
         let lines=std::str::from_utf8(&original).unwrap().lines().collect::<Vec<_>>();
         let rows=lines.iter().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
