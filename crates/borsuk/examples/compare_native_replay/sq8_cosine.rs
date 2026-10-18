@@ -163,6 +163,9 @@ fn differences(a: &[i64], b: &[i64]) -> Vec<i64> {
 }
 pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
     let (c, config_bytes): (Config, _) = super::read_config(path, sha)?;
+    reduce_config(c, path, sha, config_bytes)
+}
+fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result<Value> {
     let (g, generation) = super::header_json(&c.generation)?;
     let (rows, dimensions, k) = bind(&c, &g)?;
     let mut selected = Vec::with_capacity(c.ordinals.len());
@@ -214,7 +217,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
             super::plus(sum, end - start)
         })?;
         let count = usize::try_from(count_bytes / width as u64)?;
-        let admitted = workspace(
+        let mut admitted = workspace(
             count_bytes,
             super::plus(count as u64, c.excluded_ids.len() as u64)?,
             dimensions as u64,
@@ -245,9 +248,9 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
             product(s.ordinal as u64, query_bytes.len() as u64)?,
             &mut query_bytes,
         )?;
-        let mut query = vec![0f32; dimensions];
-        floats(&query_bytes, &mut query)?;
-        let query = normalize_two_bit_diagnostic_query(&query).map_err(|e| e.to_string())?;
+        let mut raw_query = vec![0f32; dimensions];
+        floats(&query_bytes, &mut raw_query)?;
+        let query = normalize_two_bit_diagnostic_query(&raw_query).map_err(|e| e.to_string())?;
         let geometry = Sq8Geometry { rows, dimensions };
         let mut native =
             rank_returned_ranges(geometry, &ranges, &query, &low, &step, count, body.len())
@@ -276,6 +279,26 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
             &c.excluded_ids,
         )
         .map_err(|e| format!("cosine candidate: {e:?}"))?;
+        // The row allowance covers kernel scratch and all three retained rankings.
+        admitted = admitted.max(workspace(
+            body.capacity() as u64,
+            super::plus(
+                native.capacity().max(candidate.capacity()).max(exact.capacity()) as u64,
+                c.excluded_ids.capacity() as u64,
+            )?,
+            [
+                query_bytes.capacity().div_ceil(4),
+                raw_query.capacity(),
+                match &query {
+                    std::borrow::Cow::Borrowed(_) => raw_query.capacity(),
+                    std::borrow::Cow::Owned(values) => values.capacity(),
+                },
+                low.capacity(),
+                step.capacity(),
+            ].into_iter().max().unwrap_or(0) as u64,
+            ranges.capacity() as u64,
+            c.max_workspace_bytes,
+        )?);
         native.retain(|s| c.excluded_ids.binary_search(&s.id).is_err());
         exact.retain(|s| c.excluded_ids.binary_search(&s.id).is_err());
         exact.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
@@ -416,6 +439,31 @@ mod tests {
                 .all(|s| s["id"] != 20)
         );
         assert!(reduce(&path, &sha).is_err());
+        // Reserve bounded extra capacity without changing the authenticated config values.
+        let (mut parsed, _): (Config, _) = super::super::read_config(&path, &excluded_sha).unwrap();
+        parsed.excluded_ids.reserve_exact(3);
+        assert!(parsed.excluded_ids.capacity() > parsed.excluded_ids.len());
+        let d = parsed.completed.expected_bound_inputs["dimensions"].as_u64().unwrap();
+        let fetched_count = excluded["queries"][0]["fetched_rows"].as_u64().unwrap();
+        let ranges = excluded["queries"][0]["fetched_ranges"].as_array().unwrap().len() as u64;
+        let modeled = workspace(fetched_count*(d+12), fetched_count+1, d, ranges, 512*1024*1024).unwrap();
+        let actual = workspace(fetched_count*(d+12), fetched_count+parsed.excluded_ids.capacity() as u64,
+            d, ranges, 512*1024*1024).unwrap();
+        assert!(actual > modeled);
+        c["max_workspace_bytes"] = json!(modeled);
+        let bounded_sha = config(&path, &c);
+        let (mut parsed, bytes): (Config, _) = super::super::read_config(&path, &bounded_sha).unwrap();
+        parsed.excluded_ids.reserve_exact(3);
+        assert!(reduce_config(parsed, &path, &bounded_sha, bytes).unwrap_err()
+            .to_string().contains("workspace cap"));
+        c["max_workspace_bytes"] = json!(actual);
+        let exact_sha = config(&path, &c);
+        let (mut parsed, bytes): (Config, _) = super::super::read_config(&path, &exact_sha).unwrap();
+        parsed.excluded_ids.reserve_exact(3);
+        let exact_bound = reduce_config(parsed, &path, &exact_sha, bytes).unwrap();
+        assert!(exact_bound["queries"].as_array().unwrap().iter()
+            .all(|q|q["checked_workspace_bytes"]==actual));
+        c["max_workspace_bytes"] = json!(512*1024*1024u64);
         c["excluded_ids"] = json!([20, 20]);
         let bad_sha = config(&path, &c);
         assert!(reduce(&path, &bad_sha).is_err());
