@@ -1,0 +1,60 @@
+{
+  "canonical_parity_per_cell": 1000,
+  "cells": [
+    {
+      "attempt_delta": 127811,
+      "cell": "A1.A",
+      "cohort_anchor_and_batch_floor": true,
+      "fault_counters_zero": true,
+      "payload_byte_delta": 34229466368,
+      "queries": 1000,
+      "query_slots": 1,
+      "s3_checkpoint_verified": true
+    },
+    {
+      "attempt_delta": 127811,
+      "cell": "B1.B",
+      "cohort_anchor_and_batch_floor": true,
+      "fault_counters_zero": true,
+      "payload_byte_delta": 34229466368,
+      "queries": 1000,
+      "query_slots": 2,
+      "s3_checkpoint_verified": true
+    },
+    {
+      "attempt_delta": 127811,
+      "cell": "B2.B",
+      "cohort_anchor_and_batch_floor": true,
+      "fault_counters_zero": true,
+      "payload_byte_delta": 34229466368,
+      "queries": 1000,
+      "query_slots": 2,
+      "s3_checkpoint_verified": true
+    },
+    {
+      "attempt_delta": 127811,
+      "cell": "A2.A",
+      "cohort_anchor_and_batch_floor": true,
+      "fault_counters_zero": true,
+      "payload_byte_delta": 34229466368,
+      "queries": 1000,
+      "query_slots": 1,
+      "s3_checkpoint_verified": true
+    }
+  ],
+  "collect_invocation": "7c1f4b5cc42e41dbad8cdc49447254c8",
+  "compiled_source": "89fb834bb51396b9580fa620fd2898526a23fa01",
+  "decision": "VALID_THROUGHPUT_LATENCY_MEMORY_PARETO_TRADEOFF",
+  "default_promoted": false,
+  "delivery_source": "03f4f50da872091619d11ef173b750c1b1a90131",
+  "instance": "i-0a71976260f8bd031",
+  "recall_all": 0.9737,
+  "run_invocation": "9c538ceafb19444ba41078d69eecaa43",
+  "run_ssm": "947230ce-cb0d-489a-911b-18ae145302e1",
+  "schema": "borsuk-concurrent-query-root-verification-v1",
+  "service_capacity_or_competitor_win_claim": false,
+  "shutdown_proof": "External final terminal is published only after independent instance termination/EBS availability/timer cleanup proof.",
+  "summary_sha256": "84930dd026abf334fff521dbfb793cfb0e07243cfc285847ccf2c8cfafe4f5d4",
+  "verified_at": "2026-10-18T01:55:09.152613+00:00",
+  "volume": "vol-02541c376657a5814"
+}
