@@ -1,0 +1,15 @@
+{
+  "schema": "borsuk-runtime-result-evidence-v1",
+  "source_commit": "efef1d988359076da2f552a90e41765f7665e217",
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "prefix": "research/semantic-router/20261018/runtime-task-abba-closure-a0002",
+  "archive_sha256": "b91326a431afd1b7519a1b9b90d774144f56bae94e0ae2b46d587b83080bc107",
+  "summary_sha256": "1605bf50fc5b0226ea8695ca2ef0c76520de2191c6bcdc38b50785d3e3ff0c75",
+  "root_verification_sha256": "c0ab84d67ae0a7fbd1d0de16e0e7786b432de59481a8be1c02b293ea8679282f",
+  "strict_readers_passed": 4,
+  "all_canonical_queries_per_cell": 1000,
+  "source_qualification_prefix": "research/semantic-router/20261018/runtime-task-qualification-closure-a0001/",
+  "component_elfs_in_qualification_archive": true,
+  "default_promoted": false,
+  "competitor_win": false
+}
