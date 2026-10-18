@@ -9748,7 +9748,7 @@ fn main() {
                 })
         } else {
             Err(
-                "usage: compare_native_replay --source-frame-range CONFIG CONFIG_SHA NEW_REPORT"
+                "usage: compare_native_replay (--source-frame-range|--source-frame-range-admit) CONFIG CONFIG_SHA NEW_REPORT"
                     .into(),
             )
         };

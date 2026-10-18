@@ -37,7 +37,8 @@ compare_native_replay --source-frame-range CONFIG CONFIG_SHA NEW_REPORT
 
 Both create reports exclusively and return 0 on success, 2 on refusal. Refusal
 can produce a durable INVALID report. Admission checks every native trace row,
-seal, full SHA and EOF before opening SOURCE; then it authenticates every
+seal, full SHA and EOF, and reconstructs SOURCE ranges with exact original
+logical GET/verified-byte/failed-GET parity before opening SOURCE; then it authenticates every
 original SOURCE unit/full hash without encoding or calculating costs. Cost
 mode first repeats full admission, then scans SOURCE with the unchanged
 256-row transpose/Zstd1/raw-fallback codec, retains sizes in original physical
@@ -47,10 +48,13 @@ this CLI does not authorize paid experiments.
 
 ## Accounting
 
-The strict current native reader reconstructs the shared flat cover from
+The adapter observer inside the strict current native reader reconstructs
+the pinned shared flat cover from
 `trace.ranked_candidate_pages` using the original SOURCE GET cap.
-It checks every recorded interval and original logical submission/verified-byte
-charge, including bridge pages. No historical 16-leaf or 1024-unit restriction
+Full-mode traces contain no recorded diagnostic physical spans. These intervals
+are explicitly labeled reconstructed_from_pinned_shared_cover and checked
+against original logical submission/verified-byte charges, including bridge pages.
+Duplicate, empty and out-of-bounds page rosters are refused. No historical 16-leaf or 1024-unit restriction
 is imported into the current trace.
 
 Each original object interval is mapped to every touched complete compressed
@@ -69,6 +73,7 @@ does not establish directory fetch cost or an adopted format.
 
 ## Memory, timing and evidence limits
 
+A final_resources snapshot is taken after the second reader and report construction.
 Only original/encoded/decoded frame buffers, bounded metadata, ordered sizes,
 and per-query costs are retained. Original source bytes are streamed once.
 The replay metadata cap is checked before SOURCE IO. Its conservative model
@@ -90,3 +95,8 @@ complete bridge intervals, partial tails, raw fallback expansion, ordering
 distinct from the sorted histogram, cap-minus-one refusal, valid but unrelated
 SOURCE generation, corrupt original units/pins, and existing strict native
 range/counter/seal/header refusals.
+
+The locked serde_json version is unchanged; float_roundtrip is enabled so JSON
+parsing preserves the producer's exact QPS f64 bits. A fixed count2/15309257ns
+literal reproduces the prior one-ULP false refusal; exact QPS equality, integer
+counts/elapsed, seals and SOURCE range/charge semantics remain strict.

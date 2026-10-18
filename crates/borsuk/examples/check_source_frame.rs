@@ -128,7 +128,7 @@ fn cpu_ns() -> u128 {
     let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
     (t.tv_sec as u128) * 1_000_000_000 + t.tv_nsec as u128
 }
-fn resource_snapshot() -> Value {
+pub(crate) fn resource_snapshot() -> Value {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
     let status: BTreeMap<_, _> = status
         .lines()
@@ -297,7 +297,7 @@ fn execute_table(c: &Config, measure: bool) -> Result<(Value, Vec<usize>)> {
     for a in [&c.generation, &c.plane, &c.digests] {
         read_artifact(a, c.max_metadata_bytes)?;
     }
-    let mut report = json!({"schema":"source-frame-report-v1","mode":if measure {"measure"}else{"admit-only"},"config":c,"original_bytes":c.records.bytes,"original_sha256":records_hash,"authenticated_original_units":c.rows.div_ceil(32),"frame_rows":FRAME_ROWS,"frame_count":nframes,"query_or_truth_opened":false,"limits":{"frame_decoded_bytes":c.max_frame_bytes,"zstd_max_window_bytes":1<<20,"metadata_admission_bytes":metadata_total},"resources":resource_snapshot(),"limitations":"Whole-plane lossless compression only. No query-range transfer, GET, billed-byte, ANN recall, latency, QPS or vendor claim. VmHWM is process resident-memory high-water; VmRSS is the end snapshot. Cgroup memory.peak includes file cache and is not process RSS. Resource snapshot is taken at the end of execute and covers the whole process/cgroup. Buffer/window bounds are not a total workspace cap. Encode/decode timings describe whole fresh calls, including contexts, zeroing, transpose and validation; no steady-state/context-reuse cost claim. Total times cover execute, excluding config loading and report publication."});
+    let mut report = json!({"schema":"source-frame-report-v1","mode":if measure {"measure"}else{"admit-only"},"config":c,"record_bytes":width,"original_bytes":c.records.bytes,"original_sha256":records_hash,"authenticated_original_units":c.rows.div_ceil(32),"frame_rows":FRAME_ROWS,"frame_count":nframes,"query_or_truth_opened":false,"limits":{"frame_decoded_bytes":c.max_frame_bytes,"zstd_max_window_bytes":1<<20,"metadata_admission_bytes":metadata_total},"resources":resource_snapshot(),"limitations":"Whole-plane lossless compression only. No query-range transfer, GET, billed-byte, ANN recall, latency, QPS or vendor claim. VmHWM is process resident-memory high-water; VmRSS is the end snapshot. Cgroup memory.peak includes file cache and is not process RSS. Resource snapshot is taken at the end of execute and covers the whole process/cgroup. Buffer/window bounds are not a total workspace cap. Encode/decode timings describe whole fresh calls, including contexts, zeroing, transpose and validation; no steady-state/context-reuse cost claim. Total times cover execute, excluding config loading and report publication."});
     if measure {
         // Keep physical frame order for the range replay; sort a bounded copy for percentiles.
         let mut distribution = sizes.clone();

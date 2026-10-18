@@ -3618,6 +3618,26 @@ pub(crate) fn runtime_task_reducer_fixture(
         },
     )
 }
+
+/// Small actual producer trace for the offline frame adapter's full-population fixture.
+#[cfg(test)]
+pub(crate) fn source_frame_range_reducer_fixture() -> (tempfile::TempDir, PathBuf) {
+    let shape = Shape {
+        count: 1000,
+        ..Shape::tiny(32)
+    };
+    let (dir, mut value) = query_runtime(64).unwrap().block_on(tests::fixture(shape));
+    value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+    value["max_active_queries"] = json!(2);
+    value["query_runtime"] = json!("multi_thread2");
+    value["fetch_parallelism"] = json!(64);
+    value["source_authentication"] = json!("offload2");
+    let (status, _) = tests::run_status(dir.path(), "frame-full.jsonl", &value, shape);
+    assert_eq!(status, Status::Measured);
+    let trace = dir.path().join("frame-full.jsonl");
+    (dir, trace)
+}
+
 #[cfg(test)]
 pub(crate) fn concurrent_reducer_fixture(active: usize) -> (tempfile::TempDir, Vec<Value>) {
     tests::concurrent_fixture(active)
@@ -7699,7 +7719,12 @@ mod tests {
             json!({"mode":"direct_closure","max_sq8_bytes":bytes,"max_sq8_gets":gets});
         value
     }
-    fn run_status(dir: &Path, name: &str, value: &Value, shape: Shape) -> (Status, Vec<Value>) {
+    pub(super) fn run_status(
+        dir: &Path,
+        name: &str,
+        value: &Value,
+        shape: Shape,
+    ) -> (Status, Vec<Value>) {
         let (path, sha) = write_config(dir, value);
         let output = dir.join(name);
         let status = execute_paths_status(&path, &sha, &output, shape, |c, shape, out, p| {
