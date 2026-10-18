@@ -15,14 +15,21 @@ pub(super) const PAGE_RANGE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline
 pub(super) const CPU_PROFILE_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
 pub(super) const CPU_PROFILE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
 
-pub(super) const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v17";
-pub(super) const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v16";
+pub(super) const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v18";
+pub(super) const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v17";
 
 pub(super) fn concurrent_queries(inputs: &Value) -> Result<usize> {
     let active = number(&inputs["max_active_queries"])?;
     require(
         inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA
             && matches!(active, 1 | 2)
+            && matches!(
+                inputs["query_runtime"].as_str(),
+                Some("current_thread" | "multi_thread2")
+            )
+            && inputs["query_dispatch"] == "spawned_ordered_batches"
+            && inputs["query_wall_semantics"]
+                == "dispatch_to_completion_including_initial_runtime_queue"
             && inputs["fetch_parallelism"] == 64
             && inputs["source_authentication"] == "offload2"
             && inputs["execution"] == json!({"mode":"full"})
@@ -97,14 +104,37 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
             }
             raw["config_schema"] = json!(CPU_PROFILE_CONFIG_SCHEMA);
             raw.as_object_mut().unwrap().remove("max_active_queries");
+            raw.as_object_mut().unwrap().remove("query_runtime");
+            raw.as_object_mut().unwrap().remove("query_dispatch");
+            raw.as_object_mut().unwrap().remove("query_wall_semantics");
         }
         "startup" => {
             let r = &raw["concurrent_resources"];
             fields(
                 r,
-                "query_slots downloads_per_query downloads_global_bound compute_workers_global compute_slots_global query_future_bytes_per_query modeled_memory_bound_bytes external_memory_limit_bytes source_bytes_per_query sq8_bytes_per_query query_bytes_global_bound scheduler_bytes_global cohort_record_bytes",
+                "query_slots downloads_per_query downloads_global_bound compute_workers_global compute_slots_global query_future_bytes_per_query modeled_memory_bound_bytes external_memory_limit_bytes source_bytes_per_query sq8_bytes_per_query query_bytes_global_bound scheduler_bytes_global cohort_record_bytes query_runtime query_dispatch query_wall_semantics runtime_num_workers runtime_charged_worker_threads runtime_worker_threads runtime_max_blocking_threads runtime_stack_bytes_per_thread runtime_thread_state_bytes runtime_reserve_bytes task_state_bytes_per_query",
             )?;
             let active = number(&r["query_slots"])?;
+            let workers = match r["query_runtime"].as_str() {
+                Some("current_thread") => 0,
+                Some("multi_thread2") => 2,
+                _ => return Err("runtime selector".into()),
+            };
+            require(
+                r["query_dispatch"] == "spawned_ordered_batches"
+                    && r["query_wall_semantics"]
+                        == "dispatch_to_completion_including_initial_runtime_queue"
+                    && r["runtime_worker_threads"] == workers
+                    && r["runtime_num_workers"] == if workers == 0 { 1 } else { 2 }
+                    && r["runtime_charged_worker_threads"] == 2
+                    && r["runtime_max_blocking_threads"] == 64
+                    && r["runtime_stack_bytes_per_thread"] == 2 * 1024 * 1024
+                    && r["runtime_thread_state_bytes"] == 64 * 1024
+                    && r["task_state_bytes_per_query"] == 4096
+                    && r["runtime_reserve_bytes"]
+                        == (64 + 2) * (2 * 1024 * 1024 + 64 * 1024) + 512 * 1024,
+                "runtime resource bounds",
+            )?;
             require(
                 matches!(active, 1 | 2)
                     && r["downloads_per_query"] == 64
@@ -692,6 +722,9 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "source_authentication",
         "semantic_leaf_limit",
         "max_active_queries",
+        "query_runtime",
+        "query_dispatch",
+        "query_wall_semantics",
     ] {
         require(i.get(key) == b.get(key), "v10 identity/input agreement")?;
     }
@@ -1468,11 +1501,17 @@ pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
         let r = &raw["concurrent_resources"];
         require(
             r["query_slots"] == active
+                && r["query_runtime"] == inputs["query_runtime"]
+                && r["query_dispatch"] == inputs["query_dispatch"]
+                && r["query_wall_semantics"] == inputs["query_wall_semantics"]
                 && r["source_bytes_per_query"] == inputs["source_byte_budget"]
                 && r["sq8_bytes_per_query"] == inputs["sq8_byte_budget"]
                 && r["scheduler_bytes_global"] == active * library_scheduler_bytes(inputs)?
                 && number(&raw["caller_pinned_bytes"])?
-                    >= (active * 512 * 1024 + 1024 * 1024) as u64,
+                    >= plus(
+                        (active * 512 * 1024 + 1024 * 1024) as u64,
+                        number(&r["runtime_reserve_bytes"])?,
+                    )?,
             "startup query resources match headers",
         )?;
     }

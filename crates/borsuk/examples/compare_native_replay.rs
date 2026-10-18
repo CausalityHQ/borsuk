@@ -13648,6 +13648,20 @@ mod tests {
                 .unwrap()
                 .len()
         );
+        if config.get("max_active_queries").is_some() {
+            identity["schema"] = json!(current_v10::CONCURRENT_RESULT_SCHEMA);
+            for header in [&mut identity, &mut bound] {
+                header["config_schema"] = json!(current_v10::CONCURRENT_CONFIG_SCHEMA);
+                header["max_active_queries"] = config["max_active_queries"].clone();
+                header["query_runtime"] = config
+                    .get("query_runtime")
+                    .cloned()
+                    .unwrap_or(json!("current_thread"));
+                header["query_dispatch"] = json!("spawned_ordered_batches");
+                header["query_wall_semantics"] =
+                    json!("dispatch_to_completion_including_initial_runtime_queue");
+            }
+        }
         let completed = CompletedConfig {
             schema: SCALE_CONFIG_SCHEMA.into(),
             input: CompletedInput {
@@ -13786,6 +13800,88 @@ mod tests {
                 );
                 row["diagnostic"] = old;
             }
+        }
+    }
+
+    #[test]
+    fn runtime_task_reader_mutations() {
+        for multi in [false, true] {
+            let (dir, rows) = scale_native_runner::runtime_task_reducer_fixture(2, multi);
+            // Independent headers from config, source bytes and executable, before mutations.
+            assert_current_native_config(
+                &dir.path().join("config.json"),
+                &dir.path().join("concurrent.jsonl"),
+            );
+            let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+            for mutation in 0..9 {
+                let mut bad = rows.clone();
+                match mutation {
+                    0 => bad[0]["query_runtime"] = json!("unknown"),
+                    1 => {
+                        bad[1]["query_runtime"] = json!(if multi {
+                            "current_thread"
+                        } else {
+                            "multi_thread2"
+                        })
+                    }
+                    2 => bad[startup]["concurrent_resources"]["runtime_worker_threads"] = json!(3),
+                    3 => {
+                        bad[startup]["concurrent_resources"]["runtime_stack_bytes_per_thread"] =
+                            json!(1)
+                    }
+                    4 => bad[startup]["concurrent_resources"]["runtime_reserve_bytes"] = json!(1),
+                    5 => {
+                        bad[startup]["concurrent_resources"]["task_state_bytes_per_query"] =
+                            json!(1)
+                    }
+                    6 => {
+                        for row in &mut bad[0..2] {
+                            row["query_dispatch"] = json!("join_all");
+                        }
+                    }
+                    7 => {
+                        for row in &mut bad[0..2] {
+                            row["query_runtime"] = json!(if multi {
+                                "current_thread"
+                            } else {
+                                "multi_thread2"
+                            });
+                        }
+                    }
+                    _ => bad[startup]["caller_pinned_bytes"] = json!(1024 * 1024),
+                }
+                let (path, _) = write_fixture(dir.path(), "runtime-mutation.jsonl", bad.clone());
+                let (config, pin) = scale_config(dir.path(), &path, &bad);
+                assert!(
+                    reduce_scale(&config, &pin).is_err(),
+                    "mode {multi} mutation {mutation}"
+                );
+            }
+            // Coherent alternate runtime is valid internally but is not the frozen experiment.
+            let mut changed = rows.clone();
+            let mode = if multi {
+                "current_thread"
+            } else {
+                "multi_thread2"
+            };
+            for header in &mut changed[..2] {
+                header["query_runtime"] = json!(mode);
+            }
+            let resources = &mut changed[startup]["concurrent_resources"];
+            resources["query_runtime"] = json!(mode);
+            resources["runtime_worker_threads"] = json!(if multi { 0 } else { 2 });
+            resources["runtime_num_workers"] = json!(if multi { 1 } else { 2 });
+            let (path, _) = write_fixture(dir.path(), "coherent-runtime.jsonl", changed.clone());
+            let (internal, pin) = scale_config(dir.path(), &path, &changed);
+            assert!(
+                reduce_scale(&internal, &pin).is_ok(),
+                "mutation must be internally coherent"
+            );
+            let (frozen, pin) = scale_config(dir.path(), &path, &rows);
+            assert!(
+                reduce_scale(&frozen, &pin).is_err(),
+                "frozen original expectation refuses relabeling"
+            );
         }
     }
 
