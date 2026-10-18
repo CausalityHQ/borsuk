@@ -144,6 +144,8 @@ fn resource_snapshot() -> Value {
     let base = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
     let counters: BTreeMap<_, _> = [
         "memory.max",
+        "memory.current",
+        "memory.stat",
         "memory.peak",
         "memory.swap.max",
         "memory.events",
@@ -159,6 +161,9 @@ fn resource_snapshot() -> Value {
     json!({"process_status":status,"cgroup":cgroup,"cgroup_counters":counters})
 }
 fn execute(c: &Config, measure: bool) -> Result<Value> {
+    Ok(execute_table(c, measure)?.0)
+}
+fn execute_table(c: &Config, measure: bool) -> Result<(Value, Vec<usize>)> {
     let start = Instant::now();
     let cpu_start = cpu_ns();
     if c.schema != "source-frame-config-v1"
@@ -175,7 +180,7 @@ fn execute(c: &Config, measure: bool) -> Result<Value> {
     }
     let nframes = c.rows.div_ceil(FRAME_ROWS);
     let size_bytes = nframes
-        .checked_mul(std::mem::size_of::<usize>())
+        .checked_mul(2 * std::mem::size_of::<usize>())
         .ok_or_else(|| fail("frame count overflow"))?;
     if nframes > 1_000_000 || size_bytes > c.max_metadata_bytes {
         return Err(fail("frame distribution cap"));
@@ -294,7 +299,9 @@ fn execute(c: &Config, measure: bool) -> Result<Value> {
     }
     let mut report = json!({"schema":"source-frame-report-v1","mode":if measure {"measure"}else{"admit-only"},"config":c,"original_bytes":c.records.bytes,"original_sha256":records_hash,"authenticated_original_units":c.rows.div_ceil(32),"frame_rows":FRAME_ROWS,"frame_count":nframes,"query_or_truth_opened":false,"limits":{"frame_decoded_bytes":c.max_frame_bytes,"zstd_max_window_bytes":1<<20,"metadata_admission_bytes":metadata_total},"resources":resource_snapshot(),"limitations":"Whole-plane lossless compression only. No query-range transfer, GET, billed-byte, ANN recall, latency, QPS or vendor claim. VmHWM is process resident-memory high-water; VmRSS is the end snapshot. Cgroup memory.peak includes file cache and is not process RSS. Resource snapshot is taken at the end of execute and covers the whole process/cgroup. Buffer/window bounds are not a total workspace cap. Encode/decode timings describe whole fresh calls, including contexts, zeroing, transpose and validation; no steady-state/context-reuse cost claim. Total times cover execute, excluding config loading and report publication."});
     if measure {
-        sizes.sort_unstable();
+        // Keep physical frame order for the range replay; sort a bounded copy for percentiles.
+        let mut distribution = sizes.clone();
+        distribution.sort_unstable();
         let header_bytes = (HEADER_BYTES as u64)
             .checked_mul(nframes as u64)
             .ok_or_else(|| fail("header overflow"))?;
@@ -308,12 +315,45 @@ fn execute(c: &Config, measure: bool) -> Result<Value> {
         let framed_bytes = payload_bytes
             .checked_add(header_bytes)
             .ok_or_else(|| fail("framed overflow"))?;
-        report["measurement"] = json!({"codec_input_sha256":format!("{:x}",input_hash.finalize()),"decoded_sha256":format!("{:x}",decoded_hash.finalize()),"payload_bytes":payload_bytes,"actual_frame_header_bytes":header_bytes,"candidate_framed_bytes":framed_bytes,"counterfactual_directory_bytes":directory_bytes,"candidate_framed_plus_counterfactual_directory_bytes":framed_bytes.checked_add(directory_bytes).ok_or_else(||fail("total overflow"))?,"raw_fallback_frames":fallback,"raw_fallback_header_expansion_bytes":fallback*HEADER_BYTES,"frame_size_bytes_including_header":{"min":sizes[0],"p50":sizes[(sizes.len()-1)/2],"p95":sizes[(sizes.len()-1)*95/100],"max":sizes[sizes.len()-1]},"encode_wall_ns":encode_wall,"decode_wall_ns":decode_wall,"encode_process_cpu_ns":encode_cpu,"decode_process_cpu_ns":decode_cpu,"zstd_level":1,"zstd_version":zstd::zstd_safe::version_number(),"dictionary":false,"directory_is_adopted":false});
+        report["measurement"] = json!({"codec_input_sha256":format!("{:x}",input_hash.finalize()),"decoded_sha256":format!("{:x}",decoded_hash.finalize()),"payload_bytes":payload_bytes,"actual_frame_header_bytes":header_bytes,"candidate_framed_bytes":framed_bytes,"counterfactual_directory_bytes":directory_bytes,"candidate_framed_plus_counterfactual_directory_bytes":framed_bytes.checked_add(directory_bytes).ok_or_else(||fail("total overflow"))?,"raw_fallback_frames":fallback,"raw_fallback_header_expansion_bytes":fallback*HEADER_BYTES,"frame_size_bytes_including_header":{"min":distribution[0],"p50":distribution[(distribution.len()-1)/2],"p95":distribution[(distribution.len()-1)*95/100],"max":distribution[distribution.len()-1]},"encode_wall_ns":encode_wall,"decode_wall_ns":decode_wall,"encode_process_cpu_ns":encode_cpu,"decode_process_cpu_ns":decode_cpu,"zstd_level":1,"zstd_version":zstd::zstd_safe::version_number(),"dictionary":false,"directory_is_adopted":false});
     }
     report["total_wall_ns"] = json!(start.elapsed().as_nanos());
     report["total_process_cpu_ns"] = json!(cpu_ns() - cpu_start);
-    Ok(report)
+    Ok((report, sizes))
 }
+
+/// Cost replay entrypoint: authenticate the config and bind it before any SOURCE open.
+pub(crate) fn replay_table(
+    path: &Path,
+    bytes: u64,
+    sha: &str,
+    expected: &Value,
+    generation: &str,
+    rows: u64,
+    dimensions: u64,
+    measure: bool,
+) -> Result<(Value, Vec<usize>)> {
+    let artifact = Artifact {
+        path: path.to_owned(),
+        bytes,
+        sha256: sha.to_owned(),
+    };
+    let original = read_artifact(&artifact, 65536)?;
+    let c: Config = serde_json::from_slice(&original)?;
+    if serde_json::to_value(&c)? != *expected
+        || c.generation.sha256 != generation
+        || c.rows as u64 != rows
+        || c.dimensions as u64 != dimensions
+    {
+        return Err(fail("replay SOURCE config/trace binding"));
+    }
+    let result = execute_table(&c, measure)?;
+    if read_artifact(&artifact, 65536)? != original {
+        return Err(fail("replay config changed"));
+    }
+    Ok(result)
+}
+
 fn publish(path: &Path, report: &Value) -> Result<()> {
     let parent = path
         .parent()
@@ -564,5 +604,80 @@ mod tests {
         bytes[0] ^= 1;
         fs::write(&c.digests.path, bytes).unwrap();
         assert!(execute(&c, true).is_err());
+    }
+    #[test]
+    fn source_frame_replay_order_tail_admission_and_coherent_other_generation() {
+        let first = tempfile::tempdir().unwrap();
+        let c = fixture(first.path(), true).unwrap();
+        let bytes = serde_json::to_vec(&c).unwrap();
+        let a = artifact(first.path().join("config.json"), &bytes).unwrap();
+        let expected = serde_json::to_value(&c).unwrap();
+        let (admission, empty) = replay_table(
+            &a.path,
+            a.bytes,
+            &a.sha256,
+            &expected,
+            &c.generation.sha256,
+            c.rows as u64,
+            c.dimensions as u64,
+            false,
+        )
+        .unwrap();
+        assert!(empty.is_empty());
+        assert!(admission.get("measurement").is_none());
+        let (report, table) = replay_table(
+            &a.path,
+            a.bytes,
+            &a.sha256,
+            &expected,
+            &c.generation.sha256,
+            c.rows as u64,
+            c.dimensions as u64,
+            true,
+        )
+        .unwrap();
+        assert_eq!(table, [256 * 9 + 25, 33 * 9 + 25]);
+        assert_eq!(
+            report["measurement"]["frame_size_bytes_including_header"]["min"],
+            table[1]
+        );
+        assert_eq!(
+            table.iter().sum::<usize>() as u64,
+            report["measurement"]["candidate_framed_bytes"]
+                .as_u64()
+                .unwrap()
+        );
+        let other = tempfile::tempdir().unwrap();
+        let unrelated = fixture(other.path(), false).unwrap();
+        let b = artifact(
+            other.path().join("config.json"),
+            &serde_json::to_vec(&unrelated).unwrap(),
+        )
+        .unwrap();
+        // Both configurations and their generation/plane/record chains are valid internally.
+        execute(&unrelated, false).unwrap();
+        assert_ne!(unrelated.generation.sha256, c.generation.sha256);
+        assert!(
+            replay_table(
+                &b.path,
+                b.bytes,
+                &b.sha256,
+                &serde_json::to_value(&unrelated).unwrap(),
+                &c.generation.sha256,
+                c.rows as u64,
+                c.dimensions as u64,
+                true
+            )
+            .is_err()
+        );
+        let mut capped = c.clone();
+        capped.max_source_bytes = c.records.bytes - 1;
+        capped.records.path = first.path().join("never-open-source");
+        assert!(
+            execute(&capped, true)
+                .unwrap_err()
+                .to_string()
+                .contains("authority geometry/source cap")
+        );
     }
 }
