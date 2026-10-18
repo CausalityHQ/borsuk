@@ -225,8 +225,7 @@ fn validate_target(
         || root.base_epoch != job.base_epoch
         || root.discovery.mode() != job.discovery
         || root.discovery.semantic_profile() != job.profile
-        || root.source_layout.is_capsules()
-            != (job.source_layout == SourceLayoutMode::LeafCapsulesV2)
+        || root.source_layout.mode() != job.source_layout
         || root.canonical.rows != input.rows
         || root.canonical.dimensions != input.dimensions
     {
@@ -319,6 +318,13 @@ fn disk_bound(rows: usize, dimensions: usize, layout: SourceLayoutMode) -> Resul
             .and_then(|n| n.checked_add(units.checked_mul(4)?))
             .and_then(|n| n.checked_add(32))
             .ok_or(bad("compaction capsule disk geometry"))?
+    } else if layout == SourceLayoutMode::FramedRecordsV1 {
+        crate::source_frame::frame_bytes(rows, codec).map_err(TwoBitGenerationError::Io)?;
+        codec
+            .checked_mul(rows)
+            .and_then(|n| n.checked_add(rows.div_ceil(256).checked_mul(25)?))
+            .and_then(|n| n.checked_add(crate::source_frame::directory_bytes(rows).ok()?))
+            .ok_or(bad("compaction frame disk geometry"))?
     } else {
         0
     };
@@ -1011,9 +1017,10 @@ async fn compact_owned(
                     build_budget,
                 )?
             } else {
-                builder.build_with_discovery(
+                builder.build_with_discovery_and_source_layout(
                     Some(&order),
                     job.discovery,
+                    job.source_layout,
                     &generation_dir,
                     build_budget,
                 )?
@@ -1102,6 +1109,24 @@ async fn compact_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framed_source_compaction_disk_reserves_flat_and_worst_case_frames() {
+        for rows in [0usize, 1, 32, 256, 257, 513] {
+            for dimensions in [1usize, 257, 1024] {
+                let width = RotatedTwoBitCodec::padded_dimensions(dimensions)
+                    .unwrap()
+                    .div_ceil(4)
+                    + 8;
+                assert_eq!(
+                    disk_bound(rows, dimensions, SourceLayoutMode::FramedRecordsV1).unwrap()
+                        - disk_bound(rows, dimensions, SourceLayoutMode::FlatRecords).unwrap(),
+                    (rows * width + rows.div_ceil(256) * 25 + (rows.div_ceil(256) + 1) * 8) as u64
+                );
+            }
+        }
+        assert!(disk_bound(usize::MAX, 1024, SourceLayoutMode::FramedRecordsV1).is_err());
+    }
 
     #[test]
     fn scale_profile_compaction_million_row_payload_and_disk_arithmetic() {

@@ -82,7 +82,7 @@ impl EmptyRoot {
             && self.dimensions > 0
             && u32::try_from(self.dimensions).is_ok()
             && (self.discovery == DiscoveryMode::Semantic
-                || self.source_layout == SourceLayoutMode::FlatRecords)
+                || self.source_layout != SourceLayoutMode::LeafCapsulesV2)
             && match (self.discovery, self.profile) {
                 (DiscoveryMode::Graph, None) => true,
                 (DiscoveryMode::Semantic, Some(profile)) => {
@@ -366,11 +366,7 @@ pub(crate) async fn discovery_profile_and_source_layout(
         {
             let profile = root.discovery.semantic_profile();
             root.capsule_metadata_bytes()?;
-            let layout = if root.source_layout.is_capsules() {
-                SourceLayoutMode::LeafCapsulesV2
-            } else {
-                SourceLayoutMode::FlatRecords
-            };
+            let layout = root.source_layout.mode();
             Ok((root.discovery.mode(), profile, layout))
         }
         _ => Err(TwoBitStoreError::Invalid("discovery authority")),
@@ -464,7 +460,7 @@ fn source_artifacts<'a>(
     plane: &'a SourcePlaneReceipt,
 ) -> Result<Vec<(&'static str, usize, &'a str)>> {
     manifest.capsule_metadata_bytes()?;
-    let mut files = Vec::with_capacity(if manifest.source_layout.is_capsules() {
+    let mut files = Vec::with_capacity(if manifest.source_layout.directory_name().is_some() {
         2
     } else {
         1
@@ -484,7 +480,13 @@ fn source_artifacts<'a>(
                 plane.records_sha256.as_str(),
             ));
         }
-        SourceLayout::LeafCapsulesV2 {
+        SourceLayout::FramedRecordsV1 {
+            blob_bytes,
+            blob_sha256,
+            directory_bytes,
+            directory_sha256,
+        }
+        | SourceLayout::LeafCapsulesV2 {
             blob_bytes,
             blob_sha256,
             directory_bytes,
@@ -497,7 +499,7 @@ fn source_artifacts<'a>(
                 blob_sha256.as_str(),
             ));
             files.push((
-                "plane/capsule_directory.bin",
+                manifest.source_layout.directory_name().unwrap(),
                 *directory_bytes,
                 directory_sha256.as_str(),
             ));
@@ -2391,6 +2393,7 @@ mod source_layout_tests {
         for layout in [
             SourceLayoutMode::FlatRecords,
             SourceLayoutMode::LeafCapsulesV2,
+            SourceLayoutMode::FramedRecordsV1,
         ] {
             let prefix = ObjectPath::from(format!("empty/{layout:?}"));
             let head = publish_empty_two_bit_generation_with_source_layout(

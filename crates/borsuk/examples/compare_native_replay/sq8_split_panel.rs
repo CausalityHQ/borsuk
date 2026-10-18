@@ -466,7 +466,7 @@ fn decompose_current(raw: &Value, inputs: &Value) -> Result<Decomposition> {
     let width = plus(number(&inputs["dimensions"])?, 12)?;
     let parallelism = number(&inputs["fetch_parallelism"])?;
     let diag = &raw["diagnostic"];
-    let cpu_profile = inputs["config_schema"] == super::current_v10::CPU_PROFILE_CONFIG_SCHEMA;
+    let cpu_profile = super::current_v10::cpu_profile_config(inputs);
     super::current_v10::diagnostic_shape(diag, cpu_profile)?;
     if let (Some(start), Some(end)) = (
         nullable(&diag["query_monotonic_start_ns"])?,

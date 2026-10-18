@@ -169,7 +169,7 @@ pub struct TwoBitGenerationLimits {
     /// Concurrent GETs per admitted query, bounded by the admitted batch length.
     /// Retained payload is charged in full; transport overhead needs an RSS gate.
     pub max_parallel_gets: usize,
-    /// Maximum authenticated source bytes per query, separate from SQ8.
+    /// Independently bounds physical SOURCE transfer and decoded SOURCE cover per query.
     pub max_source_bytes: usize,
     /// Maximum source range GETs per query.
     pub max_source_gets: usize,
@@ -244,7 +244,7 @@ pub(crate) struct Manifest {
     pub(crate) low: Vec<f32>,
     pub(crate) step: Vec<f32>,
 }
-pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v11";
+pub(crate) const SCHEMA: &str = "borsuk-two-bit-generation-v12";
 /// Explicit SOURCE storage choice; existing builders retain the flat control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -253,12 +253,20 @@ pub enum SourceLayoutMode {
     FlatRecords,
     /// Whole original pages duplicated into fixed semantic leaf capsules.
     LeafCapsulesV2,
+    /// Independently compressed original 256-row frames.
+    FramedRecordsV1,
 }
 /// Authenticated physical SOURCE descriptor from the generation root.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "layout", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceLayout {
     FlatRecords,
+    FramedRecordsV1 {
+        blob_bytes: u64,
+        blob_sha256: String,
+        directory_bytes: usize,
+        directory_sha256: String,
+    },
     LeafCapsulesV2 {
         blob_bytes: u64,
         blob_sha256: String,
@@ -270,7 +278,22 @@ impl SourceLayout {
     pub(crate) fn object_name(&self) -> &'static str {
         match self {
             Self::FlatRecords => "plane/records.bin",
+            Self::FramedRecordsV1 { .. } => "plane/frames.bin",
             Self::LeafCapsulesV2 { .. } => "plane/capsules.bin",
+        }
+    }
+    pub(crate) fn mode(&self) -> SourceLayoutMode {
+        match self {
+            Self::FlatRecords => SourceLayoutMode::FlatRecords,
+            Self::LeafCapsulesV2 { .. } => SourceLayoutMode::LeafCapsulesV2,
+            Self::FramedRecordsV1 { .. } => SourceLayoutMode::FramedRecordsV1,
+        }
+    }
+    pub(crate) fn directory_name(&self) -> Option<&'static str> {
+        match self {
+            Self::FlatRecords => None,
+            Self::LeafCapsulesV2 { .. } => Some("plane/capsule_directory.bin"),
+            Self::FramedRecordsV1 { .. } => Some("plane/frame_offsets.bin"),
         }
     }
     pub(crate) fn is_capsules(&self) -> bool {
@@ -280,17 +303,53 @@ impl SourceLayout {
 impl Manifest {
     pub(crate) fn files(&self, startup: bool) -> Vec<&'static str> {
         let mut files = self.discovery.files(startup);
-        if self.source_layout.is_capsules() {
+        if let Some(directory) = self.source_layout.directory_name() {
             files.retain(|name| *name != "plane/records.bin");
-            files.push("plane/capsule_directory.bin");
+            files.push(directory);
             if !startup {
-                files.push("plane/capsules.bin");
+                files.push(self.source_layout.object_name());
             }
         }
         files
     }
     // Joint descriptor admission, before any child metadata or SOURCE payload read.
     pub(crate) fn capsule_metadata_bytes(&self) -> Result<usize> {
+        if let SourceLayout::FramedRecordsV1 {
+            blob_bytes,
+            blob_sha256,
+            directory_bytes,
+            directory_sha256,
+        } = &self.source_layout
+        {
+            let bad = TwoBitGenerationError::Invalid;
+            let rows = self.canonical.rows;
+            let width = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(
+                self.canonical.dimensions,
+            )
+            .map_err(|_| bad("frame dimensions"))?
+            .div_ceil(4)
+                + 8;
+            crate::source_frame::frame_bytes(rows, width).map_err(TwoBitGenerationError::Io)?;
+            let expected =
+                crate::source_frame::directory_bytes(rows).map_err(TwoBitGenerationError::Io)?;
+            let maximum = rows
+                .checked_mul(width)
+                .and_then(|n| n.checked_add(rows.div_ceil(256).checked_mul(25)?))
+                .ok_or(bad("frame geometry"))?;
+            if *directory_bytes != expected
+                || *blob_bytes > maximum as u64
+                || (rows == 0) != (*blob_bytes == 0)
+                || !crate::resident_graph_generation::valid_sha256(blob_sha256)
+                || !crate::resident_graph_generation::valid_sha256(directory_sha256)
+            {
+                return Err(bad("frame descriptor"));
+            }
+            return expected
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(128))
+                .ok_or(bad("frame directory memory"));
+        }
+
         let SourceLayout::LeafCapsulesV2 {
             blob_bytes,
             blob_sha256,
@@ -824,6 +883,81 @@ impl CapsuleSource {
     }
 }
 
+struct FramedSource {
+    directory: std::sync::Arc<crate::source_frame::Directory>,
+    local: Option<(std::path::PathBuf, std::sync::Arc<PageAuthority>)>,
+}
+impl FramedSource {
+    fn physical_ranges(
+        &self,
+        ranges: &[(usize, usize)],
+        limits: TwoBitGenerationLimits,
+    ) -> Result<Vec<std::ops::Range<usize>>> {
+        let bad = TwoBitGenerationError::Invalid;
+        if ranges.len() > limits.max_source_gets {
+            return Err(bad("frame GET cap"));
+        }
+        let mut physical = Vec::with_capacity(ranges.len());
+        let (mut p, mut u) = (0usize, 0usize);
+        for &(first, last) in ranges {
+            if first % 8 != 0 {
+                return Err(bad("frame alignment"));
+            }
+            let range = self
+                .directory
+                .physical_range(first / 8, last / 8)
+                .map_err(TwoBitGenerationError::Io)?;
+            let logical = self
+                .directory
+                .decoded_range(first / 8, last / 8)
+                .map_err(TwoBitGenerationError::Io)?;
+            p = p
+                .checked_add(range.len())
+                .ok_or(bad("frame physical bytes"))?;
+            u = u
+                .checked_add(logical.len())
+                .ok_or(bad("frame decoded bytes"))?;
+            if p > limits.max_source_bytes || u > limits.max_source_bytes {
+                return Err(bad("frame byte cap"));
+            }
+            physical.push(range);
+        }
+        Ok(physical)
+    }
+    fn read_local(&self, ranges: &[std::ops::Range<usize>]) -> Result<Vec<VerifiedRange>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let (path, authority) = self
+            .local
+            .as_ref()
+            .ok_or(TwoBitGenerationError::Invalid("frame local authority"))?;
+        let mut file = fs::File::open(path).map_err(TwoBitGenerationError::Io)?;
+        if file.metadata().map_err(TwoBitGenerationError::Io)?.len()
+            != self.directory.blob_bytes() as u64
+        {
+            return Err(TwoBitGenerationError::Invalid("frame local length"));
+        }
+        let mut verified = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            file.seek(SeekFrom::Start(range.start as u64))
+                .map_err(TwoBitGenerationError::Io)?;
+            let mut body = vec![0; range.len()];
+            file.read_exact(&mut body)
+                .map_err(TwoBitGenerationError::Io)?;
+            verified.push(
+                self.directory
+                    .decode_physical(range.start, &body, authority)
+                    .map_err(TwoBitGenerationError::Io)?,
+            );
+        }
+        if file.metadata().map_err(TwoBitGenerationError::Io)?.len()
+            != self.directory.blob_bytes() as u64
+        {
+            return Err(TwoBitGenerationError::Invalid("frame local length"));
+        }
+        Ok(verified)
+    }
+}
+
 /// Admitted capsule work, separate from logical unique SOURCE and SQ8 bytes.
 /// Successful queries replace estimates with the codec's actual capacity charges.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -944,6 +1078,13 @@ pub struct StageInterval {
     /// Nanoseconds from query start, including failed attempts.
     pub end_ns: u128,
 }
+/// Successfully authenticated framed SOURCE bytes, independent of compression ratio.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SourceFrameStats {
+    pub physical_bytes: usize,
+    pub decoded_bytes: usize,
+    pub hash_bytes: usize,
+}
 /// Query phase intervals, not inferred network waves or wire accounting.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct QueryStages {
@@ -959,6 +1100,9 @@ pub struct QueryStages {
     pub leaf_peak_inflight: usize,
     /// Present for capsule SOURCE, including admission/failure accounting.
     pub source_capsules: Option<SourceCapsuleStats>,
+    /// Physical transfer and original decoded/hash bytes for framed SOURCE.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_frames: Option<SourceFrameStats>,
 }
 /// A bounded generation query with independently charged source and SQ8 reads.
 pub struct TwoBitSearchResult {
@@ -1025,6 +1169,7 @@ pub struct TwoBitGeneration {
     remote_open_stats: Option<RemoteOpenStats>,
     source: Option<RemoteSource>,
     capsules: Option<CapsuleSource>,
+    frames: Option<FramedSource>,
     source_cache: Option<std::sync::Mutex<SourceCache>>,
     byte_window: Option<std::sync::Arc<InFlightBytes>>,
     sq8_range_split: Option<Sq8RangeSplit>,
@@ -1784,8 +1929,8 @@ impl TwoBitGeneration {
         if max_bytes == 0 {
             return Ok(self);
         }
-        if self.capsules.is_some() {
-            return Err(bad("capsules do not support SOURCE cache"));
+        if self.capsules.is_some() || self.frames.is_some() {
+            return Err(bad("encoded SOURCE layouts do not support SOURCE cache"));
         }
         let source = self
             .source
@@ -1991,6 +2136,31 @@ impl TwoBitGeneration {
         use futures_util::StreamExt;
         use object_store::{GetOptions, GetRange};
         let bad = TwoBitGenerationError::Invalid;
+        if let Some(frames) = &self.frames {
+            let source = self.source.as_ref().ok_or(bad("frame remote authority"))?;
+            if meta.location != source.location
+                || meta.size != frames.directory.blob_bytes() as u64
+                || meta.e_tag.as_deref() != Some(source.etag.as_str())
+            {
+                return Err(bad("retained frame identity"));
+            }
+            // Each frame is authenticated against all of its logical page digests.
+            for frame in 0..frames.directory.frames() {
+                let last = ((frame + 1) * 256).min(self.rows()).div_ceil(32) - 1;
+                self.fetch_source_ranges_traced(store, &[(frame * 8, last)], None)
+                    .await?;
+            }
+            if store.head(&meta.location).await.map_err(|error| {
+                TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                    error: RangeFetchError::Store(error),
+                    stats: Sq8ReadStats::default(),
+                })
+            })? != *meta
+            {
+                return Err(bad("retained frame changed"));
+            }
+            return Ok(());
+        }
         let Some(capsules) = &self.capsules else {
             return Ok(());
         };
@@ -2191,7 +2361,7 @@ impl TwoBitGeneration {
             return Err(bad("root identity"));
         }
         let capsule_metadata = manifest.capsule_metadata_bytes()?;
-        paged |= manifest.source_layout.is_capsules();
+        paged |= manifest.source_layout.mode() != SourceLayoutMode::FlatRecords;
         if validate_local_records {
             // These files are authenticated by the publisher's existing
             // semantic validation/uploads, before it can commit the head.
@@ -2261,7 +2431,7 @@ impl TwoBitGeneration {
             || admitted_size("plane/mean.bin")? != expected_mean
             || (!paged && admitted_size("plane/records.bin")? != expected_records)
             || (validate_local_records
-                && !manifest.source_layout.is_capsules()
+                && manifest.source_layout.mode() == SourceLayoutMode::FlatRecords
                 && size("plane/records.bin")? != expected_records as u64)
             || admitted_size("plane/page_digests.bin")?
                 != geometry
@@ -2300,7 +2470,8 @@ impl TwoBitGeneration {
             .ok_or(bad("codec memory"))?;
         let source_payload_bytes = match &manifest.source_layout {
             SourceLayout::FlatRecords => expected_records,
-            SourceLayout::LeafCapsulesV2 { blob_bytes, .. } => {
+            SourceLayout::LeafCapsulesV2 { blob_bytes, .. }
+            | SourceLayout::FramedRecordsV1 { blob_bytes, .. } => {
                 usize::try_from(*blob_bytes).map_err(|_| bad("capsule blob length"))?
             }
         };
@@ -2344,6 +2515,30 @@ impl TwoBitGeneration {
                 .checked_mul(2)
                 .and_then(|n| n.checked_mul(limits.max_active_queries))
                 .ok_or(bad("source query memory"))? as u64
+        } else {
+            0
+        };
+        let frame_scratch = if manifest.source_layout.mode() == SourceLayoutMode::FramedRecordsV1 {
+            let f = crate::source_frame::frame_bytes(geometry.rows, padded.div_ceil(4) + 8)
+                .map_err(TwoBitGenerationError::Io)?;
+            let codec = f
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(crate::source_frame::DECODER_CONTEXT_BYTES))
+                .and_then(|n| n.checked_mul(2))
+                .ok_or(bad("frame context memory"))?;
+            let descriptors = crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<VerifiedRange>(
+                limits.max_source_gets,
+            )
+            .and_then(|n| n.checked_add(limits.max_source_gets.checked_mul(64)?))
+            .and_then(|n| n.checked_add(4096))
+            .ok_or(bad("frame descriptor memory"))?;
+            limits
+                .max_source_bytes
+                .min(expected_records)
+                .checked_add(codec)
+                .and_then(|n| n.checked_add(descriptors))
+                .and_then(|n| n.checked_mul(limits.max_active_queries))
+                .ok_or(bad("frame query memory"))? as u64
         } else {
             0
         };
@@ -2391,6 +2586,7 @@ impl TwoBitGeneration {
             .and_then(|n| n.checked_add(query_memory))
             .and_then(|n| n.checked_add(scheduler_memory))
             .and_then(|n| n.checked_add(source_query_memory))
+            .and_then(|n| n.checked_add(frame_scratch))
             .and_then(|n| n.checked_add(capsule_metadata as u64))
             .and_then(|n| {
                 n.checked_add(
@@ -2414,7 +2610,9 @@ impl TwoBitGeneration {
                 memory,
             )
             .map_err(TwoBitGenerationError::Plane)?;
-            if validate_local_records && !manifest.source_layout.is_capsules() {
+            if validate_local_records
+                && manifest.source_layout.mode() == SourceLayoutMode::FlatRecords
+            {
                 plane
                     .validate_local_records(&root.join("plane/records.bin"), &authority)
                     .map_err(TwoBitGenerationError::Plane)?;
@@ -2429,7 +2627,7 @@ impl TwoBitGeneration {
                     etag,
                 })
             } else {
-                if manifest.source_layout.is_capsules() {
+                if manifest.source_layout.mode() != SourceLayoutMode::FlatRecords {
                     if size(manifest.source_layout.object_name())? != source_payload_bytes as u64 {
                         return Err(bad("capsule local geometry"));
                     }
@@ -2616,7 +2814,7 @@ impl TwoBitGeneration {
             drop(encoded);
             Some(CapsuleSource {
                 directory: std::sync::Arc::new(directory),
-                local: local_capsule_authority.map(|authority| {
+                local: local_capsule_authority.take().map(|authority| {
                     (
                         root.join("plane/capsules.bin"),
                         std::sync::Arc::new(authority),
@@ -2628,6 +2826,64 @@ impl TwoBitGeneration {
         } else {
             None
         };
+        let frames = if let SourceLayout::FramedRecordsV1 {
+            blob_bytes,
+            directory_bytes,
+            directory_sha256,
+            ..
+        } = &manifest.source_layout
+        {
+            if admitted_size("plane/frame_offsets.bin")? != *directory_bytes {
+                return Err(bad("frame directory length"));
+            }
+            let directory = crate::source_frame::Directory::open(
+                read("plane/frame_offsets.bin", directory_sha256)?,
+                geometry.rows,
+                padded.div_ceil(4) + 8,
+                usize::try_from(*blob_bytes).map_err(|_| bad("frame blob length"))?,
+                capsule_metadata,
+            )
+            .map_err(TwoBitGenerationError::Io)?;
+            Some(FramedSource {
+                directory: std::sync::Arc::new(directory),
+                local: local_capsule_authority.map(|authority| {
+                    (
+                        root.join("plane/frames.bin"),
+                        std::sync::Arc::new(authority),
+                    )
+                }),
+            })
+        } else {
+            None
+        };
+        if validate_local_records && let Some(frames) = &frames {
+            use sha2::Digest;
+            let mut sha = sha2::Sha256::new();
+            let (path, _) = frames.local.as_ref().ok_or(bad("frame local validation"))?;
+            let mut file = fs::File::open(path).map_err(TwoBitGenerationError::Io)?;
+            for frame in 0..frames.directory.frames() {
+                let range = frames
+                    .directory
+                    .physical_range(frame, frame)
+                    .map_err(TwoBitGenerationError::Io)?;
+                let mut body = vec![0; range.len()];
+                file.read_exact(&mut body)
+                    .map_err(TwoBitGenerationError::Io)?;
+                sha.update(&body);
+                frames
+                    .directory
+                    .decode_physical(range.start, &body, &frames.local.as_ref().unwrap().1)
+                    .map_err(TwoBitGenerationError::Io)?;
+            }
+            let SourceLayout::FramedRecordsV1 { blob_sha256, .. } = &manifest.source_layout else {
+                unreachable!()
+            };
+            if format!("{:x}", sha.finalize()) != *blob_sha256
+                || file.read(&mut [0]).map_err(TwoBitGenerationError::Io)? != 0
+            {
+                return Err(bad("frame blob identity"));
+            }
+        }
         let receipt = plane.receipt();
         if pages.generation() != manifest.generation
             || pages.object_sha256() != manifest.sq8_object_sha256
@@ -2656,6 +2912,7 @@ impl TwoBitGeneration {
             remote_open_stats: None,
             source,
             capsules,
+            frames,
             source_cache: None,
             byte_window: None,
             sq8_range_split: None,
@@ -2754,6 +3011,32 @@ impl TwoBitGeneration {
                 trace,
                 &mut QueryStages::default(),
             )?
+        } else if let Some(frames) = &self.frames {
+            let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
+                .into_iter()
+                .map(|unit| unit / 8)
+                .collect::<BTreeSet<_>>();
+            let width = self.plane.receipt().record_bytes;
+            let (cover, _) = plan_two_bit_source_cover(
+                &closure,
+                self.rows(),
+                width,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+            )?;
+            let ranges = cover
+                .iter()
+                .map(|r| (r.start / (32 * width), (r.end - 1) / (32 * width)))
+                .collect::<Vec<_>>();
+            let physical = frames.physical_ranges(&ranges, self.limits)?;
+            let fetched = frames.read_local(&physical)?;
+            let mut last = None;
+            self.plan_walks(
+                &walks,
+                &prepared,
+                |row| verified_source_record(&fetched, row, width, &mut last),
+                trace,
+            )?
         } else {
             self.plan_walks(&walks, &prepared, |row| self.plane.record(row), trace)?
         };
@@ -2792,6 +3075,65 @@ impl TwoBitGeneration {
         ranges: &[(usize, usize)],
         mut trace: Option<&mut Sq8RangeTrace>,
     ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats)> {
+        if let Some(frames) = &self.frames {
+            let physical = frames.physical_ranges(ranges, self.limits)?;
+            let Some(source) = &self.source else {
+                return frames
+                    .read_local(&physical)
+                    .map(|r| (r, Sq8ReadStats::default()));
+            };
+            let workers = if self.source_authentication == SourceAuthentication::Offload2 {
+                Some(
+                    SourceAuthWorkers::new(
+                        self.limits.max_parallel_source_gets.min(physical.len()),
+                    )
+                    .await
+                    .map_err(|error| {
+                        TwoBitGenerationError::SourceRead(RankedSq8Failure {
+                            error,
+                            stats: Sq8ReadStats::default(),
+                        })
+                    })?,
+                )
+            } else {
+                None
+            };
+            return crate::sq8_s3_range::fetch_capsule_ranges_with_authentication(
+                store,
+                &source.location,
+                frames.directory.blob_bytes(),
+                &physical,
+                &source.etag,
+                self.limits.max_source_gets,
+                self.limits.max_source_bytes,
+                self.limits.max_parallel_source_gets,
+                self.byte_window.as_ref(),
+                trace.as_deref_mut(),
+                workers.as_ref(),
+                |offset, bytes, probe, byte_lease| {
+                    let directory = std::sync::Arc::clone(&frames.directory);
+                    let authority = std::sync::Arc::clone(&source.authority);
+                    let workers = workers.as_ref();
+                    async move {
+                        let authenticate = move || {
+                            let _lease = byte_lease;
+                            directory
+                                .decode_physical(offset, &bytes, &authority)
+                                .map_err(|_| {
+                                    crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata
+                                })
+                        };
+                        if let Some(workers) = workers {
+                            workers.authenticate(probe, authenticate).await
+                        } else {
+                            crate::sq8_s3_range::authenticate_inline(probe, authenticate)
+                        }
+                    }
+                },
+            )
+            .await
+            .map_err(TwoBitGenerationError::SourceRead);
+        }
         let source = self
             .source
             .as_ref()
@@ -2904,7 +3246,7 @@ impl TwoBitGeneration {
         mut profile: Option<&mut QueryProfile>,
     ) -> Result<(BudgetedPagePlan, Cow<'a, [f32]>, Sq8ReadStats, Sq8ReadStats)> {
         stages.discovery.start_ns = started.elapsed().as_nanos().max(1);
-        if self.source.is_none() && self.capsules.is_none() {
+        if self.source.is_none() && self.capsules.is_none() && self.frames.is_none() {
             return Err(TwoBitGenerationError::Invalid("source binding"));
         }
         let discovery_cpu = profile.as_deref().map(|_| SyncStart::now());
@@ -3105,6 +3447,14 @@ impl TwoBitGeneration {
             }
             stages.source.end_ns = started.elapsed().as_nanos();
             let (verified, stats) = fetched?;
+            if self.frames.is_some() {
+                let decoded_bytes = verified.iter().map(|r| r.bytes.len()).sum();
+                stages.source_frames = Some(SourceFrameStats {
+                    physical_bytes: stats.verified_bytes,
+                    decoded_bytes,
+                    hash_bytes: decoded_bytes,
+                });
+            }
             if let Some(profile) = profile.as_deref_mut() {
                 profile.source.retained_payload_bytes =
                     Some(verified.iter().map(|range| range.bytes.len() as u64).sum());
@@ -3292,7 +3642,7 @@ impl TwoBitGeneration {
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
         let mut trace = TwoBitPlanTrace::default();
-        if self.source.is_some() || self.capsules.is_some() {
+        if self.source.is_some() || self.capsules.is_some() || self.frames.is_some() {
             let (plan, _, source, leaves) = self.plan_paged(store, query, Some(&mut trace)).await?;
             Ok((plan, trace, source, leaves))
         } else {
@@ -3328,7 +3678,7 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
-        if self.source.is_some() || self.capsules.is_some() {
+        if self.source.is_some() || self.capsules.is_some() || self.frames.is_some() {
             let (plan, _, stats, leaves) = self.plan_paged(store, query, None).await?;
             Ok((plan, stats, leaves))
         } else {
@@ -3684,7 +4034,7 @@ impl TwoBitGeneration {
             ));
         }
         let (plan, normalized, source_stats, router_stats) =
-            if self.source.is_some() || self.capsules.is_some() {
+            if self.source.is_some() || self.capsules.is_some() || self.frames.is_some() {
                 self.plan_paged_measured(
                     store,
                     query,
@@ -13073,10 +13423,13 @@ mod source_walk_tests {
     // Small source-only fixture; publication is deliberately manual until the
     // separate store/GC owner adopts Manifest::files for v10.
     async fn capsule_control_fixture(dimensions: usize) -> TinyDirect {
+        capsule_control_rows_fixture(513, dimensions).await
+    }
+
+    async fn capsule_control_rows_fixture(rows: usize, dimensions: usize) -> TinyDirect {
         use crate::{two_bit_build::TwoBitGenerationBuilder, two_bit_source::TwoBitSource};
         use sha2::{Digest, Sha256};
         let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-        let rows = 513;
         // SQ8 carries application IDs; its vectors remain in the original raw-row order.
         let source_order = (0..rows as u64).collect::<Vec<_>>();
         let temp = tempfile::tempdir().unwrap();
@@ -13156,6 +13509,251 @@ mod source_walk_tests {
             low,
             step,
             limits,
+        }
+    }
+
+    #[test]
+    fn framed_source_physical_decoded_get_caps_and_raw_fallback() {
+        for raw in [false, true] {
+            let mut seed = 9u64;
+            let input = (0..256 * 9)
+                .map(|_| {
+                    if raw {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        seed as u8
+                    } else {
+                        7
+                    }
+                })
+                .collect::<Vec<_>>();
+            let blob = crate::source_frame::encode(
+                256,
+                9,
+                &input,
+                crate::source_frame::Limits {
+                    max_decoded_bytes: 1 << 20,
+                },
+            )
+            .unwrap();
+            assert_eq!(blob[4] == 0, raw);
+            let mut encoded = 0u64.to_le_bytes().to_vec();
+            encoded.extend_from_slice(&(blob.len() as u64).to_le_bytes());
+            let frames = FramedSource {
+                directory: std::sync::Arc::new(
+                    crate::source_frame::Directory::open(encoded, 256, 9, blob.len(), 160).unwrap(),
+                ),
+                local: None,
+            };
+            let cap = input.len().max(blob.len());
+            let mut limits = TwoBitGenerationLimits {
+                max_source_bytes: cap,
+                max_source_gets: 1,
+                max_memory_bytes: 128 << 20,
+                max_active_queries: 1,
+                max_query_bytes: 1,
+                max_query_gets: 1,
+                max_parallel_gets: 1,
+                max_parallel_source_gets: 1,
+                max_query_scratch_bytes: 1,
+                already_pinned_bytes: 0,
+            };
+            assert_eq!(
+                frames.physical_ranges(&[(0, 7)], limits).unwrap(),
+                vec![0..blob.len()]
+            );
+            limits.max_source_bytes -= 1;
+            assert!(frames.physical_ranges(&[(0, 7)], limits).is_err());
+            limits.max_source_bytes = cap;
+            limits.max_source_gets = 0;
+            assert!(frames.physical_ranges(&[(0, 7)], limits).is_err());
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn framed_source_local_remote_parity_caps_publication_and_corruption() {
+        use crate::two_bit_build::repackage_source_layout;
+        for (rows, dimensions) in [32, 256, 257, 513]
+            .into_iter()
+            .flat_map(|rows| [1, 257, 1024].map(|d| (rows, d)))
+        {
+            let tiny = capsule_control_rows_fixture(rows, dimensions).await;
+            let current = tiny.temp.path().join("generation");
+            let output = tiny.temp.path().join("frames");
+            let root_sha = repackage_source_layout(
+                &current,
+                &tiny.root_sha,
+                &output,
+                2,
+                SourceLayoutMode::FramedRecordsV1,
+                tiny.limits,
+            )
+            .unwrap();
+            let manifest: Manifest =
+                serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+            for name in manifest.files(false) {
+                tiny.store
+                    .put(
+                        &metadata_location(&tiny.prefix, name),
+                        fs::read(output.join(name)).unwrap().into(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            TwoBitGeneration::validate_local_publication(&output, &root_sha, tiny.limits).unwrap();
+            let flat = TwoBitGeneration::open(&current, &tiny.root_sha, tiny.limits).unwrap();
+            let query = (0..dimensions)
+                .map(|d| (1 + d % 5) as f32)
+                .collect::<Vec<_>>();
+            let (baseline, bt) = flat
+                .diagnostic_search_with_store(&tiny.store, &query, 10)
+                .await
+                .unwrap();
+            let local = TwoBitGeneration::open(&output, &root_sha, tiny.limits).unwrap();
+            assert!(local.plane.record(0).is_none());
+            let exact = TwoBitGenerationLimits {
+                max_memory_bytes: local.modeled_memory_bytes,
+                ..tiny.limits
+            };
+            TwoBitGeneration::open(&output, &root_sha, exact).unwrap();
+            assert!(
+                TwoBitGeneration::open(
+                    &output,
+                    &root_sha,
+                    TwoBitGenerationLimits {
+                        max_memory_bytes: exact.max_memory_bytes - 1,
+                        ..exact
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(local.plan(&query).await.unwrap(), baseline.plan);
+            for policy in [SourceAuthentication::Inline, SourceAuthentication::Offload2] {
+                let mut remote = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &root_sha,
+                    tiny.limits,
+                    tiny.temp.path(),
+                )
+                .await
+                .unwrap()
+                .with_source_authentication(policy)
+                .unwrap();
+                for generation in [&local, &remote] {
+                    let (actual, trace) = generation
+                        .diagnostic_search_with_store(&tiny.store, &query, 10)
+                        .await
+                        .unwrap();
+                    assert_eq!(actual.plan, baseline.plan);
+                    assert_eq!(ranking_bits(&actual), ranking_bits(&baseline));
+                    assert_eq!(
+                        trace.nomination_evaluated_units,
+                        bt.nomination_evaluated_units
+                    );
+                    assert_eq!(trace.ranked_candidate_pages, bt.ranked_candidate_pages);
+                }
+                let location = metadata_location(&tiny.prefix, "plane/frames.bin");
+                let meta = tiny.store.head(&location).await.unwrap();
+                remote
+                    .validate_retained_capsules(&tiny.store, &meta)
+                    .await
+                    .unwrap();
+                let mut rejected = TwoBitGeneration::open_remote(
+                    &tiny.store,
+                    &tiny.prefix,
+                    &root_sha,
+                    tiny.limits,
+                    tiny.temp.path(),
+                )
+                .await
+                .unwrap();
+                rejected.limits.max_source_bytes = 1;
+                tiny.store.inner.reads.lock().unwrap().clear();
+                assert!(
+                    rejected
+                        .search_with_store(&tiny.store, &query, 10, None)
+                        .await
+                        .is_err()
+                );
+                assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+                assert_eq!(rejected.slots.available_permits(), 1);
+                remote.source.as_mut().unwrap().etag = "stale-frame-etag".into();
+                tiny.store.inner.reads.lock().unwrap().clear();
+                assert!(
+                    remote
+                        .search_with_store(&tiny.store, &query, 10, None)
+                        .await
+                        .is_err()
+                );
+                assert!(
+                    !tiny
+                        .store
+                        .inner
+                        .reads
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r.0 == tiny.key.as_ref())
+                );
+                assert_eq!(remote.slots.available_permits(), 1);
+                assert!(remote.with_source_cache(1 << 20).is_err());
+            }
+            let mut http = TwoBitGeneration::open_remote(
+                &tiny.store,
+                &tiny.prefix,
+                &root_sha,
+                tiny.limits,
+                tiny.temp.path(),
+            )
+            .await
+            .unwrap();
+            http.source.as_mut().unwrap().etag = DIRECT_ETAG.into();
+            http.manifest.sq8_etag = DIRECT_ETAG.into();
+            let fixture = DirectHttp::new(
+                std::collections::BTreeMap::from([
+                    (
+                        metadata_location(&tiny.prefix, "plane/frames.bin").to_string(),
+                        fs::read(output.join("plane/frames.bin")).unwrap(),
+                    ),
+                    (tiny.key.to_string(), tiny.sq8.clone()),
+                ]),
+                Instant::now() + Duration::from_secs(30),
+            );
+            let (actual, trace) = run_source_and_sq8_http(
+                &fixture,
+                http.diagnostic_search_with_store(fixture.reader.store(), &query, 10),
+            )
+            .await
+            .unwrap();
+            assert_eq!(actual.plan, baseline.plan);
+            assert_eq!(ranking_bits(&actual), ranking_bits(&baseline));
+            assert_eq!(trace.ranked_candidate_pages, bt.ranked_candidate_pages);
+            assert_eq!(fixture.snapshot().active, [0; 3]);
+            fixture.finish();
+            let path = output.join("plane/frames.bin");
+            let mut corrupt = fs::read(&path).unwrap();
+            corrupt[0] ^= 1;
+            fs::write(&path, corrupt).unwrap();
+            tiny.store.inner.reads.lock().unwrap().clear();
+            assert!(
+                local
+                    .search_with_store(&tiny.store, &query, 10, None)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !tiny
+                    .store
+                    .inner
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.0 == tiny.key.as_ref())
+            );
+            assert_eq!(local.slots.available_permits(), 1);
         }
     }
 

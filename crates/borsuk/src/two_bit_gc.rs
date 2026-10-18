@@ -96,7 +96,13 @@ fn recognized(prefix: &str, key: &str) -> bool {
         return valid_sha256(root)
             && (METADATA_FILES.contains(&name)
                 || ROUTER_FILES.contains(&name)
-                || ["plane/capsules.bin", "plane/capsule_directory.bin"].contains(&name)
+                || [
+                    "plane/capsules.bin",
+                    "plane/capsule_directory.bin",
+                    "plane/frames.bin",
+                    "plane/frame_offsets.bin",
+                ]
+                .contains(&name)
                 || name.strip_prefix("mutations/").is_some_and(valid_sha256));
     }
     if let Some((owner, name)) = relative

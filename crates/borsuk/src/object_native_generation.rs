@@ -492,6 +492,13 @@ async fn stage_metadata(
                             .checked_mul(32)
                             .ok_or(overflow)?,
                     ),
+                    "plane/frame_offsets.bin" => match &root.source_layout {
+                        crate::two_bit_generation::SourceLayout::FramedRecordsV1 {
+                            directory_bytes,
+                            ..
+                        } => Some(*directory_bytes),
+                        _ => return Err(ObjectNativeOpenError::Invalid("frame descriptor")),
+                    },
                     "plane/capsule_directory.bin" => match &root.source_layout {
                         crate::two_bit_generation::SourceLayout::LeafCapsulesV2 {
                             directory_bytes,

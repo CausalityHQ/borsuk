@@ -284,13 +284,28 @@ impl<'de> Deserialize<'de> for UniqueJson {
 
 fn fields(v: &Value, names: &str) -> Result<()> {
     let object = v.as_object().ok_or("expected JSON object")?;
-    require(
-        object.len() == names.split_whitespace().count()
-            && names
-                .split_whitespace()
-                .all(|name| object.contains_key(name)),
-        "unknown/missing v2 field",
-    )
+    if object.len() != names.split_whitespace().count()
+        || names
+            .split_whitespace()
+            .any(|name| !object.contains_key(name))
+    {
+        let missing = names
+            .split_whitespace()
+            .filter(|name| !object.contains_key(*name))
+            .collect::<Vec<_>>();
+        let extra = object
+            .keys()
+            .filter(|name| {
+                !names
+                    .split_whitespace()
+                    .any(|expected| expected == name.as_str())
+            })
+            .collect::<Vec<_>>();
+        return Err(
+            format!("unknown/missing v2 field: missing={missing:?} extra={extra:?}").into(),
+        );
+    }
+    Ok(())
 }
 
 fn v2_row_fields(phase: &str) -> Result<&'static str> {
@@ -404,7 +419,9 @@ fn validate_native_row_values_for_layout(
         "query" => {
             fields(
                 &v["stages"],
-                if source_layout {
+                if source_layout && v["stages"].get("source_frames").is_some() {
+                    "discovery source planning sq8 leaf_peak_inflight source_capsules source_frames"
+                } else if source_layout {
                     "discovery source planning sq8 leaf_peak_inflight source_capsules"
                 } else {
                     "discovery source planning sq8 leaf_peak_inflight"
@@ -1365,6 +1382,8 @@ struct Stages {
     leaf_peak_inflight: u64,
     #[serde(default, rename = "source_capsules")]
     _source_capsules: Option<IgnoredAny>,
+    #[serde(default, rename = "source_frames")]
+    _source_frames: Option<IgnoredAny>,
 }
 
 #[derive(Default, Serialize)]
@@ -1761,8 +1780,8 @@ fn read_run_observed_policy(
             "parity run changed before first content read",
         )?;
     }
-    let concurrent = expected
-        .is_some_and(|c| c.expected_identity["schema"] == current_v10::CONCURRENT_RESULT_SCHEMA);
+    let concurrent =
+        expected.is_some_and(|c| current_v10::concurrent_result(&c.expected_identity["schema"]));
     require(
         !concurrent || policy == ReadPolicy::Existing,
         "concurrent completed reader policy",
@@ -1776,8 +1795,8 @@ fn read_run_observed_policy(
         || expected.is_some_and(|c| {
             c.expected_identity["schema"] == current_v10::LIBRARY_SCHEDULER_RESULT_SCHEMA
         });
-    rows.cpu_profile = expected
-        .is_some_and(|c| c.expected_identity["schema"] == current_v10::CPU_PROFILE_RESULT_SCHEMA);
+    rows.cpu_profile =
+        expected.is_some_and(|c| current_v10::profile_result(&c.expected_identity["schema"]));
     rows.v2 = expected.is_some();
     let scale = expected.is_some_and(|c| c.schema == SCALE_CONFIG_SCHEMA);
     rows.scale = scale;
@@ -4304,7 +4323,7 @@ fn completed_report(c: &CompletedConfig, run: &Run) -> Result<Value> {
         "wire_bytes":null,"unread_bytes":null,"billed_bytes":null,"billed_requests":null,
         "local_file_only":true,"external_resources_and_cost_gate_required":true,"qualified":false,
         "vendor_or_scientific_win_claim":false,"performance_pass_claim":false});
-    if c.expected_identity["schema"] == current_v10::CONCURRENT_RESULT_SCHEMA {
+    if current_v10::concurrent_result(&c.expected_identity["schema"]) {
         report["schema"] = json!("borsuk-concurrent-query-completed-v1");
         report["statistics"]
             .as_object_mut()
@@ -13591,7 +13610,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut identity = json!({"phase":"identity","schema":current_v10::CPU_PROFILE_RESULT_SCHEMA,
+        let mut identity = json!({"phase":"identity","schema":current_v10::FRAMED_RESULT_SCHEMA,
             "config_sha256":sha(&config_bytes),"binary_sha256":binary_sha,
             "scope":"AUTHENTICATED_NATIVE_QUALITY_CORRECTNESS","physical_s3_measured":false,
             "io_measurement":"logical_GET_charges_separate_from_cumulative_process_native_transport",
@@ -13634,11 +13653,13 @@ mod tests {
         ] {
             identity[key] = json!(sha(bytes));
         }
+        identity["source_frame_source_sha256"] =
+            json!(sha(include_bytes!("../src/source_frame.rs")));
         identity["source_authentication"] = config
             .get("source_authentication")
             .cloned()
             .unwrap_or(json!("inline"));
-        identity["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
+        identity["config_schema"] = json!(current_v10::FRAMED_CONFIG_SCHEMA);
         identity["range_scheduler_owner"] = json!("library");
         identity["source_capsule_verification_policy"] =
             json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
@@ -13688,7 +13709,7 @@ mod tests {
             .get("source_authentication")
             .cloned()
             .unwrap_or(json!("inline"));
-        bound["config_schema"] = json!(current_v10::CPU_PROFILE_CONFIG_SCHEMA);
+        bound["config_schema"] = json!(current_v10::FRAMED_CONFIG_SCHEMA);
         bound["source_capsule_verification_policy"] =
             json!(current_v10::PAGE_RANGE_VERIFICATION_POLICY);
         bound["reserved_queries_sha256"] = cohort["reserved_queries_sha256"].clone();
@@ -13698,9 +13719,9 @@ mod tests {
                 .len()
         );
         if config.get("max_active_queries").is_some() {
-            identity["schema"] = json!(current_v10::CONCURRENT_RESULT_SCHEMA);
+            identity["schema"] = json!(current_v10::FRAMED_CONCURRENT_RESULT_SCHEMA);
             for header in [&mut identity, &mut bound] {
-                header["config_schema"] = json!(current_v10::CONCURRENT_CONFIG_SCHEMA);
+                header["config_schema"] = json!(current_v10::FRAMED_CONCURRENT_CONFIG_SCHEMA);
                 header["max_active_queries"] = config["max_active_queries"].clone();
                 header["query_runtime"] = config
                     .get("query_runtime")
@@ -13777,6 +13798,10 @@ mod tests {
     // Synthetic historical records have their own explicit roster and accounting.
     // Never use this conversion on the current producer interoperability path.
     fn author_historical_diagnostics(rows: &mut [Value]) {
+        rows[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_frame_source_sha256");
         // These are explicit old-wire fixtures, never a projection of an offload run.
         for row in &mut *rows {
             if let Some(policy) = row.as_object_mut().unwrap().remove("source_authentication") {
@@ -14034,7 +14059,7 @@ mod tests {
             for (path, config_name) in paths.iter().zip(["config.json", "capsule-config.json"]) {
                 // Read the untouched producer file with independently authored header pins.
                 let rows = assert_current_native_config(&dir.path().join(config_name), path);
-                assert_eq!(rows[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
+                assert_eq!(rows[0]["schema"], current_v10::FRAMED_RESULT_SCHEMA);
                 let admission = rows
                     .iter()
                     .position(|r| r["phase"] == "diagnostic_admission")
@@ -14216,6 +14241,28 @@ mod tests {
                     header["config_schema"] = json!(current_v10::PAGE_RANGE_CONFIG_SCHEMA);
                 }
                 author_historical_diagnostics(&mut historical);
+                let binding = historical
+                    .iter_mut()
+                    .find(|row| row["phase"] == "source_binding")
+                    .unwrap();
+                let mut root: Value = serde_json::from_str(
+                    binding["generation_authority"]["root_manifest"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                root["schema"] = json!("borsuk-two-bit-generation-v11");
+                let body = serde_json::to_string(&root).unwrap();
+                let digest = sha(body.as_bytes());
+                binding["generation_authority"]["root_manifest"] = json!(body);
+                for row in &mut historical {
+                    if row.get("generation_root_sha256").is_some() {
+                        row["generation_root_sha256"] = json!(digest);
+                    }
+                    if row["phase"] == "terminal" {
+                        row["summary"]["generation_root_sha256"] = json!(digest);
+                    }
+                }
                 check("historical-v15", &historical).unwrap();
                 let mut bad = historical.clone();
                 bad[admission]["source_trace_ranges"] =
@@ -14971,14 +15018,40 @@ mod tests {
     }
 
     #[test]
+    fn framed_source_current_reader_and_corrupt_accounting() {
+        let (dir, paths) = scale_native_runner::source_layout_reducer_layout_fixture(
+            513,
+            2,
+            true,
+            false,
+            true,
+            borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1,
+        )
+        .unwrap();
+        for (path, config) in paths.iter().zip(["config.json", "capsule-config.json"]) {
+            assert_current_native_config(&dir.path().join(config), path);
+        }
+        let rows = assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+        let qi = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        for key in ["physical_bytes", "decoded_bytes", "hash_bytes"] {
+            let mut bad = rows.clone();
+            bad[qi]["stages"]["source_frames"][key] = json!(1);
+            let (path, _) =
+                write_fixture(dir.path(), &format!("bad-frame-{key}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(reduce_scale(&config, &pin).is_err());
+        }
+    }
+
+    #[test]
     fn page_range_v2_completed_policy_schema_and_root_refusals() {
         let (dir, paths) = scale_native_runner::source_layout_reducer_native_fixture().unwrap();
         let current =
             assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
-        assert_eq!(current[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
+        assert_eq!(current[0]["schema"], current_v10::FRAMED_RESULT_SCHEMA);
         assert_eq!(
             current[1]["config_schema"],
-            current_v10::CPU_PROFILE_CONFIG_SCHEMA
+            current_v10::FRAMED_CONFIG_SCHEMA
         );
         assert_eq!(current[1]["source_layout"]["layout"], "leaf_capsules_v2");
         for mutation in [
@@ -15626,7 +15699,7 @@ mod tests {
             .take(2)
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(headers[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
+        assert_eq!(headers[0]["schema"], current_v10::FRAMED_RESULT_SCHEMA);
         let config_bytes = std::fs::read(dir.path().join("config.json")).unwrap();
         assert_eq!(headers[0]["config_sha256"], sha(&config_bytes));
         for key in [
@@ -16087,7 +16160,7 @@ mod tests {
                 scale_native_runner::scale_reducer_native_fixture(prefix, panel).unwrap();
             let rows = assert_current_native(dir.path(), &result);
             // Pin expected headers before any falsifier changes producer output.
-            assert_eq!(rows[0]["schema"], current_v10::CPU_PROFILE_RESULT_SCHEMA);
+            assert_eq!(rows[0]["schema"], current_v10::FRAMED_RESULT_SCHEMA);
             assert_eq!(rows[0]["sq8_range_split"], Value::Null);
             let (config, pin) = scale_config(dir.path(), &result, &rows);
             let (pinned, _): (CompletedConfig, _) = read_config(&config, &pin).unwrap();

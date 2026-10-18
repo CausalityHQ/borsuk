@@ -3567,7 +3567,10 @@ pub(crate) mod cold_http_fixture {
         }
         let head = method == "HEAD";
         let (first, end) = range.unwrap_or((0, body.len()));
-        let stage = if key.ends_with("/plane/records.bin") || key.ends_with("/plane/capsules.bin") {
+        let stage = if key.ends_with("/plane/records.bin")
+            || key.ends_with("/plane/capsules.bin")
+            || key.ends_with("/plane/frames.bin")
+        {
             Some(0)
         } else if key.contains("/objects/") {
             Some(1)
@@ -8628,6 +8631,178 @@ mod tests {
         server.join().unwrap();
         assert!(requests.lock().unwrap().is_empty());
         assert_eq!(*window.available.lock().unwrap(), 15);
+    }
+
+    fn framed_source_fixture(
+        count: usize,
+    ) -> (
+        Arc<crate::source_frame::Directory>,
+        Arc<PageAuthority>,
+        Vec<u8>,
+        Vec<std::ops::Range<usize>>,
+    ) {
+        use crate::source_frame::{Directory, Limits, encode};
+        let rows = count * 256;
+        let original = vec![7u8; rows * 9];
+        let sidecar = original
+            .chunks(32 * 9)
+            .flat_map(|p| Sha256::digest(p).to_vec())
+            .collect::<Vec<_>>();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schema":"borsuk-two-bit-plane-v3","rows":rows,"dimensions":1,"seed":20260923,
+            "record_bytes":9,"page_rows":32,"source_sha256":"0".repeat(64),"sq8_sha256":"1".repeat(64),
+            "source_order_sha256":"2".repeat(64),"mean_sha256":"3".repeat(64),
+            "records_sha256":format!("{:x}",Sha256::digest(&original)),
+            "page_digest_sha256":format!("{:x}",Sha256::digest(&sidecar)), "query_or_truth_used":false
+        })).unwrap();
+        let authority = PageAuthority::load_two_bit(
+            &manifest,
+            &format!("{:x}", Sha256::digest(&manifest)),
+            2,
+            &sidecar,
+        )
+        .unwrap();
+        let mut blob = Vec::new();
+        let mut offsets = Vec::with_capacity((count + 1) * 8);
+        offsets.extend_from_slice(&0u64.to_le_bytes());
+        for _ in 0..count {
+            blob.extend(
+                encode(
+                    256,
+                    9,
+                    &original[..256 * 9],
+                    Limits {
+                        max_decoded_bytes: 1 << 20,
+                    },
+                )
+                .unwrap(),
+            );
+            offsets.extend_from_slice(&(blob.len() as u64).to_le_bytes());
+        }
+        let directory =
+            Directory::open(offsets, rows, 9, blob.len(), (count + 1) * 16 + 128).unwrap();
+        let ranges = (0..count)
+            .map(|i| directory.physical_range(i, i).unwrap())
+            .collect();
+        (Arc::new(directory), Arc::new(authority), blob, ranges)
+    }
+
+    #[tokio::test]
+    async fn framed_source_http_ordered_errors_queued_drain_and_permits() {
+        use super::cold_http_fixture::{ETAG, Fixture};
+        let (directory, authority, blob, ranges) = framed_source_fixture(5);
+        let total = blob.len();
+        let window = InFlightBytes::new(ranges[0].len() * 2);
+        let key = "framed/plane/frames.bin";
+        let fixture = Fixture::new(
+            std::collections::BTreeMap::from([(key.to_owned(), blob)]),
+            Instant::now() + Duration::from_secs(10),
+        );
+        fixture.arm(Some((
+            0,
+            [ranges[0].start, ranges[1].start, ranges[2].start],
+        )));
+        let location = Path::from(key);
+        let mut work = Box::pin(fetch_capsule_ranges(
+            fixture.reader.store(),
+            &location,
+            total,
+            &ranges,
+            ETAG,
+            5,
+            total,
+            2,
+            Some(&window),
+            |offset, bytes| {
+                directory
+                    .decode_physical(offset, &bytes, &authority)
+                    .map_err(|_| RangeFetchError::UnexpectedMetadata)
+            },
+        ));
+        tokio::select! {
+            _ = &mut work => panic!("returned before first body"),
+            () = fixture.wait(|s|s.finished[0].contains(&ranges[1].start)) => {}
+        }
+        fixture.release_error();
+        tokio::select! {
+            _ = &mut work => panic!("returned before queued drainage"),
+            () = fixture.wait(|s|s.finished[0].contains(&ranges[3].start) && s.finished[0].contains(&ranges[4].start)) => {}
+        }
+        assert!(!fixture.snapshot().finished[0].contains(&ranges[2].start));
+        fixture.release_sibling();
+        let failure = work.await.err().unwrap();
+        assert!(matches!(failure.error, RangeFetchError::Store(_)));
+        assert_eq!(failure.stats.submitted_gets, 5);
+        assert_eq!(failure.stats.failed_gets, 2);
+        assert_eq!(failure.stats.verified_bytes, ranges[0].len() * 3);
+        assert_eq!(*window.available.lock().unwrap(), ranges[0].len() * 2);
+        assert_eq!(fixture.snapshot().finished[0].len(), 5);
+        fixture.finish();
+    }
+
+    #[tokio::test]
+    async fn framed_source_offloaded_cancel_joins_and_restores_bytes() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
+        let (directory, authority, blob, ranges) = framed_source_fixture(5);
+        let total = blob.len();
+        let store = InMemory::new();
+        let location = Path::from("frames/plane/frames.bin");
+        let etag = store
+            .put(&location, blob.into())
+            .await
+            .unwrap()
+            .e_tag
+            .unwrap();
+        let workers = SourceAuthWorkers::new(2).await.unwrap();
+        let gate = Arc::new(ComputeGate::default());
+        let window = InFlightBytes::new(total);
+        let mut work = Box::pin(async {
+            let workers = workers;
+            fetch_capsule_ranges_with_authentication(
+                &store,
+                &location,
+                total,
+                &ranges,
+                &etag,
+                5,
+                total,
+                2,
+                Some(&window),
+                None,
+                Some(&workers),
+                |offset, bytes, probe, byte_lease| {
+                    let gate = Arc::clone(&gate);
+                    let directory = Arc::clone(&directory);
+                    let authority = Arc::clone(&authority);
+                    workers.authenticate(probe, move || {
+                        let _lease = byte_lease;
+                        gate.hold();
+                        directory
+                            .decode_physical(offset, &bytes, &authority)
+                            .map_err(|_| RangeFetchError::UnexpectedMetadata)
+                    })
+                },
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(3),async {
+            loop {
+                tokio::select! {
+                    _ = &mut work => panic!("held work completed"),
+                    () = tokio::task::yield_now() => if gate.active.load(std::sync::atomic::Ordering::SeqCst)==2 { break; }
+                }
+            }
+        }).await.unwrap();
+        let release = Arc::clone(&gate);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            release.release();
+        });
+        drop(work);
+        releaser.join().unwrap();
+        assert_eq!(*window.available.lock().unwrap(), total);
+        let workers = SourceAuthWorkers::new(2).await.unwrap();
+        assert_eq!(workers.slots.available_permits(), 2);
     }
 
     #[tokio::test]

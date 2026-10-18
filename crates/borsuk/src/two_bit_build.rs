@@ -544,6 +544,114 @@ fn pack_source_layout(
     })
 }
 
+fn pack_framed_source(
+    output: &Path,
+    plane: &crate::two_bit_source::SourcePlaneReceipt,
+    generation: u64,
+    cap: usize,
+) -> Result<SourceLayout> {
+    use crate::{source_frame, two_bit_source::TwoBitPlane};
+    let bad = TwoBitGenerationError::Invalid;
+    let f = source_frame::frame_bytes(plane.rows, plane.record_bytes)
+        .map_err(TwoBitGenerationError::Io)?;
+    let directory_bytes =
+        source_frame::directory_bytes(plane.rows).map_err(TwoBitGenerationError::Io)?;
+    let retained = plane
+        .rows
+        .div_ceil(32)
+        .checked_mul(96)
+        .and_then(|n| n.checked_add(plane.dimensions.checked_mul(256)?))
+        .and_then(|n| n.checked_add(131072))
+        .ok_or(bad("frame pack metadata"))?;
+    let charge = f
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(zstd::zstd_safe::compress_bound(f)))
+        .and_then(|n| n.checked_add(source_frame::ENCODER_CONTEXT_BYTES))
+        .and_then(|n| n.checked_add(source_frame::DECODER_CONTEXT_BYTES))
+        .and_then(|n| n.checked_add(directory_bytes.checked_mul(2)?))
+        .and_then(|n| n.checked_add(retained))
+        .ok_or(bad("frame pack memory"))?;
+    if charge > cap {
+        return Err(bad("frame pack memory"));
+    }
+    let plane_body =
+        fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
+    let (_codec, authority) = TwoBitPlane::open_metadata(
+        &output.join("plane"),
+        &hash(&plane_body),
+        &plane.sq8_sha256,
+        generation,
+        retained,
+    )
+    .map_err(TwoBitGenerationError::Plane)?;
+    let mut input =
+        File::open(output.join("plane/records.bin")).map_err(TwoBitGenerationError::Io)?;
+    let mut blob = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join("plane/frames.bin"))
+        .map_err(TwoBitGenerationError::Io)?;
+    let mut directory = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output.join("plane/frame_offsets.bin"))
+        .map_err(TwoBitGenerationError::Io)?;
+    let (mut logical_sha, mut physical_sha, mut directory_sha) =
+        (Sha256::new(), Sha256::new(), Sha256::new());
+    let mut offset = 0u64;
+    directory
+        .write_all(&offset.to_le_bytes())
+        .map_err(TwoBitGenerationError::Io)?;
+    directory_sha.update(offset.to_le_bytes());
+    for first in (0..plane.rows).step_by(256) {
+        let rows = (plane.rows - first).min(256);
+        let mut original = vec![0; rows * plane.record_bytes];
+        input
+            .read_exact(&mut original)
+            .map_err(TwoBitGenerationError::Io)?;
+        authority
+            .verify_payload(first / 32, (first + rows).div_ceil(32) - 1, &original)
+            .map_err(TwoBitGenerationError::Page)?;
+        logical_sha.update(&original);
+        let frame = source_frame::encode(
+            rows,
+            plane.record_bytes,
+            &original,
+            source_frame::Limits {
+                max_decoded_bytes: 1 << 20,
+            },
+        )
+        .map_err(TwoBitGenerationError::Io)?;
+        blob.write_all(&frame).map_err(TwoBitGenerationError::Io)?;
+        physical_sha.update(&frame);
+        offset = offset
+            .checked_add(frame.len() as u64)
+            .ok_or(bad("frame blob size"))?;
+        directory
+            .write_all(&offset.to_le_bytes())
+            .map_err(TwoBitGenerationError::Io)?;
+        directory_sha.update(offset.to_le_bytes());
+    }
+    if input.read(&mut [0]).map_err(TwoBitGenerationError::Io)? != 0
+        || format!("{:x}", logical_sha.finalize()) != plane.records_sha256
+    {
+        return Err(bad("frame logical identity"));
+    }
+    blob.sync_all().map_err(TwoBitGenerationError::Io)?;
+    directory.sync_all().map_err(TwoBitGenerationError::Io)?;
+    drop(input);
+    fs::remove_file(output.join("plane/records.bin")).map_err(TwoBitGenerationError::Io)?;
+    File::open(output.join("plane"))
+        .and_then(|f| f.sync_all())
+        .map_err(TwoBitGenerationError::Io)?;
+    Ok(SourceLayout::FramedRecordsV1 {
+        blob_bytes: offset,
+        blob_sha256: format!("{:x}", physical_sha.finalize()),
+        directory_bytes,
+        directory_sha256: format!("{:x}", directory_sha.finalize()),
+    })
+}
+
 fn copy_authenticated(
     current: &Path,
     output: &Path,
@@ -612,7 +720,7 @@ pub fn repackage_source_layout(
     let mut root: Manifest =
         serde_json::from_slice(&body).map_err(|_| bad("layout repackage root"))?;
     if root.schema != SCHEMA
-        || root.source_layout.is_capsules()
+        || root.source_layout.mode() != SourceLayoutMode::FlatRecords
         || root.discovery.mode() != DiscoveryMode::Semantic
         || generation <= root.generation
     {
@@ -714,6 +822,9 @@ pub fn repackage_source_layout(
     root.page_manifest_sha256 = hash(&page_body);
     root.source_layout = match layout {
         SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
+        SourceLayoutMode::FramedRecordsV1 => {
+            pack_framed_source(output, &plane, generation, available)?
+        }
         SourceLayoutMode::LeafCapsulesV2 => {
             pack_source_layout(output, &root.discovery, &plane, generation, available)?
         }
@@ -864,12 +975,30 @@ impl TwoBitGenerationBuilder<'_> {
         output: &Path,
         max_build_payload_bytes: usize,
     ) -> Result<String> {
+        self.build_with_discovery_and_source_layout(
+            order,
+            mode,
+            SourceLayoutMode::FlatRecords,
+            output,
+            max_build_payload_bytes,
+        )
+    }
+
+    /// Explicit physical SOURCE layout with the unchanged discovery builder.
+    pub fn build_with_discovery_and_source_layout(
+        &self,
+        order: Option<&[u64]>,
+        mode: DiscoveryMode,
+        layout: SourceLayoutMode,
+        output: &Path,
+        max_build_payload_bytes: usize,
+    ) -> Result<String> {
         self.build_inner(
             order,
             mode,
             SemanticProfile::Native100k,
             None,
-            SourceLayoutMode::FlatRecords,
+            layout,
             output,
             max_build_payload_bytes,
         )
@@ -1148,6 +1277,15 @@ impl TwoBitGenerationBuilder<'_> {
             fs::read(output.join("plane/manifest.json")).map_err(TwoBitGenerationError::Io)?;
         let source_layout = match layout {
             SourceLayoutMode::FlatRecords => SourceLayout::FlatRecords,
+            SourceLayoutMode::FramedRecordsV1 => pack_framed_source(
+                output,
+                &plane,
+                self.generation,
+                max_build_payload_bytes
+                    .checked_sub(REPACKAGE_METADATA_BYTES)
+                    .and_then(|n| n.checked_sub(order.map_or(0, |order| order.len() * 8)))
+                    .ok_or(bad("frame build memory"))?,
+            )?,
             SourceLayoutMode::LeafCapsulesV2 => pack_source_layout(
                 output,
                 &discovery,
@@ -1444,7 +1582,7 @@ mod tests {
             manifest["page_rows"], 32,
             "new SQ8 proofs must authenticate 32-row blocks"
         );
-        assert_eq!(root["schema"], "borsuk-two-bit-generation-v11");
+        assert_eq!(root["schema"], "borsuk-two-bit-generation-v12");
         assert_eq!(manifest["object_sha256"], sq8_sha);
         let digests = fs::read(output.join("page_digests.bin")).unwrap();
         assert_eq!(digests.len(), rows.div_ceil(32) * 32);
@@ -1888,7 +2026,7 @@ mod tests {
         assert_eq!(hash(&body), root_sha);
         let mut manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
-            manifest["schema"], "borsuk-two-bit-generation-v11",
+            manifest["schema"], "borsuk-two-bit-generation-v12",
             "two-graph root format missing"
         );
         let nearest = fs::read(output.join("graph.bin")).unwrap();

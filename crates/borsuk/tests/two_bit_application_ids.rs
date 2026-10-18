@@ -156,7 +156,7 @@ async fn application_ids_survive_ordered_build_publication_reload_and_ranking() 
     let root_sha = builder.build_with_order(&order, &root, 4_000_000).unwrap();
     let generation_root: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v11");
+    assert_eq!(generation_root["schema"], "borsuk-two-bit-generation-v12");
     let canonical_body = std::fs::read(root.join("canonical.bin")).unwrap();
     assert_eq!(canonical_body.len(), 512 * 16);
     for (physical, &ordinal) in order.iter().enumerate() {
@@ -2280,6 +2280,11 @@ async fn semantic_compaction_fixture(
             TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations, read_two_bit_mutations,
         },
     };
+    let memory_cap = if layout == borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1 {
+        128 * 1024 * 1024
+    } else {
+        32 * 1024 * 1024
+    };
     let temp = tempfile::tempdir().unwrap();
     let vector = |components: &[(usize, f32)]| {
         let mut values = vec![0.; dimensions];
@@ -2340,10 +2345,10 @@ async fn semantic_compaction_fixture(
         sq8_object_key: key.as_ref(),
         sq8_etag: &etag,
     }
-    .build_with_source_layout(Some(&order), profile, None, layout, &root, 32 * 1024 * 1024)
+    .build_with_source_layout(Some(&order), profile, None, layout, &root, memory_cap)
     .unwrap();
     let limits = TwoBitGenerationLimits {
-        max_memory_bytes: 32 * 1024 * 1024,
+        max_memory_bytes: memory_cap as _,
         max_active_queries: 1,
         max_query_bytes: ids.len() * (dimensions + 12),
         max_query_gets: 1,
@@ -2354,6 +2359,8 @@ async fn semantic_compaction_fixture(
                 .record_bytes())
             + if layout == borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2 {
                 32 + 4 // One capsule header and its one physical-page ID.
+            } else if layout == borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1 {
+                25
             } else {
                 0
             },
@@ -2428,7 +2435,7 @@ async fn semantic_compaction_fixture(
     let options = TwoBitCompactionOptions {
         mutations: mutation_limits,
         source: TwoBitCompactionLimits {
-            max_memory_bytes: 32 * 1024 * 1024,
+            max_memory_bytes: memory_cap as _,
             max_disk_bytes: 4 * 1024 * 1024,
             max_source_chunk_bytes: 65536,
         },
@@ -4228,7 +4235,11 @@ impl LayoutFixture {
             None,
             layout,
             &root,
-            32 * 1024 * 1024,
+            if layout == borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1 {
+                128 * 1024 * 1024
+            } else {
+                32 * 1024 * 1024
+            },
         )
         .unwrap();
         (root, sha)
@@ -4280,7 +4291,7 @@ async fn assert_layout_roster(
     store: &dyn ObjectStore,
     head: &borsuk::two_bit_store::TwoBitHead,
     local: &std::path::Path,
-    capsules: bool,
+    layout: borsuk::two_bit_generation::SourceLayoutMode,
 ) {
     use futures_util::TryStreamExt;
     let prefix = head.metadata_prefix();
@@ -4300,10 +4311,13 @@ async fn assert_layout_roster(
         "router/membership.bin",
         "router/leaves.bin",
     ];
-    expected.extend(if capsules {
-        vec!["plane/capsules.bin", "plane/capsule_directory.bin"]
-    } else {
-        vec!["plane/records.bin"]
+    use borsuk::two_bit_generation::SourceLayoutMode;
+    expected.extend(match layout {
+        SourceLayoutMode::FlatRecords => vec!["plane/records.bin"],
+        SourceLayoutMode::LeafCapsulesV2 => {
+            vec!["plane/capsules.bin", "plane/capsule_directory.bin"]
+        }
+        SourceLayoutMode::FramedRecordsV1 => vec!["plane/frames.bin", "plane/frame_offsets.bin"],
     });
     let names = objects
         .iter()
@@ -4340,17 +4354,18 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
         two_bit_store::{RetainedTwoBitApproval, republish_retained_two_bit_generation},
     };
     for dimensions in [3, 257, 1024] {
-        let f = LayoutFixture::new(dimensions).await;
+        let mut f = LayoutFixture::new(dimensions).await;
+        f.limits.max_memory_bytes = 128 * 1024 * 1024;
         let mut logical_identity = None;
         let mut flat_root: Option<(std::path::PathBuf, String)> = None;
-        for label in ["flat", "capsules", "repacked"] {
-            let capsules = label != "flat";
-            let layout = if capsules {
-                SourceLayoutMode::LeafCapsulesV2
-            } else {
-                SourceLayoutMode::FlatRecords
+        for label in ["flat", "capsules", "repacked", "frames", "repacked-frames"] {
+            let layout = match label {
+                "flat" => SourceLayoutMode::FlatRecords,
+                "frames" | "repacked-frames" => SourceLayoutMode::FramedRecordsV1,
+                _ => SourceLayoutMode::LeafCapsulesV2,
             };
-            let (local, sha) = if label == "repacked" {
+            let capsules = layout == SourceLayoutMode::LeafCapsulesV2;
+            let (local, sha) = if label.starts_with("repacked") {
                 let (flat, digest) = flat_root.as_ref().unwrap();
                 let output = f.temp.path().join(label);
                 let digest = borsuk::two_bit_build::repackage_source_layout(
@@ -4367,14 +4382,10 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
             let root: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(local.join("manifest.json")).unwrap())
                     .unwrap();
-            assert_eq!(root["schema"], "borsuk-two-bit-generation-v11");
+            assert_eq!(root["schema"], "borsuk-two-bit-generation-v12");
             assert_eq!(
                 root["source_layout"]["layout"],
-                if capsules {
-                    "leaf_capsules_v2"
-                } else {
-                    "flat_records"
-                }
+                serde_json::to_value(layout).unwrap()
             );
             if capsules {
                 let directory = std::fs::read(local.join("plane/capsule_directory.bin")).unwrap();
@@ -4427,7 +4438,7 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
                 uploads.last(),
                 Some(&head.metadata_prefix().join("manifest.json").to_string())
             );
-            assert_layout_roster(&observed, &head, &local, capsules).await;
+            assert_layout_roster(&observed, &head, &local, layout).await;
             assert_layout_scores(
                 &TwoBitGeneration::open(&local, &sha, f.limits).unwrap(),
                 &observed,
@@ -4488,15 +4499,27 @@ async fn source_layout_publication_import_reopen_rosters_logical_identity_and_sc
             )
             .await
             .unwrap();
-            assert_layout_roster(&observed, &imported, &local, capsules).await;
-            if capsules {
+            assert_layout_roster(&observed, &imported, &local, layout).await;
+            if layout != SourceLayoutMode::FlatRecords {
                 let signed: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(local.join("manifest.json")).unwrap())
                         .unwrap();
                 for (name, size, digest) in [
-                    ("plane/capsules.bin", "blob_bytes", "blob_sha256"),
                     (
-                        "plane/capsule_directory.bin",
+                        if capsules {
+                            "plane/capsules.bin"
+                        } else {
+                            "plane/frames.bin"
+                        },
+                        "blob_bytes",
+                        "blob_sha256",
+                    ),
+                    (
+                        if capsules {
+                            "plane/capsule_directory.bin"
+                        } else {
+                            "plane/frame_offsets.bin"
+                        },
                         "directory_bytes",
                         "directory_sha256",
                     ),
@@ -4770,13 +4793,25 @@ async fn page_range_v2_old_root_refuses_before_payload_reads_or_gc_deletes() {
 
 #[tokio::test]
 async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsule_pair() {
+    source_layout_gc_fixture(borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2).await;
+}
+#[tokio::test]
+async fn framed_source_gc_pins_and_exact_roster() {
+    source_layout_gc_fixture(borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1).await;
+}
+async fn source_layout_gc_fixture(layout: borsuk::two_bit_generation::SourceLayoutMode) {
     use borsuk::{
         two_bit_gc::{TwoBitGcLimits, TwoBitGcSession, collect_two_bit_garbage},
         two_bit_generation::SourceLayoutMode,
         two_bit_mutations::{TwoBitMutationLimits, seal_two_bit_mutations},
     };
     let f = LayoutFixture::new(257).await;
-    let (old_local, old_sha) = f.build("old", SourceLayoutMode::LeafCapsulesV2, 1, 0);
+    let names = match layout {
+        SourceLayoutMode::FramedRecordsV1 => ["plane/frames.bin", "plane/frame_offsets.bin"],
+        SourceLayoutMode::LeafCapsulesV2 => ["plane/capsules.bin", "plane/capsule_directory.bin"],
+        SourceLayoutMode::FlatRecords => unreachable!(),
+    };
+    let (old_local, old_sha) = f.build("old", layout, 1, 0);
     let prefix = ObjectPath::from("gc/index");
     let maintenance = f.temp.path().join("maintenance");
     let old = publish_two_bit_generation(
@@ -4811,12 +4846,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
         .await
         .unwrap()
         .unwrap();
-    let (new_local, new_sha) = f.build(
-        "new",
-        SourceLayoutMode::LeafCapsulesV2,
-        2,
-        sealed_head.control_epoch(),
-    );
+    let (new_local, new_sha) = f.build("new", layout, 2, sealed_head.control_epoch());
     let current = publish_two_bit_generation(
         f.store.as_ref(),
         &prefix,
@@ -4845,7 +4875,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
     };
     let failure = collect_two_bit_garbage(&mut gc, caps).await.unwrap_err();
     assert_eq!(failure.report.delete_attempts, 0);
-    for name in ["plane/capsules.bin", "plane/capsule_directory.bin"] {
+    for name in names {
         assert!(
             f.store
                 .head(&ObjectPath::from(format!(
@@ -4861,7 +4891,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
     for _ in 0..64 {
         let report = collect_two_bit_garbage(&mut gc, caps).await.unwrap();
         assert!(report.objects_deleted <= 1);
-        for name in ["plane/capsules.bin", "plane/capsule_directory.bin"] {
+        for name in names {
             assert!(
                 f.store
                     .head(&ObjectPath::from(format!(
@@ -4878,7 +4908,7 @@ async fn source_layout_gc_refuses_pinned_old_reader_then_reclaims_only_old_capsu
         }
     }
     assert!(complete);
-    for name in ["plane/capsules.bin", "plane/capsule_directory.bin"] {
+    for name in names {
         assert!(matches!(
             f.store
                 .head(&ObjectPath::from(format!(
@@ -4937,6 +4967,7 @@ async fn source_layout_empty_v6_roundtrip_requires_layout_and_refuses_old_or_gra
     for layout in [
         SourceLayoutMode::FlatRecords,
         SourceLayoutMode::LeafCapsulesV2,
+        SourceLayoutMode::FramedRecordsV1,
     ] {
         let prefix = ObjectPath::from(format!("empty/{layout:?}"));
         let head = publish_empty_two_bit_generation_with_source_layout(
@@ -5085,6 +5116,30 @@ async fn source_layout_compaction_preserves_logical_ids_and_score_bits() {
         )
         .await;
         assert_eq!(flat, capsules);
+    }
+}
+
+#[tokio::test]
+async fn framed_source_compaction_mutations_pins_and_empty_layout() {
+    use borsuk::{semantic_unit_router::SemanticProfile, two_bit_generation::SourceLayoutMode};
+    for dimensions in [1, 257, 1024] {
+        let flat = semantic_compaction_fixture(
+            std::sync::Arc::new(InMemory::new()),
+            dimensions,
+            0,
+            SemanticProfile::Scale1m,
+            SourceLayoutMode::FlatRecords,
+        )
+        .await;
+        let framed = semantic_compaction_fixture(
+            std::sync::Arc::new(InMemory::new()),
+            dimensions,
+            0,
+            SemanticProfile::Scale1m,
+            SourceLayoutMode::FramedRecordsV1,
+        )
+        .await;
+        assert_eq!(flat, framed);
     }
 }
 
@@ -5477,6 +5532,19 @@ async fn source_layout_retained_import_capsule_budget_minus_one_and_pins_refuse_
 
 #[tokio::test]
 async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_refill() {
+    source_layout_empty_refill_fixture(
+        borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2,
+    )
+    .await;
+}
+#[tokio::test]
+async fn framed_source_empty_wrappers_refill_preserves_layout_and_ids() {
+    source_layout_empty_refill_fixture(
+        borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1,
+    )
+    .await;
+}
+async fn source_layout_empty_refill_fixture(layout: borsuk::two_bit_generation::SourceLayoutMode) {
     use borsuk::{
         canonical_source::TwoBitCompactionLimits,
         semantic_unit_router::SemanticProfile,
@@ -5490,8 +5558,11 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
             publish_empty_two_bit_generation_with_semantic_profile,
         },
     };
-    let f = LayoutFixture::new(257).await;
-    let (local, sha) = f.build("capsules", SourceLayoutMode::LeafCapsulesV2, 1, 0);
+    let mut f = LayoutFixture::new(257).await;
+    if layout == SourceLayoutMode::FramedRecordsV1 {
+        f.limits.max_memory_bytes = 128 * 1024 * 1024;
+    }
+    let (local, sha) = f.build("encoded", layout, 1, 0);
     let mutations = TwoBitMutationLimits {
         max_snapshot_bytes: 32768,
         max_memory_bytes: 1_000_000,
@@ -5499,7 +5570,7 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
     let options = TwoBitCompactionOptions {
         mutations,
         source: TwoBitCompactionLimits {
-            max_memory_bytes: 32 * 1024 * 1024,
+            max_memory_bytes: f.limits.max_memory_bytes as usize,
             max_disk_bytes: 4 * 1024 * 1024,
             max_source_chunk_bytes: 65536,
         },
@@ -5564,7 +5635,7 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(root["source_layout"], "leaf_capsules_v2");
+        assert_eq!(root["source_layout"], serde_json::to_value(layout).unwrap());
         assert_eq!(root["profile"], "scale1m");
         let empty = read_two_bit_head(f.store.as_ref(), &prefix)
             .await
@@ -5621,7 +5692,10 @@ async fn source_layout_both_empty_wrappers_preserve_capsules_profile_and_ids_on_
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(root["source_layout"]["layout"], "leaf_capsules_v2");
+        assert_eq!(
+            root["source_layout"]["layout"],
+            serde_json::to_value(layout).unwrap()
+        );
         let reopened = TwoBitGeneration::open_remote_from_head(
             f.store.as_ref(),
             &filled,

@@ -46,10 +46,10 @@ const BLOCK: usize = 65_536;
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // CPU-profile admission and diagnostics have their own config/result protocol.
-const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v15";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v16";
-const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v17";
-const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v18";
+const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v19";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v20";
+const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v21";
+const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v22";
 // Checked against each unpolled future, plus bounded join/result bookkeeping.
 const QUERY_FUTURE_BYTES: usize = 512 * 1024;
 // Cohort snapshot JSON and its terminal copy can coexist after query futures drain.
@@ -1000,6 +1000,48 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             && c.source_byte_budget > 0,
         "explicit positive memory/SOURCE byte budgets with checked width",
     )?;
+    if let SourceLayout::FramedRecordsV1 {
+        blob_bytes,
+        blob_sha256,
+        directory_bytes,
+        directory_sha256,
+    } = &c.source_layout
+    {
+        let tail = c.dimensions % 256;
+        let padded = (c.dimensions / 256)
+            .checked_mul(256)
+            .and_then(|n| {
+                n.checked_add(if tail == 0 {
+                    0
+                } else {
+                    tail.next_power_of_two()
+                })
+            })
+            .ok_or("frame dimensions overflow")?;
+        let width = padded
+            .div_ceil(4)
+            .checked_add(8)
+            .ok_or("frame width overflow")?;
+        require(
+            c.rows
+                .min(256)
+                .checked_mul(width)
+                .is_some_and(|n| n <= 1 << 20)
+                && c.rows
+                    .div_ceil(256)
+                    .checked_add(1)
+                    .and_then(|n| n.checked_mul(8))
+                    == Some(*directory_bytes)
+                && *blob_bytes > 0
+                && c.rows
+                    .checked_mul(width)
+                    .and_then(|n| n.checked_add(c.rows.div_ceil(256).checked_mul(25)?))
+                    .is_some_and(|n| *blob_bytes <= n as u64)
+                && valid_sha(blob_sha256)
+                && valid_sha(directory_sha256),
+            "SOURCE frame descriptor",
+        )?;
+    }
     if let SourceLayout::LeafCapsulesV2 {
         blob_bytes,
         blob_sha256,
@@ -1383,7 +1425,7 @@ async fn bind_source(
     let root_body = metadata(c, store, "manifest.json", &c.generation_root_sha256, charge).await?;
     let root: Root = serde_json::from_slice(&root_body)?;
     require(
-        root.schema == "borsuk-two-bit-generation-v11" && root.source_layout == c.source_layout,
+        root.schema == "borsuk-two-bit-generation-v12" && root.source_layout == c.source_layout,
         "authenticated root/config SOURCE layout agreement",
     )?;
     require(
@@ -1461,6 +1503,11 @@ fn caller_bytes(c: &Config) -> usize {
     let layout_bytes = match &c.source_layout {
         SourceLayout::FlatRecords => 0,
         SourceLayout::LeafCapsulesV2 {
+            blob_sha256,
+            directory_sha256,
+            ..
+        }
+        | SourceLayout::FramedRecordsV1 {
             blob_sha256,
             directory_sha256,
             ..
@@ -3199,6 +3246,7 @@ fn execute_paths_status(
                 json!("dispatch_to_completion_including_initial_runtime_queue");
         }
         identity["source_capsule_verification_policy"] = json!(SOURCE_CAPSULE_VERIFICATION_POLICY);
+        identity["source_frame_source_sha256"] = json!(hash(include_bytes!("../source_frame.rs")));
         identity["source_authentication"] =
             json!(configured.as_ref().ok().map(|c| c.source_authentication));
         identity["source_layout"] = json!(configured.as_ref().ok().map(|c| &c.source_layout));
@@ -3475,8 +3523,26 @@ pub(crate) fn source_layout_reducer_profile_fixture(
     padded_authority: bool,
     traced: bool,
 ) -> Result<(tempfile::TempDir, [PathBuf; 2])> {
+    source_layout_reducer_layout_fixture(
+        rows,
+        count,
+        panel,
+        padded_authority,
+        traced,
+        borsuk::two_bit_generation::SourceLayoutMode::LeafCapsulesV2,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn source_layout_reducer_layout_fixture(
+    rows: usize,
+    count: usize,
+    panel: bool,
+    padded_authority: bool,
+    traced: bool,
+    layout: borsuk::two_bit_generation::SourceLayoutMode,
+) -> Result<(tempfile::TempDir, [PathBuf; 2])> {
     use borsuk::two_bit_build::repackage_source_layout;
-    use borsuk::two_bit_generation::SourceLayoutMode;
     let shape = Shape {
         rows,
         count,
@@ -3536,7 +3602,7 @@ pub(crate) fn source_layout_reducer_profile_fixture(
         &c.generation_root_sha256,
         &root,
         2,
-        SourceLayoutMode::LeafCapsulesV2,
+        layout,
         limits(&c)?,
     )?;
     let manifest: Value = serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
@@ -3720,6 +3786,41 @@ mod tests {
         let body = serde_json::to_vec(&value).unwrap();
         std::fs::write(&path, &body).unwrap();
         (path, hash(&body))
+    }
+    #[test]
+    fn framed_source_runner_paired_parity() {
+        let (_dir, paths) = source_layout_reducer_layout_fixture(
+            513,
+            2,
+            true,
+            false,
+            true,
+            borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1,
+        )
+        .unwrap();
+        let rows = paths.map(|p| {
+            std::fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>()
+        });
+        let a = rows[0].iter().find(|r| r["phase"] == "query").unwrap();
+        let b = rows[1].iter().find(|r| r["phase"] == "query").unwrap();
+        assert_eq!(a["plan"], b["plan"]);
+        assert_eq!(
+            a["returned_physical_ordinals"],
+            b["returned_physical_ordinals"]
+        );
+        let stats = &b["stages"]["source_frames"];
+        assert_eq!(
+            stats["physical_bytes"],
+            b["charges"]["source"]["verified_bytes"]
+        );
+        assert_eq!(stats["decoded_bytes"], stats["hash_bytes"]);
+        assert!(
+            stats["decoded_bytes"].as_u64().unwrap() > stats["physical_bytes"].as_u64().unwrap()
+        );
     }
     #[test]
     fn full_selected_requests_require_equal_reserved_digest() {
@@ -4853,8 +4954,8 @@ mod tests {
             "blob_sha256":"d".repeat(64),"directory_bytes":100,"directory_sha256":"e".repeat(64)});
         let c: Config = serde_json::from_value(good.clone()).unwrap();
         validate_config(&c, shape).unwrap();
-        assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v15");
-        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v16");
+        assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v19");
+        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v20");
         assert_eq!(
             SOURCE_CAPSULE_VERIFICATION_POLICY,
             "directory_page_ranges_original_units_v2"

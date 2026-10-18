@@ -18,6 +18,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 struct Config {
     discovery: DiscoveryMode,
+    #[serde(default = "flat_layout")]
+    source_layout: SourceLayoutMode,
     semantic_profile: Option<SemanticProfile>,
     order: Option<Order>,
     raw: PathBuf,
@@ -32,6 +34,9 @@ struct Config {
     step: Vec<f32>,
     sq8_object_key: String,
     sq8_etag: String,
+}
+fn flat_layout() -> SourceLayoutMode {
+    SourceLayoutMode::FlatRecords
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,8 +91,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 fn run(args: &[String]) -> Result<String, Box<dyn Error>> {
     if args.get(1).is_some_and(|arg| arg == "--repackage") {
-        if args.len() != 7 {
-            return Err("usage: build_two_bit_generation --repackage FLAT_DIR EXPECTED_ROOT_SHA NEW_GENERATION MAX_MEMORY_BYTES NEW_OUTPUT".into());
+        if args.len() != 8 {
+            return Err("usage: build_two_bit_generation --repackage FLAT_DIR EXPECTED_ROOT_SHA NEW_GENERATION MAX_MEMORY_BYTES NEW_OUTPUT LAYOUT".into());
         }
         if args[3].len() != 64
             || !args[3]
@@ -116,7 +121,12 @@ fn run(args: &[String]) -> Result<String, Box<dyn Error>> {
             &args[3],
             Path::new(&args[6]),
             generation,
-            SourceLayoutMode::LeafCapsulesV2,
+            match args[7].as_str() {
+                "flat_records" => SourceLayoutMode::FlatRecords,
+                "leaf_capsules_v2" => SourceLayoutMode::LeafCapsulesV2,
+                "framed_records_v1" => SourceLayoutMode::FramedRecordsV1,
+                _ => return Err("invalid SOURCE layout".into()),
+            },
             limits,
         )?);
     }
@@ -157,12 +167,21 @@ fn run(args: &[String]) -> Result<String, Box<dyn Error>> {
     };
     let output = Path::new(&args[4]);
     let sha = match (input.discovery, input.semantic_profile) {
-        (DiscoveryMode::Graph, None) => {
-            builder.build_with_discovery(order.as_deref(), DiscoveryMode::Graph, output, cap)?
-        }
-        (DiscoveryMode::Semantic, Some(profile)) => {
-            builder.build_with_semantic_profile(order.as_deref(), profile, output, cap)?
-        }
+        (DiscoveryMode::Graph, None) => builder.build_with_discovery_and_source_layout(
+            order.as_deref(),
+            DiscoveryMode::Graph,
+            input.source_layout,
+            output,
+            cap,
+        )?,
+        (DiscoveryMode::Semantic, Some(profile)) => builder.build_with_source_layout(
+            order.as_deref(),
+            profile,
+            None,
+            input.source_layout,
+            output,
+            cap,
+        )?,
         _ => return Err("explicit discovery/profile agreement required".into()),
     };
     Ok(sha)
@@ -216,6 +235,7 @@ mod tests {
             "2".into(),
             "134217728".into(),
             "output".into(),
+            "framed_records_v1".into(),
         ];
         for count in 2..valid.len() {
             assert!(
@@ -259,6 +279,13 @@ mod tests {
 
     #[test]
     fn repackage_current_flat_preserves_authority_and_refuses_bad_inputs() {
+        repackage_layout_fixture("leaf_capsules_v2");
+    }
+    #[test]
+    fn framed_source_repackage_cli_preserves_authority_and_scores() {
+        repackage_layout_fixture("framed_records_v1");
+    }
+    fn repackage_layout_fixture(layout: &str) {
         use borsuk::two_bit_generation::{TwoBitGeneration, TwoBitGenerationLimits};
         use object_store::{ObjectStoreExt, memory::InMemory, path::Path as ObjectPath};
         let dir = tempfile::tempdir().unwrap();
@@ -348,6 +375,7 @@ mod tests {
                 "2".into(),
                 cap.to_string(),
                 output.display().to_string(),
+                layout.into(),
             ];
             // One byte below the library's mandatory metadata/copy admission.
             let short_cap = 3 * 65536 * 8 + 65536 + 131072 - 1;
@@ -394,9 +422,9 @@ mod tests {
             };
             let before = read_root(&current);
             let after = read_root(&output);
-            assert_eq!(after["schema"], "borsuk-two-bit-generation-v11");
+            assert_eq!(after["schema"], "borsuk-two-bit-generation-v12");
             assert_eq!(after["generation"], 2);
-            assert_eq!(after["source_layout"]["layout"], "leaf_capsules_v2");
+            assert_eq!(after["source_layout"]["layout"], layout);
             for field in [
                 "discovery",
                 "canonical",

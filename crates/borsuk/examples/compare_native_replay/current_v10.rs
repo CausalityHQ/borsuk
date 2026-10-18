@@ -18,10 +18,39 @@ pub(super) const CPU_PROFILE_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baselin
 pub(super) const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v18";
 pub(super) const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v17";
 
+pub(super) const FRAMED_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v19";
+pub(super) const FRAMED_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v20";
+pub(super) const FRAMED_CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v21";
+pub(super) const FRAMED_CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v22";
+fn framed_config(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(FRAMED_CONFIG_SCHEMA | FRAMED_CONCURRENT_CONFIG_SCHEMA)
+    )
+}
+pub(super) fn concurrent_result(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(CONCURRENT_RESULT_SCHEMA | FRAMED_CONCURRENT_RESULT_SCHEMA)
+    )
+}
+pub(super) fn profile_result(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(CPU_PROFILE_RESULT_SCHEMA | FRAMED_RESULT_SCHEMA)
+    )
+}
+fn concurrent_config(schema: &Value) -> bool {
+    matches!(
+        schema.as_str(),
+        Some(CONCURRENT_CONFIG_SCHEMA | FRAMED_CONCURRENT_CONFIG_SCHEMA)
+    )
+}
+
 pub(super) fn concurrent_queries(inputs: &Value) -> Result<usize> {
     let active = number(&inputs["max_active_queries"])?;
     require(
-        inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA
+        concurrent_config(&inputs["config_schema"])
             && matches!(active, 1 | 2)
             && matches!(
                 inputs["query_runtime"].as_str(),
@@ -97,12 +126,20 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
             concurrent_queries(&raw)?;
             if phase == "identity" {
                 require(
-                    raw["schema"] == CONCURRENT_RESULT_SCHEMA,
+                    concurrent_result(&raw["schema"]),
                     "concurrent result schema",
                 )?;
-                raw["schema"] = json!(CPU_PROFILE_RESULT_SCHEMA);
+                raw["schema"] = json!(if framed_config(&raw["config_schema"]) {
+                    FRAMED_RESULT_SCHEMA
+                } else {
+                    CPU_PROFILE_RESULT_SCHEMA
+                });
             }
-            raw["config_schema"] = json!(CPU_PROFILE_CONFIG_SCHEMA);
+            raw["config_schema"] = json!(if framed_config(&raw["config_schema"]) {
+                FRAMED_CONFIG_SCHEMA
+            } else {
+                CPU_PROFILE_CONFIG_SCHEMA
+            });
             raw.as_object_mut().unwrap().remove("max_active_queries");
             raw.as_object_mut().unwrap().remove("query_runtime");
             raw.as_object_mut().unwrap().remove("query_dispatch");
@@ -180,24 +217,41 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
     validate_row_envelope(&serde_json::to_vec(&raw)?, phase, true, true, true)
 }
 
-fn cpu_profile_config(inputs: &Value) -> bool {
+pub(super) fn cpu_profile_config(inputs: &Value) -> bool {
     matches!(
         inputs["config_schema"].as_str(),
-        Some(CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA)
+        Some(
+            CPU_PROFILE_CONFIG_SCHEMA
+                | CONCURRENT_CONFIG_SCHEMA
+                | FRAMED_CONFIG_SCHEMA
+                | FRAMED_CONCURRENT_CONFIG_SCHEMA
+        )
     )
 }
 
 fn page_range_config(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA)
+        Some(
+            PAGE_RANGE_CONFIG_SCHEMA
+                | CPU_PROFILE_CONFIG_SCHEMA
+                | CONCURRENT_CONFIG_SCHEMA
+                | FRAMED_CONFIG_SCHEMA
+                | FRAMED_CONCURRENT_CONFIG_SCHEMA
+        )
     )
 }
 
 fn page_range_result(schema: &Value) -> bool {
     matches!(
         schema.as_str(),
-        Some(PAGE_RANGE_RESULT_SCHEMA | CPU_PROFILE_RESULT_SCHEMA | CONCURRENT_RESULT_SCHEMA)
+        Some(
+            PAGE_RANGE_RESULT_SCHEMA
+                | CPU_PROFILE_RESULT_SCHEMA
+                | CONCURRENT_RESULT_SCHEMA
+                | FRAMED_RESULT_SCHEMA
+                | FRAMED_CONCURRENT_RESULT_SCHEMA
+        )
     )
 }
 
@@ -209,6 +263,7 @@ fn layout_result_schema(config: &Value) -> Result<&'static str> {
         Some(ONEPASS_CONFIG_SCHEMA) => Ok(ONEPASS_RESULT_SCHEMA),
         Some(PAGE_RANGE_CONFIG_SCHEMA) => Ok(PAGE_RANGE_RESULT_SCHEMA),
         Some(CPU_PROFILE_CONFIG_SCHEMA) => Ok(CPU_PROFILE_RESULT_SCHEMA),
+        Some(FRAMED_CONFIG_SCHEMA) => Ok(FRAMED_RESULT_SCHEMA),
         _ => Err("exact SOURCE layout config schema".into()),
     }
 }
@@ -231,6 +286,8 @@ pub(super) fn is_result_schema(schema: &str) -> bool {
             | PAGE_RANGE_RESULT_SCHEMA
             | CPU_PROFILE_RESULT_SCHEMA
             | CONCURRENT_RESULT_SCHEMA
+            | FRAMED_RESULT_SCHEMA
+            | FRAMED_CONCURRENT_RESULT_SCHEMA
     )
 }
 
@@ -243,6 +300,8 @@ pub(super) fn is_source_layout_schema(schema: &Value) -> bool {
                 | PAGE_RANGE_RESULT_SCHEMA
                 | CPU_PROFILE_RESULT_SCHEMA
                 | CONCURRENT_RESULT_SCHEMA
+                | FRAMED_RESULT_SCHEMA
+                | FRAMED_CONCURRENT_RESULT_SCHEMA
         )
     )
 }
@@ -256,6 +315,8 @@ pub(super) fn is_source_layout_config(header: &Value) -> bool {
                 | PAGE_RANGE_CONFIG_SCHEMA
                 | CPU_PROFILE_CONFIG_SCHEMA
                 | CONCURRENT_CONFIG_SCHEMA
+                | FRAMED_CONFIG_SCHEMA
+                | FRAMED_CONCURRENT_CONFIG_SCHEMA
         )
     )
 }
@@ -305,7 +366,12 @@ pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
             && match header["phase"].as_str() {
                 Some("identity") => matches!(
                     header["schema"].as_str(),
-                    Some(CPU_PROFILE_RESULT_SCHEMA | CONCURRENT_RESULT_SCHEMA)
+                    Some(
+                        CPU_PROFILE_RESULT_SCHEMA
+                            | CONCURRENT_RESULT_SCHEMA
+                            | FRAMED_RESULT_SCHEMA
+                            | FRAMED_CONCURRENT_RESULT_SCHEMA
+                    )
                 ),
                 Some("bound_inputs") => header["profile"] == "scale1m",
                 _ => false,
@@ -334,7 +400,7 @@ fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
             .additional_memory_bytes(
                 usize::try_from(number(&inputs["fetch_parallelism"])?)?,
                 usize::try_from(number(&inputs["source_get_budget"])?)?,
-                if inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA {
+                if concurrent_config(&inputs["config_schema"]) {
                     concurrent_queries(inputs)?
                 } else {
                     1
@@ -449,7 +515,12 @@ pub(super) fn validate_row_envelope(
     if source_layout
         && matches!(
             raw["config_schema"].as_str(),
-            Some(ONEPASS_CONFIG_SCHEMA | PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA)
+            Some(
+                ONEPASS_CONFIG_SCHEMA
+                    | PAGE_RANGE_CONFIG_SCHEMA
+                    | CPU_PROFILE_CONFIG_SCHEMA
+                    | FRAMED_CONFIG_SCHEMA
+            )
         )
         && matches!(phase, "identity" | "bound_inputs")
     {
@@ -513,6 +584,15 @@ pub(super) fn validate_row_envelope(
     if matches!(phase, "identity" | "bound_inputs") && semantic_leaf_limit(&raw)?.is_some() {
         roster.push_str(" semantic_leaf_limit");
     }
+    if phase == "identity" && framed_config(&raw["config_schema"]) {
+        roster.push_str(" source_frame_source_sha256");
+        require(
+            raw["source_frame_source_sha256"]
+                .as_str()
+                .is_some_and(super::valid_sha),
+            "frame source pin",
+        )?;
+    }
     fields(&raw, &roster)?;
     if retry {
         require(
@@ -521,6 +601,7 @@ pub(super) fn validate_row_envelope(
                     match raw["config_schema"].as_str() {
                         Some(PAGE_RANGE_CONFIG_SCHEMA) => PAGE_RANGE_CONFIG_SCHEMA,
                         Some(CPU_PROFILE_CONFIG_SCHEMA) => CPU_PROFILE_CONFIG_SCHEMA,
+                        Some(FRAMED_CONFIG_SCHEMA) => FRAMED_CONFIG_SCHEMA,
                         Some(ONEPASS_CONFIG_SCHEMA) => ONEPASS_CONFIG_SCHEMA,
                         _ => SOURCE_LAYOUT_CONFIG_SCHEMA,
                     }
@@ -684,7 +765,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         let bytes = serde_json::to_vec(v)?;
         require(bytes.len() < 65536, "v10 header cap")?;
         let layout = is_source_layout_schema(&c.expected_identity["schema"]);
-        if c.expected_identity["schema"] == CONCURRENT_RESULT_SCHEMA {
+        if concurrent_result(&c.expected_identity["schema"]) {
             validate_concurrent_row(&bytes, phase)?;
         } else {
             validate_row_envelope(
@@ -692,7 +773,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
                 phase,
                 layout || c.expected_identity["schema"] == LIBRARY_SCHEDULER_RESULT_SCHEMA,
                 layout,
-                c.expected_identity["schema"] == CPU_PROFILE_RESULT_SCHEMA,
+                profile_result(&c.expected_identity["schema"]),
             )?;
         }
     }
@@ -1195,7 +1276,9 @@ fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
     )?;
     let flat = inputs["source_layout"]["layout"] == "flat_records";
     require(
-        flat || inputs["source_layout"]["layout"] == "leaf_capsules_v2",
+        flat || inputs["source_layout"]["layout"] == "leaf_capsules_v2"
+            || (framed_config(&inputs["config_schema"])
+                && inputs["source_layout"]["layout"] == "framed_records_v1"),
         "SOURCE diagnostic layout",
     )?;
     let width = super::source_record_bytes(usize::try_from(number(&inputs["dimensions"])?)?)?;
@@ -1324,7 +1407,12 @@ fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
     }
     require(
         trace["planned_bytes"] == bytes
-            && trace["retained_payload_bytes"] == bytes
+            && trace["retained_payload_bytes"]
+                == if inputs["source_layout"]["layout"] == "framed_records_v1" {
+                    raw["stages"]["source_frames"]["decoded_bytes"].clone()
+                } else {
+                    json!(bytes)
+                }
             && bytes <= number(&inputs["source_byte_budget"])?
             && charge
                 == &json!({"submitted_gets":ranges.len(),"verified_bytes":bytes,"failed_gets":0}),
@@ -1496,7 +1584,7 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
 }
 
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
-    if inputs["config_schema"] == CONCURRENT_CONFIG_SCHEMA {
+    if concurrent_config(&inputs["config_schema"]) {
         let active = concurrent_queries(inputs)?;
         let r = &raw["concurrent_resources"];
         require(
@@ -1574,7 +1662,11 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
     require(
         match raw["config_schema"].as_str() {
             Some(
-                PAGE_RANGE_CONFIG_SCHEMA | CPU_PROFILE_CONFIG_SCHEMA | CONCURRENT_CONFIG_SCHEMA,
+                PAGE_RANGE_CONFIG_SCHEMA
+                | CPU_PROFILE_CONFIG_SCHEMA
+                | CONCURRENT_CONFIG_SCHEMA
+                | FRAMED_CONFIG_SCHEMA
+                | FRAMED_CONCURRENT_CONFIG_SCHEMA,
             ) => raw["source_capsule_verification_policy"] == PAGE_RANGE_VERIFICATION_POLICY,
             Some(ONEPASS_CONFIG_SCHEMA) => {
                 raw["source_capsule_verification_policy"] == SOURCE_CAPSULE_VERIFICATION_POLICY
@@ -1594,7 +1686,44 @@ fn validate_layout_header(raw: &Value) -> Result<()> {
             "layout blob_bytes blob_sha256 directory_bytes directory_sha256"
         },
     )?;
-    if !flat {
+    if layout["layout"] == "framed_records_v1" {
+        let bytes = number(&layout["blob_bytes"])?;
+        let directory = number(&layout["directory_bytes"])?;
+        require(
+            framed_config(&raw["config_schema"])
+                && bytes > 0
+                && bytes <= usize::MAX as u64
+                && directory >= 16
+                && directory % 8 == 0
+                && directory <= usize::MAX as u64
+                && ["blob_sha256", "directory_sha256"]
+                    .iter()
+                    .all(|key| layout[key].as_str().is_some_and(super::valid_sha)),
+            "framed SOURCE descriptor",
+        )?;
+        if raw["phase"] == "bound_inputs" {
+            let rows = number(&raw["rows"])?;
+            let width =
+                super::source_record_bytes(usize::try_from(number(&raw["dimensions"])?)?)? as u64;
+            require(
+                rows.min(256)
+                    .checked_mul(width)
+                    .is_some_and(|n| n <= 1 << 20)
+                    && directory
+                        == rows
+                            .div_ceil(256)
+                            .checked_add(1)
+                            .and_then(|n| n.checked_mul(8))
+                            .ok_or("frame directory overflow")?
+                    && bytes
+                        <= rows
+                            .checked_mul(width)
+                            .and_then(|n| n.checked_add(rows.div_ceil(256).checked_mul(25)?))
+                            .ok_or("frame blob overflow")?,
+                "framed SOURCE geometry",
+            )?;
+        }
+    } else if !flat {
         let v2 = page_range_config(&raw["config_schema"]);
         let directory = number(&layout["directory_bytes"])?;
         require(
@@ -1660,7 +1789,9 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
                     .as_str()
                     .ok_or("v13 page manifest SHA")?
             && root["schema"]
-                == if page_range_config(&inputs["config_schema"]) {
+                == if framed_config(&inputs["config_schema"]) {
+                    "borsuk-two-bit-generation-v12"
+                } else if page_range_config(&inputs["config_schema"]) {
                     "borsuk-two-bit-generation-v11"
                 } else {
                     "borsuk-two-bit-generation-v10"
@@ -1757,7 +1888,13 @@ pub(super) fn validate_layout_startup(
         "router/membership.bin",
     ];
     if inputs["source_layout"]["layout"] != "flat_records" {
-        names.push("plane/capsule_directory.bin");
+        names.push(
+            if inputs["source_layout"]["layout"] == "framed_records_v1" {
+                "plane/frame_offsets.bin"
+            } else {
+                "plane/capsule_directory.bin"
+            },
+        );
     }
     let entries = raw["metadata"]["metadata"]
         .as_array()
@@ -1793,7 +1930,7 @@ pub(super) fn validate_layout_startup(
             "plane/mean.bin" => Some(dimensions.checked_mul(4).ok_or("mean bytes")?),
             "router/root.bin" => Some(number(&root["discovery"]["root_bytes"])?),
             "router/membership.bin" => Some(number(&root["discovery"]["membership_bytes"])?),
-            "plane/capsule_directory.bin" => {
+            "plane/capsule_directory.bin" | "plane/frame_offsets.bin" => {
                 Some(number(&inputs["source_layout"]["directory_bytes"])?)
             }
             _ => None,
@@ -2077,6 +2214,42 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
     let stats = raw["stages"]
         .get("source_capsules")
         .ok_or("v13 capsule stats field required")?;
+    if inputs["source_layout"]["layout"] == "framed_records_v1" {
+        let frames = &raw["stages"]["source_frames"];
+        fields(frames, "physical_bytes decoded_bytes hash_bytes")?;
+        let pages = raw["trace"]["ranked_candidate_pages"]
+            .as_array()
+            .ok_or("frame closure")?
+            .iter()
+            .map(|p| Ok(usize::try_from(number(p)?)?))
+            .collect::<Result<std::collections::BTreeSet<_>>>()?;
+        let (cover, decoded) = super::source_cover::cover_pages(
+            &pages,
+            usize::try_from(number(&inputs["rows"])?)?,
+            super::source_record_bytes(usize::try_from(number(&inputs["dimensions"])?)?)?,
+            256,
+            usize::try_from(number(&inputs["source_get_budget"])?)?,
+        )
+        .map_err(|e| format!("frame cover: {e:?}"))?;
+        return require(
+            framed_config(&inputs["config_schema"])
+                && stats.is_null()
+                && frames["physical_bytes"] == raw["charges"]["source"]["verified_bytes"]
+                && frames["decoded_bytes"] == decoded
+                && frames["hash_bytes"] == decoded
+                && raw["charges"]["source"]["submitted_gets"] == cover.len()
+                && number(&frames["physical_bytes"])? > 0
+                && number(&frames["physical_bytes"])?
+                    <= number(&inputs["source_layout"]["blob_bytes"])?
+                && number(&frames["physical_bytes"])? <= number(&inputs["source_byte_budget"])?
+                && decoded as u64 <= number(&inputs["source_byte_budget"])?,
+            "framed SOURCE physical/decoded/hash conservation",
+        );
+    }
+    require(
+        raw["stages"].get("source_frames").is_none(),
+        "unexpected frame accounting",
+    )?;
     if inputs["source_layout"]["layout"] == "flat_records" {
         return require(stats.is_null(), "v13 flat capsule stats must be null");
     }
@@ -2278,7 +2451,11 @@ pub(super) fn paired_source_layout(config: &std::path::Path, sha: &str) -> Resul
         a.expected_identity["schema"] == b.expected_identity["schema"]
             && a.expected_bound_inputs["source_layout"] == json!({"layout":"flat_records"})
             && b.expected_bound_inputs["source_layout"]["layout"]
-                == if page_range_result(&b.expected_identity["schema"]) {
+                == if b.expected_bound_inputs["source_layout"]["layout"] == "framed_records_v1"
+                    && framed_config(&b.expected_bound_inputs["config_schema"])
+                {
+                    "framed_records_v1"
+                } else if page_range_result(&b.expected_identity["schema"]) {
                     "leaf_capsules_v2"
                 } else {
                     "leaf_capsules"
