@@ -1,0 +1,19 @@
+{
+  "schema": "borsuk-fp32-full1000-terminal-v1",
+  "status": "VALID_QUALITY_GAIN_EFFICIENCY_WORSE",
+  "source_commit": "7a98b3d43472237437cbc64713cffc6044f7aaf3",
+  "instance_id": "i-07323d089216b4c25",
+  "source_unchanged": true,
+  "complete_ABBA": true,
+  "control_hits_each": 9746,
+  "candidate_hits_each": 9803,
+  "denominator_each": 10000,
+  "archive": {
+    "key": "research/semantic-router/20261018/fp32-serving-full1000-closure-a0001/evidence.tar.gz",
+    "bytes": 71822940,
+    "sha256": "edcce8415a6a5ca91ba6e1755ce9ba9248afe76778b854d69689dfd92673276a",
+    "server_checksum_verified": true
+  },
+  "vendor_win_claim": false,
+  "first_attempt": "incomplete enforced270s native deadline preserved"
+}

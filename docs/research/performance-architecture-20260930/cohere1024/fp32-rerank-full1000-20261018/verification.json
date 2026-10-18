@@ -1,0 +1,45 @@
+{
+  "schema": "borsuk-fp32-full1000-root-verification-v1",
+  "complete": true,
+  "actual_frozen_truth_recount": true,
+  "all_reference_ids_ordinals_scorebits": true,
+  "all_precanonical_plans_charges_equal": true,
+  "arms": {
+    "A1": {
+      "recounted_hits": 9746,
+      "result_sha256": "00d8be19e2dbddc2227895ae3bfd4e4d24b1baae54ee1a186a09942832609f16",
+      "preceding_plan_charge_sha256": "7538baf88d6c236fdfba9da817ffd957fa08b31b7c09c899d2f60705f9211ec4"
+    },
+    "B1": {
+      "recounted_hits": 9803,
+      "result_sha256": "2bda08997e598964b556ced9b5993271696045855bf9026b736d84c3ef260407",
+      "preceding_plan_charge_sha256": "7538baf88d6c236fdfba9da817ffd957fa08b31b7c09c899d2f60705f9211ec4"
+    },
+    "B2": {
+      "recounted_hits": 9803,
+      "result_sha256": "b90111fdabf9f69f0d8de9275a696d7f120fae62bbde869084cb55d5dd52d19d",
+      "preceding_plan_charge_sha256": "7538baf88d6c236fdfba9da817ffd957fa08b31b7c09c899d2f60705f9211ec4"
+    },
+    "A2": {
+      "recounted_hits": 9746,
+      "result_sha256": "f733ada2928e7db0ff8f41d5c0211e12b0b43c51f2f703c95e5643978cc2ba2f",
+      "preceding_plan_charge_sha256": "7538baf88d6c236fdfba9da817ffd957fa08b31b7c09c899d2f60705f9211ec4"
+    }
+  },
+  "candidate_control_ratios": {
+    "B1/A1": {
+      "p90": 1.9287509487862435,
+      "p95": 1.775090182961656,
+      "query_wall_sum": 1.560709644589807,
+      "serial_qps": 0.6407341708090902
+    },
+    "B2/A2": {
+      "p90": 1.2099954846456684,
+      "p95": 1.059394370847752,
+      "query_wall_sum": 1.3355379581527493,
+      "serial_qps": 0.7487619456231339
+    }
+  },
+  "quality_gain_retained": true,
+  "vendor_win_claim": false
+}

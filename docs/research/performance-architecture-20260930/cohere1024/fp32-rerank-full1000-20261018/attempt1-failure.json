@@ -1,0 +1,11 @@
+{
+  "schema": "borsuk-full1000-attempt-failure-v1",
+  "status": "INCOMPLETE_ENFORCED_NATIVE_CELL_DEADLINE",
+  "A1": "valid and independently checkpointed",
+  "B1_native_exit": 124,
+  "B1_deadline_seconds": 270,
+  "complete_ABBA": false,
+  "candidate_full_quality_claim": false,
+  "partial_B1_not_used_as_scientific_metrics": true,
+  "followup": "fresh complete ABBA a0002 with prospectively420s/cell and same1260s measurement cap; no hard shutdown extension"
+}
