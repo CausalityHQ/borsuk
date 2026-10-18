@@ -1,0 +1,899 @@
+{
+  "cgroup_observed": {
+    "candidate_pid": 4834,
+    "cpu_max": "800000 100000",
+    "cpus": "0-7",
+    "memory_max": 8589934592,
+    "observed_memory_peak_bytes": 557981696,
+    "swap_max": 0
+  },
+  "claims": {
+    "fully_cold": false,
+    "material_cpu_overhead_observed": false,
+    "production_ready": false,
+    "quality_gain": true,
+    "robust_latency_win": false,
+    "vendor_win": false
+  },
+  "first32": {
+    "admission": {
+      "evidence_dir": "/mnt/borsuk-workspace/evidence/cosine-serving-screen-a0001",
+      "kind": "RETAINED_ORIGINAL_ADMISSION_POINTER_NOT_NEW_EXECUTION",
+      "original_checksum_head": {
+        "AcceptRanges": "bytes",
+        "ChecksumSHA256": "RDWn+Z8eaGQjGxuD/ltiTL5KkMTinb3hz3DAbfu3mvc=",
+        "ChecksumType": "FULL_OBJECT",
+        "ContentLength": 6471751,
+        "ContentType": "binary/octet-stream",
+        "ETag": "\"c9342de66f6fa6a05d10463f2a3ae909\"",
+        "LastModified": "2026-10-18T19:17:04+00:00",
+        "Metadata": {},
+        "ServerSideEncryption": "AES256"
+      },
+      "queries": 1000,
+      "receipt_path": "/mnt/borsuk-workspace/evidence/cosine-serving-screen-a0001/admit-verification.json",
+      "receipt_sha256": "4a2209c6471a321cfcf6ad8748cbb1c9478cb11d18be65c2a1a8b0899a5d1fcc",
+      "result_sha256": "31b19584d6ea7ef2a67d441f6b5e225066b77ee70f9467ce20a14ef0ba83100d",
+      "s3_uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261018/cosine-serving-screen-a0001/admit.tar.gz",
+      "truth_hits": 9746
+    },
+    "cells": {
+      "A1": {
+        "arm": "A",
+        "cell": "A1",
+        "diagnostic_not_population": true,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 110.129437,
+          "0.9": 156.775053,
+          "0.95": 159.696205,
+          "0.99": 183.315378
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 32,
+        "query_cpu_total_s": 2.740529613,
+        "query_wall_total_s": 3.796559861,
+        "result_sha256": "37017d8d277b0053e005d86441f4b492cc061fc9c7efc8fa19852e42163dd801",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 8.428683116185956,
+        "source_bytes": 749506560,
+        "source_gets": 2826,
+        "sq8_bytes": 153659520,
+        "sq8_gets": 851,
+        "stage_total_ms": {
+          "discovery": 71.075709,
+          "planning": 646.983076,
+          "source": 1571.014047,
+          "sq8": 1505.495919
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 314,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "A2": {
+        "arm": "A",
+        "cell": "A2",
+        "diagnostic_not_population": true,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 142.417498,
+          "0.9": 183.930231,
+          "0.95": 196.697254,
+          "0.99": 214.845988
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 32,
+        "query_cpu_total_s": 2.670951095,
+        "query_wall_total_s": 4.700405378,
+        "result_sha256": "bcead95c8ac93a075c769a71d23964915a0b88642b7d94bcdee8ff5e2f5c0658",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 6.807923450554779,
+        "source_bytes": 749506560,
+        "source_gets": 2826,
+        "sq8_bytes": 153659520,
+        "sq8_gets": 851,
+        "stage_total_ms": {
+          "discovery": 71.528703,
+          "planning": 651.855704,
+          "source": 2005.57632,
+          "sq8": 1969.393612
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 314,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "B1": {
+        "arm": "B",
+        "cell": "B1",
+        "diagnostic_not_population": true,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 154.23448,
+          "0.9": 178.680932,
+          "0.95": 186.600239,
+          "0.99": 205.531592
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 32,
+        "query_cpu_total_s": 2.7888276,
+        "query_wall_total_s": 4.938688542,
+        "result_sha256": "a9063a0c11787fc7fe254e64403ab754b31ab2e68e1380d381607f3dfdc0b0d0",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 6.479452941375625,
+        "source_bytes": 749506560,
+        "source_gets": 2826,
+        "sq8_bytes": 153659520,
+        "sq8_gets": 851,
+        "stage_total_ms": {
+          "discovery": 72.691338,
+          "planning": 648.897449,
+          "source": 2160.906781,
+          "sq8": 2054.236252
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 315,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "B2": {
+        "arm": "B",
+        "cell": "B2",
+        "diagnostic_not_population": true,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 103.989457,
+          "0.9": 121.532654,
+          "0.95": 136.912386,
+          "0.99": 165.212526
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 32,
+        "query_cpu_total_s": 2.64683443,
+        "query_wall_total_s": 3.442391802,
+        "result_sha256": "402f5109dfe4bcb523f59d1401759d4c7c6c7cb089145cdab6928b36d9257188",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 9.295862249441878,
+        "source_bytes": 749506560,
+        "source_gets": 2826,
+        "sq8_bytes": 153659520,
+        "sq8_gets": 851,
+        "stage_total_ms": {
+          "discovery": 66.628685,
+          "planning": 649.228874,
+          "source": 1453.890154,
+          "sq8": 1270.646197
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 315,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "canary": {
+        "arm": "B",
+        "cell": "canary",
+        "diagnostic_not_population": true,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 174.852151,
+          "0.9": 174.852151,
+          "0.95": 174.852151,
+          "0.99": 174.852151
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 1,
+        "query_cpu_total_s": 0.13123306,
+        "query_wall_total_s": 0.174852151,
+        "result_sha256": "d4e76789105c59146dd10aedfefa57be8e41dae95e4402969ae6d52f0e4bc74a",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 5.719117518891718,
+        "source_bytes": 25411584,
+        "source_gets": 100,
+        "sq8_bytes": 3016832,
+        "sq8_gets": 32,
+        "stage_total_ms": {
+          "discovery": 1.889663,
+          "planning": 22.489996,
+          "source": 88.169095,
+          "sq8": 62.24311
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 10,
+        "underfill": 0,
+        "vendor_claim": false
+      }
+    },
+    "fullycold_claim": false,
+    "manifest_sha256": "d5d7983a941afe369cf65e0e81ca601a441bac88c256892886e0eca0d22697ad",
+    "paired_wall_ratios": [
+      1.3008325228142636,
+      0.7323606210885413
+    ],
+    "population_performance_claim": false,
+    "status": "VALID_FIRST32_SERVING_PAIRED_SCREEN",
+    "vendor_claim": false
+  },
+  "full1000": {
+    "admission": {
+      "evidence_dir": "/mnt/borsuk-workspace/evidence/cosine-serving-screen-a0001",
+      "kind": "RETAINED_ORIGINAL_ADMISSION_POINTER_NOT_NEW_EXECUTION",
+      "original_checksum_head": {
+        "AcceptRanges": "bytes",
+        "ChecksumSHA256": "RDWn+Z8eaGQjGxuD/ltiTL5KkMTinb3hz3DAbfu3mvc=",
+        "ChecksumType": "FULL_OBJECT",
+        "ContentLength": 6471751,
+        "ContentType": "binary/octet-stream",
+        "ETag": "\"c9342de66f6fa6a05d10463f2a3ae909\"",
+        "LastModified": "2026-10-18T19:17:04+00:00",
+        "Metadata": {},
+        "ServerSideEncryption": "AES256"
+      },
+      "queries": 1000,
+      "receipt_path": "/mnt/borsuk-workspace/evidence/cosine-serving-screen-a0001/admit-verification.json",
+      "receipt_sha256": "4a2209c6471a321cfcf6ad8748cbb1c9478cb11d18be65c2a1a8b0899a5d1fcc",
+      "result_sha256": "31b19584d6ea7ef2a67d441f6b5e225066b77ee70f9467ce20a14ef0ba83100d",
+      "s3_uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261018/cosine-serving-screen-a0001/admit.tar.gz",
+      "truth_hits": 9746
+    },
+    "cells": {
+      "A1": {
+        "arm": "A",
+        "cell": "A1",
+        "diagnostic_not_population": false,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 122.21406,
+          "0.9": 183.160839,
+          "0.95": 226.268588,
+          "0.99": 348.503989
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 1000,
+        "query_cpu_total_s": 99.342044823,
+        "query_wall_total_s": 136.856828145,
+        "result_sha256": "6f510d37b09f47be14e141def8f3ab1c2f21f3253132af0ca4a8f97018d607c0",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 7.30690615553722,
+        "source_bytes": 24255289344,
+        "source_gets": 97797,
+        "sq8_bytes": 9974177024,
+        "sq8_gets": 30014,
+        "stage_total_ms": {
+          "discovery": 2198.789916,
+          "planning": 21388.01111,
+          "source": 57484.470319,
+          "sq8": 55715.239901
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 9737,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "A2": {
+        "arm": "A",
+        "cell": "A2",
+        "diagnostic_not_population": false,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 120.701923,
+          "0.9": 217.595995,
+          "0.95": 501.361503,
+          "0.99": 1261.980144
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 1000,
+        "query_cpu_total_s": 98.388256015,
+        "query_wall_total_s": 181.692109273,
+        "result_sha256": "e4182144d86bebafce4fa374c8e4e933abb52e1165f92dc3adfc08c705b05be0",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 5.503816340738596,
+        "source_bytes": 24255289344,
+        "source_gets": 97797,
+        "sq8_bytes": 9974177024,
+        "sq8_gets": 30014,
+        "stage_total_ms": {
+          "discovery": 2193.907418,
+          "planning": 21254.53386,
+          "source": 80962.481181,
+          "sq8": 77211.16576
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 9737,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "B1": {
+        "arm": "B",
+        "cell": "B1",
+        "diagnostic_not_population": false,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 117.131187,
+          "0.9": 175.260737,
+          "0.95": 222.658229,
+          "0.99": 367.068489
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 1000,
+        "query_cpu_total_s": 98.708633769,
+        "query_wall_total_s": 133.088756104,
+        "result_sha256": "153338624f8f2346b873a034779f2e5feef272e491c350cf5387c1888c0ed756",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 7.513782751253356,
+        "source_bytes": 24255289344,
+        "source_gets": 97797,
+        "sq8_bytes": 9974177024,
+        "sq8_gets": 30014,
+        "stage_total_ms": {
+          "discovery": 2003.161646,
+          "planning": 21280.828531,
+          "source": 57129.946774,
+          "sq8": 52606.726318
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 9746,
+        "underfill": 0,
+        "vendor_claim": false
+      },
+      "B2": {
+        "arm": "B",
+        "cell": "B2",
+        "diagnostic_not_population": false,
+        "fullycold_claim": false,
+        "observed_query_ms": {
+          "0.5": 118.680773,
+          "0.9": 169.580883,
+          "0.95": 190.999517,
+          "0.99": 343.325953
+        },
+        "plan_and_logical_charges_equal_retained": true,
+        "queries": 1000,
+        "query_cpu_total_s": 98.585094777,
+        "query_wall_total_s": 130.979790289,
+        "result_sha256": "beab60c1e9a077082ace978be4fba3446de3e2a7570a40b61a1e260602ce624d",
+        "scorebits_equal_frozen_offline": true,
+        "serial_qps": 7.634765621425663,
+        "source_bytes": 24255289344,
+        "source_gets": 97797,
+        "sq8_bytes": 9974177024,
+        "sq8_gets": 30014,
+        "stage_total_ms": {
+          "discovery": 1989.739152,
+          "planning": 21071.051025,
+          "source": 56142.922779,
+          "sq8": 51711.529832
+        },
+        "status": "VALID_NATIVE_SERVING_DATA_CHECK",
+        "truth_hits": 9746,
+        "underfill": 0,
+        "vendor_claim": false
+      }
+    },
+    "complete_1000_query_cohort": true,
+    "fullycold_claim": false,
+    "manifest_sha256": "53c23f08388b5754cadeb69221a8a616fb61d0485a3fe8791614aafa02a8824f",
+    "paired_wall_ratios": [
+      0.9724670512091094,
+      0.7208887100991126
+    ],
+    "population_performance_claim": false,
+    "status": "VALID_FULL1000_SERVING_PAIRED_SCREEN",
+    "vendor_claim": false
+  },
+  "instance": "i-04f34662a71d643c2",
+  "main_before": "c1d385c6ea17a9fb2c62f0c704035b6a7ede07e5",
+  "manifest_sha256": "53c23f08388b5754cadeb69221a8a616fb61d0485a3fe8791614aafa02a8824f",
+  "producer_terminals": {
+    "A1": {
+      "phase": "terminal",
+      "summary": {
+        "all_queries_sealed": true,
+        "binding_charge": {
+          "failed_gets": 0,
+          "submitted_gets": 3,
+          "verified_bytes": 46283
+        },
+        "charges": {
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 97797,
+            "verified_bytes": 24255289344
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 30014,
+            "verified_bytes": 9974177024
+          }
+        },
+        "complete": true,
+        "diagnostic_panel": false,
+        "diagnostic_prefix": false,
+        "direct_memory": null,
+        "executed_count": 1000,
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "full_cohort_qualification": false,
+        "generation_root_sha256": "19177ccf2ffc1e04bba366c4957daf46a9b418f93c95374d6c5b8d97027c1203",
+        "k": 10,
+        "mean_recall10": 0.9737,
+        "observed_process_peak_bytes": 112173056,
+        "physical_s3_measured": false,
+        "population_count": 1000,
+        "population_percentiles_valid": true,
+        "prefix_bytes": 32341462,
+        "prefix_sha256": "636f3a45e6ffacbee7c47da00fac84e23399d72d8645021815e795ee37eb8eb1",
+        "process_cpu_ns": 104454358615,
+        "process_wall_ns": 142425053362,
+        "queries": 1000,
+        "query_process_cpu_ns": 99342044823,
+        "query_wall_ns": 136856828145,
+        "recall_denominator": 10000,
+        "recall_numerator": 9737,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_count": 1000,
+        "sealed_bytes": 32341959,
+        "sealed_sha256": "300f193ac458350047a4cdd003c2849cf00a89092a4dd0310039fba02bd0aa1e",
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "status": "MEASURED",
+        "sum": {
+          "failed_gets": 0,
+          "submitted_gets": 127811,
+          "verified_bytes": 34229466368
+        },
+        "total_hits10": 9737,
+        "transport_last_boundary": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 127716,
+            "consumed_payload_bytes": 34205284125,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127711,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "billed_bytes": null,
+          "billed_requests": null,
+          "ordinal": 999,
+          "scope": "cumulative_process_native_transport",
+          "stage": "query",
+          "status_counts_omitted_from_terminal": true,
+          "unread_bytes": null,
+          "wire_bytes": null
+        },
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "underfilled_queries": 0
+      }
+    },
+    "A2": {
+      "phase": "terminal",
+      "summary": {
+        "all_queries_sealed": true,
+        "binding_charge": {
+          "failed_gets": 0,
+          "submitted_gets": 3,
+          "verified_bytes": 46283
+        },
+        "charges": {
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 97797,
+            "verified_bytes": 24255289344
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 30014,
+            "verified_bytes": 9974177024
+          }
+        },
+        "complete": true,
+        "diagnostic_panel": false,
+        "diagnostic_prefix": false,
+        "direct_memory": null,
+        "executed_count": 1000,
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "full_cohort_qualification": false,
+        "generation_root_sha256": "19177ccf2ffc1e04bba366c4957daf46a9b418f93c95374d6c5b8d97027c1203",
+        "k": 10,
+        "mean_recall10": 0.9737,
+        "observed_process_peak_bytes": 109051904,
+        "physical_s3_measured": false,
+        "population_count": 1000,
+        "population_percentiles_valid": true,
+        "prefix_bytes": 32341674,
+        "prefix_sha256": "2ff837bc4ed457fb964fc59b286c1ebd1b5a67a805217de9b9f4e4d3e0a49c66",
+        "process_cpu_ns": 103533287340,
+        "process_wall_ns": 187099422156,
+        "queries": 1000,
+        "query_process_cpu_ns": 98388256015,
+        "query_wall_ns": 181692109273,
+        "recall_denominator": 10000,
+        "recall_numerator": 9737,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_count": 1000,
+        "sealed_bytes": 32342171,
+        "sealed_sha256": "42500d6739494e898077b7c37df27aec9d04463a87031d10cf6a2c2db13bca18",
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "status": "MEASURED",
+        "sum": {
+          "failed_gets": 0,
+          "submitted_gets": 127811,
+          "verified_bytes": 34229466368
+        },
+        "total_hits10": 9737,
+        "transport_last_boundary": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 127716,
+            "consumed_payload_bytes": 34205284125,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127711,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "billed_bytes": null,
+          "billed_requests": null,
+          "ordinal": 999,
+          "scope": "cumulative_process_native_transport",
+          "stage": "query",
+          "status_counts_omitted_from_terminal": true,
+          "unread_bytes": null,
+          "wire_bytes": null
+        },
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "underfilled_queries": 0
+      }
+    },
+    "B1": {
+      "phase": "terminal",
+      "summary": {
+        "all_queries_sealed": true,
+        "binding_charge": {
+          "failed_gets": 0,
+          "submitted_gets": 3,
+          "verified_bytes": 46283
+        },
+        "charges": {
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 97797,
+            "verified_bytes": 24255289344
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 30014,
+            "verified_bytes": 9974177024
+          }
+        },
+        "complete": true,
+        "diagnostic_panel": false,
+        "diagnostic_prefix": false,
+        "direct_memory": null,
+        "executed_count": 1000,
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "full_cohort_qualification": false,
+        "generation_root_sha256": "19177ccf2ffc1e04bba366c4957daf46a9b418f93c95374d6c5b8d97027c1203",
+        "k": 10,
+        "mean_recall10": 0.9746,
+        "observed_process_peak_bytes": 104259584,
+        "physical_s3_measured": false,
+        "population_count": 1000,
+        "population_percentiles_valid": true,
+        "prefix_bytes": 32341384,
+        "prefix_sha256": "f3390a2a6860cc603d2f780428f2768b9439fa432a2401328fd9add5f9dc8aac",
+        "process_cpu_ns": 103838327316,
+        "process_wall_ns": 138469653331,
+        "queries": 1000,
+        "query_process_cpu_ns": 98708633769,
+        "query_wall_ns": 133088756104,
+        "recall_denominator": 10000,
+        "recall_numerator": 9746,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_count": 1000,
+        "sealed_bytes": 32341881,
+        "sealed_sha256": "81d022706eeb5865bea8452350bd7585c26c1dab4a7f9fa123c2cd6b42f6c34e",
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "status": "MEASURED",
+        "sum": {
+          "failed_gets": 0,
+          "submitted_gets": 127811,
+          "verified_bytes": 34229466368
+        },
+        "total_hits10": 9746,
+        "transport_last_boundary": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 127716,
+            "consumed_payload_bytes": 34205284125,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127711,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "billed_bytes": null,
+          "billed_requests": null,
+          "ordinal": 999,
+          "scope": "cumulative_process_native_transport",
+          "stage": "query",
+          "status_counts_omitted_from_terminal": true,
+          "unread_bytes": null,
+          "wire_bytes": null
+        },
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "underfilled_queries": 0
+      }
+    },
+    "B2": {
+      "phase": "terminal",
+      "summary": {
+        "all_queries_sealed": true,
+        "binding_charge": {
+          "failed_gets": 0,
+          "submitted_gets": 3,
+          "verified_bytes": 46283
+        },
+        "charges": {
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 97797,
+            "verified_bytes": 24255289344
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 30014,
+            "verified_bytes": 9974177024
+          }
+        },
+        "complete": true,
+        "diagnostic_panel": false,
+        "diagnostic_prefix": false,
+        "direct_memory": null,
+        "executed_count": 1000,
+        "execution": {
+          "mode": "full"
+        },
+        "external_gate_required": true,
+        "full_cohort_qualification": false,
+        "generation_root_sha256": "19177ccf2ffc1e04bba366c4957daf46a9b418f93c95374d6c5b8d97027c1203",
+        "k": 10,
+        "mean_recall10": 0.9746,
+        "observed_process_peak_bytes": 104861696,
+        "physical_s3_measured": false,
+        "population_count": 1000,
+        "population_percentiles_valid": true,
+        "prefix_bytes": 32341291,
+        "prefix_sha256": "48baf5da1dd5d257d67fcb41fc01740640be3acc632e411a0e8a3b87de6cc6ed",
+        "process_cpu_ns": 103673777441,
+        "process_wall_ns": 136345246312,
+        "queries": 1000,
+        "query_process_cpu_ns": 98585094777,
+        "query_wall_ns": 130979790289,
+        "recall_denominator": 10000,
+        "recall_numerator": 9746,
+        "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+        "reserved_query_count": 1000,
+        "sealed_bytes": 32341788,
+        "sealed_sha256": "a32e027cd6ea78727e1261a28b92117c0efb57b83db86a9b360c9f12f8bb8882",
+        "selected_count": 1000,
+        "serving": {
+          "mode": "baseline"
+        },
+        "status": "MEASURED",
+        "sum": {
+          "failed_gets": 0,
+          "submitted_gets": 127811,
+          "verified_bytes": 34229466368
+        },
+        "total_hits10": 9746,
+        "transport_last_boundary": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 127716,
+            "consumed_payload_bytes": 34205284125,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127711,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": null,
+            "status_counts_entries": 2,
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "billed_bytes": null,
+          "billed_requests": null,
+          "ordinal": 999,
+          "scope": "cumulative_process_native_transport",
+          "stage": "query",
+          "status_counts_omitted_from_terminal": true,
+          "unread_bytes": null,
+          "wire_bytes": null
+        },
+        "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+        "underfilled_queries": 0
+      }
+    }
+  },
+  "ratios": {
+    "cpu": [
+      0.9936239378288563,
+      1.0020006326971584
+    ],
+    "p95": [
+      0.984043923056611,
+      0.38096167307843737
+    ],
+    "wall": [
+      0.9724670512091094,
+      0.7208887100991126
+    ]
+  },
+  "s3_prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261018/cosine-serving-full-paired-a0001/",
+  "source_commit": "e5293d37576a8e1eee92f487bb5b80a543363952",
+  "ssm": "43a00719-e45e-4af9-ad21-d6a97097c77b",
+  "unit_invocation": "cf12b42c80644b6287b3ec0845d6fbe8"
+}
