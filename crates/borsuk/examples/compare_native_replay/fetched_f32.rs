@@ -55,7 +55,7 @@ fn product(a: u64, b: u64) -> Result<u64> {
     a.checked_mul(b)
         .ok_or_else(|| "fetched-f32 size overflow".into())
 }
-fn workspace(bytes: u64, rows: u64, dimensions: u64, ranges: u64, cap: u64) -> Result<u64> {
+pub(super) fn workspace(bytes: u64, rows: u64, dimensions: u64, ranges: u64, cap: u64) -> Result<u64> {
     // Native kernel's internal Vec/HashSet/sort allowance, plus retained rankings.
     // Three body copies conservatively include the native range/score lifetime.
     let bound = [
@@ -83,7 +83,7 @@ fn snapshot(pin: &CompletedInput) -> Result<HeaderSnapshot> {
         path: pin.path.clone(),
     })
 }
-fn authenticate(
+pub(super) fn authenticate(
     pin: &CompletedInput,
     canonical_width: Option<(usize, &str)>,
 ) -> Result<HeaderSnapshot> {
@@ -126,11 +126,11 @@ fn authenticate(
     input.recheck()?;
     Ok(input)
 }
-fn row(file: &File, offset: u64, bytes: &mut [u8]) -> Result<()> {
+pub(super) fn row(file: &File, offset: u64, bytes: &mut [u8]) -> Result<()> {
     file.read_exact_at(bytes, offset)?;
     Ok(())
 }
-fn floats(bytes: &[u8], values: &mut [f32]) -> Result<()> {
+pub(super) fn floats(bytes: &[u8], values: &mut [f32]) -> Result<()> {
     require(bytes.len() == values.len() * 4, "fetched-f32 row width")?;
     for (v, bytes) in values.iter_mut().zip(bytes.chunks_exact(4)) {
         *v = f32::from_le_bytes(bytes.try_into()?);

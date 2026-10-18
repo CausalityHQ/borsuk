@@ -34,6 +34,8 @@
 
 #[path = "compare_native_replay/fetched_f32.rs"]
 mod fetched_f32;
+#[path = "compare_native_replay/sq8_cosine.rs"]
+mod sq8_cosine;
 
 #[path = "compare_native_replay/current_v10.rs"]
 mod current_v10;
@@ -6187,6 +6189,10 @@ fn execute_report_with_sync(
             && report["complete"] == true
             && report["qualified"] == false);
     }
+    if schema == sq8_cosine::REPORT_SCHEMA {
+        return Ok(report["schema"] == schema && report["status"] == "NATIVE_REPLAY_VERIFIED_SQ8_COSINE"
+            && report["complete"] == true && report["qualified"] == false);
+    }
     if schema == fetched_f32::REPORT_SCHEMA {
         return Ok(report["schema"] == schema && report["status"] == "NATIVE_REPLAY_VERIFIED_F32_DIAGNOSTIC"
             && report["complete"] == true && report["qualified"] == false);
@@ -9751,6 +9757,20 @@ mod source_neighborhood_tests {
 
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|a| a == "--sq8-cosine") {
+        let result = if args.len() == 5 {
+            args[3].to_str().ok_or_else(|| "sq8-cosine SHA UTF-8".into()).and_then(|sha| {
+                execute_report(Path::new(&args[4]), sq8_cosine::REPORT_SCHEMA,
+                    || sq8_cosine::reduce(Path::new(&args[2]), sha))
+            })
+        } else { Err("usage: compare_native_replay --sq8-cosine CONFIG CONFIG_SHA NEW_REPORT".into()) };
+        match result {
+            Ok(true) => (),
+            Ok(false) => std::process::exit(2),
+            Err(e) => { eprintln!("{e}"); std::process::exit(2); }
+        }
+        return;
+    }
     if args.get(1).is_some_and(|a| a == "--fetched-f32") {
         let result = if args.len() == 5 {
             args[3].to_str().ok_or_else(|| "fetched-f32 SHA UTF-8".into()).and_then(|sha| {

@@ -22,7 +22,7 @@ pub struct ScoredNominee {
     pub ordinal: usize,
     /// Stable vector identifier stored with the record.
     pub id: i64,
-    /// Squared-L2 score in the generation's SQ8 scale.
+    /// Distance in the explicitly selected kernel's units.
     pub score: f32,
 }
 
@@ -53,6 +53,33 @@ pub fn score_nominees(
     query: &[f32],
     low: &[f32],
     step: &[f32],
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    score_nominees_impl(object, geometry, ordinals, query, low, step, false)
+}
+
+/// Reconstructed SQ8 cosine distance, using the direct affine dot product.
+/// Norms must be finite and positive; stored norms are decoded squared norms.
+/// Returns every nominated row in roster order without truncation.
+pub fn score_nominees_cosine(
+    object: &[u8],
+    geometry: Sq8Geometry,
+    ordinals: &[usize],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    score_nominees_impl(object, geometry, ordinals, query, low, step, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn score_nominees_impl(
+    object: &[u8],
+    geometry: Sq8Geometry,
+    ordinals: &[usize],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    cosine: bool,
 ) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
     let row_bytes = geometry
         .dimensions
@@ -92,7 +119,15 @@ pub fn score_nominees(
         qnorm += query[coordinate] * query[coordinate];
         weights.push(query[coordinate] * step[coordinate]);
     }
-    shift -= qnorm / 2.0;
+    let query_norm = if cosine {
+        if !qnorm.is_finite() || qnorm <= 0.0 || !shift.is_finite() {
+            return Err(Sq8ScoreError::InvalidQuery);
+        }
+        Some(qnorm.sqrt())
+    } else {
+        shift -= qnorm / 2.0;
+        None
+    };
     // Validate every roster row (finite norm, unique ID) before scoring any block.
     let mut ids = HashSet::with_capacity(ordinals.len());
     let mut rows = Vec::with_capacity(ordinals.len());
@@ -100,7 +135,7 @@ pub fn score_nominees(
         let offset = ordinal * row_bytes;
         let id = i64::from_le_bytes(object[offset..offset + 8].try_into().unwrap());
         let norm = f32::from_le_bytes(object[offset + 8..offset + 12].try_into().unwrap());
-        if !norm.is_finite() || !ids.insert(id) {
+        if !norm.is_finite() || (cosine && norm <= 0.0) || !ids.insert(id) {
             return Err(Sq8ScoreError::InvalidPlane);
         }
         rows.push(RosterRow { ordinal, id, norm });
@@ -112,19 +147,51 @@ pub fn score_nominees(
         // Independent rows are scored together in 8, then 4, 2 and 1-row blocks.
         let lanes = match remaining.len() {
             8.. => {
-                score_block::<8>(object, row_bytes, &weights, shift, remaining, &mut result)?;
+                score_block::<8>(
+                    object,
+                    row_bytes,
+                    &weights,
+                    shift,
+                    query_norm,
+                    remaining,
+                    &mut result,
+                )?;
                 8
             }
             4..=7 => {
-                score_block::<4>(object, row_bytes, &weights, shift, remaining, &mut result)?;
+                score_block::<4>(
+                    object,
+                    row_bytes,
+                    &weights,
+                    shift,
+                    query_norm,
+                    remaining,
+                    &mut result,
+                )?;
                 4
             }
             2..=3 => {
-                score_block::<2>(object, row_bytes, &weights, shift, remaining, &mut result)?;
+                score_block::<2>(
+                    object,
+                    row_bytes,
+                    &weights,
+                    shift,
+                    query_norm,
+                    remaining,
+                    &mut result,
+                )?;
                 2
             }
             _ => {
-                score_block::<1>(object, row_bytes, &weights, shift, remaining, &mut result)?;
+                score_block::<1>(
+                    object,
+                    row_bytes,
+                    &weights,
+                    shift,
+                    query_norm,
+                    remaining,
+                    &mut result,
+                )?;
                 1
             }
         };
@@ -148,11 +215,13 @@ struct RosterRow {
 /// sum, no reassociation), so each score is bit-identical to scoring that row
 /// alone. The `N` independent accumulators remove the single-dependency-chain
 /// latency bound and let the compiler emit vector code where the target has it.
+#[allow(clippy::too_many_arguments)]
 fn score_block<const N: usize>(
     object: &[u8],
     row_bytes: usize,
     weights: &[f32],
     shift: f32,
+    query_norm: Option<f32>,
     rows: &[RosterRow],
     result: &mut Vec<ScoredNominee>,
 ) -> Result<(), Sq8ScoreError> {
@@ -169,7 +238,21 @@ fn score_block<const N: usize>(
     }
     for lane in 0..N {
         let row = rows[lane];
-        let score = row.norm - 2.0 * (inner[lane] + shift);
+        let score = if let Some(query_norm) = query_norm {
+            let dot = inner[lane] + shift;
+            let denominator = query_norm * row.norm.sqrt();
+            let ratio = dot / denominator;
+            if !dot.is_finite()
+                || !denominator.is_finite()
+                || denominator <= 0.0
+                || !ratio.is_finite()
+            {
+                return Err(Sq8ScoreError::InvalidPlane);
+            }
+            1.0 - ratio.clamp(-1.0, 1.0)
+        } else {
+            row.norm - 2.0 * (inner[lane] + shift)
+        };
         if !score.is_finite() {
             return Err(Sq8ScoreError::InvalidPlane);
         }
@@ -714,5 +797,97 @@ mod tests {
             score(geometry, &plane.object, &[], &plane.query, &plane.step),
             Ok(Vec::new())
         );
+    }
+}
+
+#[cfg(test)]
+mod cosine_tests {
+    use super::*;
+    fn plane(codes: &[Vec<u8>], low: &[f32], step: &[f32]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (i, codes) in codes.iter().enumerate() {
+            let mut norm = 0f32;
+            for d in 0..codes.len() {
+                let x = low[d] + f32::from(codes[d]) * step[d];
+                norm += x * x;
+            }
+            body.extend_from_slice(&(100 - i as i64).to_le_bytes());
+            body.extend_from_slice(&norm.to_le_bytes());
+            body.extend_from_slice(codes);
+        }
+        body
+    }
+    #[test]
+    fn cosine_block_tails_arbitrary_dimensions_and_unchanged_l2_bits() {
+        for d in [1, 3, 17, 1025] {
+            let low = vec![-0.25; d];
+            let step = vec![0.125; d];
+            let query = (0..d)
+                .map(|j| (j % 7) as f32 * 0.1 + 0.3)
+                .collect::<Vec<_>>();
+            let codes = (0..15)
+                .map(|i| (0..d).map(|j| ((i + j) % 11 + 3) as u8).collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let body = plane(&codes, &low, &step);
+            let geometry = Sq8Geometry {
+                rows: 15,
+                dimensions: d,
+            };
+            let ordinals = (0..15).rev().collect::<Vec<_>>();
+            let cosine =
+                score_nominees_cosine(&body, geometry, &ordinals, &query, &low, &step).unwrap();
+            let l2 = score_nominees(&body, geometry, &ordinals, &query, &low, &step).unwrap();
+            for (cos, old) in cosine.iter().zip(&l2) {
+                let (mut inner, mut offset, mut qnorm) = (0f32, 0f32, 0f32);
+                for j in 0..d {
+                    inner += f32::from(codes[cos.ordinal][j]) * (query[j] * step[j]);
+                    offset += query[j] * low[j];
+                    qnorm += query[j] * query[j];
+                }
+                let at = cos.ordinal * (d + 12) + 8;
+                let norm = f32::from_le_bytes(body[at..at + 4].try_into().unwrap());
+                let expected =
+                    1.0 - ((inner + offset) / (qnorm.sqrt() * norm.sqrt())).clamp(-1., 1.);
+                assert_eq!(cos.score.to_bits(), expected.to_bits());
+                let shifted = offset - qnorm / 2.;
+                assert_eq!(
+                    old.score.to_bits(),
+                    (norm - 2. * (inner + shifted)).to_bits()
+                );
+                let single =
+                    score_nominees_cosine(&body, geometry, &[cos.ordinal], &query, &low, &step)
+                        .unwrap();
+                assert_eq!(cos.score.to_bits(), single[0].score.to_bits());
+            }
+        }
+    }
+    #[test]
+    fn cosine_uses_direct_dot_and_refuses_invalid_norms_queries_rosters() {
+        let mut body = plane(&[vec![0]], &[1e8], &[1.]);
+        let g = Sq8Geometry {
+            rows: 1,
+            dimensions: 1,
+        };
+        let score = score_nominees_cosine(&body, g, &[0], &[1.], &[1e8], &[1.]).unwrap()[0];
+        assert_eq!(score.score.to_bits(), 0f32.to_bits());
+        for norm in [0., -1., f32::NAN, f32::INFINITY] {
+            body[8..12].copy_from_slice(&norm.to_le_bytes());
+            assert_eq!(
+                score_nominees_cosine(&body, g, &[0], &[1.], &[1e8], &[1.]),
+                Err(Sq8ScoreError::InvalidPlane)
+            );
+        }
+        body = plane(&[vec![1]], &[0.], &[1.]);
+        for q in [0., f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                score_nominees_cosine(&body, g, &[0], &[q], &[0.], &[1.]),
+                Err(Sq8ScoreError::InvalidQuery)
+            );
+        }
+        assert!(score_nominees_cosine(&body, g, &[0, 0], &[1.], &[0.], &[1.]).is_err());
+        assert!(score_nominees_cosine(&body, g, &[1], &[1.], &[0.], &[1.]).is_err());
+        assert!(score_nominees_cosine(&body[..12], g, &[0], &[1.], &[0.], &[1.]).is_err());
+        assert!(score_nominees_cosine(&body, g, &[0], &[1.], &[0.], &[0.]).is_err());
+        assert!(score_nominees(&body, g, &[0], &[0.], &[0.], &[1.]).is_ok());
     }
 }

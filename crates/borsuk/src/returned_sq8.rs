@@ -1,6 +1,6 @@
 //! Exact SQ8 ranking over authenticated physical ranges from one generation.
 
-use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees};
+use crate::exact_sq8_nominee::{ScoredNominee, Sq8Geometry, Sq8ScoreError, score_nominees, score_nominees_cosine};
 use std::collections::{BTreeMap, HashSet};
 
 /// Validated headerless records from a framed extent. File offsets are not
@@ -192,7 +192,38 @@ pub fn rank_returned_ranges_excluding_traced(
     top_k: usize,
     max_bytes: usize,
     excluded_ids: &[i64],
+    phases: Option<&mut RankPhases>,
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    rank_ranges_impl(geometry, ranges, query, low, step, top_k, max_bytes, excluded_ids, phases, false)
+}
+
+/// Score all visible returned rows by reconstructed cosine, including bridges.
+/// All rows, including exclusions, are validated before filtering. The caller
+/// authenticates range bodies and the sorted unique exclusion snapshot.
+pub fn score_returned_ranges_cosine_excluding(
+    geometry: Sq8Geometry,
+    ranges: &[ReturnedRange<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    max_bytes: usize,
+    excluded_ids: &[i64],
+) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
+    rank_ranges_impl(geometry, ranges, query, low, step, usize::MAX, max_bytes, excluded_ids, None, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rank_ranges_impl(
+    geometry: Sq8Geometry,
+    ranges: &[ReturnedRange<'_>],
+    query: &[f32],
+    low: &[f32],
+    step: &[f32],
+    top_k: usize,
+    max_bytes: usize,
+    excluded_ids: &[i64],
     mut phases: Option<&mut RankPhases>,
+    cosine: bool,
 ) -> Result<Vec<ScoredNominee>, Sq8ScoreError> {
     if ranges.is_empty() || excluded_ids.windows(2).any(|ids| ids[0] >= ids[1]) {
         return Err(Sq8ScoreError::InvalidRoster);
@@ -233,7 +264,8 @@ pub fn rank_returned_ranges_excluding_traced(
         let count = range.bytes.len() / row_bytes;
         let scored_at = phases.is_some().then(std::time::Instant::now);
         let local_ordinals = (0..count).collect::<Vec<_>>();
-        let local = score_nominees(
+        let scorer = if cosine { score_nominees_cosine } else { score_nominees };
+        let local = scorer(
             range.bytes,
             Sq8Geometry {
                 rows: count,
@@ -644,6 +676,102 @@ mod tests {
                 26
             ),
             Err(Sq8ScoreError::InvalidPlane)
+        );
+    }
+}
+
+#[cfg(test)]
+mod cosine_tests {
+    use super::*;
+    #[test]
+    fn cosine_nonunit_order_reversal_ties_bridges_exclusions_and_errors() {
+        let mut body = Vec::new();
+        for (id, codes, norm) in [
+            (90i64, [10u8, 4u8], 2.25f32),
+            (7, [8, 5], 1.0625),
+            (41, [10, 4], 2.25),
+        ] {
+            body.extend(id.to_le_bytes());
+            body.extend(norm.to_le_bytes());
+            body.extend(codes);
+        }
+        let g = Sq8Geometry {
+            rows: 8,
+            dimensions: 2,
+        };
+        let ranges = [ReturnedRange {
+            start: 3 * 14,
+            bytes: &body,
+        }];
+        let cosine = score_returned_ranges_cosine_excluding(
+            g,
+            &ranges,
+            &[1., 0.],
+            &[-1., -1.],
+            &[0.25, 0.25],
+            42,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            cosine.iter().map(|s| (s.id, s.ordinal)).collect::<Vec<_>>(),
+            [(41, 5), (90, 3), (7, 4)]
+        );
+        let l2 =
+            rank_returned_ranges(g, &ranges, &[1., 0.], &[-1., -1.], &[0.25, 0.25], 3, 42).unwrap();
+        assert_eq!(l2.iter().map(|s| s.id).collect::<Vec<_>>(), [7, 41, 90]);
+        let visible = score_returned_ranges_cosine_excluding(
+            g,
+            &ranges,
+            &[1., 0.],
+            &[-1., -1.],
+            &[0.25, 0.25],
+            42,
+            &[41, 90],
+        )
+        .unwrap();
+        assert_eq!((visible[0].id, visible[0].ordinal), (7, 4));
+        for excluded in [vec![90, 41], vec![41, 41]] {
+            assert!(
+                score_returned_ranges_cosine_excluding(
+                    g,
+                    &ranges,
+                    &[1., 0.],
+                    &[-1., -1.],
+                    &[0.25, 0.25],
+                    42,
+                    &excluded
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            score_returned_ranges_cosine_excluding(
+                g,
+                &ranges,
+                &[1., 0.],
+                &[-1., -1.],
+                &[0.25, 0.25],
+                41,
+                &[]
+            )
+            .is_err()
+        );
+        body[8..12].copy_from_slice(&0f32.to_le_bytes());
+        assert!(
+            score_returned_ranges_cosine_excluding(
+                g,
+                &[ReturnedRange {
+                    start: 42,
+                    bytes: &body
+                }],
+                &[1., 0.],
+                &[-1., -1.],
+                &[0.25, 0.25],
+                42,
+                &[90]
+            )
+            .is_err()
         );
     }
 }
