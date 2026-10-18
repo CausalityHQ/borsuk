@@ -139,3 +139,6 @@ harness = false
 
 [[example]]
 name = "source_capsule_geometry"
+
+[[example]]
+name = "check_source_frame"

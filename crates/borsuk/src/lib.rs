@@ -948,3 +948,5 @@ pub mod two_bit_compaction;
 
 /// Bounded callable single-host garbage collection under a durable write fence.
 pub mod two_bit_gc;
+
+pub mod source_frame;
