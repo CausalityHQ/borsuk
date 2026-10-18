@@ -1,0 +1,8 @@
+PASS: Bash/ShellCheck/AST/JSON, fixed config+input+ELF/header pins, canonical1000 and parity digest checks; no runtime invoked
+PASS: both policy headers; exact resource values; cap/caller/scratch/worker one-byte mutations rejected
+PASS: actual admission0 and separate smoke32,161 frozen resource/header checks for both arms
+artifacts/check_cohere_native_baseline.A: OK
+artifacts/check_cohere_native_baseline.B: OK
+artifacts/compare_native_replay: OK
+/mnt/borsuk-workspace/environment.sh: OK
+/mnt/borsuk-workspace/evidence/s3vectors-full-cell-a0002/native-profile/config: OK

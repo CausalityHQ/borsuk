@@ -1,0 +1,129 @@
+{
+  "caller_derivation": "Exact frozen source and ELF; all retained strings, paths and vectors keep byte lengths/capacities; source_authentication is a Copy enum, scratch0000 preserves old scratch path length. Prior accepted inline resources retained as independent numeric anchors, never learned from this trial.",
+  "cap_unchanged": 2147483648,
+  "diagnostic_admission": {
+    "admission": {
+      "caller_pinned_bytes": 7204345,
+      "charged_in_caller_pinned_bytes": true,
+      "diagnostic_bytes_per_active_query": 262144,
+      "diagnostic_cap_bytes": 1048576,
+      "diagnostic_pinned_bytes": 262144,
+      "execution": {
+        "mode": "diagnostic_panel",
+        "ordinals": [
+          0
+        ],
+        "trace": false
+      },
+      "full_cohort_qualification": false,
+      "host_read_cap_bytes": 131072,
+      "max_active_queries": 1,
+      "panel_line_cap_bytes": 131072,
+      "phase": "diagnostic_admission",
+      "population_count": 1000,
+      "population_percentiles_valid": false,
+      "range_scheduler_owner": "library",
+      "range_state_both_paths_bytes": 174592,
+      "range_state_charged_by_library_bytes": 174592,
+      "selected_count": 1,
+      "semantics": {
+        "body_gaps": "application_observed_poll_gaps_not_packet_arrival",
+        "capsule_page_bounds": "u64_max_means_no_single_logical_page_interval",
+        "cpu_residual": "unattributed_process_cpu_not_tls_or_network_cpu",
+        "headers_interval": "get_opts_client_queue_connect_tls_server_combined",
+        "host_counters": "host_wide_not_per_flow_null_means_unavailable",
+        "poll_cpu": "unresolved_not_instrumented",
+        "ranges": "overlap_in_time_never_sum_intervals",
+        "unset": "a boundary never reached is null, never a fabricated timestamp"
+      },
+      "source_authentication_extra_library_bytes": 0,
+      "source_trace_ranges": 128,
+      "trace": false,
+      "trace_additional_bytes_charged_by_library": 0,
+      "trace_peak_bytes": null,
+      "trace_ranges": 32,
+      "trace_retained_bytes": null,
+      "truth_opened": false
+    },
+    "smoke": {
+      "caller_pinned_bytes": 7204353,
+      "charged_in_caller_pinned_bytes": true,
+      "diagnostic_bytes_per_active_query": 262144,
+      "diagnostic_cap_bytes": 1048576,
+      "diagnostic_pinned_bytes": 262144,
+      "execution": {
+        "mode": "diagnostic_panel",
+        "ordinals": [
+          32,
+          161
+        ],
+        "trace": false
+      },
+      "full_cohort_qualification": false,
+      "host_read_cap_bytes": 131072,
+      "max_active_queries": 1,
+      "panel_line_cap_bytes": 131072,
+      "phase": "diagnostic_admission",
+      "population_count": 1000,
+      "population_percentiles_valid": false,
+      "range_scheduler_owner": "library",
+      "range_state_both_paths_bytes": 174592,
+      "range_state_charged_by_library_bytes": 174592,
+      "selected_count": 2,
+      "semantics": {
+        "body_gaps": "application_observed_poll_gaps_not_packet_arrival",
+        "capsule_page_bounds": "u64_max_means_no_single_logical_page_interval",
+        "cpu_residual": "unattributed_process_cpu_not_tls_or_network_cpu",
+        "headers_interval": "get_opts_client_queue_connect_tls_server_combined",
+        "host_counters": "host_wide_not_per_flow_null_means_unavailable",
+        "poll_cpu": "unresolved_not_instrumented",
+        "ranges": "overlap_in_time_never_sum_intervals",
+        "unset": "a boundary never reached is null, never a fabricated timestamp"
+      },
+      "source_authentication_extra_library_bytes": 0,
+      "source_trace_ranges": 128,
+      "trace": false,
+      "trace_additional_bytes_charged_by_library": 0,
+      "trace_peak_bytes": null,
+      "trace_ranges": 32,
+      "trace_retained_bytes": null,
+      "truth_opened": false
+    }
+  },
+  "extra_library_bytes": {
+    "A": 0,
+    "B": 2380032
+  },
+  "model": "B = A + ((min(128,64+2)*4096 + 2*(1048576+4096) + 4096)*1 + 256); with_source_authentication checked_add and <= max_memory_bytes before query I/O",
+  "source_hashes": {
+    "generation_source_sha256": "d25ff99e2fdfefd96670343520bd2fa20c29bcec28991307586985acc5408495",
+    "runner_source_sha256": "40cc98a6d02937718ce5e7135093323fb699f26e8d7a695437b9e8aaf33e65c5",
+    "sq8_range_source_sha256": "6fe80a9ef95059a4d360bb86173969684949171c60403068707dbedfa0edb112"
+  },
+  "startup": {
+    "admission": {
+      "caller_pinned_bytes": 7204345,
+      "codec_scratch_bytes": 532480,
+      "library_cap_bytes": 2147483648,
+      "query_scratch_bytes": 778840,
+      "range_state_charged_by_library_bytes": 174592,
+      "trace_scratch_bytes": 246360
+    },
+    "full": {
+      "caller_pinned_bytes": 6942193,
+      "codec_scratch_bytes": 532480,
+      "library_cap_bytes": 2147483648,
+      "query_scratch_bytes": 778840,
+      "range_state_charged_by_library_bytes": 174592,
+      "trace_scratch_bytes": 246360
+    },
+    "smoke": {
+      "caller_pinned_bytes": 7204353,
+      "codec_scratch_bytes": 532480,
+      "library_cap_bytes": 2147483648,
+      "query_scratch_bytes": 778840,
+      "range_state_charged_by_library_bytes": 174592,
+      "trace_scratch_bytes": 246360
+    }
+  }
+}

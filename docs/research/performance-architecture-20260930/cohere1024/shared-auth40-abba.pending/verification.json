@@ -1,0 +1,16 @@
+{
+  "base": "58055c7a643120fd839dd5e42e321a10bc89398b",
+  "command": "bash static-check.sh",
+  "exit": 0,
+  "instance": "i-0518bef1e30d66437",
+  "runtime_authority": "parent only",
+  "static_limits": {
+    "cpus": "4",
+    "memory_bytes": 536870912,
+    "pids": 128,
+    "quota": "100%",
+    "seconds": 120,
+    "swap": 0
+  },
+  "status": "STATIC_PASS_RUNTIME_UNRUN"
+}

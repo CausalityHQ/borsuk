@@ -1,0 +1,34 @@
+{
+  "configs": [
+    {
+      "bytes": 3333,
+      "name": "full.A.json",
+      "sha256": "6acbcbb97326604774da2f940905a86b4bdb03709ab159e16a0095d0b058b682"
+    },
+    {
+      "bytes": 3335,
+      "name": "full.B.json",
+      "sha256": "fe87182f7fcf93df4b408a2e9065d7e9796d668e7baaa150d33eaf1d7604af04"
+    },
+    {
+      "bytes": 3398,
+      "name": "admission.A.json",
+      "sha256": "066f0eac7b6b2413caddee8ea5b1ab6e8a272c0ee81a042f947386918226f48a"
+    },
+    {
+      "bytes": 3400,
+      "name": "admission.B.json",
+      "sha256": "3a51fb0294a0b3897f838b4118f9e553a4c9c2b7d8707fd2236f84d123158d7d"
+    },
+    {
+      "bytes": 3410,
+      "name": "smoke.A.json",
+      "sha256": "d2b3303bc8f063784e75e6635cf813cd9ae535d0f604120f129ba7b86493d5e5"
+    },
+    {
+      "bytes": 3412,
+      "name": "smoke.B.json",
+      "sha256": "7464b34c5f9a53d18aa6a037508e3d9f8bc66f82fb5fb4b68801b14125f8560b"
+    }
+  ]
+}

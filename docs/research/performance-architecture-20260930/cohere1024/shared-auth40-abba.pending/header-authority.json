@@ -1,0 +1,15 @@
+{
+  "binary_sha256": {
+    "A": "3e86a3e8d5b59db6150ea2db0575725df7200ee1a82018ee3257f5b73178d81c",
+    "B": "3e86a3e8d5b59db6150ea2db0575725df7200ee1a82018ee3257f5b73178d81c"
+  },
+  "headers_frozen_before_any_query": true,
+  "only_policy_difference": "source_authentication",
+  "qualified_shared_revision": "8ace22bd6272ac3b6eacea6c3f41d3ef484774c4",
+  "schema": "borsuk-shared-auth40-authority-v1",
+  "source_revisions": {
+    "A": "a0463ed097296c19539d05529ddad615be760fdd",
+    "B": "a0463ed097296c19539d05529ddad615be760fdd"
+  },
+  "strict_reader_sha256": "ec0b3651f8921599f4597cfe6e1ce38f3fd3d14ce14e72c23eb04847164009e4"
+}
