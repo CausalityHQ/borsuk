@@ -1,0 +1,1041 @@
+{
+  "arm_semantics": {
+    "A": "m6i.4xlarge multi_thread2 Q2 fixed40 Offload2",
+    "B": "m6in.4xlarge multi_thread2 Q2 fixed40 Offload2"
+  },
+  "both_ordinal_p95_pairs_lower": true,
+  "both_ordinal_planning_wall_pairs_lower_descriptive": true,
+  "both_ordinal_qps_pairs_higher": true,
+  "cache_app": "OFF",
+  "cache_backend": "UNKNOWN",
+  "candidate_host_replications": 1,
+  "candidate_p95_max_below_control_min": true,
+  "candidate_qps_min_exceeds_control_max": true,
+  "canonical_equal_queries_per_cell": 1000,
+  "cells": [
+    {
+      "cell": "A1",
+      "cohort_elapsed_ns": 123792921755,
+      "cohort_qps": 8.078006285198693,
+      "config_sha256": "0eeae8c5ac70eebeac59bcdcf99447c0ed698e9795aff37660c562c33be6089f",
+      "leaf_limit": 40,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "logical_gets": 127811,
+      "logical_verified_bytes": 34229466368,
+      "max_query_ms": 629.99048,
+      "observed_process_peak_bytes": 154439680,
+      "overlap_witness_established": true,
+      "physical_transport": {
+        "after": {
+          "attempts": 127829,
+          "consumed_payload_bytes": 34234731165,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            127824,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 18,
+          "consumed_payload_bytes": 5264797,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            13,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 1,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "billed_bytes": null,
+        "billed_requests": null,
+        "ordinal": null,
+        "scope": "cumulative_process_native_transport",
+        "stage": "query_cohort",
+        "status_counts_omitted_from_terminal": true,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "process_cpu_ns": 114057772007,
+      "process_max_rss_kib": 150820,
+      "process_wall_ns": 124278014230,
+      "query_cohort": {
+        "attempted_count": 1000,
+        "elapsed_ns": 123792921755,
+        "max_active_queries": 2,
+        "phase": "query_cohort",
+        "process_cpu_end_ns": 113902547185,
+        "process_cpu_ns": 113790714976,
+        "process_cpu_start_ns": 111832209,
+        "qps": 8.078006285198693,
+        "successful_count": 1000,
+        "sum_query_wall_ns": 198791319085,
+        "transport": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ],
+              [
+                206,
+                127811
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 18,
+            "consumed_payload_bytes": 5264797,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              13,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "ordinal": null,
+          "stage": "query_cohort"
+        },
+        "truth_opened": false
+      },
+      "query_cpu_ns": 113790714976,
+      "query_wall_ns": 198791319085,
+      "reader_report_sha256": "b96f6c46d9fee3fd9027f1b34f87b76681c6d18db74ed6eb4b0150d0731736f2",
+      "recall_at_10": 0.9737,
+      "recall_denominator": 10000,
+      "recall_hits": 9737,
+      "result_sha256": "d6d727c5a817447621043d94627fbb23a8bab85da7ca1a276765b5f87c4e1d16",
+      "stage_descriptive": {
+        "discovery": {
+          "count": 1000,
+          "p50_ms": 1.987905,
+          "p90_ms": 2.027696,
+          "p95_ms": 2.040346,
+          "p99_ms": 2.077183,
+          "total_ns": 1990656082
+        },
+        "planning": {
+          "count": 1000,
+          "p50_ms": 21.645066,
+          "p90_ms": 23.974284,
+          "p95_ms": 24.713943,
+          "p99_ms": 25.883128,
+          "total_ns": 21540524008
+        },
+        "source": {
+          "count": 1000,
+          "p50_ms": 71.1555,
+          "p90_ms": 252.493829,
+          "p95_ms": 259.217103,
+          "p99_ms": 285.556848,
+          "total_ns": 108790572111
+        },
+        "sq8": {
+          "count": 1000,
+          "p50_ms": 46.286209,
+          "p90_ms": 116.593079,
+          "p95_ms": 176.032083,
+          "p99_ms": 290.304154,
+          "total_ns": 66368238078
+        }
+      },
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 151.713271,
+        "p90_ms": 343.556073,
+        "p90_ns": 343556073,
+        "p95_ms": 383.471967,
+        "p95_ns": 383471967,
+        "p99_ms": 533.907863,
+        "query_wall_ns": 198791319085
+      }
+    },
+    {
+      "cell": "B1",
+      "cohort_elapsed_ns": 105342039856,
+      "cohort_qps": 9.492886233900308,
+      "config_sha256": "0eeae8c5ac70eebeac59bcdcf99447c0ed698e9795aff37660c562c33be6089f",
+      "leaf_limit": 40,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "logical_gets": 127811,
+      "logical_verified_bytes": 34229466368,
+      "max_query_ms": 959.219343,
+      "observed_process_peak_bytes": 151834624,
+      "overlap_witness_established": true,
+      "physical_transport": {
+        "after": {
+          "attempts": 127829,
+          "consumed_payload_bytes": 34234731161,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            127824,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 18,
+          "consumed_payload_bytes": 5264793,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            13,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 1,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "billed_bytes": null,
+        "billed_requests": null,
+        "ordinal": null,
+        "scope": "cumulative_process_native_transport",
+        "stage": "query_cohort",
+        "status_counts_omitted_from_terminal": true,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "process_cpu_ns": 110780376105,
+      "process_max_rss_kib": 148276,
+      "process_wall_ns": 105892938423,
+      "query_cohort": {
+        "attempted_count": 1000,
+        "elapsed_ns": 105342039856,
+        "max_active_queries": 2,
+        "phase": "query_cohort",
+        "process_cpu_end_ns": 110626538991,
+        "process_cpu_ns": 110511770737,
+        "process_cpu_start_ns": 114768254,
+        "qps": 9.492886233900308,
+        "successful_count": 1000,
+        "sum_query_wall_ns": 171589270518,
+        "transport": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731161,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ],
+              [
+                206,
+                127811
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 18,
+            "consumed_payload_bytes": 5264793,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              13,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "ordinal": null,
+          "stage": "query_cohort"
+        },
+        "truth_opened": false
+      },
+      "query_cpu_ns": 110511770737,
+      "query_wall_ns": 171589270518,
+      "reader_report_sha256": "cba0841df8d518ed8dff60f1aa6982c36682d3067d6a3d612c82c8e7c580c469",
+      "recall_at_10": 0.9737,
+      "recall_denominator": 10000,
+      "recall_hits": 9737,
+      "result_sha256": "80b15ab47ed80b482bd703280ff063b9e08f8b8b62f6059507fa87c1c23e123d",
+      "stage_descriptive": {
+        "discovery": {
+          "count": 1000,
+          "p50_ms": 1.975331,
+          "p90_ms": 2.012962,
+          "p95_ms": 2.026306,
+          "p99_ms": 2.430178,
+          "total_ns": 1983297085
+        },
+        "planning": {
+          "count": 1000,
+          "p50_ms": 21.537631,
+          "p90_ms": 24.023148,
+          "p95_ms": 24.674477,
+          "p99_ms": 25.850796,
+          "total_ns": 21417822248
+        },
+        "source": {
+          "count": 1000,
+          "p50_ms": 66.982871,
+          "p90_ms": 115.984878,
+          "p95_ms": 185.371267,
+          "p99_ms": 299.985731,
+          "total_ns": 81854265534
+        },
+        "sq8": {
+          "count": 1000,
+          "p50_ms": 50.400155,
+          "p90_ms": 113.736305,
+          "p95_ms": 155.814003,
+          "p99_ms": 272.070668,
+          "total_ns": 66236114624
+        }
+      },
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 141.710342,
+        "p90_ms": 256.287466,
+        "p90_ns": 256287466,
+        "p95_ms": 349.540451,
+        "p95_ns": 349540451,
+        "p99_ms": 507.16918,
+        "query_wall_ns": 171589270518
+      }
+    },
+    {
+      "cell": "B2",
+      "cohort_elapsed_ns": 100963563187,
+      "cohort_qps": 9.904563274454237,
+      "config_sha256": "0eeae8c5ac70eebeac59bcdcf99447c0ed698e9795aff37660c562c33be6089f",
+      "leaf_limit": 40,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "logical_gets": 127811,
+      "logical_verified_bytes": 34229466368,
+      "max_query_ms": 1015.197332,
+      "observed_process_peak_bytes": 149827584,
+      "overlap_witness_established": true,
+      "physical_transport": {
+        "after": {
+          "attempts": 127829,
+          "consumed_payload_bytes": 34234731161,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            127824,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 18,
+          "consumed_payload_bytes": 5264793,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            13,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 1,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "billed_bytes": null,
+        "billed_requests": null,
+        "ordinal": null,
+        "scope": "cumulative_process_native_transport",
+        "stage": "query_cohort",
+        "status_counts_omitted_from_terminal": true,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "process_cpu_ns": 110657654818,
+      "process_max_rss_kib": 146316,
+      "process_wall_ns": 101464239063,
+      "query_cohort": {
+        "attempted_count": 1000,
+        "elapsed_ns": 100963563187,
+        "max_active_queries": 2,
+        "phase": "query_cohort",
+        "process_cpu_end_ns": 110500063512,
+        "process_cpu_ns": 110388434746,
+        "process_cpu_start_ns": 111628766,
+        "qps": 9.904563274454237,
+        "successful_count": 1000,
+        "sum_query_wall_ns": 167295828494,
+        "transport": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731161,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ],
+              [
+                206,
+                127811
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 18,
+            "consumed_payload_bytes": 5264793,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              13,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "ordinal": null,
+          "stage": "query_cohort"
+        },
+        "truth_opened": false
+      },
+      "query_cpu_ns": 110388434746,
+      "query_wall_ns": 167295828494,
+      "reader_report_sha256": "9f9ef79e33750db1b61b081298a2133c57971169dcec37f8884367dfff67a946",
+      "recall_at_10": 0.9737,
+      "recall_denominator": 10000,
+      "recall_hits": 9737,
+      "result_sha256": "7932d901a519f64b6336ac3c98325d7052a975c58744362a71ce1e755e7d6793",
+      "stage_descriptive": {
+        "discovery": {
+          "count": 1000,
+          "p50_ms": 1.975135,
+          "p90_ms": 2.014025,
+          "p95_ms": 2.030218,
+          "p99_ms": 2.398806,
+          "total_ns": 1986086437
+        },
+        "planning": {
+          "count": 1000,
+          "p50_ms": 21.479282,
+          "p90_ms": 23.962231,
+          "p95_ms": 24.734076,
+          "p99_ms": 25.734949,
+          "total_ns": 21439411548
+        },
+        "source": {
+          "count": 1000,
+          "p50_ms": 66.727801,
+          "p90_ms": 104.992824,
+          "p95_ms": 139.74621,
+          "p99_ms": 258.64253,
+          "total_ns": 77019593383
+        },
+        "sq8": {
+          "count": 1000,
+          "p50_ms": 48.962053,
+          "p90_ms": 114.599317,
+          "p95_ms": 163.567157,
+          "p99_ms": 315.343933,
+          "total_ns": 66754088231
+        }
+      },
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 140.566152,
+        "p90_ms": 241.238028,
+        "p90_ns": 241238028,
+        "p95_ms": 319.992208,
+        "p95_ns": 319992208,
+        "p99_ms": 489.141631,
+        "query_wall_ns": 167295828494
+      }
+    },
+    {
+      "cell": "A2",
+      "cohort_elapsed_ns": 125249326883,
+      "cohort_qps": 7.984074844043967,
+      "config_sha256": "0eeae8c5ac70eebeac59bcdcf99447c0ed698e9795aff37660c562c33be6089f",
+      "leaf_limit": 40,
+      "logical_charges": {
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 97797,
+          "verified_bytes": 24255289344
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30014,
+          "verified_bytes": 9974177024
+        }
+      },
+      "logical_gets": 127811,
+      "logical_verified_bytes": 34229466368,
+      "max_query_ms": 788.128607,
+      "observed_process_peak_bytes": 144666624,
+      "overlap_witness_established": true,
+      "physical_transport": {
+        "after": {
+          "attempts": 127829,
+          "consumed_payload_bytes": 34234731165,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            127824,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 18,
+          "consumed_payload_bytes": 5264797,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            13,
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 1,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "billed_bytes": null,
+        "billed_requests": null,
+        "ordinal": null,
+        "scope": "cumulative_process_native_transport",
+        "stage": "query_cohort",
+        "status_counts_omitted_from_terminal": true,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "process_cpu_ns": 113772981000,
+      "process_max_rss_kib": 141276,
+      "process_wall_ns": 125732501949,
+      "query_cohort": {
+        "attempted_count": 1000,
+        "elapsed_ns": 125249326883,
+        "max_active_queries": 2,
+        "phase": "query_cohort",
+        "process_cpu_end_ns": 113613620432,
+        "process_cpu_ns": 113502992095,
+        "process_cpu_start_ns": 110628337,
+        "qps": 7.984074844043967,
+        "successful_count": 1000,
+        "sum_query_wall_ns": 201197464566,
+        "transport": {
+          "after": {
+            "attempts": 127829,
+            "consumed_payload_bytes": 34234731165,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              127824,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ],
+              [
+                206,
+                127811
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "before": {
+            "attempts": 18,
+            "consumed_payload_bytes": 5264797,
+            "dropped_error_bodies": 0,
+            "method_counts": [
+              13,
+              4,
+              1,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "status_counts": [
+              [
+                200,
+                18
+              ]
+            ],
+            "stream_failures": 0,
+            "transport_failures": 0
+          },
+          "ordinal": null,
+          "stage": "query_cohort"
+        },
+        "truth_opened": false
+      },
+      "query_cpu_ns": 113502992095,
+      "query_wall_ns": 201197464566,
+      "reader_report_sha256": "94fc03f040625591dc325870091f8fb334efb9dc7b6ea742f852e9e07ba59991",
+      "recall_at_10": 0.9737,
+      "recall_denominator": 10000,
+      "recall_hits": 9737,
+      "result_sha256": "fb9e92e84fc504946f792af8afab699bfe1cbd8938f5247e2fe11cea535dbc63",
+      "stage_descriptive": {
+        "discovery": {
+          "count": 1000,
+          "p50_ms": 1.991295,
+          "p90_ms": 2.026724,
+          "p95_ms": 2.038266,
+          "p99_ms": 2.089017,
+          "total_ns": 1994194641
+        },
+        "planning": {
+          "count": 1000,
+          "p50_ms": 21.686491,
+          "p90_ms": 24.051708,
+          "p95_ms": 24.783104,
+          "p99_ms": 25.875074,
+          "total_ns": 21549837078
+        },
+        "source": {
+          "count": 1000,
+          "p50_ms": 71.356798,
+          "p90_ms": 252.097989,
+          "p95_ms": 258.908497,
+          "p99_ms": 280.026634,
+          "total_ns": 111899158408
+        },
+        "sq8": {
+          "count": 1000,
+          "p50_ms": 49.378216,
+          "p90_ms": 105.647967,
+          "p95_ms": 148.818509,
+          "p99_ms": 280.048607,
+          "total_ns": 65653940453
+        }
+      },
+      "statistics": {
+        "count": 1000,
+        "p50_ms": 156.487911,
+        "p90_ms": 338.053661,
+        "p90_ns": 338053661,
+        "p95_ms": 374.691572,
+        "p95_ns": 374691572,
+        "p99_ms": 524.849454,
+        "query_wall_ns": 201197464566
+      }
+    }
+  ],
+  "cohort_qps_definition": "successful_count/cohort elapsed; not reciprocal mean query latency",
+  "competitor_win_claim": false,
+  "concurrent_qps_claim_scope": "identical runtime2 spawned closed-loop Q2 batches; host class m6i4 versus m6in4",
+  "confounds": [
+    "host class",
+    "physical host",
+    "time block",
+    "CPU variation",
+    "Nitro/IRQ/EBS",
+    "neighbors",
+    "unknown network credits and backend cache"
+  ],
+  "control_host_replications": 1,
+  "control_source_revision": "efef1d988359076da2f552a90e41765f7665e217",
+  "cross_arm_parity": {
+    "A1_B1": {
+      "canonical_equal_queries": 1000,
+      "logical_charges_equal": true,
+      "recall_rows_equal": true
+    },
+    "A2_B2": {
+      "canonical_equal_queries": 1000,
+      "logical_charges_equal": true,
+      "recall_rows_equal": true
+    }
+  },
+  "decision": "VALID_DESCRIPTIVE_HOST_CLASS_SENSITIVITY",
+  "default_promoted": false,
+  "delivery_revision": null,
+  "dominance_flags_are_descriptive_not_acceptance_gates": true,
+  "ena_attribution_limit": "Host-wide allowance counters; no packet-loss fraction, timing fraction or isolated network causality.",
+  "ena_host_allowance_counters": {
+    "A1": {
+      "available": true,
+      "deltas": {
+        "bw_in_allowance_exceeded": 3363097,
+        "bw_out_allowance_exceeded": 0,
+        "conntrack_allowance_exceeded": 0,
+        "linklocal_allowance_exceeded": 0,
+        "pps_allowance_exceeded": 0
+      },
+      "scope": "host_wide_not_per_query_wire_or_billed"
+    },
+    "A2": {
+      "available": true,
+      "deltas": {
+        "bw_in_allowance_exceeded": 3429580,
+        "bw_out_allowance_exceeded": 0,
+        "conntrack_allowance_exceeded": 0,
+        "linklocal_allowance_exceeded": 0,
+        "pps_allowance_exceeded": 0
+      },
+      "scope": "host_wide_not_per_query_wire_or_billed"
+    },
+    "B1": {
+      "available": true,
+      "deltas": {
+        "bw_in_allowance_exceeded": 0,
+        "bw_out_allowance_exceeded": 0,
+        "conntrack_allowance_exceeded": 0,
+        "linklocal_allowance_exceeded": 0,
+        "pps_allowance_exceeded": 0
+      },
+      "scope": "host_wide_not_per_query_wire_or_billed"
+    },
+    "B2": {
+      "available": true,
+      "deltas": {
+        "bw_in_allowance_exceeded": 0,
+        "bw_out_allowance_exceeded": 0,
+        "conntrack_allowance_exceeded": 0,
+        "linklocal_allowance_exceeded": 0,
+        "pps_allowance_exceeded": 0
+      },
+      "scope": "host_wide_not_per_query_wire_or_billed"
+    }
+  },
+  "first_query_included": true,
+  "independent_queries": 1000,
+  "instances": {
+    "A": "i-0d0027ae28470b0c5",
+    "B": "i-0264d03412a1238c4"
+  },
+  "isolated_nic_causality_claim": false,
+  "matched_ordinal_descriptive_ratios": [
+    {
+      "candidate": "B1",
+      "cohort_elapsed_ratio": 0.8509536600524192,
+      "cohort_qps_ratio": 1.1751521227823374,
+      "control": "A1",
+      "cpu_ratio": 0.9711844306480404,
+      "discovery_interval_wall_ratio": 0.9963032303437335,
+      "logical_byte_ratio": 1.0,
+      "logical_get_ratio": 1.0,
+      "p90_ratio": 0.7459843854950572,
+      "p95_ratio": 0.9115150026077395,
+      "planning_interval_wall_ratio": 0.9943036780370603,
+      "source_interval_wall_ratio": 0.7524021975956092,
+      "sq8_interval_wall_ratio": 0.9980092366796792,
+      "sum_query_wall_ratio": 0.8631627945716843,
+      "whole_instance_compute_cost_per_completed_query_ratio": 1.072582782319593
+    },
+    {
+      "candidate": "B2",
+      "cohort_elapsed_ratio": 0.8061006450063701,
+      "cohort_qps_ratio": 1.2405398831954755,
+      "control": "A2",
+      "cpu_ratio": 0.972559689471506,
+      "discovery_interval_wall_ratio": 0.9959340959837631,
+      "logical_byte_ratio": 1.0,
+      "logical_get_ratio": 1.0,
+      "p90_ratio": 0.7136086835634062,
+      "p95_ratio": 0.8540149603364978,
+      "planning_interval_wall_ratio": 0.9948758067357858,
+      "source_interval_wall_ratio": 0.6882946617183284,
+      "sq8_interval_wall_ratio": 1.016756766926847,
+      "sum_query_wall_ratio": 0.8315006794686568,
+      "whole_instance_compute_cost_per_completed_query_ratio": 1.016047892193437
+    }
+  ],
+  "network_observations": {
+    "A1": {
+      "rx_bytes_delta": 34778040369,
+      "rx_packets_delta": 8210319
+    },
+    "A2": {
+      "rx_bytes_delta": 34769022246,
+      "rx_packets_delta": 7966851
+    },
+    "B1": {
+      "rx_bytes_delta": 34820675992,
+      "rx_packets_delta": 9277922
+    },
+    "B2": {
+      "rx_bytes_delta": 34765809276,
+      "rx_packets_delta": 7774214
+    }
+  },
+  "not_abba": true,
+  "order": [
+    "B1",
+    "B2",
+    "A1",
+    "A2"
+  ],
+  "overlap_witness_scope": "overlapping dispatch-to-completion lifetimes, not proof of IO/compute parallelism",
+  "planning_cpu_isolated": false,
+  "pooled_2000_independent": false,
+  "pooled_descriptive_candidate": {
+    "count": 2000,
+    "p50_ms": 141.340515,
+    "p90_ms": 250.19944,
+    "p95_ms": 344.896327,
+    "p99_ms": 506.795871,
+    "total_ns": 338885099012
+  },
+  "pooled_descriptive_control": {
+    "count": 2000,
+    "p50_ms": 153.89774,
+    "p90_ms": 340.559465,
+    "p95_ms": 379.068248,
+    "p99_ms": 533.907863,
+    "total_ns": 399988783651
+  },
+  "price_scope": "observed whole-instance Spot quote, not total lifecycle or prorated four-core cost",
+  "q2_overlap_witness_all_cells": true,
+  "query_wall_semantics": "dispatch_to_completion_including_initial_runtime_queue",
+  "recall_delta": {
+    "net_hits": 0,
+    "percentage_points": 0.0,
+    "queries_improved": 0,
+    "queries_same": 1000,
+    "queries_worsened": 0
+  },
+  "repetitions_per_arm": 2,
+  "runtime": "Tokio two runtime workers in all four cells",
+  "runtime_reserved_bytes_both_arms": 143261696,
+  "same_arm_parity": {
+    "A1_A2": {
+      "canonical_equal_queries": 1000,
+      "logical_charges_equal": true,
+      "recall_rows_equal": true
+    },
+    "B1_B2": {
+      "canonical_equal_queries": 1000,
+      "logical_charges_equal": true,
+      "recall_rows_equal": true
+    }
+  },
+  "schema": "borsuk-network-headroom-host-class-screen-v1",
+  "setup_full_candidate_cohort_smoke_preceded_measurement": true,
+  "shared_scheduler_prior_real_performance": null,
+  "significance_or_service_capacity_claim": false,
+  "source_revision": "efef1d988359076da2f552a90e41765f7665e217",
+  "spot_usd_per_instance_hour": {
+    "A": 0.4331,
+    "B": 0.5459
+  },
+  "stage_intervals_additive_to_cohort": false,
+  "universal_cold_claim": false
+}

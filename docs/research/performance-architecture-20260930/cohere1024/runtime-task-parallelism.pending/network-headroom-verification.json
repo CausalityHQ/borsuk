@@ -1,0 +1,29 @@
+{
+  "all_four_canonical_1000_parity": true,
+  "checks": {
+    "network-headroom-A-gates-a0001": {
+      "manager_exit": 0,
+      "terminal": "PASS"
+    },
+    "network-headroom-A-run-a0001": {
+      "manager_exit": 0,
+      "terminal": "HOST_CLASS_BLOCK_CLOSED"
+    },
+    "network-headroom-B-gates-a0001": {
+      "manager_exit": 0,
+      "terminal": "PASS"
+    },
+    "network-headroom-B-run-a0001": {
+      "manager_exit": 0,
+      "terminal": "HOST_CLASS_BLOCK_CLOSED"
+    }
+  },
+  "cleanup_pending": true,
+  "competitor_win_claim": false,
+  "decision_sha256": "281745a201b969a24a0ded9cd743b25a4ebd73bb3a97742aa8cd87863bf4797a",
+  "reducer_sha256": "5fa865d4108613e5af09dc727d54c547634078522918fa52d0dbb0949409f050",
+  "schema": "borsuk-network-headroom-root-verification-v1",
+  "source_revision": "efef1d988359076da2f552a90e41765f7665e217",
+  "source_unchanged": true,
+  "summary_sha256": "23899b1376ff31be231e9b637b7914b09fd72171e7decc7bb00c33f0b19b487a"
+}
