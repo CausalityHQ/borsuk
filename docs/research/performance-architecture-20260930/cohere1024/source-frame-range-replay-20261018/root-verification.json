@@ -1,0 +1,14 @@
+{
+  "source_commit": "83e8673dd1f81bfeaeeea5efa8888da2711e087e",
+  "status": "VALID_SOURCE_COST_REPLAY",
+  "count": 1000,
+  "original_source_bytes": 24255289344,
+  "framed_source_bytes": 23118198255,
+  "source_byte_saving_fraction": 0.04688012881946024,
+  "planned_gets_each": 97797,
+  "measure_sha256": "bde521da05a2a53b6827a3527a54d2d11df5323fc2b2d6610e542249f78e7d61",
+  "range_origin": "reconstructed_from_pinned_shared_cover",
+  "canary_query_cost_parity": true,
+  "all10_native_gates_exit0": true,
+  "ann_latency_recall_vendor_win_measured": false
+}
