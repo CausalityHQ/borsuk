@@ -27,6 +27,9 @@ Every ordered top-k ID, physical ordinal and f32 score bit must match the seal's
 recorded query before canonical scores can enter a successful report.
 
 Canonical records are read at native physical ordinals and IDs must agree.
+Canonical values are cosine distances, 1 - dot/(norms), lower is better. Native
+SQ8 values are squared-L2 distances, stored norm + query norm squared - 2 *
+decoded dot. Margin magnitudes are not interchangeable across these units.
 Cosine uses the existing f64 ascending-coordinate accumulator over canonical
 f32 unit rows (squared-norm tolerance 1e-6); equal scores sort by ID. Report
 contains all true-neighbor fetched ranks, top-k recoveries/losses, cutoff ties,

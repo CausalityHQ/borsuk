@@ -448,6 +448,7 @@ pub(super) fn reduce(path: &Path, sha: &str) -> Result<Value> {
         "native_replay_exact_ids_ordinals_scorebits":true,"canonical_order_authenticated":true,
         "max_workspace_bytes":c.max_workspace_bytes,"qualified":false,
         "quantization_attributed":false,"vendor_or_scientific_win_claim":false,
+        "score_units":{"canonical":"cosine distance = 1 - dot/(norms), lower is better","native":"SQ8 squared-L2 = stored norm + query norm squared - 2 * decoded dot; lower is better","margins":"Each margin uses its own distance units; magnitudes are not interchangeable"},
         "normalization":"production query normalization; canonical f32 unit rows tolerance 1e-6; cosine f64 ascending accumulation; ties by ID ascending",
         "limits":"Only exactly fetched rows including bridges. Canonical already normalized f32, not original vectors; differences include normalization, precision and ties. No global recall or quantization-only attribution."}),
     )
@@ -633,6 +634,14 @@ mod tests {
             .set_len(15)
             .unwrap();
         assert!(authenticate(&pin, None).is_err());
+        let partial = std::fs::read(&pin.path).unwrap();
+        pin.bytes = partial.len() as u64;
+        pin.sha256 = format!("{:x}", Sha256::digest(&partial));
+        let error = authenticate(&pin, Some((16, &order))).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
         let output = dir.path().join("report");
         std::fs::write(&output, b"keep").unwrap();
         assert!(
@@ -644,5 +653,180 @@ mod tests {
         assert_eq!(std::fs::read(output).unwrap(), b"keep");
         assert!(workspace(u64::MAX, 1, 1, 1, MAX_WORKSPACE).is_err());
         assert!(workspace(0, 0, 1, 0, FIXED_BYTES).is_err());
+    }
+    #[test]
+    fn sealed_reducer_bridge_recovery_and_coherent_refusals() {
+        use super::super::{scale_native_runner, tests as native};
+        let (dir, paths) =
+            scale_native_runner::source_layout_reducer_native_fixture_with(96, 2, false, false)
+                .unwrap();
+        let original = native::assert_current_native(dir.path(), &paths[0]);
+        let original_root =
+            std::fs::read_to_string(dir.path().join("generation/manifest.json")).unwrap();
+        let root: Value = serde_json::from_str(&original_root).unwrap();
+        let original_canonical =
+            std::fs::read(dir.path().join("generation/canonical.bin")).unwrap();
+        let mut canonical = original_canonical.clone();
+        let width = 8 + 4 * 1024;
+        let physical = canonical
+            .chunks_exact(width)
+            .position(|r| i64::from_le_bytes(r[..8].try_into().unwrap()) == 40)
+            .unwrap();
+        assert_eq!(physical, 55); // ID40 lies inside the unselected middle/bridge page.
+        canonical[physical * width + 8..(physical + 1) * width].fill(0);
+        canonical[physical * width + 8..physical * width + 12].copy_from_slice(&1f32.to_le_bytes());
+        let mut truth = std::fs::read(dir.path().join("truth.u64")).unwrap();
+        truth[9 * 8..10 * 8].copy_from_slice(&40u64.to_le_bytes());
+        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let pin = |path: std::path::PathBuf, body: &[u8]| {
+            std::fs::write(&path, body).unwrap();
+            json!({"path":path,"bytes":body.len(),"sha256":hash(body)})
+        };
+        let packet = |tag: &str, mut rows: Vec<Value>, canonical: &[u8]| {
+            let order = canonical
+                .chunks_exact(width)
+                .flat_map(|r| r[..8].iter().copied())
+                .collect::<Vec<_>>();
+            let root_body = original_root
+                .replace(
+                    root["canonical"]["sha256"].as_str().unwrap(),
+                    &hash(canonical),
+                )
+                .replace(
+                    root["discovery"]["source_order_sha256"].as_str().unwrap(),
+                    &hash(&order),
+                );
+            let substitutions = [
+                (
+                    original[1]["generation_root_sha256"].as_str().unwrap(),
+                    hash(root_body.as_bytes()),
+                ),
+                (
+                    root["canonical"]["sha256"].as_str().unwrap(),
+                    hash(canonical),
+                ),
+                (
+                    original[1]["native_order_sha256"].as_str().unwrap(),
+                    hash(&order),
+                ),
+                (original[1]["truth_sha256"].as_str().unwrap(), hash(&truth)),
+            ];
+            for r in &mut rows {
+                let mut text = serde_json::to_string(r).unwrap();
+                for (old, new) in &substitutions {
+                    text = text.replace(old, new);
+                }
+                *r = serde_json::from_str(&text).unwrap();
+                if r.get("sq8_get_budget").is_some() {
+                    r["sq8_get_budget"] = json!(1);
+                }
+                if r["phase"] == "query" {
+                    assert_eq!(r["plan"]["ranges"], json!([[0, 96 * 1036]]));
+                    r["plan"]["selected_pages"] = json!([0, 2]);
+                    r["plan"]["target_pages"] = json!(2);
+                    r["plan"]["target_shortfall"] = json!(0);
+                    r["plan"]["bridge_pages"] = json!(1);
+                }
+                if r["phase"] == "recall" && r["ordinal"] == 0 {
+                    r["hits10"] = json!(9);
+                    r["recall10"] = json!(0.9);
+                }
+                if r["phase"] == "terminal" {
+                    r["summary"]["total_hits10"] = json!(19);
+                    r["summary"]["recall_numerator"] = json!(19);
+                    r["summary"]["mean_recall10"] = json!(0.95);
+                }
+            }
+            native::authenticate(&mut rows);
+            let completed = pin(
+                dir.path().join(format!("{tag}.jsonl")),
+                &native::encode(&rows),
+            );
+            let generation = pin(
+                dir.path().join(format!("{tag}-manifest.json")),
+                root_body.as_bytes(),
+            );
+            let canonical = pin(dir.path().join(format!("{tag}-canonical.bin")), canonical);
+            let sq8_body = std::fs::read(dir.path().join("sq8")).unwrap();
+            let requests = std::fs::read(dir.path().join("requests.f32")).unwrap();
+            let config = json!({"schema":CONFIG_SCHEMA,"completed":{"schema":super::super::SCALE_CONFIG_SCHEMA,
+                "input":completed,"expected_identity":rows[0],"expected_bound_inputs":rows[1]},
+                "generation":generation,"canonical":canonical,
+                "sq8":pin(dir.path().join(format!("{tag}-sq8")),&sq8_body),
+                "requests":pin(dir.path().join(format!("{tag}-requests")),&requests),
+                "truth":pin(dir.path().join(format!("{tag}-truth")),&truth),
+                "ordinals":[0],"max_workspace_bytes":MAX_WORKSPACE});
+            let path = dir.path().join(format!("{tag}-config.json"));
+            let body = serde_json::to_vec(&config).unwrap();
+            std::fs::write(&path, &body).unwrap();
+            (path, hash(&body), config)
+        };
+        let run = |tag: &str, path: &Path, sha: &str, expected_error: Option<&str>| {
+            let output = dir.path().join(format!("{tag}-report.json"));
+            let success =
+                super::super::execute_report(&output, REPORT_SCHEMA, || reduce(path, sha)).unwrap();
+            let report: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(
+                if success { 0 } else { 2 },
+                if expected_error.is_none() { 0 } else { 2 },
+                "{report}"
+            );
+            if let Some(error) = expected_error {
+                assert_eq!(report["status"], "INVALID");
+                assert_eq!(report["complete"], false);
+                assert!(report.get("queries").is_none());
+                assert!(
+                    report["error"].as_str().unwrap().contains(error),
+                    "{report}"
+                );
+            }
+            report
+        };
+        let (path, sha, config) = packet("valid", original.clone(), &canonical);
+        let report = run("valid", &path, &sha, None);
+        let q = &report["queries"][0];
+        assert_eq!(q["fetched_rows"], 96);
+        assert_eq!(q["bridge_pages_included"], 1);
+        assert_eq!(q["recovered_ids"], json!([40]));
+        assert_eq!(
+            (q["native_hits"].as_u64(), q["canonical_f32_hits"].as_u64()),
+            (Some(9), Some(10))
+        );
+        let ids = |key: &str| {
+            q[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["id"].as_i64().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids("native_top"), [20, 0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(ids("canonical_f32_top"), [20, 40, 0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(q["canonical_f32_top"][1]["physical_ordinal"], 55);
+        assert_eq!(q["canonical_f32_top"][0]["cosine"], 0.0);
+        assert_eq!(q["canonical_f32_top"][2]["cosine"], 0.25);
+        let mut mismatch = original.clone();
+        let query = mismatch
+            .iter_mut()
+            .find(|r| r["phase"] == "query" && r["ordinal"] == 0)
+            .unwrap();
+        query["returned"][0]["score_bits"] =
+            json!(query["returned"][0]["score_bits"].as_u64().unwrap() + 1);
+        let (p, s, _) = packet("replay", mismatch, &canonical);
+        run("replay", &p, &s, Some("native replay discrepancy"));
+        let mut mapping = canonical.clone();
+        let first: [u8; 8] = mapping[..8].try_into().unwrap();
+        let second: [u8; 8] = mapping[width..width + 8].try_into().unwrap();
+        mapping[..8].copy_from_slice(&second);
+        mapping[width..width + 8].copy_from_slice(&first);
+        let (p, s, _) = packet("mapping", original.clone(), &mapping);
+        run("mapping", &p, &s, Some("physical ID mapping"));
+        let request = Path::new(config["requests"]["path"].as_str().unwrap());
+        let mut bytes = std::fs::read(request).unwrap();
+        bytes[0] ^= 1;
+        std::fs::write(request, &bytes).unwrap();
+        run("changed", &path, &sha, Some("input SHA/EOF"));
+        std::fs::write(request, &bytes[..bytes.len() - 1]).unwrap();
+        run("truncated", &path, &sha, Some("pinned length"));
     }
 }
