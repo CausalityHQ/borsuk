@@ -13634,10 +13634,11 @@ mod source_walk_tests {
                         .map(|name| fs::metadata(root.join(name)).unwrap().len())
                         .sum::<u64>()
                 };
-                let width = crate::rotated_two_bit::padded_dimensions(dimensions)
-                    .unwrap()
-                    .div_ceil(4)
-                    + 8;
+                let width =
+                    crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(dimensions)
+                        .unwrap()
+                        .div_ceil(4)
+                        + 8;
                 let logical = rows * width;
                 let blob = fs::metadata(output.join("plane/frames.bin")).unwrap().len() as usize;
                 let cap = limits.max_source_bytes.min(64 * 1024 * 1024);
