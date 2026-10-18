@@ -13612,6 +13612,59 @@ mod source_walk_tests {
                 .unwrap();
             let local = TwoBitGeneration::open(&output, &root_sha, tiny.limits).unwrap();
             assert!(local.plane.record(0).is_none());
+            // Independent framed-minus-flat components catch a missing reservation.
+            for active in [1, 2] {
+                let limits = TwoBitGenerationLimits {
+                    max_active_queries: active,
+                    ..tiny.limits
+                };
+                let flat_paged =
+                    TwoBitGeneration::open_inner(&current, &tiny.root_sha, limits, None, true)
+                        .unwrap();
+                let framed_paged =
+                    TwoBitGeneration::open_inner(&output, &root_sha, limits, None, true).unwrap();
+                let metadata = |root: &Path| {
+                    let manifest: Manifest =
+                        serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap())
+                            .unwrap();
+                    manifest
+                        .files(true)
+                        .iter()
+                        .filter(|&&name| name != "router/leaves.bin")
+                        .map(|name| fs::metadata(root.join(name)).unwrap().len())
+                        .sum::<u64>()
+                };
+                let width = crate::rotated_two_bit::padded_dimensions(dimensions)
+                    .unwrap()
+                    .div_ceil(4)
+                    + 8;
+                let logical = rows * width;
+                let blob = fs::metadata(output.join("plane/frames.bin")).unwrap().len() as usize;
+                let cap = limits.max_source_bytes.min(64 * 1024 * 1024);
+                let gets = limits.max_source_gets.min(128);
+                let directory = (rows.div_ceil(256) + 1) * 8;
+                let decoded_return = cap.min(logical);
+                let codec = 2 * (2 * rows.min(256) * width + 8 * 1024 * 1024);
+                let descriptors =
+                    crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<VerifiedRange>(gets)
+                        .unwrap()
+                        + gets * 64
+                        + 4096;
+                let expected = 3 * (metadata(&output) as i128 - metadata(&current) as i128)
+                    + (2 * directory + 128) as i128
+                    + active as i128
+                        * (decoded_return as i128
+                            + codec as i128
+                            + descriptors as i128
+                            + 2 * cap.min(blob) as i128
+                            - 2 * cap.min(logical) as i128);
+                assert_eq!(
+                    framed_paged.modeled_memory_bytes as i128
+                        - flat_paged.modeled_memory_bytes as i128,
+                    expected,
+                    "independent frame components rows={rows} dimensions={dimensions} active={active}"
+                );
+            }
             let exact = TwoBitGenerationLimits {
                 max_memory_bytes: local.modeled_memory_bytes,
                 ..tiny.limits

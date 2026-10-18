@@ -126,8 +126,11 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
             concurrent_queries(&raw)?;
             if phase == "identity" {
                 require(
-                    concurrent_result(&raw["schema"]),
-                    "concurrent result schema",
+                    (raw["config_schema"] == CONCURRENT_CONFIG_SCHEMA
+                        && raw["schema"] == CONCURRENT_RESULT_SCHEMA)
+                        || (raw["config_schema"] == FRAMED_CONCURRENT_CONFIG_SCHEMA
+                            && raw["schema"] == FRAMED_CONCURRENT_RESULT_SCHEMA),
+                    "concurrent result/config schema pair",
                 )?;
                 raw["schema"] = json!(if framed_config(&raw["config_schema"]) {
                     FRAMED_RESULT_SCHEMA
@@ -2231,8 +2234,33 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
             usize::try_from(number(&inputs["source_get_budget"])?)?,
         )
         .map_err(|e| format!("frame cover: {e:?}"))?;
+        let width = super::source_record_bytes(usize::try_from(number(&inputs["dimensions"])?)?)?;
+        let page_bytes = width.checked_mul(256).ok_or("frame page bytes overflow")?;
+        let covered_frames = cover.iter().try_fold(0u64, |total, range| {
+            plus(
+                total,
+                (range.end.div_ceil(page_bytes) - range.start / page_bytes) as u64,
+            )
+        })?;
+        let minimum = covered_frames
+            .checked_mul(26)
+            .ok_or("frame minimum overflow")?;
+        let maximum = plus(
+            decoded as u64,
+            covered_frames
+                .checked_mul(25)
+                .ok_or("frame maximum overflow")?,
+        )?;
+        let whole_bytes = number(&inputs["rows"])?
+            .checked_mul(width as u64)
+            .ok_or("frame object overflow")?;
+        let physical = number(&frames["physical_bytes"])?;
+        let blob = number(&inputs["source_layout"]["blob_bytes"])?;
         return require(
-            framed_config(&inputs["config_schema"])
+            physical >= minimum
+                && physical <= maximum
+                && (decoded as u64 != whole_bytes || physical == blob)
+                && framed_config(&inputs["config_schema"])
                 && stats.is_null()
                 && frames["physical_bytes"] == raw["charges"]["source"]["verified_bytes"]
                 && frames["decoded_bytes"] == decoded

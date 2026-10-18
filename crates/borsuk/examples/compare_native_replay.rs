@@ -13970,6 +13970,26 @@ mod tests {
                 reduce_scale(&config, &pin)
             };
             let good = check(&rows).unwrap();
+            for (config_schema, result_schema) in [
+                (
+                    current_v10::FRAMED_CONCURRENT_CONFIG_SCHEMA,
+                    current_v10::CONCURRENT_RESULT_SCHEMA,
+                ),
+                (
+                    current_v10::CONCURRENT_CONFIG_SCHEMA,
+                    current_v10::FRAMED_CONCURRENT_RESULT_SCHEMA,
+                ),
+            ] {
+                let mut bad = rows.clone();
+                bad[0]["schema"] = json!(result_schema);
+                bad[0]["config_schema"] = json!(config_schema);
+                bad[1]["config_schema"] = json!(config_schema);
+                let error = check(&bad).unwrap_err().to_string();
+                assert!(
+                    error.contains("concurrent result/config schema pair"),
+                    "{error}"
+                );
+            }
             assert!(
                 current_v10::validate_concurrent_geometry(&rows[1]).is_err(),
                 "production geometry rejects tiny fixtures"
@@ -15040,6 +15060,49 @@ mod tests {
                 write_fixture(dir.path(), &format!("bad-frame-{key}.jsonl"), bad.clone());
             let (config, pin) = scale_config(dir.path(), &path, &bad);
             assert!(reduce_scale(&config, &pin).is_err());
+        }
+    }
+
+    #[test]
+    fn framed_source_trace_off_coordinated_physical_refusals() {
+        let (dir, paths) = scale_native_runner::source_layout_reducer_layout_fixture(
+            32,
+            2,
+            true,
+            false,
+            false,
+            borsuk::two_bit_generation::SourceLayoutMode::FramedRecordsV1,
+        )
+        .unwrap();
+        let rows = assert_current_native_config(&dir.path().join("capsule-config.json"), &paths[1]);
+        let blob = rows[1]["source_layout"]["blob_bytes"].as_u64().unwrap();
+        let width =
+            source_record_bytes(rows[1]["dimensions"].as_u64().unwrap() as usize).unwrap() as u64;
+        assert!(blob > 26 && blob < 32 * width + 25);
+        for physical in [1, 32 * width + 26, blob - 1] {
+            let mut bad = rows.clone();
+            let mut old_total = 0;
+            let mut new_total = 0;
+            for row in bad.iter_mut().filter(|r| r["phase"] == "query") {
+                let old = row["charges"]["source"]["verified_bytes"].as_u64().unwrap();
+                old_total += old;
+                new_total += physical;
+                row["stages"]["source_frames"]["physical_bytes"] = json!(physical);
+                row["charges"]["source"]["verified_bytes"] = json!(physical);
+                row["sum"]["verified_bytes"] =
+                    json!(row["sum"]["verified_bytes"].as_u64().unwrap() - old + physical);
+            }
+            let summary = &mut bad.last_mut().unwrap()["summary"];
+            summary["charges"]["source"]["verified_bytes"] = json!(new_total);
+            summary["sum"]["verified_bytes"] =
+                json!(summary["sum"]["verified_bytes"].as_u64().unwrap() - old_total + new_total);
+            let (path, _) = write_fixture(dir.path(), "frame-coordinated.jsonl", bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let error = reduce_scale(&config, &pin).unwrap_err().to_string();
+            assert!(
+                error.contains("framed SOURCE physical/decoded/hash conservation"),
+                "{error}"
+            );
         }
     }
 
