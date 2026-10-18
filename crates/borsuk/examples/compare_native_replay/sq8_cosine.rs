@@ -1,4 +1,4 @@
-//! Offline first32 SQ8 cosine falsifier over authenticated sealed native ranges.
+//! Offline exact-prefix SQ8 cosine falsifier over authenticated sealed native ranges.
 use super::fetched_f32::{authenticate, floats, row, workspace};
 use super::{CompletedConfig, CompletedInput, Result, require};
 use borsuk::{
@@ -82,12 +82,10 @@ fn bind(c: &Config, g: &Value) -> Result<(usize, usize, usize)> {
         "sq8-cosine generation/input authority",
     )?;
     require(
-        c.ordinals
-            .iter()
-            .copied()
-            .eq(0..usize::try_from(count.min(32))?)
+        (c.ordinals.iter().copied().eq(0..usize::try_from(count.min(32))?)
+            || (count <= 1000 && c.ordinals.iter().copied().eq(0..usize::try_from(count)?)))
             && c.excluded_ids.windows(2).all(|ids| ids[0] < ids[1]),
-        "sq8-cosine first32 and sorted unique visibility roster",
+        "sq8-cosine exact first32/full<=1000 prefix and sorted unique visibility roster",
     )?;
     workspace(0, c.excluded_ids.len() as u64, d, 0, c.max_workspace_bytes)?;
     Ok((
@@ -95,6 +93,37 @@ fn bind(c: &Config, g: &Value) -> Result<(usize, usize, usize)> {
         usize::try_from(d)?,
         usize::try_from(k)?,
     ))
+}
+fn metadata_charge(
+    selected: &[Selected],
+    selected_capacity: usize,
+    report_capacity: usize,
+    k: usize,
+) -> Result<u64> {
+    let mut bytes = super::plus(
+        product(selected_capacity as u64, std::mem::size_of::<Selected>() as u64)?,
+        product(report_capacity as u64, std::mem::size_of::<Value>() as u64)?,
+    )?;
+    for s in selected {
+        for (capacity, width) in [
+            (s.returned.capacity(), std::mem::size_of::<super::Hit>()),
+            (s.returned_physical_ordinals.capacity(), std::mem::size_of::<usize>()),
+            (s.plan.ranges.capacity(), std::mem::size_of::<[u64; 2]>()),
+        ] {
+            bytes = super::plus(bytes, product(capacity as u64, width as u64)?)?;
+        }
+        // Map/field overhead and two report copies during final JSON assembly.
+        let report = super::plus(16 * 1024, super::plus(
+            product(k as u64, 4096)?, product(s.plan.ranges.capacity() as u64, 256)?,
+        )?)?;
+        bytes = super::plus(bytes, product(report, 2)?)?;
+    }
+    Ok(bytes)
+}
+fn with_metadata(workspace: u64, metadata: u64, cap: u64) -> Result<u64> {
+    let total = super::plus(workspace, metadata)?;
+    require(total <= cap, "sq8-cosine aggregate workspace cap")?;
+    Ok(total)
 }
 fn replay_matches(native: &[ScoredNominee], s: &Selected, k: usize) -> Result<()> {
     require(
@@ -177,6 +206,11 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
         |line, q, _| {
             if c.ordinals.binary_search(&q.ordinal).is_ok() {
                 selected.push(serde_json::from_slice::<Selected>(line)?);
+                with_metadata(
+                    workspace(0, c.excluded_ids.capacity() as u64, dimensions as u64, 0, c.max_workspace_bytes)?,
+                    metadata_charge(&selected, selected.capacity(), c.ordinals.len(), k)?,
+                    c.max_workspace_bytes,
+                )?;
             }
             Ok(())
         },
@@ -187,7 +221,7 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
                 .iter()
                 .map(|s| s.ordinal)
                 .eq(c.ordinals.iter().copied()),
-        "sq8-cosine complete first32 roster",
+        "sq8-cosine complete admitted prefix roster",
     )?;
     let low: Vec<f32> = serde_json::from_value(g["low"].clone())?;
     let step: Vec<f32> = serde_json::from_value(g["step"].clone())?;
@@ -205,6 +239,7 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
     let requests = authenticate(&c.requests, None)?;
     let truth = authenticate(&c.truth, None)?;
     let mut reports = Vec::with_capacity(selected.len());
+    let metadata = metadata_charge(&selected, selected.capacity(), reports.capacity(), k)?;
     for s in &selected {
         let count_bytes = s.plan.ranges.iter().try_fold(0u64, |sum, [start, end]| {
             require(
@@ -217,13 +252,13 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
             super::plus(sum, end - start)
         })?;
         let count = usize::try_from(count_bytes / width as u64)?;
-        let mut admitted = workspace(
+        let mut admitted = with_metadata(workspace(
             count_bytes,
             super::plus(count as u64, c.excluded_ids.len() as u64)?,
             dimensions as u64,
             s.plan.ranges.len() as u64,
             c.max_workspace_bytes,
-        )?;
+        )?, metadata, c.max_workspace_bytes)?;
         require(count >= k, "sq8-cosine fetched underfill")?;
         let mut body = vec![0u8; usize::try_from(count_bytes)?];
         let mut offset = 0;
@@ -280,7 +315,7 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
         )
         .map_err(|e| format!("cosine candidate: {e:?}"))?;
         // The row allowance covers kernel scratch and all three retained rankings.
-        admitted = admitted.max(workspace(
+        admitted = admitted.max(with_metadata(workspace(
             body.capacity() as u64,
             super::plus(
                 native.capacity().max(candidate.capacity()).max(exact.capacity()) as u64,
@@ -298,7 +333,7 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
             ].into_iter().max().unwrap_or(0) as u64,
             ranges.capacity() as u64,
             c.max_workspace_bytes,
-        )?);
+        )?, metadata, c.max_workspace_bytes)?);
         native.retain(|s| c.excluded_ids.binary_search(&s.id).is_err());
         exact.retain(|s| c.excluded_ids.binary_search(&s.id).is_err());
         exact.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.id.cmp(&b.id)));
@@ -357,6 +392,11 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
         super::file_identity(&super::open_input(&c.completed.input.path)?)? == run.file_identity,
         "sq8-cosine completed input changed",
     )?;
+    let scope = if c.ordinals.len() as u64 == number(&c.completed.expected_bound_inputs["count"])? {
+        format!("Exact full prefix of {} queries", c.ordinals.len())
+    } else {
+        "Exact first32 prefix".to_owned()
+    };
     Ok(
         json!({"schema":REPORT_SCHEMA,"status":"NATIVE_REPLAY_VERIFIED_SQ8_COSINE",
         "complete":true,"qualified":false,"config_path":path,"config_sha256":sha,"config_bytes":config_bytes,
@@ -366,7 +406,7 @@ fn reduce_config(c: Config, path: &Path, sha: &str, config_bytes: u64) -> Result
         "max_workspace_bytes":c.max_workspace_bytes,"queries":reports,
         "candidate":"1-clamp((sequential_f32_code_weight_dot+unshifted_affine_offset)/(sqrt(query_norm2)*sqrt(stored_decoded_norm2)),-1,1)",
         "oracle":"literal f32 decoded coordinates; independent sequential f64 dot and squared norms; cosine distance",
-        "limits":"First32 sealed fetched ranges including bridges only. No canonical payload, global recall, serving qualification or vendor claim."}),
+        "limits":format!("{scope}: sealed fetched ranges including bridges only; aggregate retained metadata charged. No canonical payload, global recall, serving qualification or vendor claim.")}),
     )
 }
 
@@ -443,12 +483,8 @@ mod tests {
         let (mut parsed, _): (Config, _) = super::super::read_config(&path, &excluded_sha).unwrap();
         parsed.excluded_ids.reserve_exact(3);
         assert!(parsed.excluded_ids.capacity() > parsed.excluded_ids.len());
-        let d = parsed.completed.expected_bound_inputs["dimensions"].as_u64().unwrap();
-        let fetched_count = excluded["queries"][0]["fetched_rows"].as_u64().unwrap();
-        let ranges = excluded["queries"][0]["fetched_ranges"].as_array().unwrap().len() as u64;
-        let modeled = workspace(fetched_count*(d+12), fetched_count+1, d, ranges, 512*1024*1024).unwrap();
-        let actual = workspace(fetched_count*(d+12), fetched_count+parsed.excluded_ids.capacity() as u64,
-            d, ranges, 512*1024*1024).unwrap();
+        let modeled = excluded["queries"][0]["checked_workspace_bytes"].as_u64().unwrap();
+        let actual = modeled + (parsed.excluded_ids.capacity() - parsed.excluded_ids.len()) as u64 * 512;
         assert!(actual > modeled);
         c["max_workspace_bytes"] = json!(modeled);
         let bounded_sha = config(&path, &c);
@@ -512,4 +548,49 @@ mod tests {
         assert_eq!(differences(&[41, 7], &[90, 41]), [7]);
         assert_eq!(differences(&[90, 41], &[41, 7]), [90]);
     }
+    #[test]
+    fn full_prefix_over32_first32_partial_refusal_and_metadata_charge() {
+        let (dir,result)=super::super::scale_native_runner::scale_reducer_native_fixture_count(35,None).unwrap();
+        let original=std::fs::read(&result).unwrap();
+        let lines=std::str::from_utf8(&original).unwrap().lines().collect::<Vec<_>>();
+        let rows=lines.iter().map(|line|serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let native: Value=serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+        let mut c=json!({"schema":CONFIG_SCHEMA,
+            "completed":{"schema":super::super::SCALE_CONFIG_SCHEMA,"input":pin(result.clone()),
+                "expected_identity":rows[0],"expected_bound_inputs":rows[1]},
+            "generation":pin(dir.path().join("generation/manifest.json")),
+            "sq8":pin(dir.path().join("sq8")),"requests":native["requests"],"truth":native["truth"],
+            "ordinals":(0..35).collect::<Vec<_>>(),"excluded_ids":[],"max_workspace_bytes":512*1024*1024u64});
+        let path=dir.path().join("full-cosine-config.json");
+        let sha=config(&path,&c);
+        let report=reduce(&path,&sha).unwrap();
+        assert_eq!(report["queries"].as_array().unwrap().len(),35);
+        assert!(report["limits"].as_str().unwrap().contains("Exact full prefix of 35 queries"));
+        let mut selected=Vec::with_capacity(35);
+        for (line,row) in lines.iter().zip(&rows) {
+            if row["phase"]=="query" {
+                selected.push(serde_json::from_str::<Selected>(line).unwrap());
+            }
+        }
+        let metadata=metadata_charge(&selected,selected.capacity(),35,10).unwrap();
+        assert!(metadata>0);
+        let query_workspace=workspace(32*(1024+12),32,1024,1,512*1024*1024).unwrap();
+        assert!(report["queries"].as_array().unwrap().iter()
+            .all(|q|q["checked_workspace_bytes"]==query_workspace+metadata));
+        assert!(with_metadata(query_workspace,metadata,query_workspace+metadata-1).is_err());
+        assert_eq!(with_metadata(query_workspace,metadata,query_workspace+metadata).unwrap(),
+            query_workspace+metadata);
+        c["ordinals"]=json!((0..32).collect::<Vec<_>>());
+        let first32_sha=config(&path,&c);
+        let first32=reduce(&path,&first32_sha).unwrap();
+        assert_eq!(first32["queries"].as_array().unwrap().len(),32);
+        assert!(first32["limits"].as_str().unwrap().contains("Exact first32 prefix"));
+        for ordinals in [json!((0..31).collect::<Vec<_>>()),json!((0..33).collect::<Vec<_>>()),
+            json!((1..35).collect::<Vec<_>>()),json!((0..36).collect::<Vec<_>>())] {
+            c["ordinals"]=ordinals;
+            let sha=config(&path,&c);
+            assert!(reduce(&path,&sha).is_err());
+        }
+    }
+
 }

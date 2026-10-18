@@ -1,0 +1,220 @@
+{
+  "changed_queries": [
+    {
+      "gain": [],
+      "loss": [
+        608770
+      ],
+      "ordinal": 7
+    },
+    {
+      "gain": [
+        382916
+      ],
+      "loss": [],
+      "ordinal": 8
+    },
+    {
+      "gain": [
+        397315
+      ],
+      "loss": [],
+      "ordinal": 20
+    },
+    {
+      "gain": [
+        697987
+      ],
+      "loss": [],
+      "ordinal": 111
+    },
+    {
+      "gain": [
+        321165
+      ],
+      "loss": [],
+      "ordinal": 115
+    },
+    {
+      "gain": [
+        366502
+      ],
+      "loss": [],
+      "ordinal": 160
+    },
+    {
+      "gain": [],
+      "loss": [
+        805755
+      ],
+      "ordinal": 166
+    },
+    {
+      "gain": [],
+      "loss": [
+        464356
+      ],
+      "ordinal": 222
+    },
+    {
+      "gain": [
+        382746
+      ],
+      "loss": [],
+      "ordinal": 240
+    },
+    {
+      "gain": [],
+      "loss": [
+        419711
+      ],
+      "ordinal": 262
+    },
+    {
+      "gain": [],
+      "loss": [
+        673176
+      ],
+      "ordinal": 316
+    },
+    {
+      "gain": [
+        713940
+      ],
+      "loss": [],
+      "ordinal": 319
+    },
+    {
+      "gain": [
+        912616
+      ],
+      "loss": [],
+      "ordinal": 341
+    },
+    {
+      "gain": [
+        768770
+      ],
+      "loss": [
+        15902
+      ],
+      "ordinal": 362
+    },
+    {
+      "gain": [
+        658227
+      ],
+      "loss": [],
+      "ordinal": 380
+    },
+    {
+      "gain": [
+        293938
+      ],
+      "loss": [],
+      "ordinal": 393
+    },
+    {
+      "gain": [],
+      "loss": [
+        646966
+      ],
+      "ordinal": 430
+    },
+    {
+      "gain": [
+        397308
+      ],
+      "loss": [],
+      "ordinal": 441
+    },
+    {
+      "gain": [],
+      "loss": [
+        218908
+      ],
+      "ordinal": 444
+    },
+    {
+      "gain": [
+        80169
+      ],
+      "loss": [],
+      "ordinal": 452
+    },
+    {
+      "gain": [
+        302564
+      ],
+      "loss": [],
+      "ordinal": 499
+    },
+    {
+      "gain": [
+        711995
+      ],
+      "loss": [],
+      "ordinal": 546
+    },
+    {
+      "gain": [
+        92927
+      ],
+      "loss": [],
+      "ordinal": 697
+    },
+    {
+      "gain": [],
+      "loss": [
+        609300
+      ],
+      "ordinal": 784
+    },
+    {
+      "gain": [
+        395597
+      ],
+      "loss": [],
+      "ordinal": 826
+    },
+    {
+      "gain": [
+        148421
+      ],
+      "loss": [],
+      "ordinal": 899
+    },
+    {
+      "gain": [
+        366078
+      ],
+      "loss": [],
+      "ordinal": 938
+    },
+    {
+      "gain": [],
+      "loss": [
+        716824
+      ],
+      "ordinal": 942
+    }
+  ],
+  "config_sha256": "759ccf9c52e680a93976dfccde7d24e4a7c205af5ceb42931ffb713a353be49f",
+  "cosine_hits": 9746,
+  "development_not_holdout": true,
+  "displaced_truth": 10,
+  "first32_rankings_equal_prior_verified": true,
+  "gained_truth": 19,
+  "max_checked_workspace_bytes": 315964352,
+  "native_hits": 9737,
+  "net_gain": 9,
+  "oracle_hits": 9746,
+  "oracle_order_disagreement_queries": [
+    289
+  ],
+  "report_sha256": "4d2f7030bcda44bd804b16b8fa85842ea54235028e632b9fd0e3ef9248918c96",
+  "serving_latency_vendor_claim": false,
+  "source_commit": "05737fcf84be22e086059c37703e3e54b8e1c8f1",
+  "status": "VALID_OFFLINE_FULL1000_QUALITY_COMPARISON",
+  "underfill_queries": 0
+}
