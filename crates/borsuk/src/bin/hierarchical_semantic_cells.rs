@@ -1942,7 +1942,8 @@ mod tests {
             .unwrap(),
         );
         let generation = probe_artifact(&dispersed.join("generation"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
@@ -2886,7 +2887,8 @@ mod tests {
             .unwrap(),
         );
         let generation = probe_artifact(&dispersed.join("generation"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
@@ -3338,7 +3340,8 @@ mod tests {
             page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
         }).unwrap());
         let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
@@ -3666,7 +3669,8 @@ mod tests {
             page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
         }).unwrap());
         let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},

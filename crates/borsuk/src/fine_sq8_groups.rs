@@ -5382,7 +5382,7 @@ pub mod pack_diagnostic {
                         .unwrap(),
                     );
                     let generation=pin(&dir.join("generation"),&serde_json::to_vec(&json!({
-                        "schema":"borsuk-two-bit-generation-v8","generation":1,"base_epoch":0,"plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
+                        "schema":crate::two_bit_generation::SCHEMA,"source_layout":crate::two_bit_generation::SourceLayout::FlatRecords,"generation":1,"base_epoch":0,"plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
                         "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),"graph_resident_bytes":1,
                         "diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},"sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
                         "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step

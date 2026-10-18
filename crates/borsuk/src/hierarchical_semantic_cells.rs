@@ -4631,6 +4631,7 @@ mod tests {
         );
         let generation = artifact(&dir.join("generation.json"), &serde_json::to_vec(&json!({
             "schema": crate::two_bit_generation::SCHEMA, "generation": 1, "base_epoch": 0,
+            "source_layout": crate::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256": plane.sha256, "page_manifest_sha256": "0".repeat(64),
             "discovery": {"mode":"graph", "centroids_sha256":"0".repeat(64),
                 "graph_sha256":"0".repeat(64), "graph_resident_bytes":1,
