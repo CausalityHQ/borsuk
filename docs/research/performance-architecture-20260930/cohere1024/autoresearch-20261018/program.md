@@ -97,3 +97,13 @@ Contextless source-audited plan88b4da9889384400 completed exit0, no truncation.
 Root adaptations: Pareto retention instead of one scalar; preserve failures/
 history instead of destructive reset; do not retain old readers for compatibility;
 no arbitrary trial-count stop; only root owns cloud jobs and product promotion.
+
+## Current successor after full1000 cosine/top16 results
+Earlier hypothesis queue above is historical. Serving cosine is integrated;
+top16 FP32-coordinate offline reranking recovers57 hits (9746->9803/10000),
+zero losses, full reference containment across1000 queries. Next intervention:
+generic authenticated partial FP32 top16 serving; delivery costs unmeasured.
+Keep quality as a Pareto gain, distinguish all-fetched offline cost from16-row
+serving. Rechecked official autoresearch README/program.md on2026-10-18:
+protected evaluation, bounded native trials, ledger, autonomous continuation;
+retain failures/Pareto candidates without destructive resets or truth changes.

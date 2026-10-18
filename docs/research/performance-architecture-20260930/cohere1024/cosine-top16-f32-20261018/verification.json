@@ -1,0 +1,121 @@
+{
+  "all_fetched_hits": 9803,
+  "all_fetched_top10_exact_rerank_equal_queries": 1000,
+  "archive_prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261018/cosine-top16-f32-closure-a0001/",
+  "config_sha256": "69ab9a2e1c2cd7fc0003278f3d76c027b249dc3998c5b9592334f1cd5375e53e",
+  "development_cohort": true,
+  "first32": {
+    "contained": 320,
+    "gains": 4,
+    "losses": 0,
+    "native_hits": 315,
+    "report_sha256": "e8c6f01b86957473167b69bacef753a78eb56bd91b2c08208b8bd8230943dd0a",
+    "reranked_hits": 319
+  },
+  "full_original_ssm": "c42afdc2-e35b-4f45-950d-ad6b40664cde",
+  "gains": 57,
+  "instance_id": "i-0c88fb5fdae461a89",
+  "losses": 0,
+  "native_elapsed_seconds": 79.72,
+  "native_hits": 9746,
+  "native_max_rss_kib": 120728,
+  "peak_checked_workspace_bytes": 434954352,
+  "product_ready": false,
+  "qualification": {
+    "affected-compile": {
+      "command": "cargo test --locked -p borsuk --example compare_native_replay --no-run ",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/affected-compile.final.log",
+      "log_sha256": "81268876e924325cb47ab6b225ca037c4e214db0dceb89793da86c27990760ab"
+    },
+    "clippy": {
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious ",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/clippy.final.log",
+      "log_sha256": "0e1c50cfed9b536d44342b37abdaa1d23f4e4ebc0735d4bfe16fd519f9cd2571"
+    },
+    "fetched-f32": {
+      "command": "cargo test --locked -p borsuk --example compare_native_replay fetched_f32:: ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/fetched-f32.final.log",
+      "log_sha256": "6d29ff6d9535b149a79ceaddc3dd35efa4f15e90cd6d7edb5df4e54fb5873b2d",
+      "passed": 5
+    },
+    "new-tests": {
+      "command": "cargo test --locked -p borsuk --example compare_native_replay f32_top16:: ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/new-tests.final.log",
+      "log_sha256": "1f572376704867537557bca01ebff2709cdfa6901cea663053bceebdf20bb228",
+      "passed": 7
+    },
+    "release": {
+      "command": "cargo build --locked --release -p borsuk --example compare_native_replay ",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/release.final.log",
+      "log_sha256": "5322fa86d3ed047bdcce981f1b2a861a1db30dec9ea46127e7a469ec71848775"
+    },
+    "report-boundaries": {
+      "command": "cargo test --locked -p borsuk --example compare_native_replay sq8_cosine_report_writer_boundaries ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/report-boundaries.final.log",
+      "log_sha256": "c7e6c3d3903be3483b3bb437dcccecad7a5ad5ff113f05eb5cbd285a91750509",
+      "passed": 1
+    },
+    "sq8-cosine": {
+      "command": "cargo test --locked -p borsuk --example compare_native_replay sq8_cosine:: ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/sq8-cosine.final.log",
+      "log_sha256": "bf325e7aae8eabd5c5118b7c22e03583883e70cd34296a5f92469705e12e4e68",
+      "passed": 3
+    },
+    "workspace-testbuild": {
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 CARGO_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh ",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/workspace-testbuild.final.log",
+      "log_sha256": "04323db8c00953dac21cc3b692ada36da2180fd0c4c8ee8019513bf6d7babf1c"
+    }
+  },
+  "queries": 1000,
+  "raw_f32_serving_plane_qualified": false,
+  "release_elf": {
+    "bytes": 16813416,
+    "path": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/bin/compare_native_replay",
+    "sha256": "62b473a255abefc25c6686a953ca614612517eef96cf1e907e0d95092510d9e4"
+  },
+  "report_sha256": "9e9edc78630f1b9a420a52fc92557723aed49e0d50a1b4aa835617491aacb63a",
+  "reranked_hits": 9803,
+  "reused_fixture_checks": {
+    "fixture-bin": {
+      "command": "cargo test --locked -p borsuk --bin hierarchical_semantic_cells ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/fixture-bin.attempt2.log",
+      "log_sha256": "f8555f60e5466a52a525078a896cf2a1e45b05d9f1caeb5b6ad9c4fb86905e35",
+      "passed": 20
+    },
+    "fixture-hierarchy": {
+      "command": "cargo test --locked -p borsuk --lib hierarchical_semantic_cells::tests:: ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/fixture-hierarchy.attempt2.log",
+      "log_sha256": "53c86c293c6e962b16a7d29a8bc1377e3937d2bdb7f49de594191cdaeba2cb4b",
+      "passed": 30
+    },
+    "fixture-pq": {
+      "command": "cargo test --locked -p borsuk --lib fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests:: ",
+      "exit": 0,
+      "failed": 0,
+      "log": "/mnt/borsuk-workspace/cosine-top16-f32-source-a0001/evidence/cosine-top16-f32-native-a0001/fixture-pq.attempt2.log",
+      "log_sha256": "c704349b4246fc50aead709ad2f76dfcba44067c9559abb9413c80845b5e7b6d",
+      "passed": 5
+    }
+  },
+  "serving_or_latency_claim": false,
+  "source_commit": "0c421132a7fb1c2c81eee6b82ab08bc50d678162",
+  "source_tree": "8a46a591f9b5a71dab80de4bb962d1d842db01cf",
+  "status": "ROOT_INDEPENDENT_RECOUNT_VERIFIED"
+}
