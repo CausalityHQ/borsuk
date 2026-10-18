@@ -2217,6 +2217,22 @@ fn read_run_observed_policy(
                 && cohort["sum_query_wall_ns"] == wall,
             "cohort conservation",
         )?;
+        let minimum_elapsed = samples
+            .chunks(current_v10::concurrent_queries(inputs)?)
+            .try_fold(0, |total, batch| {
+                plus(
+                    total,
+                    batch
+                        .iter()
+                        .map(|sample| sample.wall_ns)
+                        .max()
+                        .ok_or("empty concurrent batch")?,
+                )
+            })?;
+        require(
+            cohort["elapsed_ns"].as_u64().ok_or("cohort elapsed")? >= minimum_elapsed,
+            "cohort ordered-batch elapsed floor",
+        )?;
         cpu = cohort["process_cpu_ns"].as_u64().ok_or("cohort CPU")?;
         if let Some(e) = &mut completed {
             e.transport_scale(&rows.line, "query_cohort", None, local)?;
@@ -13784,6 +13800,10 @@ mod tests {
                 reduce_scale(&config, &pin)
             };
             let good = check(&rows).unwrap();
+            assert!(
+                current_v10::validate_concurrent_geometry(&rows[1]).is_err(),
+                "production geometry rejects tiny fixtures"
+            );
             assert!(good["statistics"].get("sequential_qps").is_none());
             let cohort = rows
                 .iter()
@@ -13825,6 +13845,36 @@ mod tests {
                     _ => bad[cohort]["process_cpu_start_ns"] = json!(0),
                 }
                 assert!(check(&bad).is_err(), "mutation {mutation}");
+            }
+            if active == 2 {
+                let mut bad = rows.clone();
+                for (row, wall) in bad
+                    .iter_mut()
+                    .filter(|r| r["phase"] == "query")
+                    .zip([90_000_000_u64, 10_000_000])
+                {
+                    row["query_wall_ns"] = json!(wall);
+                    for (index, stage) in ["discovery", "source", "planning", "sq8"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        row["stages"][stage]["start_ns"] = json!(1 + index * 2);
+                        row["stages"][stage]["end_ns"] = json!(2 + index * 2);
+                    }
+                }
+                bad[cohort]["elapsed_ns"] = json!(50_000_000);
+                bad[cohort]["sum_query_wall_ns"] = json!(100_000_000);
+                bad[cohort]["qps"] = json!(40.0);
+                let coherent = bad[cohort].clone();
+                let summary = &mut bad.last_mut().unwrap()["summary"];
+                summary["query_cohort"] = coherent;
+                summary["query_wall_ns"] = json!(100_000_000);
+                summary["process_wall_ns"] = json!(100_000_001);
+                let error = check(&bad).unwrap_err().to_string();
+                assert!(
+                    error.contains("cohort ordered-batch elapsed floor"),
+                    "{error}"
+                );
             }
         }
     }

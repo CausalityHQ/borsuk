@@ -6327,6 +6327,7 @@ mod tests {
         inner: ChunkedStore,
         key: String,
         entered: std::sync::atomic::AtomicUsize,
+        payload_reads: std::sync::atomic::AtomicUsize,
         release: tokio::sync::Semaphore,
         fail_first: bool,
     }
@@ -6342,6 +6343,14 @@ mod tests {
             path: &ObjectPath,
             options: object_store::GetOptions,
         ) -> object_store::Result<object_store::GetResult> {
+            if !options.head
+                && (path.as_ref() == self.key
+                    || path.as_ref().ends_with("/plane/records.bin")
+                    || path.as_ref().ends_with("/router/leaves.bin"))
+            {
+                self.payload_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             if !options.head && path.as_ref() == self.key {
                 let index = self
                     .entered
@@ -6410,13 +6419,20 @@ mod tests {
         use std::sync::atomic::Ordering::SeqCst;
         let shape = Shape::tiny(32);
         let (dir, value) = fixture(shape).await;
-        let c: Config = serde_json::from_value(value).unwrap();
+        let c: Config = serde_json::from_value(value.clone()).unwrap();
         let root: Value = serde_json::from_slice(
             &std::fs::read(dir.path().join("generation/manifest.json")).unwrap(),
         )
         .unwrap();
         let query = request_row(&std::fs::read(&c.requests.path).unwrap(), 0).unwrap();
         for active in [1, 2] {
+            let mut concurrent = value.clone();
+            concurrent["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+            concurrent["max_active_queries"] = json!(active);
+            concurrent["fetch_parallelism"] = json!(64);
+            concurrent["source_authentication"] = json!("offload2");
+            let c: Config = serde_json::from_value(concurrent).unwrap();
+            validate_config(&c, shape).unwrap();
             for fault in [false, true] {
                 let store = HeldQueryStore {
                     inner: ChunkedStore::new(
@@ -6427,11 +6443,16 @@ mod tests {
                     ),
                     key: root["sq8_object_key"].as_str().unwrap().into(),
                     entered: Default::default(),
+                    payload_reads: Default::default(),
                     release: tokio::sync::Semaphore::new(0),
                     fail_first: fault,
                 };
                 let mut admission = limits(&c).unwrap();
-                admission.max_active_queries = active;
+                assert_eq!(admission.max_active_queries, active);
+                assert!(
+                    admission.already_pinned_bytes
+                        >= (active * QUERY_FUTURE_BYTES + COHORT_RECORD_BYTES) as u64
+                );
                 let generation = TwoBitGeneration::open_remote(
                     &store,
                     &ObjectPath::from(c.generation_prefix.clone()),
@@ -6443,8 +6464,20 @@ mod tests {
                 .unwrap()
                 .with_source_authentication(borsuk::sq8_s3_range::SourceAuthentication::Offload2)
                 .unwrap();
+                // The fault belongs to the first physical GET. Hold ordinal zero
+                // there before starting its sibling so the failure oracle is deterministic.
+                let mut first =
+                    Box::pin(generation.diagnostic_search_with_store(&store, &query, K));
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while store.entered.load(SeqCst) < 1 {
+                        assert!(first.as_mut().now_or_never().is_none());
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
                 let mut joined = Box::pin(futures_util::future::join(
-                    generation.diagnostic_search_with_store(&store, &query, K),
+                    first,
                     generation.diagnostic_search_with_store(&store, &query, K),
                 ));
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -6487,13 +6520,21 @@ mod tests {
                     .await
                     .unwrap();
                     drop(cancelled);
-                    store.release.add_permits(1);
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(5),
-                        generation.diagnostic_search_with_store(&store, &query, K),
-                    )
+                    let entered = store.entered.load(SeqCst);
+                    let mut replacements =
+                        Box::pin(futures_util::future::join_all((0..active).map(|_| {
+                            generation.diagnostic_search_with_store(&store, &query, K)
+                        })));
+                    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                        while store.entered.load(SeqCst) < entered + active {
+                            assert!(replacements.as_mut().now_or_never().is_none());
+                            tokio::task::yield_now().await;
+                        }
+                        assert_eq!(store.entered.load(SeqCst), entered + active);
+                        store.release.add_permits(active);
+                        assert!(replacements.await.iter().all(|result| result.is_ok()));
+                    })
                     .await
-                    .unwrap()
                     .unwrap();
                 }
                 // Public memory witness: resident is the baseline model, without the direct extra.
@@ -6505,29 +6546,28 @@ mod tests {
                     .unwrap()
                     .resident_bytes;
                 drop(generation);
-                let before = store.entered.load(SeqCst);
-                admission.max_memory_bytes = model - 1;
-                let opened = TwoBitGeneration::open_remote(
-                    &store,
-                    &ObjectPath::from(c.generation_prefix.clone()),
-                    &c.generation_root_sha256,
-                    admission,
-                    &c.scratch_parent,
-                )
-                .await
-                .unwrap();
-                assert!(
-                    opened
-                        .with_source_authentication(
-                            borsuk::sq8_s3_range::SourceAuthentication::Offload2
-                        )
-                        .is_err()
-                );
-                assert_eq!(
-                    store.entered.load(SeqCst),
-                    before,
-                    "model-1 performs zero query payload IO"
-                );
+                let before = store.payload_reads.load(SeqCst);
+                for cap in [model - 1, model] {
+                    admission.max_memory_bytes = cap;
+                    let opened = TwoBitGeneration::open_remote(
+                        &store,
+                        &ObjectPath::from(c.generation_prefix.clone()),
+                        &c.generation_root_sha256,
+                        admission,
+                        &c.scratch_parent,
+                    )
+                    .await
+                    .unwrap();
+                    let admitted = opened.with_source_authentication(
+                        borsuk::sq8_s3_range::SourceAuthentication::Offload2,
+                    );
+                    assert_eq!(admitted.is_ok(), cap == model);
+                    assert_eq!(
+                        store.payload_reads.load(SeqCst),
+                        before,
+                        "concurrent caller model boundary performs zero SOURCE/SQ8 payload IO"
+                    );
+                }
             }
         }
     }
@@ -6552,26 +6592,44 @@ mod tests {
             ),
             key: root["sq8_object_key"].as_str().unwrap().into(),
             entered: Default::default(),
-            release: tokio::sync::Semaphore::new(2),
+            payload_reads: Default::default(),
+            release: tokio::sync::Semaphore::new(0),
             fail_first: true,
         });
         let mut out = Output::create(&dir.path().join("failure.jsonl")).unwrap();
         let mut progress = Progress::default();
-        let result = query_and_seal_with(&c, shape, &mut out, &mut progress, || {
-            Ok(Reader::Stub {
-                store: store.clone(),
-                stats: Arc::new(std::sync::Mutex::new(NativeTransportStats {
-                    attempts: 0,
-                    method_counts: [0; 10],
-                    status_counts: vec![],
-                    transport_failures: 0,
-                    stream_failures: 0,
-                    consumed_payload_bytes: 0,
-                    dropped_error_bodies: 0,
-                })),
-            })
+        use futures_util::FutureExt;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut running = Box::pin(query_and_seal_with(
+                &c,
+                shape,
+                &mut out,
+                &mut progress,
+                || {
+                    Ok(Reader::Stub {
+                        store: store.clone(),
+                        stats: Arc::new(std::sync::Mutex::new(NativeTransportStats {
+                            attempts: 0,
+                            method_counts: [0; 10],
+                            status_counts: vec![],
+                            transport_failures: 0,
+                            stream_failures: 0,
+                            consumed_payload_bytes: 0,
+                            dropped_error_bodies: 0,
+                        })),
+                    })
+                },
+            ));
+            while store.entered.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                assert!(running.as_mut().now_or_never().is_none());
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(store.entered.load(std::sync::atomic::Ordering::SeqCst), 2);
+            store.release.add_permits(2);
+            running.await
         })
-        .await;
+        .await
+        .unwrap();
         assert!(result.is_err());
         assert_eq!(store.entered.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert!(!progress.sealed && !progress.truth_opened);

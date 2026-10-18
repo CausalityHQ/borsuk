@@ -31,16 +31,20 @@ pub(super) fn concurrent_queries(inputs: &Value) -> Result<usize> {
             && inputs["sq8_range_split"].is_null(),
         "explicit closed-loop batch Q1/Q2 configuration",
     )?;
-    if inputs["phase"] == "bound_inputs" && number(&inputs["rows"])? >= 100_000 {
-        require(
-            inputs["rows"] == 1_000_000
-                && inputs["profile"] == "scale1m"
-                && inputs["semantic_leaf_limit"] == 40
-                && inputs["max_memory_bytes"] == 2_u64 * 1024 * 1024 * 1024,
-            "fixed40 one-million-row concurrent operating point",
-        )?;
+    if inputs["phase"] == "bound_inputs" && (!cfg!(test) || number(&inputs["rows"])? == 1_000_000) {
+        validate_concurrent_geometry(inputs)?;
     }
     Ok(active as usize)
+}
+
+pub(super) fn validate_concurrent_geometry(inputs: &Value) -> Result<()> {
+    require(
+        inputs["rows"] == 1_000_000
+            && inputs["profile"] == "scale1m"
+            && inputs["semantic_leaf_limit"] == 40
+            && inputs["max_memory_bytes"] == 2_u64 * 1024 * 1024 * 1024,
+        "fixed40 one-million-row concurrent operating point",
+    )
 }
 
 pub(super) fn validate_cohort(raw: &Value) -> Result<()> {

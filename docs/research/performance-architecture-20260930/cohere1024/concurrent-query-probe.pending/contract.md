@@ -8,7 +8,10 @@ Opt in with config schema borsuk-cohere-native-baseline-config-v16 and explicit
 max_active_queries: 1 or 2. Result schema is borsuk-cohere-native-baseline-result-v17.
 Use execution full, baseline serving, fetch_parallelism64, offload2, no split or
 byte-window intervention. Production uses Scale1m, fixed40 and exactly 2 GiB
-modeled cap. Both arms use the same binary/runtime mode/thread count. Each arm
+modeled cap. Both arms use the same binary and current_thread Tokio runtime: cooperative
+query overlap on one runtime thread, plus the shared Offload2 workers. A negative
+result applies only to this closed-loop cooperative schedule, not to all library
+concurrency. No new thread-CPU instrumentation is introduced. Each arm
 shares one generation, client, process and shared two-worker/two-slot SOURCE pool.
 This is bounded closed-loop ordered batches, not rolling scheduling or service-peak QPS.
 A 32-request prefix is diagnostic; it is not population-tail/full1000 evidence.
@@ -44,12 +47,19 @@ failed query cannot cancel another started query. The first ordinal error is
 selected, successful siblings and their charges are retained, later batches stop,
 and no seal/truth follows a failed cohort.
 
-Root next gate: freeze this qualified source and NEW ELF hashes (never label old
-a046/3e86 runtime as this binary), pre-register first32 ordinals 0..31 Q1/Q2,
-perform actual-input admission/model bound checks, then one bounded diagnostic
-Q1/Q2 run with unchanged generation/requests/truth and external8GiB controls.
-Compare exact IDs/scorebits/plans/charges before any throughput interpretation.
-Only root may authorize real-data/S3/performance work and later full1000.
+Root next gate: freeze the repaired qualified source and NEW ELF hashes (never
+label old a046/3e86 runtime as this binary). The initial first32 proposal is
+prospectively superseded by Full1000 reuse: current Full prefixes require a
+separately authenticated native prefix-cohort receipt, and regeneration is not
+cheap. Do not truncate files and forge a receipt. There is no admission-only CLI.
+Root owns actual-input model/resource admission, separate smoke and the eventual
+Full1000 Q1/Q2 ABBA descriptive repeated-cohort Pareto screen. Keep exact
+generation/requests/truth and external8GiB controls; compare exact IDs, scorebits,
+plans and charges before throughput interpretation. Require an artifact-side Q2
+overlap witness sum_query_wall_ns > elapsed_ns; if absent report overlap not
+established, not a negative concurrency result. No significance, variance, cold,
+vendor, or arbitrary-threshold claims. Connection establishment is included;
+each cell is a fresh process and backend/cache state remains unknown. No prewarm.
 Historical fixed40 reference: 9737hits,127811logicalGET,34229466368logicalB.
 No concurrent performance claim is made by this source qualification.
 
@@ -61,3 +71,10 @@ gates. This source freeze is UNVERIFIED until their terminal receipt is collecte
 Evidence: /mnt/borsuk-workspace/evidence/concurrent-query-qualification-a0002.
 Original failed setup/compile attempts remain in qualification-a0001; no real-data
 runs were performed. The new controller started only after original terminal1.
+
+Review repairs: cohort elapsed must cover the sum of each ordered batch's maximum
+query wall. The reader rejects a coherently resealed 90ms/10ms pair claiming50ms
+elapsed/QPS40, including an updated terminal copy. Production small-population
+headers refuse; fixture bypass is test-only. Runner-level overlap holds both
+payload GETs at zero permits until both actually enter. Caller memory boundaries
+use the real concurrent config and both Q2 slots must be regained after cancellation.
