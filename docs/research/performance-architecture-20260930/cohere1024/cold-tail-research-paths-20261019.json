@@ -1,0 +1,54 @@
+{
+  "schema": "borsuk-cold-tail-research-paths-metadata-v1",
+  "base_commit": "afab20a8c2f58d326c4502065a80e61f2a9be680",
+  "crates_tree": "ab0730bfc49fe9587705275a464cb54f3813c1d2",
+  "geometry": {
+    "status": "OFFLINE_METADATA_COUNTERFACTUAL_NOT_NATIVE_SPEED",
+    "input_sha256": "85adb7108f1205c89b026047714fb81d031436d49efd6d6dc5a38b0afd79a9ed",
+    "queries": 1000,
+    "rows": 1000000,
+    "dimensions": 1024,
+    "source_record_bytes": 264,
+    "source_cover_page_rows": 256,
+    "max_source_gets": 128,
+    "baseline_exact_source_charge_parity_queries": 1000,
+    "source_gets": 122948,
+    "source_verified_bytes": 39255017472,
+    "range_counts": {
+      "min": 53,
+      "p50": 128,
+      "p95": 128,
+      "max": 128
+    },
+    "range_bytes": {
+      "min": 67584,
+      "p50": 202752,
+      "p95": 1081344,
+      "max": 6893568
+    },
+    "queries_over_64_ranges": 994,
+    "toy_model": "64 equal-rate transfer servers; service units=range bytes; zero request startup/auth/scoring/contention/retries; original physical order versus descending byte length with original-index tie order",
+    "toy_makespan_lpt_over_original_pooled": 0.9936232033118202,
+    "toy_queries_better_equal_worse": [
+      132,
+      868,
+      0
+    ],
+    "native_measurement": false,
+    "quality_claim": false
+  },
+  "completed_evidence_sha256": {
+    "result.json": "b814f9daa60070e8a212693bc29ee1a7c616080c96f1c236b02d348f47d6c068",
+    "performance-audit.json": "439471d7d4d60783b40ec36ff793e969e32e7c9a831b1a07d0c7d56c5aa4674a",
+    "preregistration.json": "f92c71e7610749a5274d4f46bc38bc13bd11ea4b0159f5e531a095ed23da28c6",
+    "qualified-native-authority.json": "b91e767fbd8a03a0260b8eff319b8df4076d51be6bdb1856dabcd861a123ee67"
+  },
+  "primary_snapshot_sha256": {
+    "rabitq.html": "e1c3968dab4f9c882824174d2ef2a5d9a81c5d66939c52f86555c800e0056bc8",
+    "spann.html": "7db9d2016c5316155081338dce6f205a0094b9151b9052492c338bec73fbacb1",
+    "faiss.cpp": "c051c399db6edff1cde4d77d77bbb1bccedbfba7b23ec8743120bf69cc25afd9",
+    "s3.html": "eeeb243de6876214bed5081d9c640ac247a117bd086093426e5c9e1ac70b92fc",
+    "autoresearch-readme.md": "3958fd4195ac2f98ed35c4eaa4f3028a335165ee24945e96426c408d25793a41",
+    "autoresearch-program.md": "86cf987a5c381e46eefe0d0a82765223fd766d8d7acdc2afacfbbce15ecacece"
+  }
+}
