@@ -1,0 +1,447 @@
+{
+  "baseline48_functional_parity_all1000": true,
+  "baseline_parity_fields": [
+    "returned IDs",
+    "f64 score bits",
+    "physical ordinals",
+    "shortlist",
+    "plans",
+    "trace",
+    "SOURCE and SQ8 IO"
+  ],
+  "claims": {
+    "holdout": false,
+    "paired_speed_win": false,
+    "production_ready": false,
+    "provider_cache_eviction_proven": false,
+    "quality_pareto_gain": true,
+    "vendor_win": false
+  },
+  "configuration": {
+    "candidate64": {
+      "config_sha256": "8691b04f6b5a7ba2723441ff070ed8826a90f30f24426688cf2a9955cd4795e1",
+      "expected_sha256": "0dbbc6f59b8343d6750a4999478ef5c3a622f4c8574cb2b900137c3097c40bfd"
+    },
+    "control48": {
+      "config_sha256": "3d156e09054121356e82b33db6fc1d0b0480f63dc91e80505d52f5139720c8a4",
+      "expected_sha256": "db3a7b240bf4eff637a01de5d13039ca8b8200af8bb25d366c18035509c64558"
+    },
+    "download_parallelism": 128,
+    "fp32_coalesce": false,
+    "host_memory_bytes": 8589934592,
+    "library_memory_bytes": 2147483648,
+    "only_full_config_difference": "semantic_leaf_limit 48 -> 64",
+    "query_concurrency": 1,
+    "shortlist": 16,
+    "source_authentication": "offload2"
+  },
+  "decision": "retain quality Pareto gain",
+  "evidence_files": {
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/admit64-config.json": {
+      "bytes": 3053,
+      "sha256": "0e78135ea123d809501b2610d379ab7f97d4ae600f8872f7c90839c13bb9c564"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/admit64-report.json": {
+      "bytes": 677,
+      "sha256": "5cbbc90d26f698f636aeaedb5c50901233a383c83b9b3930079a111a6a7b25c6"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/admit64-verification.json": {
+      "bytes": 2901,
+      "sha256": "b0f66060624205d39ca2db70770577d8d7f71cfb336c9f323842df9f2a25d416"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/canary64-config.json": {
+      "bytes": 3053,
+      "sha256": "c75974516367179ef7ae56ea6db7f9c11c8610782c0bfae0f77642f4be384b3b"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/canary64-report.json": {
+      "bytes": 677,
+      "sha256": "2ef74dc011c1089a8b0645552316e02879231cc1ba8f13675bcd5dd788a18223"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/canary64-verification.json": {
+      "bytes": 2903,
+      "sha256": "fb7a0bb5b1cc9cebaf0393ec887d4225c71ebbbbecb0fbfc8e0eabf51b777575"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/control48-full-config.json": {
+      "bytes": 3011,
+      "sha256": "3d156e09054121356e82b33db6fc1d0b0480f63dc91e80505d52f5139720c8a4"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/control48-full-report.json": {
+      "bytes": 712,
+      "sha256": "8602b3a48aa344591b62ed74ac76fd7b8e31c423a1c4a958ad26e392c020838e"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/control48-full-verification.json": {
+      "bytes": 2763,
+      "sha256": "6a09076255f83a003e2854cb9b64ef358afe5b75f7369be0965d021548eb99ce"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/frozen.json": {
+      "bytes": 925,
+      "sha256": "e03161253bc6a5469f7f9710e4579703cc5dc6e920db310ab6790c1ab0f8ecf0"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/full64-after-positive-config.json": {
+      "bytes": 3011,
+      "sha256": "8691b04f6b5a7ba2723441ff070ed8826a90f30f24426688cf2a9955cd4795e1"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/full64-after-positive-report.json": {
+      "bytes": 712,
+      "sha256": "7a18527f8e6c8389581277d00a27988deb9274287ff684e4ae3858815a1af1ee"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/full64-after-positive-verification.json": {
+      "bytes": 5687,
+      "sha256": "b8eee0b554d8b23fee0fdf1b65320d22bbe600ac036a1df87ed10a61a22f9b28"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/measurement-addendum.json": {
+      "bytes": 2119,
+      "sha256": "5d529d2b4fff1d857868333589d102530bebc099e034e92089e9be610d25c7de"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/preflight.json": {
+      "bytes": 110,
+      "sha256": "ff85fcc5ab3736b69a01c48532e8bcaf87635cb1c7cda670af5279639fbd2e3b"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/report.json": {
+      "bytes": 12100,
+      "sha256": "bde89eabc13cfe81246bdef1c91e8cf7395af3df250fb6392ef39cc134960c28"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/root-independent-verification.json": {
+      "bytes": 19690,
+      "sha256": "7e886d2a7f21bcd91491bab94f87852089e2361b5db291ad4cb155e3abdf165a"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/root-verification-publication.json": {
+      "bytes": 226,
+      "sha256": "08d4b1fc643adecd9a839022b44f8bf2009e53b18c92a83b4c2cfa3640ef62d3"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/screen-decision.json": {
+      "bytes": 102,
+      "sha256": "2bf478503db935f252473b46defcc656e69e7f9efb9da26c7021ba9d32a58b34"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/screen64-config.json": {
+      "bytes": 3482,
+      "sha256": "055b36c6f5eb8c069d8130da6e0c5834c2958c3514a826bfdc72332536d0d971"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/screen64-report.json": {
+      "bytes": 701,
+      "sha256": "b73f5270d7d2304347da92862de14191cabe4ea89a9173b337d6728c8f470ec4"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/screen64-verification.json": {
+      "bytes": 6224,
+      "sha256": "89fdd6fd6ac1f7d458f03e290b0d3f3ad29763a2824b6c5acf096d9ebb6430e1"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-control-a0001/source-params.json": {
+      "bytes": 3172,
+      "sha256": "004d451d60ec1b69360a74673542d551e8ff47ea5eadd0c811ba9ba021e76983"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-fp32-control-a0001/terminal.json": {
+      "bytes": 284,
+      "sha256": "0d982dc122b96cec0c4034f692b7c9f65b02b1f7ee0590ebec17188ae91cf5fa"
+    },
+    "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/handoff.json": {
+      "bytes": 9249,
+      "sha256": "d89cf3b0cba9ebba070eaeb6d791102485fc662c492f6a7f0f40f11666298a84"
+    }
+  },
+  "full": {
+    "baseline_hits": 9852,
+    "candidate_hits": 9902,
+    "denominator": 10000,
+    "improved_queries": 43,
+    "net_gain": 50,
+    "perfect_queries_candidate": 925,
+    "perfect_queries_control": 890,
+    "regressed_queries": [
+      {
+        "after": 9,
+        "before": 10,
+        "ordinal": 113
+      }
+    ],
+    "unchanged_queries": 956
+  },
+  "full_cohort_qualification": false,
+  "measurement_order": "one sequential control48 full1000, then screen64 and positive-triggered full64; no randomized paired timing repetitions",
+  "metrics": {
+    "candidate64": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 122948,
+          "verified_bytes": 39255017472
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30076,
+          "verified_bytes": 11756760064
+        }
+      },
+      "full_cohort_qualification": false,
+      "histogram": {
+        "10": 925,
+        "3": 1,
+        "7": 4,
+        "8": 9,
+        "9": 61
+      },
+      "hits": 9902,
+      "observed_process_peak_bytes": 154566656,
+      "population_percentiles_valid": true,
+      "process_cpu_ns": 154216271210,
+      "process_wall_ns": 253559425906,
+      "query_process_cpu_ns": 146323915068,
+      "query_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 169024,
+        "verified_bytes": 51077441536
+      },
+      "query_wall_ns": 245061079258,
+      "recall_percentiles": {
+        "0.01": 0.8,
+        "0.05": 0.9,
+        "0.1": 1.0
+      },
+      "serial_query_qps": 4.080615343031282,
+      "wall_percentiles_ms": {
+        "0.5": 200.509366,
+        "0.9": 403.658597,
+        "0.95": 433.67657,
+        "0.99": 479.781347
+      }
+    },
+    "control48": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "full_cohort_qualification": false,
+      "histogram": {
+        "10": 890,
+        "3": 1,
+        "6": 1,
+        "7": 6,
+        "8": 17,
+        "9": 85
+      },
+      "hits": 9852,
+      "observed_process_peak_bytes": 143106048,
+      "population_percentiles_valid": true,
+      "process_cpu_ns": 122136896437,
+      "process_wall_ns": 211186698281,
+      "query_process_cpu_ns": 115883579141,
+      "query_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 155913,
+        "verified_bytes": 39755864320
+      },
+      "query_wall_ns": 204433679986,
+      "recall_percentiles": {
+        "0.01": 0.8,
+        "0.05": 0.9,
+        "0.1": 0.9
+      },
+      "serial_query_qps": 4.891561899528893,
+      "wall_percentiles_ms": {
+        "0.5": 183.383985,
+        "0.9": 289.067119,
+        "0.95": 380.744656,
+        "0.99": 457.481637
+      }
+    }
+  },
+  "native_checks": {
+    "admit64": {
+      "all_queries_sealed": true,
+      "full_cohort_qualification": false,
+      "independent_f64_scorebits_and_baseline_oracle": true,
+      "raw_sha256_recorded_not_reread": "3dc0f94bb119c63c2a5c3903234b2803bdef5630860ebfcc5afc79517c1cf8b0",
+      "strict_replay_valid": true
+    },
+    "canary64": {
+      "all_queries_sealed": true,
+      "full_cohort_qualification": false,
+      "independent_f64_scorebits_and_baseline_oracle": true,
+      "raw_sha256_recorded_not_reread": "876872669bef4a52dbe6cc5401ab7e9f5e94bea361bd31857975fa24a822f569",
+      "strict_replay_valid": true
+    },
+    "control48-full": {
+      "all_queries_sealed": true,
+      "full_cohort_qualification": false,
+      "independent_f64_scorebits_and_baseline_oracle": true,
+      "raw_sha256_recorded_not_reread": "6debe4f8505c729a2885c3949670c022176c9df7ffd9f16c0bcadde0a9e2ab2e",
+      "strict_replay_valid": true
+    },
+    "full64-after-positive": {
+      "all_queries_sealed": true,
+      "full_cohort_qualification": false,
+      "independent_f64_scorebits_and_baseline_oracle": true,
+      "raw_sha256_recorded_not_reread": "ba9ddc699283fc9b107a06af871a22a6e8bda63b473072b2c2dff44fc3166f1e",
+      "strict_replay_valid": true
+    },
+    "screen64": {
+      "all_queries_sealed": true,
+      "full_cohort_qualification": false,
+      "independent_f64_scorebits_and_baseline_oracle": true,
+      "raw_sha256_recorded_not_reread": "882195173ac254ede639b11e1131c13398d708fa0975574b2244a698f42d7814",
+      "strict_replay_valid": true
+    }
+  },
+  "native_order_sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413",
+  "new_missing_id_mapping": {
+    "bytes": 1036000000,
+    "resolved_ids": {
+      "497968": 840621
+    },
+    "rows": 1000000,
+    "sq8_sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+  },
+  "preflight": {
+    "actual_D1024_selection64_and_SOURCE_completion": true,
+    "admit_exit": 0,
+    "canary_exit": 0,
+    "scratch_cleanup": true
+  },
+  "query_io_delta": {
+    "canonical": {
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "router": {
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "source": {
+      "submitted_gets": 13076,
+      "verified_bytes": 10287433728
+    },
+    "sq8": {
+      "submitted_gets": 35,
+      "verified_bytes": 1034143488
+    }
+  },
+  "residual_counts": {
+    "not_semantic_nominated_or_SOURCE_scored": 98
+  },
+  "residual_limit": "Fetched SQ8 range coverage does not establish ranking eligibility or isolate quantization. All 98 misses were not semantic-nominated/SOURCE-evaluated.",
+  "residual_truth_hits": 98,
+  "schema": "borsuk-routing64-outcome-metadata-verification-v1",
+  "scope": "Independent consistency audit of closed metadata only; no raw corpus/query/truth reads or ANN rerun. Native results and parity are inherited evidence, not re-executed here.",
+  "screen": {
+    "baseline_hits": 952,
+    "candidate_hits": 1003,
+    "decision": "GO_FULL1000",
+    "denominator": 1100,
+    "net_gain": 51,
+    "queries": 110,
+    "selection": "frozen baseline-loss development queries"
+  },
+  "source_commit": "2906256b823754dd9ca1018cf6c6c3dd5ea3a6bb",
+  "source_qualification_checks": [
+    {
+      "attempt": 1,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay --no-run",
+      "exit": 101,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/affected-build.1.log",
+      "source_patch_sha256": "ade293d75927d9ca082a5799a0c96f37599b1cc45bfc5205fa37b0c3ca1c0aa8",
+      "stage": "affected-build"
+    },
+    {
+      "attempt": 2,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay --no-run",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/affected-build.2.log",
+      "source_patch_sha256": "23f24f0d9c494d62c293471798cfeff0c5b66fe2a6ee262a47b88cd921290519",
+      "stage": "affected-build"
+    },
+    {
+      "attempt": 1,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/clippy.1.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "clippy"
+    },
+    {
+      "attempt": 1,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay coverage64 -- --nocapture",
+      "exit": 101,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/coverage-tests.1.log",
+      "source_patch_sha256": "23f24f0d9c494d62c293471798cfeff0c5b66fe2a6ee262a47b88cd921290519",
+      "stage": "coverage-tests"
+    },
+    {
+      "attempt": 2,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay coverage64 -- --nocapture",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/coverage-tests.2.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "coverage-tests"
+    },
+    {
+      "attempt": 1,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay fp32 -- --nocapture",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/fp32-tests.1.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "fp32-tests"
+    },
+    {
+      "attempt": 1,
+      "command": "cargo test --locked -p borsuk --lib --bin check_cohere_native_baseline --example compare_native_replay semantic_leaf -- --nocapture",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/leaf-tests.1.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "leaf-tests"
+    },
+    {
+      "attempt": 1,
+      "command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/release.1.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "release"
+    },
+    {
+      "attempt": 1,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND BORSUK_TEST_BUILD_JOBS=8 bash scripts/check_rust_test_build.sh",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/routing64-native-repair-a0001/test-build.1.log",
+      "source_patch_sha256": "ab5f34b7628df36bb1797e804004486e6d16afc787eab745166643da6be591fa",
+      "stage": "test-build"
+    }
+  ],
+  "source_qualification_prior_failed_attempts_preserved": true,
+  "source_qualification_statuses": {
+    "clippy.1": 0,
+    "controller": 0,
+    "coverage-tests.2": 0,
+    "fp32-tests.1": 0,
+    "leaf-tests.1": 0,
+    "release.1": 0,
+    "test-build.1": 0
+  },
+  "valid": true
+}

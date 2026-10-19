@@ -1,0 +1,26 @@
+{
+  "archive": {
+    "bytes": 40947113,
+    "key": "research/semantic-router/20261019/routing64-fp32-a0001/evidence.tar.gz",
+    "sha256": "5c602d3a362e7cd190cf135019a7b4226877f563db64d21800a564b892ac6a0c"
+  },
+  "hold_for_root_disposition": true,
+  "instance": "i-0461defb126f7e5a2",
+  "native_pipeline_exit": 0,
+  "no_merge_or_push": true,
+  "original_experiment_main_pid": 0,
+  "original_experiment_main_pid_provenance": "Root opening assignment reports terminal exit0/PID0; worker independently checked closed terminal.json and pipeline.exit, not a live process probe.",
+  "planning_consultation": "Separate root-owned planning consultation; no outcome asserted.",
+  "root_independent_verification_publication": {
+    "bytes": 19690,
+    "checksum_head_verified": true,
+    "key": "research/semantic-router/20261019/routing64-fp32-a0001/root-independent-verification.json",
+    "sha256": "7e886d2a7f21bcd91491bab94f87852089e2361b5db291ad4cb155e3abdf165a"
+  },
+  "schema": "borsuk-routing64-outcome-terminal-v1",
+  "source_commit": "2906256b823754dd9ca1018cf6c6c3dd5ea3a6bb",
+  "state": "CLOSED",
+  "terminal_utc_epoch": 1792382004.9673696,
+  "worker_native_reruns": false,
+  "worker_scope": "docs-only static metadata verification"
+}
