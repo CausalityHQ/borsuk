@@ -1,0 +1,43 @@
+{
+  "schema": "borsuk-fp32-depth32-summary-v1",
+  "valid": true,
+  "baseline_failing_query_count": 133,
+  "baseline_failing_query_hits": 1133,
+  "candidate_failing_query_hits": 1133,
+  "baseline_full1000_hits": 9803,
+  "full1000_candidate_executed": false,
+  "new_hits": 0,
+  "regressed_queries": 0,
+  "all_queries_independent_f64_scorebits_upstream_plan_charge_and_coarse_prefix_parity": true,
+  "native_elf_sha256": "c150beb61198876b29a3fa9320db3c8a7f206f9dcf719d2a0db91b7dc92f26df",
+  "reader_elf_sha256": "716754d6a5f8e80c6a93a475d23f8f6bbdf00d6c4ed207e8cd3933b09f1ea216",
+  "frozen_config_manifest_sha256": "683f423459a1afbaaccc7fe69bf342722e04d8e850db4cbb0b9977b0eb1f8488",
+  "cells": [
+    {
+      "label": "screen0",
+      "queries": 128,
+      "baseline_hits": 1093,
+      "candidate_hits": 1093,
+      "denominator": 1280,
+      "raw_sha256": "5c613e8a5d26dbfa04f2969f6b6fa65fe5cd98b39a42d94430f113730a4e4ed2"
+    },
+    {
+      "label": "screen1",
+      "queries": 5,
+      "baseline_hits": 40,
+      "candidate_hits": 40,
+      "denominator": 50,
+      "raw_sha256": "2eff7403cb9083278b3619229269cfd74602d5a39bed155d6ced0789296fa289"
+    }
+  ],
+  "canonical_screen_GETs": 4256,
+  "canonical_screen_bytes": 17466624,
+  "missing_truth_hits": 197,
+  "missing_truth_in_depth32_roster": 0,
+  "missing_truth_outside_sq8_fetched_ranges": 197,
+  "source_boundary_counts": {
+    "not_semantic_nominated_or_SOURCE_scored": 197
+  },
+  "decision": "VALID_NEGATIVE: stop shortlist32; next expand pre-SOURCE coverage",
+  "no_matched_latency_or_vendor_win_claim": true
+}
