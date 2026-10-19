@@ -14233,6 +14233,94 @@ mod tests {
     }
 
     #[test]
+    fn source_overlap_native_identity_and_bound_charge_are_strict() {
+        for active in [1, 2] {
+            let (dir, rows) = scale_native_runner::concurrent_reducer_fixture(active);
+            assert_eq!(rows[0]["source_authentication"], "offload2");
+            assert_eq!(rows[0]["source_layout"]["layout"], "flat_records");
+            assert!(rows[0].get("rows").is_none());
+            assert!(rows[0].get("dimensions").is_none());
+            let check = |records: &[Value]| {
+                let (path, _) = write_fixture(dir.path(), "overlap-reader.jsonl", records.to_vec());
+                let (config, pin) = scale_config(dir.path(), &path, records);
+                reduce_scale(&config, &pin)
+            };
+            check(&rows).unwrap();
+            let bound = &rows[1];
+            let workers = borsuk::sq8_s3_range::SourceAuthentication::Offload2
+                .additional_memory_bytes(
+                    bound["fetch_parallelism"].as_u64().unwrap() as usize,
+                    bound["source_get_budget"].as_u64().unwrap() as usize,
+                    active,
+                )
+                .unwrap();
+            let scores = borsuk::two_bit_generation::source_score_overlap_bytes(
+                bound["rows"].as_u64().unwrap() as usize,
+                bound["dimensions"].as_u64().unwrap() as usize,
+                bound["source_byte_budget"].as_u64().unwrap() as usize,
+            )
+            .unwrap()
+                * active as u64;
+            assert!(scores > 0);
+            let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+            assert_eq!(
+                rows[startup]["source_authentication_extra_library_bytes"],
+                workers + scores
+            );
+            for field in ["rows", "dimensions", "source_byte_budget"] {
+                for value in [
+                    None,
+                    Some(Value::Null),
+                    Some(json!("1024")),
+                    Some(json!(-1)),
+                    Some(json!(1.5)),
+                ] {
+                    let mut bad = rows.clone();
+                    if let Some(value) = value {
+                        bad[1][field] = value;
+                    } else {
+                        bad[1].as_object_mut().unwrap().remove(field);
+                    }
+                    assert!(check(&bad).is_err(), "{active} {field}");
+                }
+            }
+            for value in [
+                None,
+                Some(json!(workers)),
+                Some(json!(workers + scores - 1)),
+                Some(json!((workers + scores).to_string())),
+            ] {
+                let expected = if value.as_ref().is_some_and(Value::is_string) {
+                    "v10 unsigned integer"
+                } else {
+                    "SOURCE authentication exact library reservation"
+                };
+                let mut bad = rows.clone();
+                if let Some(value) = value {
+                    bad[startup]["source_authentication_extra_library_bytes"] = value;
+                } else {
+                    bad[startup]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("source_authentication_extra_library_bytes");
+                }
+                let error = check(&bad).unwrap_err().to_string();
+                assert!(
+                    error == expected,
+                    "{active} reservation: {error}"
+                );
+            }
+            for index in [0, 1] {
+                for value in [Value::Null, json!(2), json!("offload"), json!(true)] {
+                    let mut bad = rows.clone();
+                    bad[index]["source_authentication"] = value;
+                    assert!(check(&bad).is_err(), "{active} selector {index}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn runtime_task_reader_mutations() {
         for multi in [false, true] {
             let (dir, rows) = scale_native_runner::runtime_task_reducer_fixture(2, multi);

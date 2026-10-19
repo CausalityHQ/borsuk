@@ -9,7 +9,7 @@ use crate::{
     object_native_generation::{
         MetadataReadStats, ObjectNativeOpenError, metadata_location, stage_two_bit_metadata,
     },
-    rotated_two_bit::{PreparedTwoBit, TwoBitScoreBlock},
+    rotated_two_bit::{PreparedTwoBit, TwoBitError, TwoBitScoreBlock},
     sq8_page_authority::{
         PageAuthority, PageError, SOURCE_SHORTLIST_ROWS, SQ8_PAGE_ROWS, SelectedSq8Limits,
         plan_source_shortlist_blocks,
@@ -1563,6 +1563,98 @@ fn verified_source_record<'a>(
         .get(relative..relative.checked_add(width)?)
 }
 
+type SourceUnitScore = std::result::Result<[f64; 32], TwoBitError>;
+
+struct SourceScores {
+    prepared: std::sync::Arc<PreparedTwoBit>,
+    units: Box<[usize]>,
+    scores: Box<[std::sync::OnceLock<SourceUnitScore>]>,
+    rows: usize,
+    width: usize,
+}
+
+fn source_score_capacity(rows: usize, dimensions: usize, max_bytes: usize) -> Option<usize> {
+    let width = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(dimensions)
+        .ok()?.div_ceil(4).checked_add(8)?;
+    Some(rows.div_ceil(32).min(max_bytes.checked_div(width.checked_mul(32)?)?.checked_add(1)?))
+}
+
+/// Additional per-query payload for flat SOURCE overlap. Includes actual slot and
+/// unit types, two concurrent scoring blocks, Arc/closure controls and alignment.
+#[doc(hidden)]
+pub fn source_score_overlap_bytes(rows: usize, dimensions: usize, max_bytes: usize) -> Option<u64> {
+    source_score_capacity(rows, dimensions, max_bytes)?
+        .checked_mul(std::mem::size_of::<std::sync::OnceLock<SourceUnitScore>>()
+            .checked_add(std::mem::size_of::<usize>())?)?
+        .checked_add(TwoBitScoreBlock::scratch_bytes()?.checked_mul(2)?)?
+        .checked_add(std::mem::size_of::<SourceScores>())?
+        .checked_add(4096)?.try_into().ok()
+}
+
+pub(crate) fn source_authentication_memory(
+    manifest: &Manifest, limits: TwoBitGenerationLimits, authentication: SourceAuthentication,
+) -> Option<u64> {
+    let workers = authentication.additional_memory_bytes(limits.max_parallel_source_gets,
+        limits.max_source_gets, limits.max_active_queries)?;
+    let scores = if authentication == SourceAuthentication::Offload2
+        && manifest.source_layout.mode() == SourceLayoutMode::FlatRecords {
+        source_score_overlap_bytes(manifest.canonical.rows, manifest.canonical.dimensions,
+            limits.max_source_bytes)?.checked_mul(limits.max_active_queries as u64)?
+    } else { 0 };
+    workers.checked_add(scores)
+}
+
+impl SourceScores {
+    fn new(prepared: std::sync::Arc<PreparedTwoBit>, units: Vec<usize>,
+        rows: usize, dimensions: usize, width: usize, max_bytes: usize) -> Result<Self> {
+        if units.len() > source_score_capacity(rows, dimensions, max_bytes)
+            .ok_or(TwoBitGenerationError::Invalid("source score capacity"))? {
+            return Err(TwoBitGenerationError::Invalid("source score capacity"));
+        }
+        let mut scores = Vec::new();
+        scores.try_reserve_exact(units.len())
+            .map_err(|_| TwoBitGenerationError::Invalid("source score allocation"))?;
+        if scores.capacity() != units.len() {
+            return Err(TwoBitGenerationError::Invalid("source score capacity"));
+        }
+        scores.resize_with(units.len(), std::sync::OnceLock::new);
+        Ok(Self { prepared, units: units.into_boxed_slice(), scores: scores.into_boxed_slice(), rows, width })
+    }
+
+    fn score_response(&self, range: &VerifiedRange) {
+        let first = range.start / self.width / 32;
+        let end = (range.start + range.bytes.len()).div_ceil(self.width * 32);
+        let begin = self.units.partition_point(|unit| *unit < first);
+        let end = self.units.partition_point(|unit| *unit < end);
+        for index in begin..end {
+            let unit = self.units[index];
+            let first = unit * 32;
+            let count = (self.rows - first).min(32);
+            let score = (|| {
+                let mut values = [-0.0; 32];
+                let mut block = TwoBitScoreBlock::new(&self.prepared);
+                for (lane, value) in values.iter_mut().enumerate().take(count) {
+                    let offset = (first + lane) * self.width - range.start;
+                    let record = &range.bytes[offset..offset + self.width];
+                    if count == 32 { block.push(record)?; }
+                    else { *value = self.prepared.score(record)?; }
+                }
+                if count == 32 { values.copy_from_slice(block.score()); }
+                Ok(values)
+            })();
+            assert!(self.scores[index].set(score).is_ok(), "SOURCE unit scored once");
+        }
+    }
+
+    fn get(&self, unit: usize) -> Option<Result<&[f64; 32]>> {
+        self.units.binary_search(&unit).ok().map(|index| {
+            self.scores[index].get()
+                .ok_or(TwoBitGenerationError::Invalid("missing source scores"))?
+                .as_ref().map_err(|e| TwoBitGenerationError::Plane(SourceBuildError::Codec(*e)))
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SourceRowScore {
     row: usize,
@@ -1631,7 +1723,7 @@ pub fn plan_two_bit_source_walks<'a>(
     trace: Option<&mut TwoBitPlanTrace>,
 ) -> Result<BudgetedPagePlan> {
     plan_two_bit_source_walks_with_coverage(authority, nomination_page_limit,
-        semantic_profile.map(Into::into), walks, prepared, record, limits, trace)
+        semantic_profile.map(Into::into), walks, prepared, record, limits, trace, None)
 }
 fn plan_two_bit_source_walks_with_coverage<'a>(
     authority: &PageAuthority,
@@ -1642,6 +1734,7 @@ fn plan_two_bit_source_walks_with_coverage<'a>(
     mut record: impl FnMut(usize) -> Option<&'a [u8]>,
     limits: SelectedSq8Limits,
     trace: Option<&mut TwoBitPlanTrace>,
+    scores: Option<&SourceScores>,
 ) -> Result<BudgetedPagePlan> {
     let rows = authority.rows();
     let dimensions = authority.dimensions();
@@ -1683,6 +1776,15 @@ fn plan_two_bit_source_walks_with_coverage<'a>(
         }
         let first = unit * 32;
         let end = ((unit + 1) * 32).min(rows);
+        if let Some(values) = scores.and_then(|scores| scores.get(unit)) {
+            let values = values?;
+            let mut maximum = f64::NEG_INFINITY;
+            for (lane, &value) in values[..end - first].iter().enumerate() {
+                retain_source_shortlist(&mut shortlist, first + lane, value)?;
+                maximum = maximum.max(value);
+            }
+            return Ok(maximum);
+        }
         // Partial units keep the scalar path; only full units use blocked scoring.
         if end - first < 32 {
             let mut maximum = f64::NEG_INFINITY;
@@ -2161,12 +2263,7 @@ impl TwoBitGeneration {
         if self.source.is_none() {
             return Err(bad("SOURCE authentication requires remote source"));
         }
-        let bytes = authentication
-            .additional_memory_bytes(
-                self.limits.max_parallel_source_gets,
-                self.limits.max_source_gets,
-                self.limits.max_active_queries,
-            )
+        let bytes = source_authentication_memory(&self.manifest, self.limits, authentication)
             .ok_or(bad("SOURCE authentication memory"))?;
         self.modeled_memory_bytes = self
             .modeled_memory_bytes
@@ -3489,6 +3586,7 @@ impl TwoBitGeneration {
         }
         stages.discovery.end_ns = started.elapsed().as_nanos();
         let (prepared, normalized, walks, ids) = discovered?;
+        let prepared = std::sync::Arc::new(prepared);
         let router_stats = Sq8ReadStats::default();
         if let Some(capsules) = &self.capsules {
             let cover_cpu = profile.as_deref().map(|_| SyncStart::now());
@@ -3646,17 +3744,35 @@ impl TwoBitGeneration {
                 cpu.finish(&mut profile.cover);
             }
             let ranges = covered?;
+            let scores = if self.frames.is_none() && self.source_cache.is_none()
+                && self.source_authentication == SourceAuthentication::Offload2 {
+                Some(std::sync::Arc::new(SourceScores::new(
+                    std::sync::Arc::clone(&prepared),
+                    admit_source_walks_coverage(self.rows(), &walks, self.semantic_coverage())?,
+                    self.rows(), self.pages.dimensions(), self.plane.receipt().record_bytes,
+                    self.limits.max_source_bytes,
+                )?))
+            } else { None };
             stages.source.start_ns = started.elapsed().as_nanos().max(1);
             if let Some(profile) = profile.as_deref_mut() {
                 profile.source.start_phase();
             }
-            let fetched = self
-                .fetch_source_ranges_traced(
-                    store,
-                    &ranges,
+            let fetched = if let Some(scores) = &scores {
+                let source = self.source.as_ref()
+                    .ok_or(TwoBitGenerationError::Invalid("source binding"))?;
+                let scores = std::sync::Arc::clone(scores);
+                crate::sq8_s3_range::fetch_source_ranges_traced_with_callback(
+                    store, &source.location, &source.authority, &ranges, &source.etag,
+                    self.limits.max_source_gets, self.limits.max_source_bytes,
+                    self.limits.max_parallel_source_gets,
                     profile.as_deref_mut().map(|profile| &mut profile.source),
-                )
-                .await;
+                    self.byte_window.as_ref(), self.source_authentication,
+                    Some(std::sync::Arc::new(move |range: &VerifiedRange| scores.score_response(range))),
+                ).await.map_err(TwoBitGenerationError::SourceRead)
+            } else {
+                self.fetch_source_ranges_traced(store, &ranges,
+                    profile.as_deref_mut().map(|profile| &mut profile.source)).await
+            };
             if let Some(profile) = profile.as_deref_mut() {
                 profile.source.finish_phase();
             }
@@ -3682,11 +3798,12 @@ impl TwoBitGeneration {
             let planning_cpu = profile.as_deref().map(|_| SyncStart::now());
             let mut last_index = None;
             let plan = self
-                .plan_walks(
+                .plan_walks_scored(
                     &walks,
                     &prepared,
                     |row| verified_source_record(&verified, row, width, &mut last_index),
                     trace,
+                    scores.as_deref(),
                 )
                 .map_err(|error| TwoBitGenerationError::SourcePlanning {
                     stats,
@@ -3779,6 +3896,17 @@ impl TwoBitGeneration {
         record: impl FnMut(usize) -> Option<&'a [u8]>,
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<BudgetedPagePlan> {
+        self.plan_walks_scored(walks, prepared, record, trace, None)
+    }
+
+    fn plan_walks_scored<'a>(
+        &self,
+        walks: &[(usize, Vec<usize>)],
+        prepared: &PreparedTwoBit,
+        record: impl FnMut(usize) -> Option<&'a [u8]>,
+        trace: Option<&mut TwoBitPlanTrace>,
+        scores: Option<&SourceScores>,
+    ) -> Result<BudgetedPagePlan> {
         plan_two_bit_source_walks_with_coverage(
             &self.pages,
             if self.manifest.discovery.mode() == DiscoveryMode::Semantic {
@@ -3805,6 +3933,7 @@ impl TwoBitGeneration {
                     .ok_or(TwoBitGenerationError::Invalid("source block scratch"))?,
             },
             trace,
+            scores,
         )
     }
     /// Offline physical plan and candidate pages in nomination order.
@@ -9394,6 +9523,173 @@ mod source_walk_tests {
     }
 
     #[test]
+    fn source_overlap_storage_and_shuffled_score_bits_preserve_plans() {
+        use std::sync::Arc;
+        for dimensions in [1, 257, 1024] {
+            let rows: usize = 513;
+            let codec = crate::rotated_two_bit::RotatedTwoBitCodec::new(&vec![0.0; dimensions], 17).unwrap();
+            let prepared = Arc::new(codec.prepare_query(&vec![1.0; dimensions], 2 * 1024 * 1024).unwrap());
+            let mut records = (0..rows).map(|_| codec.encode(&vec![1.0; dimensions]).unwrap()).collect::<Vec<_>>();
+            let width = records[0].len();
+            for (row, record) in records.iter_mut().enumerate() {
+                if row % 3 == 0 { record[width - 8..width - 4].copy_from_slice(&(-0.0_f32).to_le_bytes()); }
+            }
+            let units = (0..8).chain([9, 16]).collect::<Vec<_>>();
+            let walks = [(0, units.clone())];
+            let scores = SourceScores::new(Arc::clone(&prepared), units.clone(), rows,
+                dimensions, width, rows * width).unwrap();
+            let actual = (scores.units.len() * std::mem::size_of::<usize>()
+                + scores.scores.len() * std::mem::size_of::<std::sync::OnceLock<SourceUnitScore>>()) as u64;
+            assert!(source_score_overlap_bytes(rows, dimensions, rows * width).unwrap() >= actual);
+            // Whole physical cover includes bridge and completion units; only mandatory units score.
+            for (first, last) in [(16, 17), (8, 16), (0, 8)] {
+                let body = records[first * 32..(last * 32).min(rows)].concat();
+                scores.score_response(&VerifiedRange { start: first * 32 * width, bytes: body.into() });
+            }
+            assert!(scores.get(8).is_none());
+            assert!(scores.get(10).is_none());
+            for unit in units {
+                for (lane, score) in scores.get(unit).unwrap().unwrap()[..(rows - unit * 32).min(32)].iter().enumerate() {
+                    assert_eq!(score.to_bits(), prepared.score(&records[unit * 32 + lane]).unwrap().to_bits());
+                }
+            }
+            let authority = source_test_authority(rows, dimensions).unwrap();
+            let limits = SelectedSq8Limits { max_gets: 32, max_bytes: rows * (dimensions + 12), max_planner_bytes: 256 * 1024 };
+            let mut expected_trace = TwoBitPlanTrace::default();
+            let expected = plan_two_bit_source_walks_with_coverage(&authority, 3, None,
+                &walks, &prepared, |row| Some(records[row].as_slice()), limits, Some(&mut expected_trace), None).unwrap();
+            let mut trace = TwoBitPlanTrace::default();
+            let actual = plan_two_bit_source_walks_with_coverage(&authority, 3, None,
+                &walks, &prepared, |row| Some(records[row].as_slice()), limits, Some(&mut trace), Some(&scores)).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(serde_json::to_value(trace).unwrap(), serde_json::to_value(expected_trace).unwrap());
+        }
+        let forecast = source_score_overlap_bytes(1_000_000, 1024, 64 * 1024 * 1024).unwrap();
+        eprintln!("SOURCE overlap: slot={} unit={} D1024/64MiB capacity={} reservation={forecast}",
+            std::mem::size_of::<std::sync::OnceLock<SourceUnitScore>>(),
+            std::mem::size_of::<usize>(), source_score_capacity(1_000_000, 1024, 64 * 1024 * 1024).unwrap());
+        assert!(forecast <= 4 * 1024 * 1024, "{forecast}");
+    }
+
+    #[tokio::test]
+    async fn source_overlap_scores_before_held_final_read_and_defers_score_errors() {
+        use crate::sq8_s3_range::{cold_http_fixture::{ETAG, Fixture}, fetch_source_ranges_traced_with_callback};
+        use std::{sync::Arc, time::{Duration, Instant}};
+        let _serial = crate::sq8_s3_range::SOURCE_AUTH_TEST_SERIAL.lock().await;
+        let tiny = tiny_direct(513, 24).await;
+        let generation = TwoBitGeneration::open_remote(&tiny.store, &tiny.prefix, &tiny.root_sha,
+            tiny.limits, tiny.temp.path()).await.unwrap();
+        let source = generation.source.as_ref().unwrap();
+        let body = fs::read(tiny.temp.path().join("generation/plane/records.bin")).unwrap();
+        let width = generation.plane.receipt().record_bytes;
+        let fixture = Fixture::new(std::collections::BTreeMap::from([(source.location.to_string(), body)]),
+            Instant::now() + Duration::from_secs(10));
+        // Only the final valid body is held; nonexistent fault offsets inject no error.
+        fixture.arm(Some((0, [usize::MAX, usize::MAX - 1, 16 * 32 * width])));
+        let query = vec![1.0; 24];
+        let prepared = Arc::new(generation.plane.prepare_query(&query, 2 * 1024 * 1024).unwrap());
+        let scores = Arc::new(SourceScores::new(prepared, vec![0, 16], 513, 24, width, 513 * width).unwrap());
+        let callback_scores = Arc::clone(&scores);
+        let mut profile = Sq8RangeTrace::new(3).unwrap();
+        let ranges = [(0, 7), (8, 15), (16, 16)];
+        let mut work = Box::pin(fetch_source_ranges_traced_with_callback(fixture.reader.store(),
+            &source.location, &source.authority, &ranges, ETAG, 3, 513 * width, 2,
+            Some(&mut profile), None, SourceAuthentication::Offload2,
+            Some(Arc::new(move |range: &VerifiedRange| callback_scores.score_response(range)))));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    _ = &mut work => panic!("returned before held final read"),
+                    _ = tokio::time::sleep(Duration::from_millis(2)) => {
+                        if scores.scores[0].get().is_some() { break; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        assert!(scores.scores[1].get().is_none());
+        assert!(!fixture.snapshot().finished[0].contains(&(16 * 32 * width)));
+        fixture.release_sibling();
+        let (verified, stats) = work.await.unwrap();
+        assert_eq!(stats.submitted_gets, 3);
+        assert_eq!(stats.verified_bytes, 513 * width);
+        assert!(scores.scores.iter().all(|score| score.get().is_some()));
+        assert_eq!(verified.len(), 3);
+        assert!(profile.cpu.source_scoring.is_some());
+        // Cheap falsifier: the original late-scoring order cannot populate a score
+        // while that same final read is held.
+        fixture.arm(Some((0, [usize::MAX, usize::MAX - 1, 16 * 32 * width])));
+        let late = Arc::new(SourceScores::new(Arc::clone(&scores.prepared), vec![0, 16],
+            513, 24, width, 513 * width).unwrap());
+        let mut control = Box::pin(async {
+            let (bodies, _) = fetch_source_ranges_traced(fixture.reader.store(),
+                &source.location, &source.authority, &ranges, ETAG, 3, 513 * width, 2,
+                None, None, SourceAuthentication::Offload2).await.unwrap();
+            for body in bodies { late.score_response(&body); }
+        });
+        tokio::select! {
+            _ = &mut control => panic!("late control bypassed held read"),
+            () = fixture.wait(|state| state.finished[0].contains(&0)) => {}
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut control).await.is_err());
+        assert!(late.scores.iter().all(|score| score.get().is_none()));
+        fixture.release_sibling();
+        control.await;
+        assert!(late.scores.iter().all(|score| score.get().is_some()));
+        fixture.finish();
+
+        // A codec error is a retained score result, never a failed authenticated GET.
+        let prepared = Arc::new(generation.plane.prepare_query(&query, 2 * 1024 * 1024).unwrap());
+        let scores = SourceScores::new(prepared, vec![0], 513, 24, width, 513 * width).unwrap();
+        let mut corrupt = verified[0].bytes.to_vec();
+        corrupt[width - 8..width - 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        scores.score_response(&VerifiedRange { start: 0, bytes: corrupt.into() });
+        assert!(matches!(scores.get(0).unwrap(), Err(TwoBitGenerationError::Plane(_))));
+
+        // Authenticate malformed codec bytes against their own hashes: scoring
+        // fails first, but a later corrupt response still wins after full drain.
+        use sha2::{Digest, Sha256};
+        let mut body = fs::read(tiny.temp.path().join("generation/plane/records.bin")).unwrap();
+        body[width - 8..width - 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let digests = body.chunks(32 * width).flat_map(|b| Sha256::digest(b).to_vec()).collect::<Vec<_>>();
+        let mut manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(tiny.temp.path().join("generation/plane/manifest.json")).unwrap()).unwrap();
+        manifest["records_sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&body)));
+        manifest["page_digest_sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&digests)));
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let authority = Arc::new(PageAuthority::load_two_bit(&manifest,
+            &format!("{:x}", Sha256::digest(&manifest)), 2, &digests).unwrap());
+        let fixture = Fixture::new(std::collections::BTreeMap::from([(source.location.to_string(), body)]),
+            Instant::now() + Duration::from_secs(10));
+        fixture.arm(Some((0, [usize::MAX, 8 * 32 * width, 16 * 32 * width])));
+        let scores = Arc::new(SourceScores::new(Arc::new(generation.plane.prepare_query(&query, 2 * 1024 * 1024).unwrap()),
+            vec![0, 16], 513, 24, width, 513 * width).unwrap());
+        let callback_scores = Arc::clone(&scores);
+        let mut work = Box::pin(fetch_source_ranges_traced_with_callback(fixture.reader.store(),
+            &source.location, &authority, &ranges, ETAG, 3, 513 * width, 2, None, None,
+            SourceAuthentication::Offload2,
+            Some(Arc::new(move |range: &VerifiedRange| callback_scores.score_response(range)))));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    _ = &mut work => panic!("error returned before final drain"),
+                    _ = tokio::time::sleep(Duration::from_millis(2)) => {
+                        if scores.scores[0].get().is_some()
+                            && fixture.snapshot().finished[0].contains(&(8 * 32 * width)) { break; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        assert!(matches!(scores.get(0).unwrap(), Err(TwoBitGenerationError::Plane(_))));
+        assert!(scores.scores[1].get().is_none());
+        fixture.release_sibling();
+        let failure = work.await.err().unwrap();
+        assert!(matches!(failure.error, crate::sq8_s3_range::RangeFetchError::Page(PageError::HashMismatch)));
+        assert_eq!(failure.stats, Sq8ReadStats { submitted_gets: 3, failed_gets: 1, verified_bytes: 257 * width });
+        assert!(scores.scores[1].get().is_some());
+        fixture.finish();
+    }
+
+    #[test]
     fn source_block32_all_lane_winners_match_scalar_maxima_shortlist_and_plan() {
         let rows = 513;
         let authority = source_test_authority(rows, 1).unwrap();
@@ -12370,13 +12666,8 @@ mod source_walk_tests {
             .await
             .unwrap();
             let model = generation.modeled_memory_bytes();
-            let extra = crate::sq8_s3_range::source_authentication_bytes(
-                tiny.limits.max_parallel_source_gets,
-                tiny.limits.max_source_gets,
-            )
-            .unwrap() as u64
-                * tiny.limits.max_active_queries as u64
-                + 256;
+            let extra = source_authentication_memory(&generation.manifest, tiny.limits,
+                SourceAuthentication::Offload2).unwrap();
             if authentication == SourceAuthentication::Offload2 {
                 // Exact model and model-minus-one, before any worker, slot or payload read.
                 generation.limits.max_memory_bytes = model + extra - 1;
@@ -12471,6 +12762,14 @@ mod source_walk_tests {
                 baseline = Some(observed);
             }
             assert!(profile.source.cpu.authentication.is_some());
+            assert_eq!(
+                profile.source.cpu.source_scoring.is_some(),
+                !capsule && authentication == SourceAuthentication::Offload2,
+            );
+            if let Some(scoring) = &profile.source.cpu.source_scoring {
+                assert_eq!(scoring.clock_reads, 4 * profile.source.planned_ranges as u64);
+            }
+            assert!(profile.sq8.cpu.source_scoring.is_none());
             assert_eq!(
                 generation.slots.available_permits(),
                 tiny.limits.max_active_queries

@@ -384,7 +384,9 @@ pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
     Ok(Some(limit))
 }
 
-fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
+fn source_authentication(
+    inputs: &Value,
+) -> Result<Option<borsuk::sq8_s3_range::SourceAuthentication>> {
     use borsuk::sq8_s3_range::SourceAuthentication;
     let Some(value) = inputs.get("source_authentication") else {
         return Ok(None);
@@ -398,7 +400,15 @@ fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
         cpu_profile_config(inputs) && inputs["range_scheduler_owner"] == "library",
         "SOURCE authentication versioned library scheduler",
     )?;
-    Ok(Some(
+    Ok(Some(policy))
+}
+
+fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
+    use borsuk::sq8_s3_range::SourceAuthentication;
+    let Some(policy) = source_authentication(inputs)? else {
+        return Ok(None);
+    };
+    let workers =
         policy
             .additional_memory_bytes(
                 usize::try_from(number(&inputs["fetch_parallelism"])?)?,
@@ -409,8 +419,17 @@ fn source_authentication_charge(inputs: &Value) -> Result<Option<u64>> {
                     1
                 },
             )
-            .ok_or("SOURCE authentication memory overflow")?,
-    ))
+            .ok_or("SOURCE authentication memory overflow")?;
+    let scores = if policy == SourceAuthentication::Offload2
+        && inputs["source_layout"]["layout"] == "flat_records" {
+        borsuk::two_bit_generation::source_score_overlap_bytes(
+            number(&inputs["rows"])?.try_into()?, number(&inputs["dimensions"])?.try_into()?,
+            number(&inputs["source_byte_budget"])?.try_into()?,
+        ).and_then(|n| n.checked_mul(if concurrent_config(&inputs["config_schema"]) {
+            concurrent_queries(inputs).ok()? as u64
+        } else { 1 })).ok_or("SOURCE scoring memory overflow")?
+    } else { 0 };
+    Ok(Some(super::plus(workers, scores)?))
 }
 
 fn validate_source_authentication_charge(raw: &Value, inputs: &Value) -> Result<()> {
@@ -594,7 +613,12 @@ pub(super) fn validate_row_envelope(
         }
     }
     if matches!(phase, "identity" | "bound_inputs") && raw.get("source_authentication").is_some() {
-        source_authentication_charge(&raw)?;
+        // Identity precedes corpus binding; rows and dimensions belong to bound_inputs.
+        if phase == "identity" {
+            source_authentication(&raw)?;
+        } else {
+            source_authentication_charge(&raw)?;
+        }
         roster.push_str(" source_authentication");
     }
     if phase == "startup"
@@ -1046,6 +1070,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     )?;
     if let Some(diag) = raw.get("diagnostic") {
         diagnostic_shape(diag, cpu_profile_config(inputs))?;
+        source_scoring_context(raw, inputs)?;
         if diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v5" {
             validate_source_trace(raw, inputs)?;
         }
@@ -1151,10 +1176,13 @@ fn cpu_wall(value: &Value, quantum: u64, aggregate: bool) -> Result<()> {
 }
 
 fn range_cpu(value: &Value) -> Result<()> {
-    fields(
-        value,
-        "collector_allocation collector_copy owned_allocation owned_copy authentication collector_copied_bytes owned_copied_bytes",
-    )?;
+    let mut roster = "collector_allocation collector_copy owned_allocation owned_copy authentication collector_copied_bytes owned_copied_bytes".to_owned();
+    if let Some(scoring) = value.get("source_scoring") {
+        roster.push_str(" source_scoring");
+        require(!scoring.is_null(), "SOURCE scoring scope must be measured")?;
+        cpu_wall(scoring, 4, true)?;
+    }
+    fields(value, &roster)?;
     for key in [
         "collector_allocation",
         "collector_copy",
@@ -1228,6 +1256,10 @@ fn profile_shape(diag: &Value, full_source: bool) -> Result<()> {
         sq8,
         &format!("{LEGACY_TRACE_FIELDS} {PROFILE_TRACE_FIELDS}"),
     )?;
+    require(
+        sq8["cpu"].get("source_scoring").is_none(),
+        "SOURCE scoring is forbidden in SQ8",
+    )?;
     for trace in [source, sq8] {
         require(trace["outcome"].is_string(), "profile range outcome")?;
         for key in [
@@ -1300,7 +1332,40 @@ pub(super) fn diagnostic_shape(diag: &Value, cpu_profile: bool) -> Result<()> {
     Ok(())
 }
 
+fn source_scoring_context(raw: &Value, inputs: &Value) -> Result<()> {
+    let diag = &raw["diagnostic"];
+    require(
+        diag["sq8_range_trace"]["cpu"].get("source_scoring").is_none(),
+        "SOURCE scoring is forbidden in SQ8",
+    )?;
+    let trace = &diag["source_range_trace"];
+    if let Some(scoring) = trace["cpu"].get("source_scoring") {
+        require(
+            inputs["source_authentication"] == "offload2"
+                && inputs["source_layout"]["layout"] == "flat_records"
+                && inputs["source_cache"] == "off"
+                && inputs.get("source_cache_bytes").is_none()
+                && (inputs["serving"]["mode"] == "baseline"
+                    || super::fp32_serving::enabled(inputs))
+                && !super::fp32_serving::direct(inputs)
+                && raw["source_nomination_skipped"] == false,
+            "SOURCE scoring requires cold flat offload2 nomination",
+        )?;
+        if trace["outcome"] == "fetched" {
+            let expected = number(&trace["planned_ranges"])?
+                .checked_mul(4)
+                .ok_or("SOURCE scoring callback count overflow")?;
+            require(
+                scoring["clock_reads"] == expected,
+                "SOURCE scoring exact callback count",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
+    source_scoring_context(raw, inputs)?;
     let trace = &raw["diagnostic"]["source_range_trace"];
     fields(
         trace,
@@ -1515,6 +1580,7 @@ fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
         "owned_allocation",
         "owned_copy",
         "authentication",
+        "source_scoring",
     ]
     .iter()
     .try_fold(0u64, |sum, key| -> Result<u64> {
@@ -3648,6 +3714,7 @@ mod tests {
             ("collector_copy", 4),
             ("owned_allocation", 4),
             ("owned_copy", 4),
+            ("source_scoring", 4),
         ] {
             for calls in [1, 3, 5] {
                 let mut cpu = empty.clone();
@@ -3993,6 +4060,58 @@ mod tests {
             "charges":{"source":{"submitted_gets":2,"verified_bytes":8208,"failed_gets":0}},
             "diagnostic":{"source_range_trace":source}});
         (raw, inputs)
+    }
+
+    #[test]
+    fn source_scoring_context_and_exact_callbacks() {
+        let (mut raw, mut inputs) = source_span_fixture();
+        inputs["source_authentication"] = json!("offload2");
+        inputs["source_cache"] = json!("off");
+        raw["diagnostic"]["source_range_trace"]["cpu"]["source_scoring"] =
+            json!({"thread_cpu_ns":0,"wall_ns":2,"clock_reads":8});
+        validate_source_trace(&raw, &inputs).unwrap();
+        for (pointer, value) in [
+            ("/source_authentication", json!("inline")),
+            ("/source_layout/layout", json!("leaf_capsules_v2")),
+            ("/source_cache", json!("authenticated_direct_mapped256_v1")),
+            ("/serving/mode", json!("direct_closure")),
+        ] {
+            let mut bad = inputs.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(validate_source_trace(&raw, &bad).unwrap_err().to_string(),
+                "SOURCE scoring requires cold flat offload2 nomination", "{pointer}");
+        }
+        let mut bad = inputs.clone();
+        bad["source_cache_bytes"] = json!(1024);
+        assert_eq!(validate_source_trace(&raw, &bad).unwrap_err().to_string(),
+            "SOURCE scoring requires cold flat offload2 nomination");
+        let mut bad = inputs.clone();
+        bad["serving"] = json!({"mode":"fp32_rerank","direct":{"max_sq8_bytes":1024,"max_sq8_gets":1}});
+        assert_eq!(validate_source_trace(&raw, &bad).unwrap_err().to_string(),
+            "SOURCE scoring requires cold flat offload2 nomination");
+        let mut bad = raw.clone();
+        bad["source_nomination_skipped"] = json!(true);
+        assert_eq!(validate_source_trace(&bad, &inputs).unwrap_err().to_string(),
+            "SOURCE scoring requires cold flat offload2 nomination");
+        let mut bad = raw.clone();
+        bad["diagnostic"]["sq8_range_trace"] = raw["diagnostic"]["source_range_trace"].clone();
+        assert_eq!(validate_source_trace(&bad, &inputs).unwrap_err().to_string(),
+            "SOURCE scoring is forbidden in SQ8");
+        for reads in [4, 12] {
+            let mut bad = raw.clone();
+            bad["diagnostic"]["source_range_trace"]["cpu"]["source_scoring"]["clock_reads"] = json!(reads);
+            assert_eq!(validate_source_trace(&bad, &inputs).unwrap_err().to_string(),
+                "SOURCE scoring exact callback count");
+        }
+        let mut bad = raw.clone();
+        bad["diagnostic"]["source_range_trace"]["planned_ranges"] = json!(u64::MAX);
+        assert_eq!(validate_source_trace(&bad, &inputs).unwrap_err().to_string(),
+            "SOURCE scoring callback count overflow");
+        raw["diagnostic"]["source_range_trace"]["outcome"] = json!("page_auth");
+        raw["diagnostic"]["source_range_trace"]["cpu"]["source_scoring"]["clock_reads"] = json!(4);
+        source_scoring_context(&raw, &inputs).unwrap();
+        raw["diagnostic"]["source_range_trace"]["cpu"].as_object_mut().unwrap().remove("source_scoring");
+        source_scoring_context(&raw, &inputs).unwrap();
     }
 
     #[test]
@@ -4363,6 +4482,22 @@ mod tests {
 #[cfg(test)]
 mod source_authentication_tests {
     use super::*;
+    #[test]
+    fn source_overlap_geometry_charge_and_timing_are_strict() {
+        let inputs = json!({"config_schema":CPU_PROFILE_CONFIG_SCHEMA,
+            "range_scheduler_owner":"library","fetch_parallelism":128,"source_get_budget":128,
+            "source_authentication":"offload2","source_layout":{"layout":"flat_records"},
+            "rows":1_000_000,"dimensions":1024,"source_byte_budget":67_108_864});
+        let workers = borsuk::sq8_s3_range::SourceAuthentication::Offload2
+            .additional_memory_bytes(128, 128, 1).unwrap();
+        let scores = borsuk::two_bit_generation::source_score_overlap_bytes(1_000_000, 1024, 67_108_864).unwrap();
+        assert_eq!(source_authentication_charge(&inputs).unwrap(), Some(workers + scores));
+        validate_source_authentication_charge(&json!({"source_authentication_extra_library_bytes":workers}), &inputs).unwrap_err();
+        let mut cpu = serde_json::to_value(borsuk::sq8_s3_range::RangeCpu::default()).unwrap();
+        cpu["source_scoring"] = Value::Null;
+        assert!(range_cpu(&cpu).is_err());
+    }
+
     #[test]
     fn source_authentication_selector_and_exact_reservation_are_bound() {
         let mut inputs = json!({"config_schema":CPU_PROFILE_CONFIG_SCHEMA,

@@ -1,0 +1,365 @@
+{
+  "checkpoints": {
+    "A1": {
+      "bytes": 10743514,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-A1.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "ffe1f7979afe18943f76d1eb6f0e1b5dba63f9edf5384753186106cd1b72e09b"
+    },
+    "A2": {
+      "bytes": 10743607,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-A2.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "9bc3a947de3b417df48861cdfaf8830a2904777faeb05e147a0e78a8e3e69a27"
+    },
+    "B1": {
+      "bytes": 10743616,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-B1.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "109ed002541600d3c86a2b7564b05e787d87c8360c62a6a7fbaf34f392e04b9f"
+    },
+    "B2": {
+      "bytes": 10744276,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-B2.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "b6ae22078719bc19b2cc5ab9386ce14e8fa276a2f067367ac88843497d50eb4a"
+    },
+    "admit-A": {
+      "bytes": 132647,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-admit-A.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "65f82d673b96c83fa8ff5f88181d55229e7eb396c893fab60c2379186a431212"
+    },
+    "admit-B": {
+      "bytes": 133812,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-admit-B.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "c47444611c4ffdf957681c9fc4ed33f5fcb5f13a298f353ac1098e91700f197e"
+    },
+    "canary-A": {
+      "bytes": 55854,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-canary-A.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "48ab2af869f2d3018ae98f848c97b232eb9988f88f5e504bbcc940c7f163e5ab"
+    },
+    "canary-B": {
+      "bytes": 55513,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-canary-B.tar.gz",
+      "server_checksum_verified": true,
+      "sha256": "094f8d6b85ef36be4c47ce740170dcabdbb3eb0153465b54184969369cd94523"
+    }
+  },
+  "disposition": "PROPOSAL; parent owns integration, archive/upload, shutdown and push",
+  "full_suite_pass_claim": false,
+  "generalization_claim": false,
+  "inputs": {
+    "evidence/cold-overlap-reader-repair-a0001/qualification.json": {
+      "bytes": 6387,
+      "sha256": "c8319f1bd0776522be799506edbf63d0212e53fb63128976c533243fe793583e"
+    },
+    "evidence/cold-overlap-reader-root-verification-a0001/combined-qualification.json": {
+      "bytes": 1991,
+      "sha256": "ab7942782e66f7bbb5f8570f7e33214583a003821db8dfcf0372f5a71c3e1677"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/A1-checkpoint.json": {
+      "bytes": 219,
+      "sha256": "8e4b2c8e7c91fb693f1d556ec471fd843bf5ec524be508a9c4ad61e9294c35fe"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/A1-verification.json": {
+      "bytes": 14258,
+      "sha256": "c8a5bf880873e76306dfb26280db55b8251b13128b903be60ecd1dadd9e2e0f2"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/A2-checkpoint.json": {
+      "bytes": 219,
+      "sha256": "efb05590f045e5893c459f8f38a3a2cabde33ee274a3d158d337b623d88fdfea"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/A2-verification.json": {
+      "bytes": 14258,
+      "sha256": "10086d6856b98c34d38e405517e07b0e71e21f6ad8801a8c14fdd5557d65b08f"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/B1-checkpoint.json": {
+      "bytes": 219,
+      "sha256": "ddad3998893f479e85b846534acc64a3a606634a1047e9b07d9597c7319f909a"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/B1-verification.json": {
+      "bytes": 14258,
+      "sha256": "c5e69508a5821129d83bd6f40e9098bf08e623bacff1a6f9deb77204a8f6e01e"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/B2-checkpoint.json": {
+      "bytes": 219,
+      "sha256": "38c30cc3b705a8ecc9817d7b299fe41b27522f2c25189554db08ca53921e8228"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/B2-verification.json": {
+      "bytes": 14257,
+      "sha256": "57c18e8032b4e83f4c086d7d13a30d00b962a203d7477d535ebfb1c423f1f789"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/admit-A-checkpoint.json": {
+      "bytes": 222,
+      "sha256": "c82f312ba0d000f59002cb6be16d699e814e2e2e0cae53c455b05195f48d463e"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/admit-A-verification.json": {
+      "bytes": 4451,
+      "sha256": "a3f5ba83bb747e53f3aeb701c53b9049b78f78f13a5418a79f45b4a646d4071e"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/admit-B-checkpoint.json": {
+      "bytes": 222,
+      "sha256": "8b5f1e0dbf045afc3c5ba9c652967e4a48a717f6c7494de47747362e5c593ce6"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/admit-B-verification.json": {
+      "bytes": 4451,
+      "sha256": "0de22c880bc6c037a8d44d3ec4b06b6c2747a096515e49094e18e8166ebe172d"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/authority.json": {
+      "bytes": 5962,
+      "sha256": "6de55d2703c30d3c8b38cfd4f9cf4f5d41cf5ac8367bf25a0a7276beeac4b442"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/canary-A-checkpoint.json": {
+      "bytes": 222,
+      "sha256": "b023cdd961ca25c1f3d9c84d0ebbd51b075ffe1986e6a638bea86764807c76a5"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/canary-A-verification.json": {
+      "bytes": 4365,
+      "sha256": "58559d2ed3ed524e41966a91394ca6b53fb9256e0fd996a1d1082ed7d4a20f2c"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/canary-B-checkpoint.json": {
+      "bytes": 222,
+      "sha256": "c03d8b7bca0be2ab23d24e7ee48002f8b56f0ac4173e4f1a6f10c694cae46384"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/canary-B-verification.json": {
+      "bytes": 4365,
+      "sha256": "0fe9f03d273fe9b5edf778ef9456aa4631f329fc760a4e5dfbad78848804f201"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/frozen.json": {
+      "bytes": 1624,
+      "sha256": "e9002f3c641123793a1bfa59ef34c191516fc0f06a4676ab8b673f4ef7a09922"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/measurement-addendum.json": {
+      "bytes": 8708,
+      "sha256": "70181335b14d50593f0bca31fbb77871955225d30f1e98d73f11e149339855c8"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/report.json": {
+      "bytes": 57751,
+      "sha256": "b76a1a4ac48545e6731dc83e5ccdb02c5745927670853ef59dab7baa7ac3ecac"
+    },
+    "evidence/cold-source-overlap-full1000-a0002/terminal.json": {
+      "bytes": 294,
+      "sha256": "809624f4816593a0d5270c92bca23cf32c4dc5b73e96b30c47879c0c89bdc820"
+    },
+    "evidence/cold-source-overlap-full1000-root-preparation-a0001/root-verification.json": {
+      "bytes": 3458,
+      "sha256": "52ac5cca2a1013f2f83835d7e943d5ce1f3d730867975743171ef21477fa7df3"
+    },
+    "evidence/cold-source-overlap-root-release-a0001/qualification.json": {
+      "bytes": 2610,
+      "sha256": "6d5a33117f0a6306c6c0531910e176f3a8d0c29e6a80eb3203c1c2bac176301a"
+    }
+  },
+  "limits": {
+    "CPUQuota": "100%",
+    "MemoryMax": 536870912,
+    "MemorySwapMax": 0,
+    "RuntimeMaxSec": 120,
+    "TasksMax": 128
+  },
+  "metadata_checks": {
+    "all_4000_duration_samples_and_nearest_rank_percentiles_checked": true,
+    "all_eight_verification_and_checkpoint_files_bound": true,
+    "all_four_report_arms_equal_closed_verifications": true,
+    "raw_payload_invariants_independently_verified_by_parent": true,
+    "report_and_protocol_copied_byte_for_byte": true,
+    "same_169024_GET_and_51077441536_verified_bytes_each_measured_cell": true,
+    "same_9902_of_10000_hits_each_measured_cell": true
+  },
+  "production_readiness_claim": false,
+  "provider_cache_eviction_proven": false,
+  "recomputed_ratios": {
+    "external_children_CPU_B_over_A": 0.9887076303543907,
+    "external_process_wall_B_over_A": 0.943264877699222,
+    "paired_p95_B_over_A": [
+      0.9441846533984232,
+      0.9358104724240023
+    ],
+    "pooled_p90_B_over_A": 0.9444544079299695,
+    "process_CPU_B_over_A": 0.9887045472326262,
+    "query_process_CPU_B_over_A": 0.987991007205771,
+    "query_wall_B_over_A": 0.9398647543352614
+  },
+  "root_verification_receipt": {
+    "content": {
+      "CPU_B_over_A": 0.987991007205771,
+      "all_4000_returned_ID_score_bits_ordinals_plans_trace_shortlists_charges_equal_reference": true,
+      "checkpoint_and_terminal_checksum_HEADs": [
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-A1.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-A2.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-B1.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-B2.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-admit-A.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-admit-B.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-canary-A.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/cell-canary-B.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/evidence.tar.gz",
+        "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/terminal.json"
+      ],
+      "details": {
+        "A1": {
+          "hits": 9902,
+          "logical_gets": 169024,
+          "physical_GET_attempts": 169024,
+          "queries": 1000,
+          "retry_GET_attempts": 0,
+          "sha256": "fa7e4ac18920bb3d35aa461a76aaf4f7a544581690dd940d404637466e80ce7c",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 51077441536
+        },
+        "A2": {
+          "hits": 9902,
+          "logical_gets": 169024,
+          "physical_GET_attempts": 169024,
+          "queries": 1000,
+          "retry_GET_attempts": 0,
+          "sha256": "9d24fe7e8a550b49e5bc454c98ef6389c552c0b91a691421f5fd272c82cdde53",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 51077441536
+        },
+        "B1": {
+          "hits": 9902,
+          "logical_gets": 169024,
+          "physical_GET_attempts": 169024,
+          "queries": 1000,
+          "retry_GET_attempts": 0,
+          "sha256": "69b56a0464d9db152625b32051438fdc644785f6dc18564f68e0980a06e6b8b1",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 51077441536
+        },
+        "B2": {
+          "hits": 9902,
+          "logical_gets": 169024,
+          "physical_GET_attempts": 169024,
+          "queries": 1000,
+          "retry_GET_attempts": 0,
+          "sha256": "a83d95ca1874199e5b2e25f62f0ef2e255c20f62bc070ac0ec0541c537087c2d",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 51077441536
+        },
+        "admit-A": {
+          "hits": 80,
+          "logical_gets": 1361,
+          "physical_GET_attempts": 1361,
+          "queries": 8,
+          "retry_GET_attempts": 0,
+          "sha256": "55097711fc4ee4fd6c398b50fd68b87cd193645256341dcd7ee1e6fd898462c2",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 378192640
+        },
+        "admit-B": {
+          "hits": 80,
+          "logical_gets": 1361,
+          "physical_GET_attempts": 1361,
+          "queries": 8,
+          "retry_GET_attempts": 0,
+          "sha256": "3d99b5c5bcbf07afd0b136bf70fd1bb2665c2934a24cfc80a92549bb859ffbba",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 378192640
+        },
+        "canary-A": {
+          "hits": 19,
+          "logical_gets": 352,
+          "physical_GET_attempts": 352,
+          "queries": 2,
+          "retry_GET_attempts": 0,
+          "sha256": "6e7e8a5dddb1432a2966eef21a2c95a9e50bf2bf776f4126ef8a3cd93c9e2482",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 145513088
+        },
+        "canary-B": {
+          "hits": 19,
+          "logical_gets": 352,
+          "physical_GET_attempts": 352,
+          "queries": 2,
+          "retry_GET_attempts": 0,
+          "sha256": "28ccb49e57b579f03de8f51657d141d4bcd3b3eadd5a3d76e9774ce1715f3929",
+          "transport_or_stream_failures": 0,
+          "verified_bytes": 145513088
+        }
+      },
+      "paired_p95_B_over_A": [
+        0.9441846533984232,
+        0.9358104724240023
+      ],
+      "protocol_sha256": "70181335b14d50593f0bca31fbb77871955225d30f1e98d73f11e149339855c8",
+      "provider_cache_eviction_proven": false,
+      "report_sha256": "b76a1a4ac48545e6731dc83e5ccdb02c5745927670853ef59dab7baa7ac3ecac",
+      "schema": "borsuk-cold-source-overlap-full1000-root-verification-v1",
+      "source_cache_bytes": 0,
+      "valid": true,
+      "vendor_win_claim": false,
+      "wall_B_over_A": 0.9398647543352614
+    },
+    "path": "evidence/cold-source-overlap-full1000-root-preparation-a0001/root-verification.json",
+    "sha256": "52ac5cca2a1013f2f83835d7e943d5ce1f3d730867975743171ef21477fa7df3",
+    "ssm_command_id": "1aae4b46-a893-4405-bd0c-3e90776a7b99"
+  },
+  "schema": "borsuk-cold-overlap-full1000-proposal-verification-v1",
+  "source_checks": {
+    "complete_crates_tree_equals": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+    "historical_missing_blobs_not_hydrated": true,
+    "qualified_source_bytes": {
+      "crates/borsuk/examples/compare_native_replay.rs": {
+        "blob": "0bafae11b16710aa4c12a7d6819e4e98b95a549c",
+        "sha256": "733c2aa7376c3b97e7c41831cede328cdb8fc0c29d849511261da374d82937ef"
+      },
+      "crates/borsuk/examples/compare_native_replay/cold_source_score_overlap.md": {
+        "blob": "1759a82fbb5089f4c698187fb257edfca26838d1",
+        "sha256": "0224a57f36157bed3bd512701a07f1857345ae0578c40b133bd64e62cb37f36e"
+      },
+      "crates/borsuk/examples/compare_native_replay/current_v10.rs": {
+        "blob": "5e4e6460902d63b328f122a69b3551db3faeaf98",
+        "sha256": "a31e15aed000ca3ad656d9f12029bdf6020e3ac3781f2f5b8cf89750e23520c8"
+      },
+      "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+        "blob": "b249ba57a9f702203dead098ac163504f14665d0",
+        "sha256": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d"
+      },
+      "crates/borsuk/src/fp32_rerank.rs": {
+        "blob": "e46762b47468ce235fb7a4a53ee9eaa279ae8c41",
+        "sha256": "982e689c7e2393f7651dc43edc6714af0821f42cfd562f4ec74a38ce2ad4b746"
+      },
+      "crates/borsuk/src/sq8_s3_range.rs": {
+        "blob": "6cad68a06e8a4bc552a03cf1be15d582fda8ea62",
+        "sha256": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01"
+      },
+      "crates/borsuk/src/two_bit_generation.rs": {
+        "blob": "e5cac55bdb1586edc33abed79bbc0ebf259b8ab8",
+        "sha256": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd"
+      }
+    },
+    "sparse_configured_before_base_checkout": true,
+    "unowned_proposal_base_entries_preserved_by_exact_diff_scope": true,
+    "unowned_repository_head_and_index_snapshots_preserved": {
+      "/mnt/borsuk-workspace/cold-overlap-full1000-packet-source-a0001": {
+        "head": "58e0b92e11558a25a591be0a435fdf3f617db704",
+        "index_sha256": "8311855121eefa0f4688be198824d6d9b23c41888cee602d080af4fb1d8045df"
+      },
+      "/mnt/borsuk-workspace/cold-overlap-reader-repair-a0001": {
+        "head": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+        "index_sha256": "16388669b6aaf0f99211349fbf9528cf34188e7702aef6f7aa945f8bc2c221a3"
+      },
+      "/mnt/borsuk-workspace/evidence/progressive-bound-outcome-a0001/source": {
+        "head": "708af9b470ec3af3fe997cf4f3f03876839fe909",
+        "index_sha256": "5a4f8961c1a222861162e2ee319e1c7c5c38cdd2d0924c8132536d41b2954dce"
+      }
+    }
+  },
+  "terminal": {
+    "archive": {
+      "bytes": 103450606,
+      "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/evidence.tar.gz",
+      "sha256": "636344fdf9b136a0750ec8d5f15634268f4c924238372d4e47ac3e0370e236bd"
+    },
+    "instance": "i-0d3628ce42fd7cbe7",
+    "native_pipeline_exit": 0,
+    "terminal_epoch": 1792408597.581799
+  },
+  "vendor_win_claim": false,
+  "worker_scope": "EC2 SSM static source/tree and closed JSON metadata checks only; no raw JSONL/corpus/requests/truth read; no compiler/native/SDK/S3 rerun"
+}

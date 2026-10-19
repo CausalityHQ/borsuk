@@ -214,8 +214,18 @@ impl SourceAuthWorkers {
 
     pub(crate) async fn authenticate<T: Send + 'static>(
         &self,
+        probe: Option<Box<Probe>>,
+        authenticate: impl FnOnce() -> Result<T, RangeFetchError> + Send + 'static,
+    ) -> (Result<T, RangeFetchError>, Option<Box<Probe>>) {
+        self.authenticate_then(probe, authenticate, None::<fn(&T)>, None).await
+    }
+
+    async fn authenticate_then<T: Send + 'static>(
+        &self,
         mut probe: Option<Box<Probe>>,
         authenticate: impl FnOnce() -> Result<T, RangeFetchError> + Send + 'static,
+        after: Option<impl FnOnce(&T) + Send + 'static>,
+        byte_lease: Option<InFlightPermit>,
     ) -> (Result<T, RangeFetchError>, Option<Box<Probe>>) {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
@@ -234,9 +244,18 @@ impl SourceAuthWorkers {
         let (send, receive) = tokio::sync::oneshot::channel();
         let job = Box::new(move || {
             let _pending = pending;
+            let _byte_lease = byte_lease;
             let _slot = slot;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                measured_auth(&mut probe.as_deref_mut(), authenticate)
+                let value = measured_auth(&mut probe.as_deref_mut(), authenticate)?;
+                if let Some(after) = after {
+                    let clock = probe.as_deref().map(|_| SyncStart::now());
+                    after(&value);
+                    if let (Some(probe), Some(clock)) = (probe.as_deref_mut(), clock) {
+                        clock.finish(&mut probe.cpu.source_scoring);
+                    }
+                }
+                Ok(value)
             }))
             .unwrap_or(Err(RangeFetchError::UnexpectedMetadata));
             let _ = send.send((result, probe));
@@ -1672,6 +1691,7 @@ pub(crate) async fn fetch_verified_ranges_traced_with_byte_window(
         trace,
         budget,
         None,
+        None::<Arc<fn(&VerifiedRange)>>,
     )
     .await
 }
@@ -1690,6 +1710,27 @@ pub(crate) async fn fetch_source_ranges_traced(
     budget: Option<&Arc<InFlightBytes>>,
     authentication: SourceAuthentication,
 ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
+    fetch_source_ranges_traced_with_callback(
+        store, location, authority, ranges, etag, max_gets, max_bytes, max_parallel,
+        trace, budget, authentication, None::<Arc<fn(&VerifiedRange)>>,
+    ).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch_source_ranges_traced_with_callback<F: Fn(&VerifiedRange) + Send + Sync + 'static>(
+    store: &dyn ObjectStore,
+    location: &Path,
+    authority: &Arc<PageAuthority>,
+    ranges: &[(usize, usize)],
+    etag: &str,
+    max_gets: usize,
+    max_bytes: usize,
+    max_parallel: usize,
+    trace: Option<&mut Sq8RangeTrace>,
+    budget: Option<&Arc<InFlightBytes>>,
+    authentication: SourceAuthentication,
+    callback: Option<Arc<F>>,
+) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
     fetch_verified_ranges_with_authentication(
         store,
         location,
@@ -1702,12 +1743,13 @@ pub(crate) async fn fetch_source_ranges_traced(
         trace,
         budget,
         (authentication == SourceAuthentication::Offload2).then_some(authority),
+        callback,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn fetch_verified_ranges_with_authentication(
+async fn fetch_verified_ranges_with_authentication<F: Fn(&VerifiedRange) + Send + Sync + 'static>(
     store: &dyn ObjectStore,
     location: &Path,
     authority: &PageAuthority,
@@ -1719,6 +1761,7 @@ async fn fetch_verified_ranges_with_authentication(
     mut trace: Option<&mut Sq8RangeTrace>,
     budget: Option<&Arc<InFlightBytes>>,
     offload_authority: Option<&Arc<PageAuthority>>,
+    callback: Option<Arc<F>>,
 ) -> Result<(Vec<VerifiedRange>, Sq8ReadStats), RankedSq8Failure> {
     let fail = |error| RankedSq8Failure {
         error,
@@ -1791,7 +1834,7 @@ async fn fetch_verified_ranges_with_authentication(
                 .map(|(index, (first, last))| {
                     let future = fetch_source_pages_offloaded(
                         store, location, authority, first, last, etag, max_bytes, index, origin,
-                        budget, workers,
+                        budget, workers, callback.clone(),
                     );
                     debug_assert!(
                         std::mem::size_of_val(&future)
@@ -1859,7 +1902,7 @@ async fn fetch_verified_ranges_with_authentication(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn fetch_source_pages_offloaded(
+async fn fetch_source_pages_offloaded<F: Fn(&VerifiedRange) + Send + Sync + 'static>(
     store: &dyn ObjectStore,
     location: &Path,
     authority: &Arc<PageAuthority>,
@@ -1871,6 +1914,7 @@ async fn fetch_source_pages_offloaded(
     origin: Option<Instant>,
     budget: Option<&Arc<InFlightBytes>>,
     workers: &SourceAuthWorkers,
+    callback: Option<Arc<F>>,
 ) -> IndexedRangeOutcome {
     let expected = match authority.byte_range(first, last) {
         Ok(range) => range,
@@ -1917,8 +1961,7 @@ async fn fetch_source_pages_offloaded(
         Ok(bytes) => {
             let authority = Arc::clone(authority);
             let (result, returned_probe) = workers
-                .authenticate(probe, move || {
-                    let _byte_lease = byte_lease;
+                .authenticate_then(probe, move || {
                     authority
                         .verify_payload(first, last, &bytes)
                         .map_err(RangeFetchError::Page)?;
@@ -1926,7 +1969,7 @@ async fn fetch_source_pages_offloaded(
                         start: expected.start,
                         bytes,
                     })
-                })
+                }, callback.map(|callback| move |range: &VerifiedRange| callback(range)), byte_lease)
                 .await;
             probe = returned_probe;
             result
@@ -2617,6 +2660,9 @@ pub struct RangeCpu {
     pub owned_allocation: Option<CpuWall>,
     pub owned_copy: Option<CpuWall>,
     pub authentication: Option<CpuWall>,
+    /// Mandatory SOURCE scoring after full response authentication, on the same worker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scoring: Option<CpuWall>,
     pub collector_copied_bytes: u64,
     pub owned_copied_bytes: u64,
 }
@@ -2629,6 +2675,7 @@ impl RangeCpu {
             (other.owned_allocation, &mut self.owned_allocation),
             (other.owned_copy, &mut self.owned_copy),
             (other.authentication, &mut self.authentication),
+            (other.source_scoring, &mut self.source_scoring),
         ] {
             if let Some(from) = from {
                 from.add_to(to);
@@ -2649,6 +2696,7 @@ impl RangeCpu {
             self.owned_allocation,
             self.owned_copy,
             self.authentication,
+            self.source_scoring,
         ]
         .into_iter()
         .flatten()
@@ -4324,7 +4372,9 @@ mod tests {
                 let window = InFlightBytes::new(bytes);
                 let mut trace = Sq8RangeTrace::new(9).unwrap();
                 trace.begin(Instant::now());
-                let result = fetch_source_ranges_traced(
+                let callbacks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let observed_callbacks = Arc::clone(&callbacks);
+                let result = fetch_source_ranges_traced_with_callback(
                     &store,
                     &location,
                     &authority,
@@ -4336,6 +4386,9 @@ mod tests {
                     Some(&mut trace),
                     Some(&window),
                     mode,
+                    Some(Arc::new(move |_: &VerifiedRange| {
+                        observed_callbacks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    })),
                 )
                 .await;
                 let (payloads, stats, error) = match result {
@@ -4356,6 +4409,8 @@ mod tests {
                         (Vec::new(), failure.stats, error)
                     }
                 };
+                assert_eq!(callbacks.load(std::sync::atomic::Ordering::SeqCst),
+                    if mode == SourceAuthentication::Offload2 { 9 - stats.failed_gets } else { 0 });
                 assert_eq!(stats.submitted_gets, 9);
                 assert_eq!(stats.failed_gets, if corrupt.is_some() { 2 } else { 0 });
                 assert_eq!(
@@ -4557,6 +4612,51 @@ mod tests {
         );
         assert_eq!(Arc::strong_count(&authority), 1, "generation pins returned");
         releaser.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn source_overlap_callback_cancel_drains_active_and_queued_work_and_recovers() {
+        let _serial = SOURCE_AUTH_TEST_SERIAL.lock().await;
+        use std::sync::atomic::Ordering::SeqCst;
+        let (store, authority, location, etag, bytes) = offload_store(false, None, None).await;
+        let ranges = (0..9).map(|page| (page, page)).collect::<Vec<_>>();
+        let gate = Arc::new(ComputeGate::default());
+        let callback_gate = Arc::clone(&gate);
+        let window = InFlightBytes::new(bytes);
+        let mut work = Box::pin(fetch_source_ranges_traced_with_callback(
+            &store, &location, &authority, &ranges, &etag, 9, bytes, 4, None,
+            Some(&window), SourceAuthentication::Offload2,
+            Some(Arc::new(move |_: &VerifiedRange| callback_gate.hold())),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    _ = &mut work => panic!("held callback completed"),
+                    () = tokio::task::yield_now() => {
+                        if gate.active.load(SeqCst) == 2 && store.state.completed.load(SeqCst) >= 6 { break; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        assert_eq!(gate.peak.load(SeqCst), 2);
+        assert_eq!(gate.entered.load(SeqCst), 2);
+        assert!(*window.available.lock().unwrap() < bytes);
+        let release = Arc::clone(&gate);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            release.release();
+        });
+        drop(work);
+        releaser.join().unwrap();
+        assert_eq!(gate.active.load(SeqCst), 0);
+        assert_eq!(Arc::strong_count(&gate), 1);
+        assert_eq!(Arc::strong_count(&authority), 1);
+        assert_eq!(*window.available.lock().unwrap(), bytes);
+        let (_, stats) = fetch_source_ranges_traced(&store, &location, &authority, &ranges,
+            &etag, 9, bytes, 4, None, Some(&window), SourceAuthentication::Offload2).await.unwrap();
+        assert_eq!(stats.submitted_gets, 9);
+        assert_eq!(stats.verified_bytes, bytes);
+        assert_eq!(*window.available.lock().unwrap(), bytes);
     }
 
     fn source_tail_authority() -> (PageAuthority, Vec<u8>) {

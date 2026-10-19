@@ -373,9 +373,7 @@ pub fn modeled_remote_memory(
     let (mut modeled, _, _) = crate::two_bit_generation::generation_memory(
         &root, limits, true, false, metadata_bytes, router, semantic_leaf_limit,
     )?;
-    modeled = modeled.checked_add(authentication.additional_memory_bytes(
-        limits.max_parallel_source_gets, limits.max_source_gets, limits.max_active_queries,
-    ).ok_or(bad("model authentication"))?)
+    modeled = modeled.checked_add(crate::two_bit_generation::source_authentication_memory(&root, limits, authentication).ok_or(bad("model authentication"))?)
         .and_then(|n| n.checked_add(byte_window_state_bytes as u64))
         .ok_or(bad("model memory"))?;
     if let Some(split) = split {

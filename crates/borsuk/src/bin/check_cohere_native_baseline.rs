@@ -1685,9 +1685,16 @@ fn range_scheduler_bytes(c: &Config) -> Result<usize> {
     Ok(pending(c.source_get_budget)?.max(pending(sq8)?))
 }
 fn source_authentication_bytes(c: &Config) -> Result<u64> {
-    c.source_authentication
+    let workers = c.source_authentication
         .additional_memory_bytes(c.fetch_parallelism, c.source_get_budget, active_queries(c))
-        .ok_or_else(|| "SOURCE authentication memory".into())
+        .ok_or("SOURCE authentication memory")?;
+    let scores = if c.source_authentication == borsuk::sq8_s3_range::SourceAuthentication::Offload2
+        && matches!(c.source_layout, SourceLayout::FlatRecords) {
+        borsuk::two_bit_generation::source_score_overlap_bytes(c.rows, c.dimensions, c.source_byte_budget)
+            .and_then(|n| n.checked_mul(active_queries(c) as u64))
+            .ok_or("SOURCE scoring memory")?
+    } else { 0 };
+    workers.checked_add(scores).ok_or_else(|| "SOURCE authentication memory".into())
 }
 // Bytes one active diagnostic query holds on top of the production model, charged before
 // any query payload opens: bounded line scratch and its coexisting record tree for every
@@ -8871,6 +8878,7 @@ mod tests {
                 finish_ns: u64::MAX,
             });
             trace.cpu = borsuk::sq8_s3_range::RangeCpu {
+                source_scoring: None,
                 collector_allocation: scope,
                 collector_copy: scope,
                 owned_allocation: scope,
