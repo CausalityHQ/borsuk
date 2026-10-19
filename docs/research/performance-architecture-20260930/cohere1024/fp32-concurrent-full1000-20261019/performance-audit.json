@@ -1,0 +1,605 @@
+{
+  "schema": "borsuk-fp32-full1000-independent-collection-v1",
+  "source_commit": "0cddd79569db2f92bf2079f1d9bbc3b90759a895",
+  "packet_commit": "8c74b307388c7b08eb130d5f4dfa0df47be758af",
+  "cells": {
+    "A1": {
+      "native_resource": {
+        "User time (seconds)": 114.33,
+        "System time (seconds)": 23.9,
+        "Maximum resident set size (kbytes)": 168088.0,
+        "Exit status": 0.0,
+        "process_elapsed_seconds": 199.22,
+        "process_qps_including_startup": 5.019576347756249,
+        "max_native_process_rss_bytes": 172122112
+      },
+      "quality": {
+        "hits": 9902,
+        "denominator": 10000,
+        "mean_recall": 0.9902,
+        "minimum_query_hits": 3,
+        "p05_query_hits": 9,
+        "query_hit_histogram": {
+          "3": 1,
+          "7": 4,
+          "8": 9,
+          "9": 61,
+          "10": 925
+        }
+      },
+      "logical_charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 122948,
+          "verified_bytes": 39255017472
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30076,
+          "verified_bytes": 11756760064
+        }
+      },
+      "logical_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 169024,
+        "verified_bytes": 51077441536
+      },
+      "model_bytes": 615933009,
+      "caller_pinned_bytes": 151900550,
+      "runtime_reserve": 143261696,
+      "query_slots": 1,
+      "cohort_cpu_core_equivalents": 0.6948384473966975,
+      "cohort_transport": {
+        "after": {
+          "attempts": 169051,
+          "consumed_payload_bytes": 51114670955,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            169045,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              169032
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 27,
+          "consumed_payload_bytes": 37229419,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            21,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              8
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "ordinal": null,
+        "stage": "query_cohort"
+      },
+      "phase_wall_ms_per_query": {
+        "discovery": {
+          "mean": 1.570163833,
+          "p50": 1.567428,
+          "p95": 1.627013
+        },
+        "source": {
+          "mean": 75.172266198,
+          "p50": 68.761569,
+          "p95": 91.473883
+        },
+        "planning": {
+          "mean": 8.812297916999999,
+          "p50": 8.838447,
+          "p95": 11.339976
+        },
+        "sq8": {
+          "mean": 50.725459654,
+          "p50": 41.542893,
+          "p95": 96.16454
+        },
+        "canonical": {
+          "mean": 55.913401341,
+          "p50": 48.719791,
+          "p95": 102.947738
+        }
+      },
+      "phase_durations_not_isolated_cpu": true
+    },
+    "B1": {
+      "native_resource": {
+        "User time (seconds)": 112.13,
+        "System time (seconds)": 23.59,
+        "Maximum resident set size (kbytes)": 229764.0,
+        "Exit status": 0.0,
+        "process_elapsed_seconds": 157.45,
+        "process_qps_including_startup": 6.351222610352493,
+        "max_native_process_rss_bytes": 235278336
+      },
+      "quality": {
+        "hits": 9902,
+        "denominator": 10000,
+        "mean_recall": 0.9902,
+        "minimum_query_hits": 3,
+        "p05_query_hits": 9,
+        "query_hit_histogram": {
+          "3": 1,
+          "7": 4,
+          "8": 9,
+          "9": 61,
+          "10": 925
+        }
+      },
+      "logical_charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 122948,
+          "verified_bytes": 39255017472
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30076,
+          "verified_bytes": 11756760064
+        }
+      },
+      "logical_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 169024,
+        "verified_bytes": 51077441536
+      },
+      "model_bytes": 871591014,
+      "caller_pinned_bytes": 152986838,
+      "runtime_reserve": 143261696,
+      "query_slots": 2,
+      "cohort_cpu_core_equivalents": 0.8656817732773664,
+      "cohort_transport": {
+        "after": {
+          "attempts": 169051,
+          "consumed_payload_bytes": 51114670955,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            169045,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              169032
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 27,
+          "consumed_payload_bytes": 37229419,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            21,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              8
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "ordinal": null,
+        "stage": "query_cohort"
+      },
+      "phase_wall_ms_per_query": {
+        "discovery": {
+          "mean": 1.5753418799999999,
+          "p50": 1.574874,
+          "p95": 1.644397
+        },
+        "source": {
+          "mean": 144.818190265,
+          "p50": 88.343339,
+          "p95": 262.423219
+        },
+        "planning": {
+          "mean": 9.497404185,
+          "p50": 9.547319,
+          "p95": 12.097141
+        },
+        "sq8": {
+          "mean": 55.371682665,
+          "p50": 45.646155,
+          "p95": 107.125118
+        },
+        "canonical": {
+          "mean": 45.866416945,
+          "p50": 33.255515,
+          "p95": 87.405573
+        }
+      },
+      "phase_durations_not_isolated_cpu": true
+    },
+    "B2": {
+      "native_resource": {
+        "User time (seconds)": 112.97,
+        "System time (seconds)": 24.19,
+        "Maximum resident set size (kbytes)": 226312.0,
+        "Exit status": 0.0,
+        "process_elapsed_seconds": 160.76,
+        "process_qps_including_startup": 6.220452848967406,
+        "max_native_process_rss_bytes": 231743488
+      },
+      "quality": {
+        "hits": 9902,
+        "denominator": 10000,
+        "mean_recall": 0.9902,
+        "minimum_query_hits": 3,
+        "p05_query_hits": 9,
+        "query_hit_histogram": {
+          "3": 1,
+          "7": 4,
+          "8": 9,
+          "9": 61,
+          "10": 925
+        }
+      },
+      "logical_charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 122948,
+          "verified_bytes": 39255017472
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30076,
+          "verified_bytes": 11756760064
+        }
+      },
+      "logical_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 169024,
+        "verified_bytes": 51077441536
+      },
+      "model_bytes": 871591014,
+      "caller_pinned_bytes": 152986838,
+      "runtime_reserve": 143261696,
+      "query_slots": 2,
+      "cohort_cpu_core_equivalents": 0.8566718791143318,
+      "cohort_transport": {
+        "after": {
+          "attempts": 169051,
+          "consumed_payload_bytes": 51114670955,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            169045,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              169032
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 27,
+          "consumed_payload_bytes": 37229419,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            21,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              8
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "ordinal": null,
+        "stage": "query_cohort"
+      },
+      "phase_wall_ms_per_query": {
+        "discovery": {
+          "mean": 1.603123922,
+          "p50": 1.593652,
+          "p95": 1.702646
+        },
+        "source": {
+          "mean": 153.082710516,
+          "p50": 91.391708,
+          "p95": 262.84754
+        },
+        "planning": {
+          "mean": 9.634260017999999,
+          "p50": 9.661188,
+          "p95": 12.308387
+        },
+        "sq8": {
+          "mean": 54.54178143199999,
+          "p50": 45.835473,
+          "p95": 100.684677
+        },
+        "canonical": {
+          "mean": 43.986515248,
+          "p50": 32.950107,
+          "p95": 85.597157
+        }
+      },
+      "phase_durations_not_isolated_cpu": true
+    },
+    "A2": {
+      "native_resource": {
+        "User time (seconds)": 115.83,
+        "System time (seconds)": 24.0,
+        "Maximum resident set size (kbytes)": 154056.0,
+        "Exit status": 0.0,
+        "process_elapsed_seconds": 186.69,
+        "process_qps_including_startup": 5.356473297980609,
+        "max_native_process_rss_bytes": 157753344
+      },
+      "quality": {
+        "hits": 9902,
+        "denominator": 10000,
+        "mean_recall": 0.9902,
+        "minimum_query_hits": 3,
+        "p05_query_hits": 9,
+        "query_hit_histogram": {
+          "3": 1,
+          "7": 4,
+          "8": 9,
+          "9": 61,
+          "10": 925
+        }
+      },
+      "logical_charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 122948,
+          "verified_bytes": 39255017472
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30076,
+          "verified_bytes": 11756760064
+        }
+      },
+      "logical_sum": {
+        "failed_gets": 0,
+        "submitted_gets": 169024,
+        "verified_bytes": 51077441536
+      },
+      "model_bytes": 615933009,
+      "caller_pinned_bytes": 151900550,
+      "runtime_reserve": 143261696,
+      "query_slots": 1,
+      "cohort_cpu_core_equivalents": 0.7521343657834229,
+      "cohort_transport": {
+        "after": {
+          "attempts": 169051,
+          "consumed_payload_bytes": 51114670955,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            169045,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              169032
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 27,
+          "consumed_payload_bytes": 37229419,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            21,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": [
+            [
+              200,
+              19
+            ],
+            [
+              206,
+              8
+            ]
+          ],
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "ordinal": null,
+        "stage": "query_cohort"
+      },
+      "phase_wall_ms_per_query": {
+        "discovery": {
+          "mean": 1.5860899439999998,
+          "p50": 1.581963,
+          "p95": 1.656791
+        },
+        "source": {
+          "mean": 74.288791756,
+          "p50": 68.930661,
+          "p95": 94.583471
+        },
+        "planning": {
+          "mean": 8.980278189,
+          "p50": 9.027765,
+          "p95": 11.412878
+        },
+        "sq8": {
+          "mean": 50.691316402999995,
+          "p50": 40.961707,
+          "p95": 95.790791
+        },
+        "canonical": {
+          "mean": 43.598004946,
+          "p50": 33.309966,
+          "p95": 83.431044
+        }
+      },
+      "phase_durations_not_isolated_cpu": true
+    }
+  },
+  "aggregate_cohort_qps": {
+    "Q1": 5.213088126814077,
+    "Q2": 6.332381631841509
+  },
+  "throughput_change_percent": 21.470834135149673,
+  "cpu_and_transport_never_summed_across_overlapping_queries": true,
+  "resource_scope": "GNU time native process RSS, not whole controller cgroup",
+  "cost_scope": "logical object reads and SDK S3+IMDS counters; not billed or wire bytes; lifecycle dollars unmeasured",
+  "provider_cache_eviction_proven": false,
+  "vendor_win": false
+}

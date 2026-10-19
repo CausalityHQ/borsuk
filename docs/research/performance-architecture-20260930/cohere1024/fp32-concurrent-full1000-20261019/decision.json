@@ -1,0 +1,50 @@
+{
+  "schema": "borsuk-fp32-full1000-decision-v1",
+  "status": "RETAIN_OPT_IN_THROUGHPUT_LATENCY_MEMORY_PARETO_CANDIDATE",
+  "native_runner_default": "Q1",
+  "public_library_concurrency_is_caller_bounded": true,
+  "mean_recall": 0.9902,
+  "identical_answers_scorebits_plans_charges": true,
+  "query_hit_histogram": {
+    "3": 1,
+    "7": 4,
+    "8": 9,
+    "9": 61,
+    "10": 925
+  },
+  "p05_query_recall": 0.9,
+  "minimum_query_recall": 0.3,
+  "aggregate_cohort_qps": {
+    "Q1": 5.213088126814077,
+    "Q2": 6.332381631841509
+  },
+  "Q2_throughput_change_percent": 21.470834135149673,
+  "Q1_p95_ms": [
+    281.836025,
+    257.028206
+  ],
+  "Q2_p95_ms": [
+    411.045252,
+    415.029013
+  ],
+  "Q1_RSS_bytes": [
+    172122112,
+    157753344
+  ],
+  "Q2_RSS_bytes": [
+    235278336,
+    231743488
+  ],
+  "Q1_model_bytes": 615933009,
+  "Q2_model_bytes": 871591014,
+  "logical_GETs_per_1000": 169024,
+  "verified_bytes_per_1000": 51077441536,
+  "application_cache_bytes": 0,
+  "provider_cache_eviction_proven": false,
+  "billed_cost_measured": false,
+  "vendor_win": false,
+  "production_ready_claim": false,
+  "same_source_ABBA": true,
+  "repetition_scope": "two matched repetitions per arm on the frozen1000 query cohort; not a population confidence interval",
+  "next_step": "Generic library runtime release-surface gate; primary-source research selects one cheap cold-tail/quality falsifier from source and completed stage evidence. Preserve Q1 and Q2 tradeoffs."
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-full1000-prospective-simulated-perspectives-v1",
+  "not_real_expert_testimony_or_consensus": true,
+  "question": "Which relevant expert or stakeholder groups would investigate the Q1/Q2 tradeoff, and what arguments, predictions and objections would each offer?",
+  "simulated_perspectives": [
+    {
+      "role": "retrieval engineer",
+      "prediction": "With unchanged scoring, shortlist and plans, both arms should match all authenticated historical answer bits and the independent f64 oracle. Any difference is a correctness failure before performance acceptance.",
+      "objection": "One corpus does not prove generic distribution performance."
+    },
+    {
+      "role": "systems engineer",
+      "prediction": "Bounded query overlap can raise cohort throughput while shared workers, sockets and ordered batches raise per-query latency. Report both and measured RSS, not a scalar win.",
+      "objection": "Do not confuse zero application cache with proof of provider cache eviction."
+    },
+    {
+      "role": "measurement skeptic",
+      "prediction": "Full1000 can reveal rare retries or larger-tail costs absent from fixed32. Preserve both ABBA repetitions, quality and errors.",
+      "objection": "Do not treat query observations as independent replicates or compare cross-source timings as paired evidence."
+    }
+  ],
+  "decision_rule": "Keep valid quality/latency/throughput/memory Pareto candidates; preserve Q1 default unless measured release policy justifies a change. No competitor win without matched measurements."
+}

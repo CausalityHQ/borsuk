@@ -1,0 +1,45 @@
+{
+  "status": "HOLD_UNTIL_RUNTIME_ADMISSION_CANARY_FREEZE",
+  "source_main": "afab20a8c2f58d326c4502065a80e61f2a9be680",
+  "rust_tree": "ab0730bfc49fe9587705275a464cb54f3813c1d2",
+  "hypothesis": "Q2 provides useful throughput Pareto gain on full1000 without answer/plan/charge loss; measure perquery latency tradeoff against same-sourceQ1",
+  "fixed32_evidence": "6.25195 versus7.55361QPS +20.82%; all320/320hits; Q2p95~375-402ms vsQ1~186-192ms",
+  "intervention": "only max_active_queries1vs2, same multi_thread2/fetch64/Offload2/cache0/leaf64/FP32shortlist16",
+  "library_generic": true,
+  "measurement": "Cohere1M D1024 cosine k10 full1000 ABBA; exactgold+independentf64oracle; no provider-cache-eviction claim",
+  "static_limits": {
+    "cpu": 1,
+    "memory": 536870912,
+    "swap": 0,
+    "tasks": 128,
+    "seconds": 120
+  },
+  "science_limits": {
+    "cpus": "0-7",
+    "cpu_quota": "800%",
+    "memory": 8589934592,
+    "swap": 0,
+    "tasks": 1024,
+    "whole_seconds": 4200
+  },
+  "prelude": "8query source-bound admission A/B then separate2query canary A/B before A1/B1/B2/A2",
+  "per_full_timeout_seconds": {
+    "native": 600,
+    "reader": 120,
+    "kill_grace_each": 5
+  },
+  "per_prelude_timeout_seconds": {
+    "native": 60,
+    "reader": 30,
+    "kill_grace_each": 5
+  },
+  "checkpoints": "each completed measurement cell create-onlyS3/checksumHEAD outside timing; bounded attempts1; preserve originalIDs",
+  "interruption": "sync completed cells; incomplete interrupted cell INVALID, discard/restart only that cell on a new recorded Spot instance; retain all failure evidence",
+  "spot_hourly_max_usd": "1.00",
+  "persistent_volume": "vol-02541c376657a5814",
+  "latest_measurement_launch": "2026-10-19T21:05:00Z",
+  "guest_shutdown": "2026-10-19T22:20:00Z",
+  "external_shutdown": "2026-10-19T22:25:00Z",
+  "no_native_compilation": true,
+  "no_new_review_for_unchanged_source": true
+}
