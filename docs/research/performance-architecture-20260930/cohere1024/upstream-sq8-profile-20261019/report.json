@@ -1,0 +1,123 @@
+{
+  "schema": "borsuk-upstream-sq8-stage-summary-v1",
+  "queries": 32,
+  "recall_numerator": 315,
+  "recall_denominator": 320,
+  "query_wall_sum_ns": 5066238109,
+  "query_process_cpu_sum_ns": 3004080793,
+  "fetch_parallelism": 32,
+  "source_authentication": "offload2",
+  "provider_cache_eviction_proven": false,
+  "same_plans_charges_f32_top10_as_closed_A2": true,
+  "series": {
+    "wall_discovery": {
+      "sum_ns": 67770151,
+      "mean_ms": 2.11781721875,
+      "p50_ms": 2.111569,
+      "p95_ms": 2.16242
+    },
+    "wall_source": {
+      "sum_ns": 2780015500,
+      "mean_ms": 86.875484375,
+      "p50_ms": 86.763991,
+      "p95_ms": 109.902539
+    },
+    "wall_planning": {
+      "sum_ns": 666206499,
+      "mean_ms": 20.81895309375,
+      "p50_ms": 20.687624,
+      "p95_ms": 24.249046
+    },
+    "wall_sq8": {
+      "sum_ns": 1549915909,
+      "mean_ms": 48.43487215625,
+      "p50_ms": 35.213795,
+      "p95_ms": 103.707773
+    },
+    "source_phase_process_cpu_ns": {
+      "sum_ns": 1831599382,
+      "mean_ms": 57.2374806875,
+      "p50_ms": 56.288384,
+      "p95_ms": 68.614778
+    },
+    "source_unattributed_process_cpu_ns": {
+      "sum_ns": 991505095,
+      "mean_ms": 30.98453421875,
+      "p50_ms": 30.373153,
+      "p95_ms": 37.912028
+    },
+    "source_rank_thread_cpu_ns": {
+      "sum_ns": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    },
+    "source_collector_copy_thread_cpu_ns": {
+      "sum_ns": 107597505,
+      "mean_ms": 3.36242203125,
+      "p50_ms": 3.027357,
+      "p95_ms": 3.984137
+    },
+    "source_authentication_thread_cpu_ns": {
+      "sum_ns": 728483357,
+      "mean_ms": 22.76510490625,
+      "p50_ms": 23.037775,
+      "p95_ms": 27.148869
+    },
+    "sq8_phase_process_cpu_ns": {
+      "sum_ns": 435918702,
+      "mean_ms": 13.6224594375,
+      "p50_ms": 10.347651,
+      "p95_ms": 28.896091
+    },
+    "sq8_unattributed_process_cpu_ns": {
+      "sum_ns": 202151205,
+      "mean_ms": 6.31722515625,
+      "p50_ms": 5.709299,
+      "p95_ms": 12.051059
+    },
+    "sq8_rank_thread_cpu_ns": {
+      "sum_ns": 84610066,
+      "mean_ms": 2.6440645625,
+      "p50_ms": 1.742782,
+      "p95_ms": 5.947745
+    },
+    "sq8_collector_copy_thread_cpu_ns": {
+      "sum_ns": 19353925,
+      "mean_ms": 0.60481015625,
+      "p50_ms": 0.435866,
+      "p95_ms": 1.476486
+    },
+    "sq8_authentication_thread_cpu_ns": {
+      "sum_ns": 128809918,
+      "mean_ms": 4.0253099375,
+      "p50_ms": 2.568162,
+      "p95_ms": 9.379516
+    },
+    "discovery_thread_cpu_ns": {
+      "sum_ns": 67735353,
+      "mean_ms": 2.11672978125,
+      "p50_ms": 2.110596,
+      "p95_ms": 2.161514
+    },
+    "planning_thread_cpu_ns": {
+      "sum_ns": 666157226,
+      "mean_ms": 20.8174133125,
+      "p50_ms": 20.686776,
+      "p95_ms": 24.246983
+    },
+    "cover_thread_cpu_ns": {
+      "sum_ns": 1227945,
+      "mean_ms": 0.03837328125,
+      "p50_ms": 0.0384,
+      "p95_ms": 0.043231
+    }
+  },
+  "limits": [
+    "Not FP32 end-to-end profile.",
+    "Not timing-equivalent to fetch128.",
+    "Nested CPU counters overlap stage process CPU; do not add them.",
+    "Unattributed CPU is unresolved, not evidence of TLS/network cost.",
+    "Development first32, not holdout/population quality."
+  ]
+}
