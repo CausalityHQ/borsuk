@@ -429,11 +429,11 @@ fn validate_source_authentication_charge(raw: &Value, inputs: &Value) -> Result<
 
 pub(super) fn physical_cap(inputs: &Value) -> Result<u64> {
     split_option(inputs)?;
-    number(if inputs["sq8_range_split"].is_null() {
-        &inputs["sq8_get_budget"]
+    if inputs["sq8_range_split"].is_null() {
+        super::fp32_serving::sq8_gets(inputs)
     } else {
-        &inputs["sq8_range_split"]["max_physical_gets"]
-    })
+        number(&inputs["sq8_range_split"]["max_physical_gets"])
+    }
 }
 
 pub(super) fn validate_row(line: &[u8], phase: &str, library_scheduler: bool) -> Result<()> {
@@ -733,8 +733,10 @@ pub(super) fn validate_row_envelope(
         }
         "query" => {
             require(
-                raw["source_nomination_skipped"] == false
-                    && raw["planning_scope"] == "source_nomination_and_cover",
+                raw["source_nomination_skipped"] == super::fp32_serving::direct(&raw)
+                    && raw["planning_scope"] == if super::fp32_serving::direct(&raw) {
+                        "direct_cover_only"
+                    } else { "source_nomination_and_cover" },
                 "v10 baseline query semantics",
             )?;
             fields(&raw["plan"], PLAN_FIELDS)?;
@@ -895,8 +897,10 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     }
     let rows = number(&inputs["rows"])?;
     let dimensions = number(&inputs["dimensions"])?;
-    let max_gets = number(&inputs["sq8_get_budget"])?;
-    let max_bytes = number(&inputs["sq8_byte_budget"])?;
+    let max_gets = super::fp32_serving::sq8_gets(inputs)?;
+    let max_bytes = super::fp32_serving::sq8_bytes(inputs)?;
+    let direct = super::fp32_serving::direct(inputs);
+    let page_rows = if direct { 256 } else { 32 };
     require(
         (1..=1_000_000).contains(&rows)
             && (1..=1024).contains(&dimensions)
@@ -904,9 +908,9 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
             && (1..=memory_cap(inputs)?).contains(&max_bytes),
         "v10 geometry limits",
     )?;
-    if semantic_leaf_limit(inputs)?.is_some_and(|limit| limit > 48) {
+    if direct || semantic_leaf_limit(inputs)?.is_some_and(|limit| limit > 48) {
         let coverage = borsuk::semantic_unit_router::SemanticCoverage::new(
-            borsuk::semantic_unit_router::SemanticProfile::Scale1m, semantic_leaf_limit(inputs)?)?;
+            serde_json::from_value(inputs["profile"].clone())?, semantic_leaf_limit(inputs)?)?;
         let trace = &raw["trace"];
         let ids = |key: &str, bound: u64, cap: usize| -> Result<std::collections::BTreeSet<u64>> {
             let values = trace[key].as_array().ok_or("coverage trace IDs")?;
@@ -940,27 +944,47 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     let plan = &raw["plan"];
     fields(plan, PLAN_FIELDS)?;
     logical_count(raw)?;
-    require(plan["page_rows"] == 32, "v10 proof rows")?;
+    require(plan["page_rows"] == page_rows, "v10 proof rows")?;
     let selected = plan["selected_pages"]
         .as_array()
         .ok_or("v10 selected blocks")?
         .iter()
         .map(number)
         .collect::<Result<Vec<_>>>()?;
-    let pages = rows.div_ceil(32);
+    let pages = rows.div_ceil(page_rows);
     let width = dimensions + 12;
-    let block = 32 * width;
+    let block = page_rows * width;
     require(
         !selected.is_empty()
-            && selected.len() <= 256
+            && selected.len() as u64 <= if direct { pages } else { 256 }
             && selected.windows(2).all(|p| p[0] < p[1])
             && selected.last().is_some_and(|p| *p < pages),
         "v10 ordered selected blocks",
     )?;
+    if direct {
+        let trace = &raw["trace"];
+        let units = trace["semantic_units"].as_array().ok_or("direct semantic units")?
+            .iter().map(number).collect::<Result<Vec<_>>>()?;
+        require(!units.is_empty() && units.windows(2).all(|p| p[0] < p[1])
+            && units.last().is_some_and(|u| *u < rows.div_ceil(32)), "direct bounded unique units")?;
+        let closure = units.iter().map(|u| u / 8).collect::<std::collections::BTreeSet<_>>();
+        require(selected == closure.into_iter().collect::<Vec<_>>()
+            && plan["target_pages"] == selected.len()
+            && plan["target_shortfall"] == 0
+            && trace["ranked_candidate_pages"] == json!([])
+            && trace["nomination_evaluated_units"] == json!([])
+            && trace["primary_page"] == 0, "direct exact closure and absent SOURCE nomination")?;
+        for plane in ["source", "router"] {
+            require(raw["charges"][plane] == json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0}),
+                "direct zero SOURCE/router payload")?;
+        }
+        require(raw["stages"]["source"]["start_ns"] == 0 && raw["stages"]["source"]["end_ns"] == 0,
+            "direct absent SOURCE stage")?;
+    }
     let mut canonical = Vec::<[u64; 2]>::new();
     for &page in &selected {
         let start = page * block;
-        let end = ((page + 1) * 32).min(rows) * width;
+        let end = ((page + 1) * page_rows).min(rows) * width;
         if let Some(last) = canonical.last_mut().filter(|r| r[1] == start) {
             last[1] = end;
         } else {
@@ -987,7 +1011,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     let bytes = canonical.iter().map(|r| r[1] - r[0]).sum::<u64>();
     let covered = canonical
         .iter()
-        .map(|r| (r[1] / width).div_ceil(32) - r[0] / block)
+        .map(|r| (r[1] / width).div_ceil(page_rows) - r[0] / block)
         .sum::<u64>();
     let target = number(&plan["target_pages"])?;
     require(
@@ -997,7 +1021,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
             && plan["covered_pages"] == covered
             && plan["bridge_pages"] == covered - selected.len() as u64
             && target >= selected.len() as u64
-            && target <= 256.min(pages)
+            && target <= if direct { pages } else { 256.min(pages) }
             && plan["target_shortfall"] == target - selected.len() as u64
             && plan["primary_pages_retained"] == 0,
         "v10 canonical cover/counts",
@@ -1500,7 +1524,9 @@ fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
     use borsuk::sq8_s3_range::Sq8RangeTrace;
     let width = usize::try_from(number(&inputs["fetch_parallelism"])?)?;
     let source = usize::try_from(number(&inputs["source_get_budget"])?)?;
-    let sq8 = usize::try_from(physical_cap(inputs)?)?;
+    let sq8 = usize::try_from(physical_cap(inputs)?.max(if inputs["sq8_range_split"].is_null() {
+        number(&inputs["sq8_get_budget"])?
+    } else { 0 }))?;
     Ok(Sq8RangeTrace::checked_pending_futures_bytes(source, width)
         .ok_or("v12 source scheduler overflow")?
         .max(
@@ -1951,7 +1977,10 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
 }
 
 pub(super) fn validate_coverage_router(raw: &Value, inputs: &Value, authority: &Value) -> Result<()> {
-    let Some(limit) = semantic_leaf_limit(inputs)?.filter(|limit| *limit > 48) else { return Ok(()); };
+    let explicit = semantic_leaf_limit(inputs)?;
+    if !super::fp32_serving::direct(inputs) && explicit.is_none_or(|limit| limit <= 48) { return Ok(()); }
+    let limit = borsuk::semantic_unit_router::SemanticCoverage::new(
+        serde_json::from_value(inputs["profile"].clone())?, explicit)?.selected_leaf_limit();
     let (root, _) = generation_manifests(authority, inputs)?;
     let bytes = number(&root["discovery"]["root_bytes"])?.checked_sub(512).ok_or("coverage root bytes")?;
     let stride = 64 + 4 * number(&inputs["dimensions"])?;
@@ -2321,6 +2350,12 @@ fn validate_page_range_capsules(raw: &Value, inputs: &Value, stats: &Value) -> R
 pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()> {
     use borsuk::source_capsule::Geometry;
     validate_layout_header(inputs)?;
+    if super::fp32_serving::direct(inputs) {
+        require(raw["charges"]["source"] == json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0})
+            && raw["stages"]["source_capsules"].is_null()
+            && raw["stages"]["source_frames"].is_null(), "direct absent SOURCE capsule/frame I/O")?;
+        return Ok(());
+    }
     require(
         number(&raw["charges"]["source"]["submitted_gets"])? > 0
             && number(&raw["charges"]["source"]["submitted_gets"])?

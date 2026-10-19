@@ -1446,20 +1446,25 @@ struct StageTotals {
 }
 
 impl StageTotals {
-    fn add(&mut self, s: &Stages, wall_ns: u64) -> Result<()> {
+    fn add(&mut self, s: &Stages, wall_ns: u64, source_skipped: bool) -> Result<()> {
         require(
-            s.discovery.end_ns <= s.source.start_ns
-                && s.source.end_ns <= s.planning.start_ns
+            (if source_skipped {
+                s.source.start_ns == 0 && s.source.end_ns == 0
+                    && s.discovery.end_ns <= s.planning.start_ns
+            } else {
+                s.discovery.end_ns <= s.source.start_ns && s.source.end_ns <= s.planning.start_ns
+            })
                 && s.planning.end_ns <= s.sq8.start_ns
                 && s.sq8.end_ns <= wall_ns,
             "stage order/query wall",
         )?;
-        for (sum, interval) in [
+        for (index, (sum, interval)) in [
             (&mut self.discovery_ns, &s.discovery),
             (&mut self.source_ns, &s.source),
             (&mut self.planning_ns, &s.planning),
             (&mut self.sq8_ns, &s.sq8),
-        ] {
+        ].into_iter().enumerate() {
+            if source_skipped && index == 1 { continue; }
             require(
                 interval.start_ns > 0 && interval.start_ns <= interval.end_ns,
                 "nonzero admitted stage interval",
@@ -2153,7 +2158,7 @@ fn read_run_observed_policy(
                         }
                     && q.charges.sq8.verified_bytes
                         <= if current {
-                            expected.ok_or("current config")?.expected_bound_inputs["sq8_byte_budget"].as_u64().ok_or("current byte budget")?
+                            fp32_serving::sq8_bytes(&expected.ok_or("current config")?.expected_bound_inputs)?
                         } else {
                             16_773_120
                         },
@@ -2282,7 +2287,8 @@ fn read_run_observed_policy(
             "positive bounded query wall",
         )?;
         charges.add(q.charges)?;
-        stages.add(&q.stages, q.query_wall_ns)?;
+        stages.add(&q.stages, q.query_wall_ns,
+            expected.is_some_and(|c| fp32_serving::direct(&c.expected_bound_inputs)))?;
         if let Some(e) = &mut completed {
             if !concurrent {
                 e.transport_scale(&rows.line, "query", Some(ordinal), local)?;
@@ -16510,6 +16516,85 @@ mod tests {
                 let (config, pin) = scale_config(dir.path(), &path, &historical);
                 let error = reduce_scale(&config, &pin).unwrap_err().to_string();
                 assert_eq!(error, "v10 logical range count", "{schema}");
+            }
+        }
+    }
+
+    #[test]
+    fn fp32_direct_native_producer_reader_and_resealed_refusals() {
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_selection(false, Some(64), true).unwrap();
+        let rows = std::fs::read_to_string(&result).unwrap().lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        let q = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        assert_eq!(rows[q]["source_nomination_skipped"], true);
+        assert_eq!(rows[q]["charges"]["source"]["submitted_gets"], 0);
+        assert_eq!(rows[q]["canonical_stage"]["shortlist"].as_array().unwrap().len(), 16);
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        for (case, index, pointer, value) in [
+            ("source", q, "/charges/source/submitted_gets", json!(1)),
+            ("roster", q, "/plan/selected_pages/0", json!(999)),
+            ("cover", q, "/plan/ranges/0/1", json!(1)),
+            ("skip", q, "/source_nomination_skipped", json!(false)),
+            ("model", startup, "/fp32_rerank/modeled_memory_bytes", json!(1)),
+            ("source-stage", q, "/stages/source/start_ns", json!(1)),
+            ("source-duration", q, "/stages/source/end_ns", json!(1)),
+            ("selector", q, "/serving/direct/max_sq8_gets", json!(1)),
+            ("nominee", q, "/canonical_stage/shortlist/0/ordinal", json!(999)),
+        ] {
+            let mut bad = rows.clone();
+            *bad[index].pointer_mut(pointer).unwrap() = value;
+            let (path, _) = write_fixture(dir.path(), &format!("direct-fp32-{case}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let output = dir.path().join(format!("direct-fp32-{case}.json"));
+            assert!(!execute_report(&output, fp32_serving::REPORT_SCHEMA,
+                || fp32_serving::reduce(&config, &pin)).unwrap(), "{case}");
+            let written: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(written["status"], "INVALID");
+        }
+    }
+
+    #[test]
+    fn fp32_direct_leaf_caps_and_complete_coalesced_shortlist() {
+        for (leaf, caps) in [(None, None), (Some(40), Some((32,96))), (Some(64), Some((256,128)))] {
+            let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_caps(true, leaf, true, caps).unwrap();
+            let rows = std::fs::read_to_string(&result).unwrap().lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+            let (config, pin) = scale_config(dir.path(), &result, &rows);
+            fp32_serving::reduce(&config, &pin).unwrap();
+            let q = rows.iter().position(|r| r["phase"] == "query").unwrap();
+            for case in ["leaf-bound", "leaf-duplicate", "unit-capacity", "seed", "shortlist"] {
+                let mut bad = rows.clone();
+                match case {
+                    "leaf-bound" => bad[q]["trace"]["semantic_leaves"][0] = json!(u64::MAX),
+                    "leaf-duplicate" => {
+                        let id = bad[q]["trace"]["semantic_leaves"][0].clone();
+                        bad[q]["trace"]["semantic_leaves"].as_array_mut().unwrap().push(id);
+                    }
+                    "unit-capacity" => bad[q]["trace"]["semantic_units"] = json!(vec![0;65]),
+                    "seed" => bad[q]["trace"]["semantic_seed_additions"] = json!([0]),
+                    "shortlist" => {
+                        let list = bad[q]["canonical_stage"]["shortlist"].as_array().unwrap();
+                        let first = list.iter().map(|r| r["ordinal"].as_u64().unwrap()).min().unwrap();
+                        let last = list.iter().map(|r| r["ordinal"].as_u64().unwrap()).max().unwrap();
+                        let remove = list.iter().position(|r| r["ordinal"] != first && r["ordinal"] != last
+                            && !bad[q]["returned"].as_array().unwrap().iter().any(|h| h["id"] == r["id"])).unwrap();
+                        bad[q]["canonical_stage"]["shortlist"].as_array_mut().unwrap().remove(remove);
+                        let bridge = bad[q]["canonical_stage"]["bridge_records"].as_u64().unwrap();
+                        bad[q]["canonical_stage"]["bridge_records"] = json!(bridge+1);
+                        assert_eq!(bad[q]["canonical_stage"]["ranges"], rows[q]["canonical_stage"]["ranges"]);
+                        assert_eq!(bad[q]["charges"], rows[q]["charges"]);
+                    }
+                    _ => unreachable!(),
+                }
+                let (path, _) = write_fixture(dir.path(), &format!("direct-leaf-{case}.jsonl"), bad.clone());
+                let (config, pin) = scale_config(dir.path(), &path, &bad);
+                let output = dir.path().join(format!("direct-leaf-{case}.json"));
+                assert!(!execute_report(&output, fp32_serving::REPORT_SCHEMA,
+                    || fp32_serving::reduce(&config, &pin)).unwrap(), "{leaf:?} {case}");
+                let written: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+                assert_eq!(written["status"], "INVALID");
             }
         }
     }

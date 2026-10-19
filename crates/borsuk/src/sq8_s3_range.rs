@@ -3287,6 +3287,7 @@ pub(crate) mod cold_http_fixture {
         fault: Option<(usize, [usize; 3])>,
         retry_status: bool,
         response_fault: Option<(String, &'static str)>,
+        paused_key: Option<String>,
         error_released: bool,
         sibling_released: bool,
         stop: bool,
@@ -3448,6 +3449,13 @@ pub(crate) mod cold_http_fixture {
             };
         }
 
+        pub fn arm_key(&self, key: String, fault: Option<[usize; 3]>) {
+            self.arm(fault.map(|starts| (2, starts)));
+            let mut state = self.state.0.lock().unwrap();
+            state.paused_key = Some(key);
+            state.released = [true, true, fault.is_some()];
+        }
+
         pub fn arm_leaves(&self, fault: Option<[usize; 3]>) {
             self.arm(fault.map(|starts| (2, starts)));
             self.state.0.lock().unwrap().released[2] = fault.is_some();
@@ -3575,7 +3583,10 @@ pub(crate) mod cold_http_fixture {
         }
         let head = method == "HEAD";
         let (first, end) = range.unwrap_or((0, body.len()));
-        let stage = if key.ends_with("/plane/records.bin")
+        let paused = shared.0.lock().unwrap().paused_key.as_deref() == Some(key);
+        let stage = if paused {
+            Some(2)
+        } else if key.ends_with("/plane/records.bin")
             || key.ends_with("/plane/capsules.bin")
             || key.ends_with("/plane/frames.bin")
         {
@@ -3748,7 +3759,8 @@ mod tests {
         let ordinals = [0,2,6,8,12,14,18,20,24,26];
         let nominees = ordinals.iter().map(|&ordinal| ScoredNominee{id:ordinal as i64,ordinal,score:0.})
             .collect::<Vec<_>>();
-        let limits = Fp32RerankLimits {coalesce:true,shortlist:10,max_bytes:15*12,max_gets:5,max_parallel_gets:2};
+        let limits = Fp32RerankLimits {
+            direct: None,coalesce:true,shortlist:10,max_bytes:15*12,max_gets:5,max_parallel_gets:2};
         let ranges = plan_ranges(&ordinals,27,1,limits).unwrap();
         assert_eq!(ranges,vec![0..36,72..108,144..180,216..252,288..324]);
         let key="coalescing/objects/canonical";

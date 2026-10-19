@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fp32RerankLimits {
+    /// Opt-in SQ8 closure; absent retains SOURCE nomination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct: Option<crate::two_bit_generation::DirectClosureLimits>,
     /// Visible SQ8 candidates refined before the final top-k truncation.
     pub shortlist: usize,
     /// Opt in to deterministic minimum-GET row coalescing within the byte cap.
@@ -51,7 +54,7 @@ impl Ord for Fp32RerankHit {
 
 /// Original SQ8 plan and charges plus the additional exact stage.
 pub struct Fp32RerankResult {
-    /// Unchanged SOURCE nomination and SQ8 physical fetch; candidates are its shortlist.
+    /// Selected nomination strategy and SQ8 physical fetch; candidates are its shortlist.
     pub base: crate::two_bit_generation::TwoBitSearchResult,
     /// Visible final results, including pending normalized puts.
     pub candidates: Vec<Fp32RerankHit>,
@@ -220,7 +223,8 @@ pub(crate) fn authenticate_range(
 /// join flags, range capacity, grouped hit payload and the final flattened hits.
 /// Three byte-cap copies cover collection/authentication; descriptor growth is separate.
 pub fn query_bytes(dimensions: usize, limits: Fp32RerankLimits) -> Option<usize> {
-    if dimensions == 0
+    if limits.direct.is_some_and(|d| d.max_sq8_bytes == 0 || d.max_sq8_gets == 0)
+        || dimensions == 0
         || limits.shortlist == 0
         || limits.max_gets == 0
         || (!limits.coalesce && limits.max_gets < limits.shortlist)
@@ -273,6 +277,7 @@ mod tests {
         for d in [1, 7, 768, 1024, 1536] {
             for shortlist in [1, 3, 16, 33] {
                 let limits = Fp32RerankLimits {
+            direct: None,
                     coalesce: false,
                     shortlist,
                     max_bytes: (8 + 4 * d) * shortlist,
@@ -296,6 +301,7 @@ mod tests {
             query_bytes(
                 usize::MAX,
                 Fp32RerankLimits {
+            direct: None,
                     coalesce: false,
                     shortlist: 1,
                     max_bytes: usize::MAX,
@@ -384,6 +390,20 @@ pub fn modeled_remote_memory(
             .and_then(|n| n.checked_add((scratch as u64).checked_mul(limits.max_active_queries as u64)?))
             .ok_or(bad("model split"))?;
     }
+    if let Some(direct) = refinement.direct {
+        let coverage = root.discovery.semantic_profile()
+            .map(|p| crate::semantic_unit_router::SemanticCoverage::new(p, semantic_leaf_limit))
+            .transpose().map_err(|_| bad("model semantic coverage"))?;
+        let trace = match semantic_leaf_limit {
+            Some(limit) if limit > 48 => crate::two_bit_generation::TwoBitPlanTrace::scratch_bytes_with_leaf_limit(root.canonical.rows, limit)
+                .ok_or(bad("model direct trace"))?,
+            _ => crate::two_bit_generation::TwoBitPlanTrace::scratch_bytes(root.canonical.rows),
+        };
+        modeled = crate::two_bit_generation::direct_closure_memory_model(
+            root.canonical.rows, root.canonical.dimensions, coverage, trace,
+            modeled, limits, true, split, direct,
+        )?.total_bytes;
+    }
     modeled.checked_add((query_bytes(root.canonical.dimensions, refinement)
         .ok_or(bad("model FP32 limits"))? as u64)
         .checked_mul(limits.max_active_queries as u64).ok_or(bad("model active queries"))?)
@@ -416,7 +436,8 @@ mod coalescing_tests {
                             best = Some(best.map_or((gets, covered), |old| std::cmp::min(old, (gets, covered))));
                         }
                     }
-                    let limits = Fp32RerankLimits { coalesce: true, shortlist: rows.len(),
+                    let limits = Fp32RerankLimits {
+            direct: None, coalesce: true, shortlist: rows.len(),
                         max_bytes: budget * 36, max_gets: cap, max_parallel_gets: 3 };
                     let actual = plan_ranges(&rows, 8, 7, limits).map(|p| {
                         assert!(p.capacity() <= rows.len());
@@ -430,7 +451,8 @@ mod coalescing_tests {
 
     #[test]
     fn coalescing_caps_ties_tail_and_checked_geometry() {
-        let limits = Fp32RerankLimits { coalesce: true, shortlist: 3,
+        let limits = Fp32RerankLimits {
+            direct: None, coalesce: true, shortlist: 3,
             max_bytes: 4 * 12, max_gets: 2, max_parallel_gets: 1 };
         assert_eq!(plan_ranges(&[0,2,4], 5, 1, limits).unwrap(), vec![0..36,48..60]);
         assert!(plan_ranges(&[0,2,4], 5, 1, Fp32RerankLimits {max_gets:1,..limits}).is_none());
@@ -445,7 +467,8 @@ mod coalescing_tests {
         assert!(plan_ranges(&[0], 1, 1, Fp32RerankLimits {max_parallel_gets:0,..limits}).is_none());
         assert!(plan_ranges(&[], 0, 1, limits).unwrap().is_empty());
         for dimensions in [1,7,768,1536] {
-            let limits = Fp32RerankLimits {coalesce:true,shortlist:3,max_bytes:100*(8+4*dimensions),
+            let limits = Fp32RerankLimits {
+            direct: None,coalesce:true,shortlist:3,max_bytes:100*(8+4*dimensions),
                 max_gets:1,max_parallel_gets:2};
             let model = query_bytes(dimensions, limits).unwrap();
             let actual_descriptors = 3 * (

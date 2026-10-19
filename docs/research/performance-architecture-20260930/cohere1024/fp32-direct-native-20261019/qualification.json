@@ -1,0 +1,76 @@
+{
+  "actual_data_admission": false,
+  "child_handoff_original_status": "UNVERIFIED release-only historical handoff preserved",
+  "child_release_guard_exit": 89,
+  "elfs": {
+    "check_cohere_native_baseline": {
+      "bytes": 19621040,
+      "sha256": "49e1f87aadc2bfba2d016eefd0b4302624b6db0c60f40823e9cad9095e471e55"
+    },
+    "compare_native_replay": {
+      "bytes": 17277784,
+      "sha256": "93d477dea47e21033059e9f1f50c28777a48f0091b106501b888033beecb2cc9"
+    }
+  },
+  "gates": {
+    "actual_unset_workspace_testbuild": 0,
+    "affected_compile": 0,
+    "library_tests_passed": 14,
+    "replay_tests_passed": 6,
+    "root_release_runner_and_reader": 0,
+    "workspace_clippy_correctness_suspicious": 0
+  },
+  "handoff_wording_erratum": "The handoff phrase reduced canonical I/O means reduced SOURCE I/O; canonical limits remain unchanged16GET/65664B. Original preserved.",
+  "integration_parent": "846c66ab4c9475fc9fa6f0cb8b3bea5a5ce46de0",
+  "limitations": [
+    "Composed multipage bridge witness not expanded",
+    "33-row overcapacity mutation also violates uniqueness; not isolated capacity proof",
+    "Direct includes bridged SQ8 rows and can alter shortlist quality"
+  ],
+  "patch_sha256": "e98222653088611f2c6a042db598afbc253861302c643acd4c78703f03ab6cac",
+  "performance_evaluated": false,
+  "production_ready": false,
+  "review_group": "d0436efd879141e1",
+  "root_release_invocation": "654ab810b9324010928d391ec098fd75",
+  "root_release_runtime_seconds": 211,
+  "root_release_ssm": "36e66e59-cb42-45e0-a73e-6934462b7012",
+  "root_release_unit": "borsuk-fp32-direct-root-release-a0001",
+  "schema": "borsuk-fp32-direct-root-qualification-v1",
+  "source_files": {
+    "crates/borsuk/examples/compare_native_replay.rs": {
+      "git_blob": "1815e2e7f3d5b6738c4b0b796404a123382b20f5",
+      "sha256": "92dc96c4bfc9ce82daaeb4da044c18b4d366f3b77da47a26fde64850fdc8eaa8"
+    },
+    "crates/borsuk/examples/compare_native_replay/current_v10.rs": {
+      "git_blob": "a64f6e07b5dddaa04c49244583bf535acd27f08f",
+      "sha256": "28ff2c09b95ef79e7c06ba8215b8da8408bd56028538b4e5c1b51286c8a59cb6"
+    },
+    "crates/borsuk/examples/compare_native_replay/fp32_serving.rs": {
+      "git_blob": "fd73f3f2a0191ef463f0ad081b6e54e7ab74d083",
+      "sha256": "1a89ba85a6b937148c4a48d1de681cbc6e4f0365440678cfd053556b37ad1c36"
+    },
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": {
+      "git_blob": "33a6d0a612114d43c6ddbc7c2fd74d80f130c3fd",
+      "sha256": "55d0c3e56b2ee24d11070a5f702e29189009a8ea5feddf3fdf4fec0eb23fb7c3"
+    },
+    "crates/borsuk/src/fp32_rerank.rs": {
+      "git_blob": "e7e7dbfa994e47507995578d8c23ee46d173726e",
+      "sha256": "f90c8e34be89a99c4e776f2cf92f226423d28d12cfa5751932e7bd20199da582"
+    },
+    "crates/borsuk/src/sq8_s3_range.rs": {
+      "git_blob": "14043b3ac6f321659cad8e5a2d519df6fb941d83",
+      "sha256": "6ba9d5f9860b547ef14f1f575a7d92cf0df146e4775fe89edcfe47b635df65cf"
+    },
+    "crates/borsuk/src/two_bit_generation.rs": {
+      "git_blob": "fa0d873888e64a99bf1e29f74a191b1b8013e85a",
+      "sha256": "5cdf20f29141eb6ae63ec882a4a6ac5eca35c1ebcd666fcd9468d334b832356d"
+    },
+    "crates/borsuk/src/two_bit_index.rs": {
+      "git_blob": "b45142c02ceb95d91ecb2f0d80407474dfd18c48",
+      "sha256": "79e555c4112e9cd4931023c2cc00408ed57709a1e7cfabab301b2f16f6525ad4"
+    }
+  },
+  "status": "COMPILER_AND_SYNTHETIC_CORRECTNESS_QUALIFIED",
+  "tested_commit": "c34142e56a3966eddcc1caa6f38dfd9a4834561a",
+  "vendor_win": false
+}
