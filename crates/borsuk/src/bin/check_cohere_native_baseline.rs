@@ -8864,7 +8864,12 @@ mod tests {
         value["serving"] = json!({"mode":"fp32_rerank","coalesce":false,"shortlist":256,
             "max_fp32_bytes":256*(D*4+8),"max_fp32_gets":256,"max_parallel_fp32_gets":128});
         let c: Config = serde_json::from_value(value).unwrap();
-        validate_config(&c, Shape::PRODUCTION).unwrap();
+        assert!(
+            validate_config(&c, Shape::PRODUCTION)
+                .unwrap_err()
+                .to_string()
+                .contains("diagnostic budget exceeds 2 MiB")
+        );
         assert!(
             diagnostic_bytes(&c)
                 .unwrap_err()
