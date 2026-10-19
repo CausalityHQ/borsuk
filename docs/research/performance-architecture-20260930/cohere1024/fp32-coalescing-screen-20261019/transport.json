@@ -1,0 +1,94 @@
+{
+  "A1": {
+    "attempts": 4189,
+    "consumed_payload_bytes": 905267328,
+    "transport_failures": 0,
+    "stream_failures": 0,
+    "method_counts": [
+      4189,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "status_counts": {
+      "200": 0,
+      "206": 4189
+    },
+    "scope": "native query intervals; startup excluded; not billed or wire bytes"
+  },
+  "B1": {
+    "attempts": 4005,
+    "consumed_payload_bytes": 910134672,
+    "transport_failures": 0,
+    "stream_failures": 0,
+    "method_counts": [
+      4005,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "status_counts": {
+      "200": 0,
+      "206": 4005
+    },
+    "scope": "native query intervals; startup excluded; not billed or wire bytes"
+  },
+  "B2": {
+    "attempts": 4005,
+    "consumed_payload_bytes": 910134672,
+    "transport_failures": 0,
+    "stream_failures": 0,
+    "method_counts": [
+      4005,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "status_counts": {
+      "200": 0,
+      "206": 4005
+    },
+    "scope": "native query intervals; startup excluded; not billed or wire bytes"
+  },
+  "A2": {
+    "attempts": 4189,
+    "consumed_payload_bytes": 905267328,
+    "transport_failures": 0,
+    "stream_failures": 0,
+    "method_counts": [
+      4189,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "status_counts": {
+      "200": 0,
+      "206": 4189
+    },
+    "scope": "native query intervals; startup excluded; not billed or wire bytes"
+  }
+}

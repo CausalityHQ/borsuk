@@ -1,0 +1,142 @@
+{
+  "schema": "borsuk-fp32-coalescing-independent-verification-v1",
+  "valid": true,
+  "source_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1",
+  "instance_id": "i-03574ebc6188ad0f5",
+  "terminal_sha256": "45f75f97ffc9ee83e75c52e73d874d631e3b495d8405d790c75e241c46add2c5",
+  "all128_query_records_reference_ID_ordinal_f64bits_and_raw_truth_verified": true,
+  "complete_shortlist_and_upstream_plan_charge_parity": true,
+  "independent_gap_plans_and_canonical_charges_verified": true,
+  "quantiles": "nearest-rank, n32 repeated cohort not128 independent queries",
+  "arms": {
+    "A1": {
+      "hits": 319,
+      "p95_ms": 363.005081,
+      "canonical_p50_ms": 34.603762,
+      "serial_qps": 4.8762151652573404,
+      "peak_bytes": 104275968,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 512,
+          "verified_bytes": 2101248
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 2826,
+          "verified_bytes": 749506560
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 851,
+          "verified_bytes": 153659520
+        }
+      },
+      "transport_last_boundary": null
+    },
+    "B1": {
+      "hits": 319,
+      "p95_ms": 196.549844,
+      "canonical_p50_ms": 33.016991,
+      "serial_qps": 6.335745548665798,
+      "peak_bytes": 104595456,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 328,
+          "verified_bytes": 6968592
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 2826,
+          "verified_bytes": 749506560
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 851,
+          "verified_bytes": 153659520
+        }
+      },
+      "transport_last_boundary": null
+    },
+    "B2": {
+      "hits": 319,
+      "p95_ms": 234.143641,
+      "canonical_p50_ms": 32.875662,
+      "serial_qps": 6.526197968543982,
+      "peak_bytes": 104353792,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 328,
+          "verified_bytes": 6968592
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 2826,
+          "verified_bytes": 749506560
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 851,
+          "verified_bytes": 153659520
+        }
+      },
+      "transport_last_boundary": null
+    },
+    "A2": {
+      "hits": 319,
+      "p95_ms": 183.22786,
+      "canonical_p50_ms": 32.485752,
+      "serial_qps": 6.825422308090699,
+      "peak_bytes": 104751104,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 512,
+          "verified_bytes": 2101248
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 2826,
+          "verified_bytes": 749506560
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 851,
+          "verified_bytes": 153659520
+        }
+      },
+      "transport_last_boundary": null
+    }
+  },
+  "canonical_get_saving_fraction": 0.359375,
+  "canonical_byte_ratio": 3.31640625,
+  "total_logical_get_saving_fraction": 0.04392456433516356,
+  "total_verified_byte_ratio": 1.0053766924415062,
+  "p95_ratios_B1_A1_B2_A2": [
+    0.5414520465073049,
+    1.277882310037349
+  ],
+  "decision": "Retain exact-quality GET/byte Pareto option; no consistent latency gain established, no full1000 scale run justified solely by this screen; no vendor/cold claim."
+}

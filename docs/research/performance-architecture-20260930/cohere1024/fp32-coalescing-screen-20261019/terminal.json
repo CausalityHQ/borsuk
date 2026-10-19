@@ -1,0 +1,209 @@
+{
+  "schema": "borsuk-fp32-coalescing-screen-terminal-v1",
+  "instance_id": "i-03574ebc6188ad0f5",
+  "source_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1",
+  "qualified_source_terminal": {
+    "key": "research/semantic-router/20261019/fp32-coalescing-qualified-closure-a0001/terminal.json",
+    "sha256": "8ba4c2412a4e33c67aeb170cfd70e0e36fc3db128e9a2729f2e788305fdab6ff"
+  },
+  "controller_sha256": "446761034a43e9dbc1670b862fa8a5504cce3baa50701d2cb6fa8aaf9de15b7f",
+  "phase_exits": {
+    "prepare": 0,
+    "preflight": 0,
+    "measure": 0
+  },
+  "execution_valid": true,
+  "error": null,
+  "algorithm_negative": false,
+  "vendor_win_claim": false,
+  "provider_cache_eviction_proven": false,
+  "guest_shutdown_usec": 1792374850859606,
+  "measured_report": {
+    "arms": {
+      "A1": {
+        "canonical_stage_median_ns": 34603762,
+        "charges": {
+          "canonical": {
+            "failed_gets": 0,
+            "submitted_gets": 512,
+            "verified_bytes": 2101248
+          },
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 2826,
+            "verified_bytes": 749506560
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 851,
+            "verified_bytes": 153659520
+          }
+        },
+        "denominator": 320,
+        "hits": 319,
+        "observed_process_peak_bytes": 104275968,
+        "p_ns": {
+          "0.5": 195620804,
+          "0.9": 295303904,
+          "0.95": 363005081,
+          "0.99": 406927477
+        },
+        "plan_charge_sha256": "8956a02dd754cb79d1973c0c004026c6c94dcf2a91ef9c4c4738d88cfa49f624",
+        "process_cpu_ns": 3096323203,
+        "process_wall_ns": 7258442948,
+        "query_wall_sum_ns": 6562466773,
+        "result_sha256": "807e6f5a842414f578f393575f537eb1cd8819c6ec554f6dff66b7f4a1ba9fee",
+        "serial_qps": 4.8762151652573404,
+        "whole_native_pass_qps": 4.408659023601931
+      },
+      "A2": {
+        "canonical_stage_median_ns": 32485752,
+        "charges": {
+          "canonical": {
+            "failed_gets": 0,
+            "submitted_gets": 512,
+            "verified_bytes": 2101248
+          },
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 2826,
+            "verified_bytes": 749506560
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 851,
+            "verified_bytes": 153659520
+          }
+        },
+        "denominator": 320,
+        "hits": 319,
+        "observed_process_peak_bytes": 104751104,
+        "p_ns": {
+          "0.5": 141482091,
+          "0.9": 171915399,
+          "0.95": 183227860,
+          "0.99": 191059425
+        },
+        "plan_charge_sha256": "8956a02dd754cb79d1973c0c004026c6c94dcf2a91ef9c4c4738d88cfa49f624",
+        "process_cpu_ns": 2953147653,
+        "process_wall_ns": 5393851993,
+        "query_wall_sum_ns": 4688354589,
+        "result_sha256": "52a5c2676652a48d738ff14407fd249a4904741601ff5068f7bb6cd67ca7a566",
+        "serial_qps": 6.825422308090699,
+        "whole_native_pass_qps": 5.932680400116422
+      },
+      "B1": {
+        "canonical_stage_median_ns": 33016991,
+        "charges": {
+          "canonical": {
+            "failed_gets": 0,
+            "submitted_gets": 328,
+            "verified_bytes": 6968592
+          },
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 2826,
+            "verified_bytes": 749506560
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 851,
+            "verified_bytes": 153659520
+          }
+        },
+        "denominator": 320,
+        "hits": 319,
+        "observed_process_peak_bytes": 104595456,
+        "p_ns": {
+          "0.5": 154379497,
+          "0.9": 185900262,
+          "0.95": 196549844,
+          "0.99": 211094162
+        },
+        "plan_charge_sha256": "8956a02dd754cb79d1973c0c004026c6c94dcf2a91ef9c4c4738d88cfa49f624",
+        "process_cpu_ns": 3004385362,
+        "process_wall_ns": 5711857985,
+        "query_wall_sum_ns": 5050707885,
+        "result_sha256": "f3c1b2ac28e2884e0bcdb8fbc6a95aa14e5566bc3626cbbb223f5982ca88bc00",
+        "serial_qps": 6.335745548665798,
+        "whole_native_pass_qps": 5.602380185928239
+      },
+      "B2": {
+        "canonical_stage_median_ns": 32875662,
+        "charges": {
+          "canonical": {
+            "failed_gets": 0,
+            "submitted_gets": 328,
+            "verified_bytes": 6968592
+          },
+          "router": {
+            "failed_gets": 0,
+            "submitted_gets": 0,
+            "verified_bytes": 0
+          },
+          "source": {
+            "failed_gets": 0,
+            "submitted_gets": 2826,
+            "verified_bytes": 749506560
+          },
+          "sq8": {
+            "failed_gets": 0,
+            "submitted_gets": 851,
+            "verified_bytes": 153659520
+          }
+        },
+        "denominator": 320,
+        "hits": 319,
+        "observed_process_peak_bytes": 104353792,
+        "p_ns": {
+          "0.5": 142939944,
+          "0.9": 185465798,
+          "0.95": 234143641,
+          "0.99": 236921761
+        },
+        "plan_charge_sha256": "8956a02dd754cb79d1973c0c004026c6c94dcf2a91ef9c4c4738d88cfa49f624",
+        "process_cpu_ns": 3000508595,
+        "process_wall_ns": 5627390521,
+        "query_wall_sum_ns": 4903314327,
+        "result_sha256": "5009c714ac21a84592c6f4068665529dae0b89d935f9c0f20b1e2407ab2a0313",
+        "serial_qps": 6.526197968543982,
+        "whole_native_pass_qps": 5.68647224332203
+      }
+    },
+    "complete": true,
+    "decision": "same quality required; retain valid latency/GET/byte tradeoffs without vendor claims",
+    "exact_reference_and_precanonical_parity": true,
+    "matched_vendor_win_claim": false,
+    "order": [
+      "A1",
+      "B1",
+      "B2",
+      "A2"
+    ],
+    "provider_cache_eviction_proven": false,
+    "schema": "borsuk-fp32-coalescing-first32-abba-result-v1",
+    "source_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1"
+  },
+  "evidence": {
+    "key": "research/semantic-router/20261019/fp32-coalescing-screen-closure-a0002/evidence.tar.gz",
+    "bytes": 1834894,
+    "sha256": "aaf68f058eb75d30ec5cc70024de7d6cd673baa53a7e1a1f7c59758315e6cb5a",
+    "server_checksum_verified": true
+  },
+  "publication_order": "terminal LAST"
+}
