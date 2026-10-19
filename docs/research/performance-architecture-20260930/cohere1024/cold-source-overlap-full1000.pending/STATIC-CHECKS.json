@@ -1,0 +1,30 @@
+{
+  "scope": "remote metadata/code-only; CPU1 MemoryMax512MiB swap0 TasksMax128 RuntimeMax120s",
+  "base": "708af9b470ec3af3fe997cf4f3f03876839fe909",
+  "static_selfcheck": {
+    "ssm_command": "d8dd81ee-03bb-4d7d-b292-6a88edec2612",
+    "exit": 0,
+    "cases": 8
+  },
+  "checks": [
+    "Python compile",
+    "shell syntax",
+    "exact ELF/source/qualification hashes",
+    "actual make_case full/count/caps/headers",
+    "strict caller pin7010842 derived from source and parent closed metadata",
+    "canonical JSON config hash matches retained writer",
+    "protocol budget4200s and launch/shutdown margin",
+    "staged diff whitespace"
+  ],
+  "not_executed": [
+    "prepare",
+    "native admission",
+    "canary",
+    "measurement",
+    "Cargo/build",
+    "S3",
+    "infrastructure controls"
+  ],
+  "status": "HOLD_FOR_ROOT_REVIEW",
+  "sparse_git": "Ordinary commit cannot validate an unrelated missing retained blob7130c20932a0921b5ff35112fe94655dd8a927f7 (.github/workflows/pages.yml). Use write-tree --missing-ok with exact base and staged packet only; commit-tree retains configured Roman identity without hooks/trailers. No missing object fabricated or unrelated file altered."
+}

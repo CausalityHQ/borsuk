@@ -76,3 +76,9 @@ separately. This proposal owns only seven copied crates files and these five doc
 Unowned trees and missing historical objects remain intact. No payload reads,
 new resources, experiments, compiler/native runs, S3 operations, children,
 consultations, push or merge were performed. Hold for the parent's disposition.
+
+## Root acceptance
+
+Root independently accepted the exact qualified crates tree and closed full1000 result. Integrate this generic cold SOURCE overlap slice; preserve the earlier screen failure and initial reader-binding INVALID attempt. Public scoring mathematics, layout and dataset-independent interfaces remain unchanged. This acceptance does not freeze all production defaults or establish full-suite correctness, lifecycle readiness or a vendor win.
+
+Next falsifier: compare the existing narrower routing breadth with this 64-leaf high-quality incumbent under the same cold overlap implementation. Preregister the recall/latency Pareto gate and verify the closed narrower reference first; retain the 99.02% point. No new experiment is authorized by this evidence file itself.

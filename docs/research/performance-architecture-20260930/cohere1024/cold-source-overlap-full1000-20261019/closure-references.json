@@ -1,0 +1,28 @@
+{
+  "bucket": "borsuk-bench-453182569524-euc1",
+  "closed_measurement": {
+    "bytes": 103450606,
+    "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0002/evidence.tar.gz",
+    "sha256": "636344fdf9b136a0750ec8d5f15634268f4c924238372d4e47ac3e0370e236bd"
+  },
+  "corrected_packet": "58e0b92e11558a25a591be0a435fdf3f617db704",
+  "invalid_attempt": {
+    "bytes": 185528,
+    "key": "research/semantic-router/20261019/cold-source-overlap-full1000-a0001/evidence.tar.gz",
+    "sha256": "b30b1467d27d93c46af839823ea568dee2b8400fb6c8a2218076ab465b264c01"
+  },
+  "known_unclassified_fixture_failures_preserved": true,
+  "native_reruns": false,
+  "original_packet": "f9177d955df4feee5c14636f472d92b4301fba57",
+  "qualification_closure": {
+    "bytes": 38376706,
+    "key": "research/semantic-router/20261019/cold-source-score-overlap-outcome-a0001/qualified-closure.tar.gz",
+    "sha256": "69be208d2158ef8eca6cb8e7f909503400fc2b5a9bd71dbcbc2de04a701eb456"
+  },
+  "qualified_crates_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+  "qualified_source": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+  "root_verification_sha256": "52ac5cca2a1013f2f83835d7e943d5ce1f3d730867975743171ef21477fa7df3",
+  "schema": "borsuk-cold-overlap-full1000-closure-references-v1",
+  "source_proposal": "f99a0f804ed605a31e711a31113309ff92db473d",
+  "vendor_win_claim": false
+}
