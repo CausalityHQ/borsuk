@@ -1,0 +1,23 @@
+{
+  "schema": "borsuk-progressive-bound-root-verification-v1",
+  "native_exit": 0,
+  "unit": "borsuk-progressive-bound-first8-a0001",
+  "invocation": "6a336911767840f7a43748e7da54ba23",
+  "source_commit": "8ceda1b5e187d1ce61dbcc057abf22be7cdf778f",
+  "report_sha256": "bf44754b05dd74cf64cdea7d5f0fc46d1bb240bccda8c2719a853a9a3df0c273",
+  "authority_sha256": "4de53ff0b641656f98d2efb47ebf797646dd0686cb905eeba418cb6171e65d72",
+  "query_count": 8,
+  "full_units": 35640,
+  "nominated_row_occurrences": 1140480,
+  "skippable_units": 0,
+  "native_synthetic_tests_passed": 20,
+  "ignored_preexisting_release_primitive": 1,
+  "clippy_required_classes_exit": 0,
+  "real_unset_workspace_testbuild_exit": 0,
+  "disposition": "STOP_HIGH_BIT_BOX_BOUND_AT_32ROW_GRANULARITY",
+  "scope": "valid offline early negative on fixed first8; not a general quantizer impossibility result",
+  "physical_io_gain_claim": false,
+  "cold_latency_claim": false,
+  "defaults_promoted": false,
+  "next": "retain existing cold overlap candidate; select next measured improvement after reconciling routing evidence"
+}

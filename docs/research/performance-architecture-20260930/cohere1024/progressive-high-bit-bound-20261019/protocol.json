@@ -1,0 +1,24 @@
+{
+  "schema": "borsuk-progressive-bound-first8-protocol-v1",
+  "purpose": "offline exact-score-bound unit-elimination falsifier; no physical IO or timing claim",
+  "source_commit": "8ceda1b5e187d1ce61dbcc057abf22be7cdf778f",
+  "authority_sha256": "4de53ff0b641656f98d2efb47ebf797646dd0686cb905eeba418cb6171e65d72",
+  "ordinals": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "timeout_seconds": 600,
+  "host_memory_bytes": 8589934592,
+  "source_memory_cap_bytes": 2147483648,
+  "cpu": "0-7/800%",
+  "swap": 0,
+  "stop_rule": "zero skippable full units in all eight => stop this bound formulation; positives are potential only, require actual layout/range/RTT test",
+  "partial_or_failure": "INVALID; never algorithm rejection; preserve original handle",
+  "cache": "offline authenticated resident plane, not a cold serving benchmark"
+}

@@ -1,0 +1,95 @@
+{
+  "authority_sha256": "4de53ff0b641656f98d2efb47ebf797646dd0686cb905eeba418cb6171e65d72",
+  "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+  "harness_source_sha256": "636fdb2d6d6256e3120d5db1f8fac93a6106bacfb10f88fc1b1598b303dfcc71",
+  "modeled_extra_payload_bytes": 45575360,
+  "offline_counterfactual": true,
+  "original_result": {
+    "bytes": 50434191,
+    "native_exit": 0,
+    "path": "/mnt/borsuk-workspace/evidence/routing64-fp32-a0001/full64-after-positive.jsonl",
+    "reader_exit": 0,
+    "sha256": "ba9ddc699283fc9b107a06af871a22a6e8bda63b473072b2c2dff44fc3166f1e"
+  },
+  "physical_io_gain_claim": false,
+  "qualified_rlib_sha256": "9cd7d7442bd5589448b591f17fd51eebe6da7ca4334db892befe8117c7a5f66d",
+  "queries": [
+    {
+      "cutoff_bits": 4602768986500303665,
+      "full_units": 4640,
+      "nominated_rows": 148480,
+      "ordinal": 0,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602794801353167073,
+      "full_units": 4184,
+      "nominated_rows": 133888,
+      "ordinal": 1,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602706713633785409,
+      "full_units": 4656,
+      "nominated_rows": 148992,
+      "ordinal": 2,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602489960159031104,
+      "full_units": 4576,
+      "nominated_rows": 146432,
+      "ordinal": 3,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602670709912614611,
+      "full_units": 4160,
+      "nominated_rows": 133120,
+      "ordinal": 4,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602430241019426550,
+      "full_units": 4680,
+      "nominated_rows": 149760,
+      "ordinal": 5,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602305403054073761,
+      "full_units": 4520,
+      "nominated_rows": 144640,
+      "ordinal": 6,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    },
+    {
+      "cutoff_bits": 4602691650390520965,
+      "full_units": 4224,
+      "nominated_rows": 135168,
+      "ordinal": 7,
+      "partial_units": 0,
+      "shortlist_capacity": 256,
+      "skippable_units": 0
+    }
+  ],
+  "requests": {
+    "bytes": 4096000,
+    "path": "/mnt/borsuk-sq8-shortlist/inputs/queries.f32",
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  }
+}

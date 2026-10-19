@@ -1,0 +1,55 @@
+{
+  "commit": "8ceda1b5e187d1ce61dbcc057abf22be7cdf778f",
+  "base": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+  "source_cutoff": "2026-10-19T10:15:00Z",
+  "committed_at": "2026-10-19T10:14:09Z",
+  "clean": true,
+  "unowned_tree_audit": "unowned-tree-audit.txt",
+  "qualified_library_sha256": {
+    "crates/borsuk/src/rotated_two_bit.rs": "73aba7184710fc965a200fd12978d4cb83f913eea29ec54adf3d145595b49d5e",
+    "crates/borsuk/src/two_bit_generation.rs": "bce215e7cd492768a5396634a6d651cca102b0fca0f75afa16306b922edb7e60"
+  },
+  "gates": {
+    "focused": {
+      "command": "cargo test --locked -p borsuk --lib progressive_bound -- --nocapture",
+      "exit": 0
+    },
+    "block32": {
+      "command": "cargo test --locked -p borsuk --lib source_block32 -- --nocapture",
+      "exit": 0
+    },
+    "shortlist": {
+      "command": "cargo test --locked -p borsuk --lib source_shortlist -- --nocapture",
+      "exit": 0
+    },
+    "clippy": {
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "exit": 0
+    },
+    "full-test-build": {
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh",
+      "exit": 0
+    }
+  },
+  "focused": "6 pass",
+  "block32": "7 pass; source_block32_release_primitive pre-existing ignored",
+  "shortlist": "7 pass",
+  "initial_red": "missing cc exit101 preserved red.log; linked stub expected runtime failures exit101 preserved red-linked.log",
+  "harness": {
+    "build_and_synthetic_self_check_exit": 0,
+    "command": "harness-build.command",
+    "libraries": "harness-libraries.json",
+    "binary_sha256": "a23e483b9d65d28ab257b3ad00b5a391dd12ba48674db2aceafe6fdbcd5fe334"
+  },
+  "scope_note": "After workspace gates, only docs and standalone .rs.txt harness were added/updated; exact two library source hashes unchanged. Original frozen.sha256 and document-only mismatch in post-harness-frozen-check.log preserved.",
+  "actual_data_execution": "not run by child; root alone executes bound first8 authority",
+  "gaps": [
+    "real first8 efficacy pending root execution",
+    "no online algorithm or authenticated physical layout/range/RTT result",
+    "no physical IO savings claimed"
+  ],
+  "artifacts": "delivery.patch; delivery.bundle (verified); delivery.sha256",
+  "source_gate_ssm": "d0a98714-d3c1-44a2-86a1-f451d7b6e5e7",
+  "harness_ssm": "ff0f1bcb-4a5e-4982-ad47-178fbfb76931",
+  "packaging_ssm": "d7a35356-44cc-4274-a10a-9c7a3d6e84da"
+}
