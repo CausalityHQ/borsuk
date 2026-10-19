@@ -1,0 +1,351 @@
+{
+  "cells": {
+    "A1": {
+      "queries": 68,
+      "raw_sha256": "38a74349360e84697f592a1c29a834ef3911e5ea5dd8664cfee23f7f08c6f63b",
+      "slowest_four": [
+        {
+          "discovery_ns": 2093275,
+          "ordinal": 859,
+          "planning_ns": 12902995,
+          "residual_ns": 112645495,
+          "source_ns": 253309227,
+          "sq8_ns": 142120885,
+          "wall_ns": 523071877
+        },
+        {
+          "discovery_ns": 2079229,
+          "ordinal": 687,
+          "planning_ns": 14478159,
+          "residual_ns": 125655201,
+          "source_ns": 265356760,
+          "sq8_ns": 102933665,
+          "wall_ns": 510503014
+        },
+        {
+          "discovery_ns": 2101335,
+          "ordinal": 125,
+          "planning_ns": 13638177,
+          "residual_ns": 83526970,
+          "source_ns": 265210849,
+          "sq8_ns": 103240807,
+          "wall_ns": 467718138
+        },
+        {
+          "discovery_ns": 2123114,
+          "ordinal": 375,
+          "planning_ns": 11953943,
+          "residual_ns": 65891186,
+          "source_ns": 260461494,
+          "sq8_ns": 96845156,
+          "wall_ns": 437274893
+        }
+      ],
+      "stages": {
+        "discovery": {
+          "max_ns": 2170694,
+          "median_ns": 2095951,
+          "p95_ns": 2145769,
+          "share_of_query_wall": 0.007707174582228296,
+          "sum_ns": 142516045
+        },
+        "planning": {
+          "max_ns": 15183598,
+          "median_ns": 11255268,
+          "p95_ns": 14516719,
+          "share_of_query_wall": 0.041610434642185605,
+          "sum_ns": 769433015
+        },
+        "residual": {
+          "max_ns": 136234887,
+          "median_ns": 80660876,
+          "p95_ns": 125655201,
+          "share_of_query_wall": 0.2889929559013167,
+          "sum_ns": 5343869231
+        },
+        "source": {
+          "max_ns": 265356760,
+          "median_ns": 71732627,
+          "p95_ns": 262926639,
+          "share_of_query_wall": 0.4495238662945564,
+          "sum_ns": 8312302112
+        },
+        "sq8": {
+          "max_ns": 142120885,
+          "median_ns": 45692683,
+          "p95_ns": 102933665,
+          "share_of_query_wall": 0.21216556857971303,
+          "sum_ns": 3923227299
+        },
+        "wall": {
+          "max_ns": 523071877,
+          "median_ns": 234122015,
+          "p95_ns": 437274893,
+          "share_of_query_wall": 1.0,
+          "sum_ns": 18491347702
+        }
+      }
+    },
+    "A2": {
+      "queries": 68,
+      "raw_sha256": "d658b96784b3533f10e07c17fe75149c1bc97ea1d5f9bd566c8d11582a79c515",
+      "slowest_four": [
+        {
+          "discovery_ns": 2078016,
+          "ordinal": 454,
+          "planning_ns": 12400884,
+          "residual_ns": 141727132,
+          "source_ns": 265467809,
+          "sq8_ns": 90992896,
+          "wall_ns": 512666737
+        },
+        {
+          "discovery_ns": 2107514,
+          "ordinal": 859,
+          "planning_ns": 13519956,
+          "residual_ns": 76297890,
+          "source_ns": 257185205,
+          "sq8_ns": 142113493,
+          "wall_ns": 491224058
+        },
+        {
+          "discovery_ns": 2129202,
+          "ordinal": 546,
+          "planning_ns": 13191331,
+          "residual_ns": 82691134,
+          "source_ns": 262789350,
+          "sq8_ns": 111970738,
+          "wall_ns": 472771755
+        },
+        {
+          "discovery_ns": 2095600,
+          "ordinal": 375,
+          "planning_ns": 12123754,
+          "residual_ns": 59904176,
+          "source_ns": 263684989,
+          "sq8_ns": 97174649,
+          "wall_ns": 434983168
+        }
+      ],
+      "stages": {
+        "discovery": {
+          "max_ns": 2226683,
+          "median_ns": 2106384,
+          "p95_ns": 2167993,
+          "share_of_query_wall": 0.008218612036308054,
+          "sum_ns": 143348041
+        },
+        "planning": {
+          "max_ns": 15447024,
+          "median_ns": 11395110,
+          "p95_ns": 14496425,
+          "share_of_query_wall": 0.04469268423065776,
+          "sum_ns": 779524414
+        },
+        "residual": {
+          "max_ns": 141727132,
+          "median_ns": 57781703,
+          "p95_ns": 110638963,
+          "share_of_query_wall": 0.23684474881728665,
+          "sum_ns": 4131017575
+        },
+        "source": {
+          "max_ns": 272894546,
+          "median_ns": 71424677,
+          "p95_ns": 263684989,
+          "share_of_query_wall": 0.4972415127950495,
+          "sum_ns": 8672826561
+        },
+        "sq8": {
+          "max_ns": 142113493,
+          "median_ns": 43333497,
+          "p95_ns": 101816602,
+          "share_of_query_wall": 0.213002442120698,
+          "sum_ns": 3715162934
+        },
+        "wall": {
+          "max_ns": 512666737,
+          "median_ns": 212387529,
+          "p95_ns": 434983168,
+          "share_of_query_wall": 1.0,
+          "sum_ns": 17441879525
+        }
+      }
+    },
+    "B1": {
+      "queries": 68,
+      "raw_sha256": "513944dfb6225e37bd4445cc3b300c963804e2f82f3a57c11a5e5c0260c2b272",
+      "slowest_four": [
+        {
+          "discovery_ns": 1979624,
+          "ordinal": 375,
+          "planning_ns": 10133293,
+          "residual_ns": 69813788,
+          "source_ns": 238099621,
+          "sq8_ns": 245424195,
+          "wall_ns": 565450521
+        },
+        {
+          "discovery_ns": 2043225,
+          "ordinal": 125,
+          "planning_ns": 12451658,
+          "residual_ns": 84097869,
+          "source_ns": 253042626,
+          "sq8_ns": 137094254,
+          "wall_ns": 488729632
+        },
+        {
+          "discovery_ns": 2043995,
+          "ordinal": 468,
+          "planning_ns": 8095528,
+          "residual_ns": 255041718,
+          "source_ns": 70657338,
+          "sq8_ns": 122858277,
+          "wall_ns": 458696856
+        },
+        {
+          "discovery_ns": 2048519,
+          "ordinal": 546,
+          "planning_ns": 11461559,
+          "residual_ns": 91371002,
+          "source_ns": 247329105,
+          "sq8_ns": 79720888,
+          "wall_ns": 431931073
+        }
+      ],
+      "stages": {
+        "discovery": {
+          "max_ns": 2053181,
+          "median_ns": 1988342,
+          "p95_ns": 2043225,
+          "share_of_query_wall": 0.00790464227341823,
+          "sum_ns": 135537611
+        },
+        "planning": {
+          "max_ns": 13307198,
+          "median_ns": 8859917,
+          "p95_ns": 11926950,
+          "share_of_query_wall": 0.03576078977781306,
+          "sum_ns": 613175378
+        },
+        "residual": {
+          "max_ns": 255041718,
+          "median_ns": 67575173,
+          "p95_ns": 99903616,
+          "share_of_query_wall": 0.26386187795690097,
+          "sum_ns": 4524329797
+        },
+        "source": {
+          "max_ns": 270015628,
+          "median_ns": 66676696,
+          "p95_ns": 259995870,
+          "share_of_query_wall": 0.45525347286086315,
+          "sum_ns": 7806041814
+        },
+        "sq8": {
+          "max_ns": 245424195,
+          "median_ns": 48843805,
+          "p95_ns": 122858277,
+          "share_of_query_wall": 0.23721921713100455,
+          "sum_ns": 4067499181
+        },
+        "wall": {
+          "max_ns": 565450521,
+          "median_ns": 203895515,
+          "p95_ns": 431931073,
+          "share_of_query_wall": 1.0,
+          "sum_ns": 17146583781
+        }
+      }
+    },
+    "B2": {
+      "queries": 68,
+      "raw_sha256": "58074bf49ca579a14c391d716d6db295b1170f36a3ece5b95f9c6cc501fa1ba7",
+      "slowest_four": [
+        {
+          "discovery_ns": 2026789,
+          "ordinal": 125,
+          "planning_ns": 11734071,
+          "residual_ns": 77155752,
+          "source_ns": 245082360,
+          "sq8_ns": 137343114,
+          "wall_ns": 473342086
+        },
+        {
+          "discovery_ns": 1981055,
+          "ordinal": 187,
+          "planning_ns": 8862703,
+          "residual_ns": 123742236,
+          "source_ns": 240426960,
+          "sq8_ns": 85775314,
+          "wall_ns": 460788268
+        },
+        {
+          "discovery_ns": 1978759,
+          "ordinal": 296,
+          "planning_ns": 10312454,
+          "residual_ns": 87772545,
+          "source_ns": 261958427,
+          "sq8_ns": 82189174,
+          "wall_ns": 444211359
+        },
+        {
+          "discovery_ns": 1992016,
+          "ordinal": 375,
+          "planning_ns": 9990013,
+          "residual_ns": 78125767,
+          "source_ns": 253187616,
+          "sq8_ns": 94887082,
+          "wall_ns": 438182494
+        }
+      ],
+      "stages": {
+        "discovery": {
+          "max_ns": 2041968,
+          "median_ns": 1999242,
+          "p95_ns": 2034417,
+          "share_of_query_wall": 0.008824835295285414,
+          "sum_ns": 135858039
+        },
+        "planning": {
+          "max_ns": 13832198,
+          "median_ns": 8828506,
+          "p95_ns": 11734071,
+          "share_of_query_wall": 0.039911901882520584,
+          "sum_ns": 614442371
+        },
+        "residual": {
+          "max_ns": 123742236,
+          "median_ns": 58270159,
+          "p95_ns": 105684622,
+          "share_of_query_wall": 0.26807421587801794,
+          "sum_ns": 4126993429
+        },
+        "source": {
+          "max_ns": 268225948,
+          "median_ns": 62012554,
+          "p95_ns": 261958427,
+          "share_of_query_wall": 0.4409809236549333,
+          "sum_ns": 6788886310
+        },
+        "sq8": {
+          "max_ns": 137343114,
+          "median_ns": 46390519,
+          "p95_ns": 96442165,
+          "share_of_query_wall": 0.24220812328924277,
+          "sum_ns": 3728785814
+        },
+        "wall": {
+          "max_ns": 473342086,
+          "median_ns": 186883091,
+          "p95_ns": 438182494,
+          "share_of_query_wall": 1.0,
+          "sum_ns": 15394965963
+        }
+      }
+    }
+  },
+  "method": "nearest-rank percentiles; stage duration end_ns-start_ns; residual query_wall_ns minus union of four named intervals; only interval, wall and ordinal fields enter reduction",
+  "schema": "borsuk-cold-breadth48-closed-stage-summary-v1",
+  "scope": "CLOSED 272 fixed-panel query records only; duration is wall interval, not stage CPU"
+}

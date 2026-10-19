@@ -1,0 +1,406 @@
+{
+  "authority": {
+    "arms": {
+      "A": {
+        "gate_reuse": "Reuse old packet B qualification; no rebuild; unclassified suite failures retained in original qualification.",
+        "main_commit": "9902a281e4c3e33d30d249244ff764e828dcb8de",
+        "qualification_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-root-verification-a0001/combined-qualification.json",
+        "qualification_sha256": "ab7942782e66f7bbb5f8570f7e33214583a003821db8dfcf0372f5a71c3e1677",
+        "qualified_gate_statuses": {
+          "affected_compile": 0,
+          "focused_tests": 0,
+          "release_runner_reader": 0,
+          "workspace_clippy": 0,
+          "workspace_testbuild": 0
+        },
+        "qualified_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+        "reader_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-repair-a0001/compare_native_replay.elf",
+        "reader_sha256": "fa16dccadc44f974a019f8613122fc5aa88f6f2ac2d5b469d4200fe9f922073e",
+        "runner_path": "/mnt/borsuk-workspace/evidence/cold-source-overlap-root-release-a0001/bin/check_cohere_native_baseline",
+        "runner_sha256": "67055f6d7d1f4911f7a024768d6c87d2ee93fa59e629173e097c4566ce6c9d0b",
+        "source_commit": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+        "source_hashes": {
+          "canonical_source_sha256": "fdbf0294d6bb08724e65f03477393e6c5959dbfb262ff7ede4b128df8c09617f",
+          "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+          "fp32_rerank_source_sha256": "982e689c7e2393f7651dc43edc6714af0821f42cfd562f4ec74a38ce2ad4b746",
+          "generation_source_sha256": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd",
+          "returned_source_sha256": "30e409f8c02fd6bcfca8c9ab312539de0a9017728675f66eeeb22054d4f04a1d",
+          "router_source_sha256": "af47c9de0a014d6f069cf35fbef6af89cf296df38d0824b051f5baa365111161",
+          "runner_source_sha256": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d",
+          "source_capsule_source_sha256": "bac906dd4020caf8e6a092389d3f16bc370d12eadfe7c37b50b982933a88efa0",
+          "source_frame_source_sha256": "3391ae0cc8729358910f123ce7919e4161a3c3f513dfce8f764c59d42f1b484e",
+          "source_plane_source_sha256": "c59a555fe50ea47ff5bfca423f75d8e958a031ad8eb5fb974cb2180fc4c49bcc",
+          "sq8_range_source_sha256": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01"
+        },
+        "source_path": "/mnt/borsuk-workspace/cold-overlap-reader-repair-a0001"
+      },
+      "B": {
+        "gate_reuse": "Reuse old packet B qualification; no rebuild; unclassified suite failures retained in original qualification.",
+        "main_commit": "9902a281e4c3e33d30d249244ff764e828dcb8de",
+        "qualification_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-root-verification-a0001/combined-qualification.json",
+        "qualification_sha256": "ab7942782e66f7bbb5f8570f7e33214583a003821db8dfcf0372f5a71c3e1677",
+        "qualified_gate_statuses": {
+          "affected_compile": 0,
+          "focused_tests": 0,
+          "release_runner_reader": 0,
+          "workspace_clippy": 0,
+          "workspace_testbuild": 0
+        },
+        "qualified_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+        "reader_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-repair-a0001/compare_native_replay.elf",
+        "reader_sha256": "fa16dccadc44f974a019f8613122fc5aa88f6f2ac2d5b469d4200fe9f922073e",
+        "runner_path": "/mnt/borsuk-workspace/evidence/cold-source-overlap-root-release-a0001/bin/check_cohere_native_baseline",
+        "runner_sha256": "67055f6d7d1f4911f7a024768d6c87d2ee93fa59e629173e097c4566ce6c9d0b",
+        "source_commit": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+        "source_hashes": {
+          "canonical_source_sha256": "fdbf0294d6bb08724e65f03477393e6c5959dbfb262ff7ede4b128df8c09617f",
+          "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+          "fp32_rerank_source_sha256": "982e689c7e2393f7651dc43edc6714af0821f42cfd562f4ec74a38ce2ad4b746",
+          "generation_source_sha256": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd",
+          "returned_source_sha256": "30e409f8c02fd6bcfca8c9ab312539de0a9017728675f66eeeb22054d4f04a1d",
+          "router_source_sha256": "af47c9de0a014d6f069cf35fbef6af89cf296df38d0824b051f5baa365111161",
+          "runner_source_sha256": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d",
+          "source_capsule_source_sha256": "bac906dd4020caf8e6a092389d3f16bc370d12eadfe7c37b50b982933a88efa0",
+          "source_frame_source_sha256": "3391ae0cc8729358910f123ce7919e4161a3c3f513dfce8f764c59d42f1b484e",
+          "source_plane_source_sha256": "c59a555fe50ea47ff5bfca423f75d8e958a031ad8eb5fb974cb2180fc4c49bcc",
+          "sq8_range_source_sha256": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01"
+        },
+        "source_path": "/mnt/borsuk-workspace/cold-overlap-reader-repair-a0001"
+      }
+    },
+    "aws_wrapper_sha256": "9c423af68ee51ec2b6ae6129b2945e48014c022d0fb838baea27861b79bd5926",
+    "controller_sha256": "9a57702325d423acfe5e05d61b6aae8d54643a6ba8e2d3d9db22ec24dfa83d87",
+    "input_authorities_sha256": "96c01fd709af8b07556d5f1eeaea199b46a7f935fbd3b680733fdfa7f745bf01",
+    "instance": "i-031447f122c124b4e",
+    "model_pins_sha256": "08d89d584e265c63c756d912341cfdc17ded810584b4b958da0ffde25a2a65a8",
+    "protocol_sha256": "0fb999f5fcfd87dafc9f25e9f1c33dbd0223167bcf3451bc8c653830c3d1f30f"
+  },
+  "base": "056d3fa3ddc4d26a30d4d7979e3a751452a1d1fc",
+  "base_parent": "9902a281e4c3e33d30d249244ff764e828dcb8de",
+  "closed_source_GET_counts": {
+    "A1": {
+      "max_SOURCE_GETs": 128,
+      "min_SOURCE_GETs": 93,
+      "queries_with_SOURCE_GETs_above_64": 68
+    },
+    "A2": {
+      "max_SOURCE_GETs": 128,
+      "min_SOURCE_GETs": 93,
+      "queries_with_SOURCE_GETs_above_64": 68
+    },
+    "B1": {
+      "max_SOURCE_GETs": 128,
+      "min_SOURCE_GETs": 76,
+      "queries_with_SOURCE_GETs_above_64": 68
+    },
+    "B2": {
+      "max_SOURCE_GETs": 128,
+      "min_SOURCE_GETs": 76,
+      "queries_with_SOURCE_GETs_above_64": 68
+    }
+  },
+  "falsifier_source_checks": {
+    "bin/check_cohere_native_baseline.rs": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d",
+    "sq8_s3_range.rs": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01",
+    "two_bit_generation.rs": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd"
+  },
+  "git_missing_blob_policy": "sparse before checkout; retain all 34946 inherited index entries; write-tree --missing-ok and commit-tree with original base parent; verify every inherited mode/object/path unchanged",
+  "host_shutdown_UTC": "2026-10-19T12:21:41Z",
+  "inputs": {
+    "evidence/cold-breadth48-pareto-a0002/A1-config.json": {
+      "bytes": 3336,
+      "sha256": "737d2025c6cbf0bf42cb01f4a20f606aafc20b3dd85dd5bbc95a6a3d15e5552a"
+    },
+    "evidence/cold-breadth48-pareto-a0002/A1.jsonl": {
+      "bytes": 3488505,
+      "sha256": "38a74349360e84697f592a1c29a834ef3911e5ea5dd8664cfee23f7f08c6f63b"
+    },
+    "evidence/cold-breadth48-pareto-a0002/A2.jsonl": {
+      "bytes": 3488509,
+      "sha256": "d658b96784b3533f10e07c17fe75149c1bc97ea1d5f9bd566c8d11582a79c515"
+    },
+    "evidence/cold-breadth48-pareto-a0002/B1-config.json": {
+      "bytes": 3336,
+      "sha256": "5ea62a8e4be1f0d56160828f4bbde07f9544ffd7581894e51fa04fdd54b6f82b"
+    },
+    "evidence/cold-breadth48-pareto-a0002/B1.jsonl": {
+      "bytes": 2762862,
+      "sha256": "513944dfb6225e37bd4445cc3b300c963804e2f82f3a57c11a5e5c0260c2b272"
+    },
+    "evidence/cold-breadth48-pareto-a0002/B2.jsonl": {
+      "bytes": 2762835,
+      "sha256": "58074bf49ca579a14c391d716d6db295b1170f36a3ece5b95f9c6cc501fa1ba7"
+    },
+    "evidence/cold-breadth48-pareto-a0002/authority.json": {
+      "bytes": 4819,
+      "sha256": "29644921f703d8e9b828a4d3f521314f72f54bde32007b60f49d1f0844e124fb"
+    },
+    "evidence/cold-breadth48-pareto-a0002/controller.finished": {
+      "bytes": 29,
+      "sha256": "babb19ac88a60e4c1a6c46c0e9dde1a7f0f18f2d74c855a8633946656549da8f"
+    },
+    "evidence/cold-breadth48-pareto-a0002/evidence.tar.gz": {
+      "bytes": 7924487,
+      "sha256": "c92fb4cf6014ff173235e22eae0be77c143376833e24e96006ae83b50fc42532"
+    },
+    "evidence/cold-breadth48-pareto-a0002/frozen.json": {
+      "bytes": 1624,
+      "sha256": "4ee1f1108cf9cd352bd61a5758add43e409cd6531020bed451b7ba89828f0b01"
+    },
+    "evidence/cold-breadth48-pareto-a0002/measurement-addendum.json": {
+      "bytes": 3505,
+      "sha256": "0fb999f5fcfd87dafc9f25e9f1c33dbd0223167bcf3451bc8c653830c3d1f30f"
+    },
+    "evidence/cold-breadth48-pareto-a0002/report.json": {
+      "bytes": 22252,
+      "sha256": "405448fcff3a08724b25f13af7d89c6a8657f9b957d93b1dd8c93193222f14be"
+    },
+    "evidence/cold-breadth48-pareto-a0002/terminal.json": {
+      "bytes": 286,
+      "sha256": "93eba1183833cf724c4b1f9db51b3aa4195ce99511f9ddcd325283097bf7b8f5"
+    },
+    "evidence/cold-breadth48-root-preparation-a0002/preflight.json": {
+      "bytes": 395,
+      "sha256": "b6cffa95b573faa61c535a40c9422f5ad677fbd1fb4613dbd5a4a9be282337c1"
+    },
+    "evidence/cold-breadth48-root-preparation-a0002/root-verification-closure.tar.gz": {
+      "bytes": 47974,
+      "sha256": "042af85b388a09b76eb760b9d19531378655199af987b7f478e2388cfe64c3f5"
+    },
+    "evidence/cold-breadth48-root-preparation-a0002/root-verification.json": {
+      "bytes": 3700,
+      "sha256": "0d77d2d0ecc2f8f5843dfb68998a089038a9c013f3ceefc97bd228cd8b883d9b"
+    },
+    "evidence/cold-breadth48-root-preparation-a0002/verification-publication.json": {
+      "bytes": 247,
+      "sha256": "8b5f402aabb16c8210328eb6327a8d5f5c5f39789413b842d591bcfc596897f0"
+    }
+  },
+  "limitations": [
+    "fixed diagnostic panel; not population percentiles or new full quality",
+    "no quality parity, vendor, generalization, production claim",
+    "application SOURCE cache disabled; provider cache eviction unproven",
+    "stage CPU unavailable; interval timings do not identify network or CPU cause",
+    "historical unclassified suite failures retained; no new native qualification",
+    "future falsifier is untested and requires root authorization"
+  ],
+  "native_reader_exits": {
+    "A1": {
+      "native": 0,
+      "reader": 0
+    },
+    "A2": {
+      "native": 0,
+      "reader": 0
+    },
+    "B1": {
+      "native": 0,
+      "reader": 0
+    },
+    "B2": {
+      "native": 0,
+      "reader": 0
+    },
+    "admit-A": {
+      "native": 0,
+      "reader": 0
+    },
+    "admit-B": {
+      "native": 0,
+      "reader": 0
+    },
+    "canary-A": {
+      "native": 0,
+      "reader": 0
+    },
+    "canary-B": {
+      "native": 0,
+      "reader": 0
+    }
+  },
+  "root_preflight": {
+    "changes": "only root recovery namespace/instance/prospective time window; science unchanged",
+    "controller_sha256": "9a57702325d423acfe5e05d61b6aae8d54643a6ba8e2d3d9db22ec24dfa83d87",
+    "elf_pins_verified": true,
+    "instance": "i-031447f122c124b4e",
+    "protocol_sha256": "0fb999f5fcfd87dafc9f25e9f1c33dbd0223167bcf3451bc8c653830c3d1f30f",
+    "qualified_source_clean": true,
+    "source_files_verified": 11
+  },
+  "root_proof": {
+    "CPU_B_over_A": 0.805494063770874,
+    "all_292_returned_ID_score_bits_ordinals_plans_trace_shortlists_charges_equal_own_arm_reference": true,
+    "checkpoint_and_terminal_checksum_HEADs": [
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-A1.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-A2.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-B1.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-B2.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-admit-A.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-admit-B.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-canary-A.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/cell-canary-B.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/evidence.tar.gz",
+      "research/semantic-router/20261019/cold-breadth48-pareto-a0002/terminal.json"
+    ],
+    "decision": "VALID_TRADEOFF_OR_NEGATIVE_ON_FIXED68",
+    "details": {
+      "A1": {
+        "hits": 674,
+        "logical_gets": 11678,
+        "physical_GET_attempts": 11678,
+        "queries": 68,
+        "retry_GET_attempts": 0,
+        "sha256": "38a74349360e84697f592a1c29a834ef3911e5ea5dd8664cfee23f7f08c6f63b",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 3481321088
+      },
+      "A2": {
+        "hits": 674,
+        "logical_gets": 11678,
+        "physical_GET_attempts": 11678,
+        "queries": 68,
+        "retry_GET_attempts": 0,
+        "sha256": "d658b96784b3533f10e07c17fe75149c1bc97ea1d5f9bd566c8d11582a79c515",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 3481321088
+      },
+      "B1": {
+        "hits": 667,
+        "logical_gets": 10850,
+        "physical_GET_attempts": 10850,
+        "queries": 68,
+        "retry_GET_attempts": 0,
+        "sha256": "513944dfb6225e37bd4445cc3b300c963804e2f82f3a57c11a5e5c0260c2b272",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 2685190528
+      },
+      "B2": {
+        "hits": 667,
+        "logical_gets": 10850,
+        "physical_GET_attempts": 10850,
+        "queries": 68,
+        "retry_GET_attempts": 0,
+        "sha256": "58074bf49ca579a14c391d716d6db295b1170f36a3ece5b95f9c6cc501fa1ba7",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 2685190528
+      },
+      "admit-A": {
+        "hits": 80,
+        "logical_gets": 1361,
+        "physical_GET_attempts": 1361,
+        "queries": 8,
+        "retry_GET_attempts": 0,
+        "sha256": "5b584a6fdcd37c3e3397029f6e9898f23b82d458574333ab0c2e6e1b12c4183b",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 378192640
+      },
+      "admit-B": {
+        "hits": 79,
+        "logical_gets": 1260,
+        "physical_GET_attempts": 1260,
+        "queries": 8,
+        "retry_GET_attempts": 0,
+        "sha256": "bc37321a3430c4858d621ed2c071b3700c8164b437ef2dfa361650d9f7f4e447",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 282077184
+      },
+      "canary-A": {
+        "hits": 19,
+        "logical_gets": 352,
+        "physical_GET_attempts": 352,
+        "queries": 2,
+        "retry_GET_attempts": 0,
+        "sha256": "58918eb6d1bdeb62fa27ec03e95a2866f52ca3d34b702a4d0315c6c404bcb816",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 145513088
+      },
+      "canary-B": {
+        "hits": 20,
+        "logical_gets": 346,
+        "physical_GET_attempts": 346,
+        "queries": 2,
+        "retry_GET_attempts": 0,
+        "sha256": "49a78c786603ea056c587a323104e1aaff5f3d48de8de58eb87fc9838d8a440c",
+        "transport_or_stream_failures": 0,
+        "verified_bytes": 112306688
+      }
+    },
+    "paired_p95_B_over_A": [
+      0.9877792663481367,
+      1.007355057012229
+    ],
+    "panel_delta_hits": -7,
+    "protocol_sha256": "0fb999f5fcfd87dafc9f25e9f1c33dbd0223167bcf3451bc8c653830c3d1f30f",
+    "provider_cache_eviction_proven": false,
+    "recomputed_checks": {
+      "GET_nonregression": true,
+      "external_wall_5percent": true,
+      "no_process_CPU_regression": true,
+      "no_query_CPU_regression": true,
+      "p95_AB1": false,
+      "p95_AB2": false,
+      "pooled_p90_nonregression": false,
+      "query_wall_10percent": false,
+      "verified_bytes_nonregression": true
+    },
+    "report_sha256": "405448fcff3a08724b25f13af7d89c6a8657f9b957d93b1dd8c93193222f14be",
+    "schema": "borsuk-cold-breadth48-root-verification-v1",
+    "source_cache_bytes": 0,
+    "valid": true,
+    "vendor_win_claim": false,
+    "wall_B_over_A": 0.9056116651706831
+  },
+  "root_publication": {
+    "bytes": 47974,
+    "checksum_HEAD_verified": true,
+    "key": "research/semantic-router/20261019/cold-breadth48-pareto-a0002/root-verification-closure.tar.gz",
+    "put_exit": 0,
+    "sha256": "042af85b388a09b76eb760b9d19531378655199af987b7f478e2388cfe64c3f5"
+  },
+  "root_receipts_prefixes": [
+    "277bf54c",
+    "a39a25d1"
+  ],
+  "root_shutdown_message": "1792411501115726026-2287866",
+  "schema": "borsuk-cold-breadth48-outcome-evidence-v1",
+  "static_checks": {
+    "all_four_intervals_nonoverlapping_within_each_query": true,
+    "authority_arms_equal": true,
+    "config_difference_only_semantic_leaf_limit": true,
+    "relative_document_links_exist": true,
+    "source_unmodified_claim_scope": "matching qualified arms and root preflight; final inherited Git entry comparison is recorded in external handoff",
+    "stage_recomputed_against_all_272_rows": true,
+    "stage_rows": 272
+  },
+  "static_host": "i-0bb6acc848d4d11ee",
+  "static_limits": {
+    "CPUQuota": "100%",
+    "MemoryMax": "512M",
+    "MemorySwapMax": 0,
+    "RuntimeMaxSec": 120,
+    "TasksMax": 128
+  },
+  "status": "HOLD_FOR_ROOT_REVIEW",
+  "terminal": {
+    "archive": {
+      "bytes": 7924487,
+      "key": "research/semantic-router/20261019/cold-breadth48-pareto-a0002/evidence.tar.gz",
+      "sha256": "c92fb4cf6014ff173235e22eae0be77c143376833e24e96006ae83b50fc42532"
+    },
+    "instance": "i-031447f122c124b4e",
+    "native_pipeline_exit": 0,
+    "terminal_epoch": 1792410915.4150102
+  },
+  "termination_UTC": "2026-10-19T11:55:28Z",
+  "termination_evidence": "authenticated opening brief and root message 1792411186195026788-2287866; not independently queried here",
+  "worker_read_receipts": [
+    "a4a5c9ae-a63e-450e-991b-39e2fbaadc4c",
+    "4da5b27d-1db2-444a-9ecb-01ffebbb1a81",
+    "67bf23d9-8117-41b1-9932-05d41bb44c55",
+    "62ef9acc-16e7-464c-b915-06bda2dbca0d",
+    "286468b8-d0b9-42ca-9c6f-dbeefc0b89cb",
+    "ac912101-d1e5-4964-91a2-7ff7d3207932",
+    "7efdc1bc-97e1-443e-8f18-f336b1ada249",
+    "6474858e-2a3f-4ce3-b689-cee378ba6c5e"
+  ]
+}
