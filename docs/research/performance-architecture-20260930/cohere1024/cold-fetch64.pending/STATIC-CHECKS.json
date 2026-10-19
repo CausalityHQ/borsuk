@@ -1,0 +1,141 @@
+{
+  "actual_admission": "ROOT_PENDING",
+  "bare_launch_failclosed": "PASS; no evidence directory created",
+  "bash_syntax": "PASS launch-root.sh/aws-bounded.sh",
+  "eight_case_selfcheck": "PASS; SSM21f873e7-74c8-451d-a377-04a33c48db5b",
+  "frozen_cases": {
+    "A1": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "737d2025c6cbf0bf42cb01f4a20f606aafc20b3dd85dd5bbc95a6a3d15e5552a",
+      "expected_sha256": "aafc2b7ee20f53525e77c13d2ccbf13669e7e7964c0a24c101bd00bc6a5b7ae2"
+    },
+    "A2": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "737d2025c6cbf0bf42cb01f4a20f606aafc20b3dd85dd5bbc95a6a3d15e5552a",
+      "expected_sha256": "aafc2b7ee20f53525e77c13d2ccbf13669e7e7964c0a24c101bd00bc6a5b7ae2"
+    },
+    "B1": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "be09a4ac6c259b6ecf6fafd32a7a96cee76ef4644144cf44ddf51cd3c7666e2a",
+      "expected_sha256": "dc34631cef56ae465359c88561ec302f6e8387b75735949acb8670b6031ca81e"
+    },
+    "B2": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "be09a4ac6c259b6ecf6fafd32a7a96cee76ef4644144cf44ddf51cd3c7666e2a",
+      "expected_sha256": "dc34631cef56ae465359c88561ec302f6e8387b75735949acb8670b6031ca81e"
+    },
+    "admit-A": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "0dcbd9a28f72e309d7cf4417facc7710cd644ec84dfe89ecfd834b3e0bb5e694",
+      "expected_sha256": "8a4860ddb60984426eccacaa6971e027720dd50b8d376dcd6fabffa35d5874fe"
+    },
+    "admit-B": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "eed4ce8ed483ac4e579b448b01062b3406dc2e35196a6cacbc8d47e1110c0a23",
+      "expected_sha256": "324b5b995f73232fafca5bb35a283bb224241186544a2fcbc7f71906860f828b"
+    },
+    "canary-A": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "d4764835323612aa49a75f1d93a7633deb15ede52d065e93a697624973ae059f",
+      "expected_sha256": "050cb5828addb34d1b1b427b6bf850ccd8685887a7a0b54e0c1d2ec80d513935"
+    },
+    "canary-B": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "7755bd0d9b7652d3b8227e1c7907aadb55cddf2b190b49ff83b8af84c9e8d60d",
+      "expected_sha256": "8d4c53e54992c358df0af008b2b4ac887907fd2dc452abda663f05d42ef05b29"
+    }
+  },
+  "inherited_missing_blob_count": 22810,
+  "measurements": "HOLD",
+  "native_or_payload_execution": false,
+  "profile_cap_failclosed": "PASS; no evidence directory created",
+  "python_ast": "PASS",
+  "source_paths_read_on_EC2": true,
+  "startup_cases": {
+    "A1": {
+      "caller_pinned_bytes": 7535674,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471959813,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 312320,
+      "source_authentication_extra_library_bytes": 4865750,
+      "trace_scratch_bytes": 314752
+    },
+    "A2": {
+      "caller_pinned_bytes": 7535674,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471959813,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 312320,
+      "source_authentication_extra_library_bytes": 4865750,
+      "trace_scratch_bytes": 314752
+    },
+    "B1": {
+      "caller_pinned_bytes": 7535674,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471568133,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 174592,
+      "source_authentication_extra_library_bytes": 4611798,
+      "trace_scratch_bytes": 314752
+    },
+    "B2": {
+      "caller_pinned_bytes": 7535674,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471568133,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 174592,
+      "source_authentication_extra_library_bytes": 4611798,
+      "trace_scratch_bytes": 314752
+    },
+    "admit-A": {
+      "caller_pinned_bytes": 7535194,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471959333,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 312320,
+      "source_authentication_extra_library_bytes": 4865750,
+      "trace_scratch_bytes": 314752
+    },
+    "admit-B": {
+      "caller_pinned_bytes": 7535194,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471567653,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 174592,
+      "source_authentication_extra_library_bytes": 4611798,
+      "trace_scratch_bytes": 314752
+    },
+    "canary-A": {
+      "caller_pinned_bytes": 7535146,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471959285,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 312320,
+      "source_authentication_extra_library_bytes": 4865750,
+      "trace_scratch_bytes": 314752
+    },
+    "canary-B": {
+      "caller_pinned_bytes": 7535146,
+      "diagnostic_pinned_bytes": 524288,
+      "fp32_modeled_memory_bytes": 471567605,
+      "query_scratch_bytes": 847232,
+      "range_state_charged_by_library_bytes": 174592,
+      "source_authentication_extra_library_bytes": 4611798,
+      "trace_scratch_bytes": 314752
+    }
+  },
+  "static_only": true,
+  "static_receipts": [
+    "d9f58ab8-dcba-46de-a258-96f27bfa5d36",
+    "21f873e7-74c8-451d-a377-04a33c48db5b"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "base": "6089c79c8fff42023825fa667fce3378d9c301ef",
+  "hooks": "/dev/null",
+  "identity": {
+    "email": "riomus@gmail.com",
+    "name": "Roman Bartusiak"
+  },
+  "missing_count": 22810,
+  "policy": "Preserve inherited missing blobs unchanged; only add assigned packet paths using update-index and write-tree --missing-ok; no fetch/rebuild/repair.",
+  "sorted_missing_blob_ids_sha256": "19fbbbe1bdca675d26efddbf1422f9a48fb83cbc61a75016c4a980f83d3169cf",
+  "sparse_before_checkout": true,
+  "verification": "Base and result tree entries outside assigned directory must be byte-identical; missing set digest audited before and after commit."
+}

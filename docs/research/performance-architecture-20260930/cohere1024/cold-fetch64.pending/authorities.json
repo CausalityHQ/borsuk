@@ -1,0 +1,69 @@
+{
+  "A": {
+    "gate_reuse": "Reuse old packet B qualification; no rebuild; unclassified suite failures retained in original qualification.",
+    "main_commit": "9902a281e4c3e33d30d249244ff764e828dcb8de",
+    "qualification_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-root-verification-a0001/combined-qualification.json",
+    "qualification_sha256": "ab7942782e66f7bbb5f8570f7e33214583a003821db8dfcf0372f5a71c3e1677",
+    "qualified_gate_statuses": {
+      "affected_compile": 0,
+      "focused_tests": 0,
+      "release_runner_reader": 0,
+      "workspace_clippy": 0,
+      "workspace_testbuild": 0
+    },
+    "qualified_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+    "reader_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-repair-a0001/compare_native_replay.elf",
+    "reader_sha256": "fa16dccadc44f974a019f8613122fc5aa88f6f2ac2d5b469d4200fe9f922073e",
+    "runner_path": "/mnt/borsuk-workspace/evidence/cold-source-overlap-root-release-a0001/bin/check_cohere_native_baseline",
+    "runner_sha256": "67055f6d7d1f4911f7a024768d6c87d2ee93fa59e629173e097c4566ce6c9d0b",
+    "source_commit": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+    "source_hashes": {
+      "canonical_source_sha256": "fdbf0294d6bb08724e65f03477393e6c5959dbfb262ff7ede4b128df8c09617f",
+      "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+      "fp32_rerank_source_sha256": "982e689c7e2393f7651dc43edc6714af0821f42cfd562f4ec74a38ce2ad4b746",
+      "generation_source_sha256": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd",
+      "returned_source_sha256": "30e409f8c02fd6bcfca8c9ab312539de0a9017728675f66eeeb22054d4f04a1d",
+      "router_source_sha256": "af47c9de0a014d6f069cf35fbef6af89cf296df38d0824b051f5baa365111161",
+      "runner_source_sha256": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d",
+      "source_capsule_source_sha256": "bac906dd4020caf8e6a092389d3f16bc370d12eadfe7c37b50b982933a88efa0",
+      "source_frame_source_sha256": "3391ae0cc8729358910f123ce7919e4161a3c3f513dfce8f764c59d42f1b484e",
+      "source_plane_source_sha256": "c59a555fe50ea47ff5bfca423f75d8e958a031ad8eb5fb974cb2180fc4c49bcc",
+      "sq8_range_source_sha256": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01"
+    },
+    "source_path": "/mnt/borsuk-workspace/cold-overlap-reader-repair-a0001"
+  },
+  "B": {
+    "gate_reuse": "Reuse old packet B qualification; no rebuild; unclassified suite failures retained in original qualification.",
+    "main_commit": "9902a281e4c3e33d30d249244ff764e828dcb8de",
+    "qualification_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-root-verification-a0001/combined-qualification.json",
+    "qualification_sha256": "ab7942782e66f7bbb5f8570f7e33214583a003821db8dfcf0372f5a71c3e1677",
+    "qualified_gate_statuses": {
+      "affected_compile": 0,
+      "focused_tests": 0,
+      "release_runner_reader": 0,
+      "workspace_clippy": 0,
+      "workspace_testbuild": 0
+    },
+    "qualified_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+    "reader_path": "/mnt/borsuk-workspace/evidence/cold-overlap-reader-repair-a0001/compare_native_replay.elf",
+    "reader_sha256": "fa16dccadc44f974a019f8613122fc5aa88f6f2ac2d5b469d4200fe9f922073e",
+    "runner_path": "/mnt/borsuk-workspace/evidence/cold-source-overlap-root-release-a0001/bin/check_cohere_native_baseline",
+    "runner_sha256": "67055f6d7d1f4911f7a024768d6c87d2ee93fa59e629173e097c4566ce6c9d0b",
+    "source_commit": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+    "source_hashes": {
+      "canonical_source_sha256": "fdbf0294d6bb08724e65f03477393e6c5959dbfb262ff7ede4b128df8c09617f",
+      "codec_source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+      "fp32_rerank_source_sha256": "982e689c7e2393f7651dc43edc6714af0821f42cfd562f4ec74a38ce2ad4b746",
+      "generation_source_sha256": "aad955591318bafddaff2a01dd15048fed7ce99412f7b0a6c22d7ca67b833ffd",
+      "returned_source_sha256": "30e409f8c02fd6bcfca8c9ab312539de0a9017728675f66eeeb22054d4f04a1d",
+      "router_source_sha256": "af47c9de0a014d6f069cf35fbef6af89cf296df38d0824b051f5baa365111161",
+      "runner_source_sha256": "c1ccf0ebe18ad1fc7cd2d0266464d9df8d6bcedda734a8e2cbb18d2d64c64a4d",
+      "source_capsule_source_sha256": "bac906dd4020caf8e6a092389d3f16bc370d12eadfe7c37b50b982933a88efa0",
+      "source_frame_source_sha256": "3391ae0cc8729358910f123ce7919e4161a3c3f513dfce8f764c59d42f1b484e",
+      "source_plane_source_sha256": "c59a555fe50ea47ff5bfca423f75d8e958a031ad8eb5fb974cb2180fc4c49bcc",
+      "sq8_range_source_sha256": "b5cfc024d51a58aa2ea2a6e240dadf6d52d78a25ae8020eb837592808538aa01"
+    },
+    "source_path": "/mnt/borsuk-workspace/cold-overlap-reader-repair-a0001"
+  },
+  "instance": "i-077937fcb9546004c"
+}
