@@ -1,0 +1,125 @@
+{
+  "status": "QUALIFIED_NATIVE_SYNTHETIC",
+  "base": "3623e85b70b59f6884294092861c44f9c80d3cd3",
+  "unit": "fp32-concurrent-final-a0001",
+  "unit_state": "RuntimeMaxUSec=infinity\nMainPID=0\nExecMainStatus=0\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=70273\nActiveState=inactive\n",
+  "launch_ssm": "038cd0df-b7fd-4100-8668-0dfcc06d2fe7",
+  "freeze_utc": "Mon Oct 19 20:25:43 UTC 2026",
+  "patch_sha256": "4f16b07f2dc033f450e1bf254ad6e9e416ce351d5f883546db08bc96abf12672",
+  "source_hash_manifest": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/final-files.sha256",
+  "source_hash_manifest_sha256": "dc0b2afeb2ca0bbf415c92e78f07edeeafe474cc7ad34acc21089f400c1b246d",
+  "review_group": "bac360816a6941de",
+  "frozen_review_patch_sha256": "b0ce691f291a4f30787c0f88f11c33b9cb4d8f730a4e26882735a4aedeb3ac4f",
+  "review_resolution": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/review-resolution.txt",
+  "review_resolution_sha256": "d32963af5a6dcf18eea45f9a735ba11b8f4f86103af0a173bdd52ce8a0bf8977",
+  "gates": {
+    "runner-tests": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/runner-tests.log",
+      "sha256": "450f2a17505cb00096d2e5414b4c3b3bafe4d4596c70fa79a526f6576781bf80",
+      "results": [
+        "test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 125.79s"
+      ]
+    },
+    "library-read-retry": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/library-read-retry.log",
+      "sha256": "e445efc688b7ffd729a1eec2a7d1353f3a8983e9c30291571dc7c8ef1e2844a6",
+      "results": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2079 filtered out; finished in 1.76s"
+      ]
+    },
+    "library-fp32": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/library-fp32.log",
+      "sha256": "c0eb57de468161a2528c07ca6a6c767a14df2454d5e5e590f5f015edb346b115",
+      "results": [
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 2071 filtered out; finished in 3.02s"
+      ]
+    },
+    "reader-fp32": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/reader-fp32.log",
+      "sha256": "fcbb2223b47d186b49c25f3b00a4fd844757915fd7380d541c51c93351cf7f62",
+      "results": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 397 filtered out; finished in 58.91s"
+      ]
+    },
+    "reader-concurrent": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/reader-concurrent.log",
+      "sha256": "c94f067bb00a6f93e16c32778d5eee58eb7f49c9be200449779e50468582f33e",
+      "results": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 409 filtered out; finished in 7.96s"
+      ]
+    },
+    "reader-current": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/reader-current.log",
+      "sha256": "3832f967bb49df3a8286ff705c29e6555a287e58a01af3e7e2cdc05014b2cc6d",
+      "results": [
+        "test result: ok. 21 passed; 0 failed; 1 ignored; 0 measured; 392 filtered out; finished in 12.47s"
+      ]
+    },
+    "clippy": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/clippy.log",
+      "sha256": "45263cf68d7980b8b89b65dded14864f3cbf07b4e9f5f13440e3fc6e893884db",
+      "results": []
+    },
+    "test-build": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/test-build.log",
+      "sha256": "aeb0fbbb631883282f6990439eeec374f452c7a4cd5920715a60459d1b9ad5d4",
+      "results": [
+        "rust-test-build status=0 elapsed_seconds=108 jobs=6",
+        "started_at=2026-10-19T20:30:06Z",
+        "finished_at=2026-10-19T20:31:54Z"
+      ]
+    },
+    "release-runner": {
+      "status": "PASS",
+      "exit": 0,
+      "log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/release-runner.log",
+      "sha256": "743fb799cf963fefbfebe331bdbba39040138a78d9c6d34e3c329bcbb69dd238",
+      "results": []
+    }
+  },
+  "scope": "four Rust files; existing library slot/FP32 math unchanged",
+  "limitations": [
+    "Native synthetic checks only; actual input/S3/ANN/performance screen remains root-owned HOLD.",
+    "One historical actual producer ABBA test requires root external files and is ignored by its existing test annotation.",
+    "Exact-parent runtime baseline not executed; original historical authoring code unchanged proof supplied by root.",
+    "All original failed attempts and review artifacts preserved."
+  ],
+  "continuation_commands": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/recipe.txt",
+  "release_binaries": {
+    "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline": "afcbbfbd616d7c35aa29beb71968435f4b0e6142c526f11051796ccb21076648",
+    "/mnt/borsuk-workspace/target/release/examples/compare_native_replay": "cea18d35d66862cc4723d3c4b25aa8abe5bb2bc87e6577c5f2f9a6941d0fb545"
+  },
+  "native_exit": 0,
+  "terminal_receipt": "619bcf11-66d4-4670-aea3-d1cbaa81ed62",
+  "resource_guard": {
+    "live_ssm_receipt": "40a83ec3-4917-4a75-ae21-c7448285c21c",
+    "MainPID": 13029,
+    "AllowedCPUs": "0-7",
+    "CPUQuotaPerSecUSec": "8s",
+    "MemoryMax": 25769803776,
+    "MemorySwapMax": 0,
+    "TasksMax": 1024,
+    "RuntimeMaxUSec": "30min",
+    "flocks": [
+      "/mnt/borsuk-workspace/cargo-target.lock",
+      "/mnt/borsuk-workspace/native-benchmark.lock"
+    ]
+  },
+  "terminal_unit_note": "Transient unit was collected after completion; inactive systemctl resource defaults are not execution limits. Limits were read while active in the live SSM receipt above. Native final.exit and final.log independently record exit0 at20:34:40 UTC; terminal MainPID0 and no rustc processes."
+}

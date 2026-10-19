@@ -1,0 +1,16 @@
+{
+  "schema": "borsuk-fp32-concurrency-decision-v1",
+  "disposition": "RETAIN_OPT_IN_THROUGHPUT_LATENCY_PARETO_CANDIDATE",
+  "default": "Q1",
+  "Q1_aggregate_qps": 6.251949994192945,
+  "Q2_aggregate_qps": 7.553614042637018,
+  "Q2_throughput_change_percent": 20.82012891422853,
+  "all_measurement_hits": 320,
+  "all_measurement_denominator": 320,
+  "exact_answers_scorebits_plans_charges": true,
+  "fixed32_exploratory_only": true,
+  "provider_cache_eviction_proven": false,
+  "vendor_win": false,
+  "execution_failure_preserved": "a0001 checkpoint local-profile error; completed native cells retained; a0002 no native repetition",
+  "next_falsifier": "Same-source Full1000 Q1/Q2 paired throughput and per-query tails, reuse native assurance; preserve Q1 default and separately qualify larger concurrency only if useful."
+}

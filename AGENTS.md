@@ -173,3 +173,9 @@ Assign one bounded end-to-end source, test and evidence packet per hypothesis.
 The root owns heavy execution, qualification and integration. Reuse unchanged
 qualified machinery; avoid routine new consultations and tiny handoff chains.
 Preserve original job handles, scientific validity gates and immutable evidence.
+
+## Specialist lifecycle and continuous autoresearch
+
+Contextless specialists and critique reviewers are short-lived: one bounded task iteration per fresh session. Supply the task, relevant code, facts, constraints and checks, without inherited conversation, root reasoning or a preferred verdict. Bounded corrections to the same deliverable may remain in that assignment. After verifying the handoff and original jobs are terminal, finish/archive through the supported lifecycle. Do not retain specialists as persistent researchers, reuse their accumulated history for another iteration, or leave them polling after handoff.
+
+Autoresearch is a continuous root-owned loop: form a falsifiable hypothesis, run the cheapest valid test, record quality/time/memory and the decision, retain useful gains and Pareto candidates, then choose the next useful iteration. A negative result or handoff is not a stopping point. Root retains continuity, integration and experiment authority, and prepares independent authorized work during original jobs. Use simulated task-relevant expert/stakeholder arguments, objections and predictions to generate falsifiable options; verify claims against source and measurements. Never present simulated views as testimony or consensus. Preserve validity, operational ceilings and original handles; do not repeat failed work merely to keep compute busy.
