@@ -1,0 +1,803 @@
+{
+  "schema": "borsuk-matched-s3vectors-current-gate-v1",
+  "status": "REUSE_CLOSED_DESCRIPTIVE_EVIDENCE_CURRENT_MATCHED_EXECUTION_BLOCKED",
+  "as_of_utc": "2026-10-19",
+  "authority": {
+    "worker": "borsuk/matched-s3vectors-current-gate",
+    "parent": "borsuk/prod-ready-v9",
+    "execution_authorized": false,
+    "vendor_win": false,
+    "production_ready": false,
+    "host_extension_authorized": false,
+    "current_host_horizon_utc": "2026-10-20T00:30:00Z",
+    "horizon_basis": "opening assignment; guest timer not inspected",
+    "worker_scope": "EC2 SSM source/metadata only; no payload/native/compiler/vendor/API/infra operations",
+    "instance": "i-00ab8447977a3e14d",
+    "profile": "causality",
+    "region": "eu-central-1",
+    "limits": {
+      "cpu": 1,
+      "memory_bytes": 536870912,
+      "swap_bytes": 0,
+      "tasks": 128,
+      "seconds_per_command": 120
+    }
+  },
+  "source": {
+    "base_commit": "b3bcfce57a4e42b6d402423f9691767a042b6802",
+    "crates_tree": "0f73631f67df77e20f186ffcdeaa27958c5aa3a1",
+    "same_crates_as": "71aad360",
+    "pending_packet_commit": "3928ab42e156a7e78fc098736c68beee1869f047",
+    "executed_packet_commit": "e8b5653f27b3588c504c15afed93dcb95f662146",
+    "executed_sdk_commit": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+    "executed_full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+    "pending_full_config_sha256": "9ad311cfe96e170fca87fdd59305471f94c230f071e58f73109052525fdfe6b3",
+    "current_sdk_source_sha256": "ae4633ecbb7230e7f669dd017ee27f2f319aa5499a6f12bdf4e77b91905f10f2",
+    "qualified_sdk_source_sha256": "778aad02428e91044368f0d38ac4ac19d85d6bbb2fca89235b58de6a60a2fb1c",
+    "current_sdk_diff": "627 insertions,77 deletions versus qualified SDK; includes eight in-flight publication and PUT pacing; old ELF is not current source",
+    "current_native_runner_source_sha256": "6b7f6a727ffefec33af2722df72692c93b26dc6a8ef274683bb56e2618848a20",
+    "current_reader_source_sha256": "250b574a4700631f758b563c77f376fc96b49f234806db3d1a0116e362aff653",
+    "current_source_elf_qualified_by_this_gate": false,
+    "measured_native_crates_tree": "ab0730bfc49fe9587705275a464cb54f3813c1d2",
+    "crates_delta_from_measured": [
+      "crates/borsuk/src/bin/hierarchical_semantic_cells.rs",
+      "crates/borsuk/src/fine_sq8_groups.rs",
+      "crates/borsuk/src/hierarchical_semantic_cells.rs"
+    ],
+    "inherited_missing_objects": "Observed .github/workflows/pages.yml blob7130c20932a0921b5ff35112fe94655dd8a927f7 warning during sparse setup; no repair/fetch; own index clean before edits"
+  },
+  "cohort": {
+    "dataset": "CohereLabs/wikipedia-2023-11-embed-multilingual-v3",
+    "revision": "ade45fb52bd549f5e8c065636fe4160a43c2af36",
+    "dimensions": 1024,
+    "rows": 1000000,
+    "queries": 1000,
+    "k": 10,
+    "metric": "cosine",
+    "corpus_intervals": [
+      {
+        "end": 100000,
+        "start": 0
+      },
+      {
+        "end": 1001000,
+        "start": 101000
+      }
+    ],
+    "query_interval": {
+      "end": 101000,
+      "start": 100000
+    },
+    "artifacts": [
+      {
+        "bytes": 4096000000,
+        "name": "corpus.f32",
+        "sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38"
+      },
+      {
+        "bytes": 4096000,
+        "name": "queries.f32",
+        "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+      },
+      {
+        "bytes": 200873446,
+        "name": "corpus.ids.jsonl",
+        "sha256": "008191ae3103d78db682276008190cc858a361b19e487f6780c02cea5dd70067"
+      },
+      {
+        "bytes": 196017,
+        "name": "queries.ids.jsonl",
+        "sha256": "f0e6e974c3dfe45fae7db3a9a5146891541d1f3c0d605674d115b6c580a87f68"
+      },
+      {
+        "bytes": 80000,
+        "name": "truth.u64",
+        "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f"
+      }
+    ],
+    "logical_ids": "compact corpus ordinal0..999999; original source ordinal i for i<100000 else i+1000; query source ordinal100000+q",
+    "sdk_keys": "six-digit zero-padded decimal logical corpus ordinal",
+    "truth_arithmetic": "sequential f64 dot and squared-norm sums over original f32; 1-dot/(sqrt(cnorm2)*sqrt(qnorm2))",
+    "truth_method": "independent single corpus block-major exhaustive scan with bounded per-query top-k heaps; no ANN inputs",
+    "truth_ties": "ascending corpus ordinal",
+    "derived_outputs": {
+      "normalized": {
+        "bytes": 4096000000,
+        "sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d"
+      },
+      "source_order": {
+        "bytes": 8000000,
+        "sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413"
+      },
+      "sq8": {
+        "bytes": 1036000000,
+        "sha256": "cc4395af5fdbdeffcb596460aceaad0e55bdcc4af074f405e78ab2dd2be002e1"
+      }
+    },
+    "cohort_receipt_sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17",
+    "derivation_receipt_sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e",
+    "normalization": {
+      "schema": "borsuk-raw-normalization-followup-v1",
+      "status": "VERIFIED_EXISTING_NATIVE_EXECUTION",
+      "original_wrapper_exit": 1,
+      "original_native_exit": 0,
+      "wrapper_failure": "final source verification ran from wrong working directory; corrected here without native rerun",
+      "rows": 1000000,
+      "dimensions": 1024,
+      "raw_sha256": "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38",
+      "normalized_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+      "native_source_commit": "7acbbb82d48078f46c0a163614db39eeee15afc7",
+      "new_source_bound_execution": true,
+      "original_producer_elf_recovered": false,
+      "independent_arithmetic_implementation": false,
+      "raw_and_executable_stamps_unchanged": true,
+      "output_independent_sha256_readback": true,
+      "query_or_truth_used": false,
+      "ann_quality_or_performance_claim": false
+    },
+    "shared_payloads_opened_by_worker": false
+  },
+  "native_closed": {
+    "authority": {
+      "qualification_complete": true,
+      "all_owned_compiler_processes_terminal": true,
+      "instance_id": "i-09f8571d0edf296e9",
+      "commit": "0cddd79569db2f92bf2079f1d9bbc3b90759a895",
+      "runner_path": "/mnt/borsuk-workspace/evidence/fp32-concurrency-screen-root-a0001/bin/check_cohere_native_baseline",
+      "runner_sha256": "afcbbfbd616d7c35aa29beb71968435f4b0e6142c526f11051796ccb21076648",
+      "reader_path": "/mnt/borsuk-workspace/evidence/fp32-concurrency-screen-root-a0001/bin/compare_native_replay",
+      "reader_sha256": "cea18d35d66862cc4723d3c4b25aa8abe5bb2bc87e6577c5f2f9a6941d0fb545",
+      "runner_source_sha256": "6b7f6a727ffefec33af2722df72692c93b26dc6a8ef274683bb56e2618848a20",
+      "qualification_sha256": "4d776d81d8f8038eef11aab83513c123c046e333e55acbef5ceeaca9390cbecd",
+      "main_commit": "afab20a8c2f58d326c4502065a80e61f2a9be680",
+      "main_crates_tree": "ab0730bfc49fe9587705275a464cb54f3813c1d2"
+    },
+    "gold_authority": {
+      "schema": "borsuk-fp32-full1000-gold-authority-v1",
+      "gold_path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/gold-full1000.json",
+      "gold_bytes": 48684516,
+      "gold_sha256": "ce13a10a30f0cbaafe2a8aaefdeea54a5e1118ed3bf812168d371d690c18f74c",
+      "records": 1000,
+      "ordinals": "0..999",
+      "source_path": "/mnt/borsuk-workspace/evidence/cold-source-overlap-full1000-a0002/B1.jsonl",
+      "source_bytes": 50434430,
+      "source_sha256": "69b56a0464d9db152625b32051438fdc644785f6dc18564f68e0980a06e6b8b1",
+      "source_completed_measured": true,
+      "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+      "historical_quality_reference_only": true,
+      "cross_source_timing_comparison": false,
+      "gold_schema": "borsuk-historical-gold-full1000-v1",
+      "draft_label_correction_only": true
+    },
+    "configuration": {
+      "schema": "borsuk-cohere-native-baseline-config-v21",
+      "result_schema": "borsuk-cohere-native-baseline-result-v22",
+      "reader_config_schema": "borsuk-completed-native-reduction-config-v4",
+      "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+      "source_layout": {
+        "layout": "flat_records"
+      },
+      "serving": {
+        "coalesce": false,
+        "max_fp32_bytes": 65664,
+        "max_fp32_gets": 16,
+        "max_parallel_fp32_gets": 16,
+        "mode": "fp32_rerank",
+        "shortlist": 16
+      },
+      "source_authentication": "offload2",
+      "query_runtime": "multi_thread2",
+      "semantic_leaf_limit": 64,
+      "fetch_parallelism": 64,
+      "application_cache_bytes": 0,
+      "modeled_memory_cap_bytes": 2147483648,
+      "measured_outer_cpu": 8,
+      "measured_outer_memory_bytes": 8589934592
+    },
+    "result": {
+      "admission_and_canary_pass": true,
+      "application_cache_bytes": 0,
+      "measured": {
+        "A1": {
+          "cohort_cpu_ns": 137813210861,
+          "cohort_qps": 5.041885629509929,
+          "denominator": 10000,
+          "full1000": true,
+          "gold_exact": true,
+          "hits": 9902,
+          "independent_f64_oracle": true,
+          "queries": 1000,
+          "query_cohort_elapsed_ns": 198338493469,
+          "query_wall_ms": {
+            "0.5": 180.153527,
+            "0.9": 255.40709,
+            "0.95": 281.836025,
+            "0.99": 392.072493
+          },
+          "raw_bytes": 49975431,
+          "raw_sha256": "85adb7108f1205c89b026047714fb81d031436d49efd6d6dc5a38b0afd79a9ed",
+          "scratch_cleanup": true,
+          "sdk_native_transport_scope": "S3_and_IMDS_not_wire_or_billed",
+          "source_cache_bytes": 0,
+          "strict_reader_exit": 0
+        },
+        "A2": {
+          "cohort_cpu_ns": 139378970668,
+          "cohort_qps": 5.396326018040434,
+          "denominator": 10000,
+          "full1000": true,
+          "gold_exact": true,
+          "hits": 9902,
+          "independent_f64_oracle": true,
+          "queries": 1000,
+          "query_cohort_elapsed_ns": 185311264860,
+          "query_wall_ms": {
+            "0.5": 166.96651,
+            "0.9": 232.826204,
+            "0.95": 257.028206,
+            "0.99": 354.131599
+          },
+          "raw_bytes": 49975382,
+          "raw_sha256": "d76fec969c6e12c151218c712a7ed9d8269bcb9105714d1048e288065fd41825",
+          "scratch_cleanup": true,
+          "sdk_native_transport_scope": "S3_and_IMDS_not_wire_or_billed",
+          "source_cache_bytes": 0,
+          "strict_reader_exit": 0
+        },
+        "B1": {
+          "cohort_cpu_ns": 135265214889,
+          "cohort_qps": 6.399884656138339,
+          "denominator": 10000,
+          "full1000": true,
+          "gold_exact": true,
+          "hits": 9902,
+          "independent_f64_oracle": true,
+          "queries": 1000,
+          "query_cohort_elapsed_ns": 156252816063,
+          "query_wall_ms": {
+            "0.5": 223.601666,
+            "0.9": 387.928417,
+            "0.95": 411.045252,
+            "0.99": 465.470189
+          },
+          "raw_bytes": 49977012,
+          "raw_sha256": "7a1bed14490d4b068cc037a94a42a4b3f36f0b6b932f0774ce5f6dae23632c63",
+          "scratch_cleanup": true,
+          "sdk_native_transport_scope": "S3_and_IMDS_not_wire_or_billed",
+          "source_cache_bytes": 0,
+          "strict_reader_exit": 0
+        },
+        "B2": {
+          "cohort_cpu_ns": 136711226255,
+          "cohort_qps": 6.266287726191765,
+          "denominator": 10000,
+          "full1000": true,
+          "gold_exact": true,
+          "hits": 9902,
+          "independent_f64_oracle": true,
+          "queries": 1000,
+          "query_cohort_elapsed_ns": 159584118013,
+          "query_wall_ms": {
+            "0.5": 227.245469,
+            "0.9": 389.531714,
+            "0.95": 415.029013,
+            "0.99": 453.723654
+          },
+          "raw_bytes": 49977199,
+          "raw_sha256": "68227ec46627becbc5fe4c5191987795134fc1c33816ec7881d93d42adb9f943",
+          "scratch_cleanup": true,
+          "sdk_native_transport_scope": "S3_and_IMDS_not_wire_or_billed",
+          "source_cache_bytes": 0,
+          "strict_reader_exit": 0
+        }
+      },
+      "no_overlapping_query_cpu_or_transport_sums": true,
+      "population_tail_claim": "frozen_1000_query_cohort_only",
+      "provider_cache_eviction_proven": false,
+      "schema": "borsuk-cold-fp32-concurrency-full1000-v1",
+      "source_commit": "0cddd79569db2f92bf2079f1d9bbc3b90759a895",
+      "status": "VALID_MATCHED_FULL1000_PAIR",
+      "vendor_win": false
+    },
+    "decision": {
+      "schema": "borsuk-fp32-full1000-decision-v1",
+      "status": "RETAIN_OPT_IN_THROUGHPUT_LATENCY_MEMORY_PARETO_CANDIDATE",
+      "native_runner_default": "Q1",
+      "public_library_concurrency_is_caller_bounded": true,
+      "mean_recall": 0.9902,
+      "identical_answers_scorebits_plans_charges": true,
+      "query_hit_histogram": {
+        "3": 1,
+        "7": 4,
+        "8": 9,
+        "9": 61,
+        "10": 925
+      },
+      "p05_query_recall": 0.9,
+      "minimum_query_recall": 0.3,
+      "aggregate_cohort_qps": {
+        "Q1": 5.213088126814077,
+        "Q2": 6.332381631841509
+      },
+      "Q2_throughput_change_percent": 21.470834135149673,
+      "Q1_p95_ms": [
+        281.836025,
+        257.028206
+      ],
+      "Q2_p95_ms": [
+        411.045252,
+        415.029013
+      ],
+      "Q1_RSS_bytes": [
+        172122112,
+        157753344
+      ],
+      "Q2_RSS_bytes": [
+        235278336,
+        231743488
+      ],
+      "Q1_model_bytes": 615933009,
+      "Q2_model_bytes": 871591014,
+      "logical_GETs_per_1000": 169024,
+      "verified_bytes_per_1000": 51077441536,
+      "application_cache_bytes": 0,
+      "provider_cache_eviction_proven": false,
+      "billed_cost_measured": false,
+      "vendor_win": false,
+      "production_ready_claim": false,
+      "same_source_ABBA": true,
+      "repetition_scope": "two matched repetitions per arm on the frozen1000 query cohort; not a population confidence interval",
+      "next_step": "Generic library runtime release-surface gate; primary-source research selects one cheap cold-tail/quality falsifier from source and completed stage evidence. Preserve Q1 and Q2 tradeoffs."
+    },
+    "evidence_is_previous_qualified_source_not_new_b3bc_timing": true
+  },
+  "sdk_closed": {
+    "verification": {
+      "schema": "borsuk-matched-sdk-full-root-verification-v1",
+      "status": "VALID_OBSERVED_SERVICE_BASELINE",
+      "instance": "i-08f0d6520a3cb73df",
+      "original_full_invocation": "96475bf14fcc4a4a93c0d6d414d4a2f6",
+      "original_launch_ssm": "55f98001-5cdc-4ff6-8130-e168e590464f",
+      "original_terminal_observation_ssm": "61c5c5d3-faa1-4f76-b13b-01dbd7a2dac8",
+      "phases": {
+        "publication": 0,
+        "idle": 0,
+        "measure": 0,
+        "reduce": 0,
+        "cleanup": 0,
+        "drain": 0,
+        "pipeline": 0,
+        "runner": 0
+      },
+      "independent_verify_invocation": "ef63c9dedafc4c51badaa2f991a70aa8",
+      "independent_verify_launch_ssm": "7d49309a-909b-47c3-b7cc-033978644146",
+      "independent_verify_terminal_ssm": "2d20dd76-35e3-4754-8ad2-37c36c10eddf",
+      "independent_verify_exit": 0,
+      "bucket_absent": true,
+      "index_absent": true,
+      "query_count": 1000,
+      "recall_hits": 9617,
+      "recall_denominator": 10000,
+      "recall_at_10": 0.9617,
+      "p90_ns": 192992818,
+      "p95_ns": 205998414,
+      "p99_ns": 233462297,
+      "first_query_ns": 393524204,
+      "sum_query_ns": 133627770211,
+      "whole_pass_ns": 138430292380,
+      "serial_reciprocal_qps": 7.483474418685479,
+      "whole_pass_qps": 7.223852401141624,
+      "service_mode": "ENHANCED",
+      "publication_rows_bitexact": 1000000,
+      "publication_calls": {
+        "put": 2000,
+        "list": 2000,
+        "get": 10000
+      },
+      "query_rpc_count": 1000,
+      "all_queries_sealed_before_truth": true,
+      "unconfirmed_reservations": 0,
+      "observed_transmits_after_cleanup": 15013,
+      "all_observed_attempts_preregistered_max": 22000,
+      "external_memory_limit_bytes": 8589934592,
+      "external_cpu_limit": 4,
+      "isolated_query_process_rss_bytes": null,
+      "dollar_cost": null,
+      "vendor_win": false,
+      "guaranteed_backend_cold": false,
+      "concurrent_capacity_claim": false,
+      "turbopuffer_measured": false,
+      "reduction_sha256": "07131103f2b1744b8784eb0f6b186ba4f7bfca21e6925ba113e06a01cd04e920",
+      "full_config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+      "binary_sha256": "7240cde309d2995a2f8dcbb5ee2259873c3da1be47784e28f419e04e0714c3da",
+      "source_execution_commit": "e8b5653f27b3588c504c15afed93dcb95f662146",
+      "compiled_sdk_source_commit": "ab9243bf7174d087061f80dd7852e0afe8ffecec",
+      "failed_original_canary_verifier_preserved": true,
+      "corrected_canary_verifier_passed": true,
+      "future_pipeline_source_not_used": true,
+      "infrastructure_termination": "PENDING_AFTER_ARCHIVE"
+    },
+    "reduction": {
+      "all_queries_sealed": true,
+      "billed_bytes": null,
+      "billed_requests": null,
+      "calls_at_measurement_seal": {
+        "accounting": "all reservations consume allowance; only captured transmits count as observed; credentials excluded",
+        "max_reserved_calls": 22000,
+        "observed_transmit_attempts": 15005,
+        "reserved_calls": 15005,
+        "scope": "all commands for this config",
+        "unconfirmed_reservations": 0
+      },
+      "concurrent_service_capacity_claim": false,
+      "config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+      "cost_usd": null,
+      "first_query_ns": 393524204,
+      "guaranteed_cold_claim": false,
+      "hits": 9617,
+      "index_arn": "arn:aws:s3vectors:eu-central-1:453182569524:bucket/borsuk-s3v-76e40c144cc74c87b7f96d58986fa001/index/baseline-76e40c144cc74c87b7f96d58986fa001",
+      "mode": "scale-measurement",
+      "observed_inactivity_ms": 3605561,
+      "percentile_method": "integer nearest rank",
+      "pooled_condition": "cache-uncontrolled first pass; backend cache state unknown",
+      "pooled_p50_ns": 127514390,
+      "pooled_p90_ns": 192992818,
+      "pooled_p95_ns": 205998414,
+      "pooled_p99_ns": 233462297,
+      "query_count": 1000,
+      "recall_at_10": 0.9617,
+      "recall_denominator": 10000,
+      "response_sha256": "37626f0fc4f0ee73843a31d84ee4580871162dbb4b3556226e620e5dc6c661eb",
+      "schema": "borsuk-s3-vectors-reduction-v1",
+      "serial_reciprocal_qps": 7.483474418685479,
+      "status": "VALID",
+      "sum_query_ns": 133627770211,
+      "truth_opened_after_seal": true,
+      "underfilled_queries": 0,
+      "whole_pass_ns": 138430292380,
+      "whole_pass_qps": 7.223852401141624
+    },
+    "observed_mode": "ENHANCED",
+    "independent_absence": {
+      "config_sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1",
+      "bucket": "borsuk-s3v-76e40c144cc74c87b7f96d58986fa001",
+      "index": "baseline-76e40c144cc74c87b7f96d58986fa001",
+      "bucket_absent": true,
+      "index_absent": true
+    },
+    "actual_outer_cpu": 4,
+    "actual_outer_memory_bytes": 8589934592,
+    "legacy_emitted_512MiB_is_not_external_cap": true,
+    "failed_original_canary_verifier_preserved": true,
+    "corrected_canary_verifier": "verify-canary-a0002; NotFoundException, CLI254; distinct receipt",
+    "reexecute_original_modes": false
+  },
+  "comparison": {
+    "kind": "same fixed logical cohort and query/truth, disclosed raw-to-normalized representation; descriptive cross-run quality only",
+    "native_hits": 9902,
+    "sdk_hits": 9617,
+    "denominator": 10000,
+    "hit_difference": 285,
+    "recall_percentage_point_difference": 2.85,
+    "historical_rust48_hits": 9783,
+    "strict_latency_matched": false,
+    "strict_throughput_matched": false,
+    "lifecycle_cost_qualified": false,
+    "guaranteed_backend_cold": false,
+    "turbopuffer_measured": false,
+    "billed_dollars": null
+  },
+  "gaps": [
+    "No exact b3bc release ELF/current-source execution qualification established by this static gate; native runner text matches old qualification but whole crates tree differs.",
+    "Old SDK source and ELF are qualified together; current SDK publication implementation differs. Never substitute current source under the old ELF pin.",
+    "3928 packet host, horizon, resource limits, config hashes and verifier exception are superseded by executed e8b5653 packet. Both consumed full and canary state must remain immutable.",
+    "Semantic raw/normalized linkage is evidenced; original normalization producer ELF and independent arithmetic proof are absent. No bit-identical corpus representation claim.",
+    "No balanced current-source cross-system run: Q1 vs Q2, clocks, initial credentials/pool, retry policy, 8CPU vs4CPU, process RSS and uncontrollable provider cache require frozen treatment.",
+    "No billed lifecycle costs or ENHANCED regional price/charge reconciliation; no Turbopuffer evidence."
+  ],
+  "recovery": {
+    "immediate": "Use existing metadata and qualified closed receipts; no new service run, native reduction or data scan needed for descriptive quality.",
+    "immediate_limits": {
+      "wall_seconds": 120,
+      "cpu": 1,
+      "memory_bytes": 536870912,
+      "swap_bytes": 0,
+      "tasks": 128,
+      "new_vendor_calls": 0,
+      "additional_vendor_cost_usd": 0,
+      "new_host_cost_usd": 0
+    },
+    "smallest_prospective_cell": "One full fixed1000 Q1 pass per system with common client envelope, explicit timer boundaries, cache disclosures, same input pins and sealed complete outputs; diagnostic canary cannot establish quality/tails. Repetitions/order remain necessary for a vendor-win study.",
+    "prospective_planning_ceiling_only": {
+      "authorized": false,
+      "total_wall_seconds": 21600,
+      "cpu": 4,
+      "memory_bytes": 8589934592,
+      "swap_bytes": 0,
+      "tasks": 512,
+      "borsuk_modeled_memory_bytes": 2147483648,
+      "sdk_full_reserved_calls_max": 22000,
+      "budget_usd_max_proposed": 10,
+      "budget_is_estimate": false,
+      "budget_meaning": "Proposed all-in admission ceiling, not cost estimate or grant; root must bind actual ENHANCED prices, EC2/EBS/network and cleanup reserve below it, or do not start. No new spend authorized by this document.",
+      "rates_verified": false,
+      "fits_current_0030_host": false,
+      "sdk_gates_runtime_plus_stop_seconds": 2750,
+      "sdk_full_runtime_plus_stop_seconds": 14250,
+      "independent_verification_seconds_each": 135,
+      "native_full_plus_reader_seconds": 730,
+      "cleanup_recovery_runtime_plus_stop_seconds": 665
+    },
+    "dependencies": [
+      "Root-owned current-source qualification or explicit historical-qualified-source designation; no compiler-lock intervention by worker",
+      "Fresh root-bound config, state, resource identities, manifest, host horizon and actual safe CPU affinity; never edit/reuse consumed run",
+      "Retain qualified SDK source/ELF and original terminal/ownership/absence receipts",
+      "Independent expected headers and existing fp32 strict reader plus retained gold/oracle machinery",
+      "Root frozen quality target and first-query/timer/retry/cache/repetition treatment",
+      "Root cost authorization, rates, lifecycle ledger and cleanup reserve; no timer extension inferred"
+    ]
+  },
+  "simulated_perspectives": [
+    {
+      "perspective": "retrieval",
+      "objection": "Cosine scale invariance does not prove identical finite-precision scores/ties; physical row ids are not service keys.",
+      "prediction": "Same queries/truth and authenticated derivation preserve the reported logical-cohort comparison; changing raw/normalized pins or logical id mapping must fail admission.",
+      "evidence": "cohort/derivation/normalization receipts; sq8_source.rs22-37; SDK key()/ordinal()"
+    },
+    {
+      "perspective": "systems",
+      "objection": "A source-compatible CLI is not an authenticated current ELF; startup and retries alter end-to-end clocks.",
+      "prediction": "The 3928 wrapper rejects this host/horizon/current SDK hash before service work; old qualification cannot admit the new publication implementation.",
+      "evidence": "run.sh preflight; current versus qualified source SHA; full argv and executed packet"
+    },
+    {
+      "perspective": "statistics",
+      "objection": "1000 correlated queries and one SDK pass do not provide population tail confidence or equal-recall performance frontier.",
+      "prediction": "Existing metadata proves +285 aggregate hits only; it cannot produce paired per-query uncertainty or a balanced tail-latency win.",
+      "evidence": "SDK response seal/reduction; native result/decision and histogram"
+    }
+  ],
+  "simulations_are_expert_evidence": false,
+  "metadata_witnesses": [
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/canary.sha256",
+      "bytes": 65,
+      "sha256": "7ef5bb4b3f3c35ccaec782ff86f6b5cec6ae0c1e9ad4312ae54bfe0097cb51d1"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/manifest.sha256",
+      "bytes": 1219,
+      "sha256": "2a7048ad76db3e27896891e7757ae1f3d6c9f199500a451245a1f2b49e090dd2"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/protocol.json",
+      "bytes": 5641,
+      "sha256": "1dd831a79674cf25e16e2cb391c8f522351fe200294bdf08c4109ab47e0e9f5e"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/raw-recovery.json",
+      "bytes": 234,
+      "sha256": "9ff7cc36b896c96622c07fc47743cd5a20a8b9098159c214ee7e2d22fe76df8c"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/PROTOCOL.md",
+      "bytes": 11227,
+      "sha256": "4be05236ce07b13d0e025c7cb817aaa516895784f06f5d732584b23a52bf3add"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/normalization.json",
+      "bytes": 872,
+      "sha256": "659bb97e1566ab77424bde024c216164f915712289dd0539b912697beb52da99"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/rust48-bindings.json",
+      "bytes": 7525,
+      "sha256": "c50cb618a250e418086359d0afd5890e8524debc9a95340bd49f8513cadb64c9"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/aws.config",
+      "bytes": 82,
+      "sha256": "9321115ae4e3749ee8a5d941b13a5c3dcf77c9cf6ad96097b6e27d065f30050a"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/run.sh",
+      "bytes": 13821,
+      "sha256": "c1d6864e739c3ca220dc3ed795094236e101ea5b2b2da7b0d13a508e1d799144"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/qualification.json",
+      "bytes": 2185,
+      "sha256": "5b72bdeee1e46b9fef3642818e957816bc3785ddbecabc34300b9e20ab2f76da"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/full.sha256",
+      "bytes": 65,
+      "sha256": "58d2a484160fb4ff8e57c54eac5be00bf53493d2b2cdb76e3ebed2eb5e383651"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/full.json",
+      "bytes": 1307,
+      "sha256": "9ad311cfe96e170fca87fdd59305471f94c230f071e58f73109052525fdfe6b3"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/cohort.json",
+      "bytes": 6238,
+      "sha256": "e0503d41493157a6a0a48627515e62ec452386d0496827028bb9571d406e3a17"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/derivation.json",
+      "bytes": 23128,
+      "sha256": "00e59ee26745c092f1097ba8892b4f205f7c96b48a757311aedc9072fcc3c96e"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/canary.expected.json",
+      "bytes": 1301,
+      "sha256": "d1d567e2a681ad3491800824ed3a1e7d47d56b1a0d649b27e31892bf75d990cb"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-packet-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/static-validation.json",
+      "bytes": 912,
+      "sha256": "8ac7f68b0288b9216de48d4b53a93146d42c40a4dc66a9b83b7293c13a783d80"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-execution-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/protocol.json",
+      "bytes": 5542,
+      "sha256": "d1c5c05fc317a555ffea7eed9884a4118250f77815cbfb8ed33eee7ed06687a6"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-execution-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/full.json",
+      "bytes": 1307,
+      "sha256": "31f3ddf6d3b59eaa8ea705012b449f60714b7beaee892b16a9be7060af54feb1"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-execution-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/run.sh",
+      "bytes": 13904,
+      "sha256": "eb72fb7a21e0e94421c14421a57db2871bcd01eb9b91508ef322edfcdfd3de05"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/matched-raw-sdk-execution-source-a0001/docs/research/performance-architecture-20260930/cohere1024/matched-raw-sdk-packet.pending/root-execution-binding.json",
+      "bytes": 670,
+      "sha256": "b0d61f4d49e055d4d16a8dda613fa801a6f70ce7aab670c80f359e58bcc96e1d"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/qualified-native-authority.json",
+      "bytes": 901,
+      "sha256": "b91e767fbd8a03a0260b8eff319b8df4076d51be6bdb1856dabcd861a123ee67"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/gold-authority.json",
+      "bytes": 840,
+      "sha256": "6b33031797998d31528cfc6add5ccfa28409f21e7ceef321bbf004a16a5b9f7a"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/A1-config.json",
+      "bytes": 3565,
+      "sha256": "c8a321ec55ccda99c49e5589172e951dd353e178da4ed9598beeff7337a0e74c"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/A1-reader-config.json",
+      "bytes": 8538,
+      "sha256": "06c0a807b7918ce979be5ef2fe49d6581a1fa2756a12e7c3dcec7dc2cadc9f44"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/A1-report.json",
+      "bytes": 1525,
+      "sha256": "238a02776c15fd49f59c0646fed96d0ef38cc3d6f55c8ac4ebad77a1194654eb"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/A1-verification.json",
+      "bytes": 623,
+      "sha256": "1d398a0ee8adca3111c32376dbe845c7a38c5816184481e714c2387d7f0b07c4"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/A2-report.json",
+      "bytes": 1525,
+      "sha256": "5418317aa840753488c1692cdd360e7c51b47c5f4020204f1f16ddd42a5a35d2"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/B1-report.json",
+      "bytes": 1525,
+      "sha256": "dff1e5b913ba20b386351bf40e0783564c35c543e4b2dd44c5975351d86be1ae"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/B2-report.json",
+      "bytes": 1525,
+      "sha256": "20e59ca8d92258090ccfb9c6a49823461e6f88a173a66fb589b7361fe965f0b3"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/result.json",
+      "bytes": 3324,
+      "sha256": "b814f9daa60070e8a212693bc29ee1a7c616080c96f1c236b02d348f47d6c068"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/decision.json",
+      "bytes": 1466,
+      "sha256": "c483b57acb56268cb97e4dc03023ac08937380b7d54008b06eadcf064c0dd7d2"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/terminal.json",
+      "bytes": 110,
+      "sha256": "aae70a37829077b0db305ccce68430e7e0a7c081d53bcdda13d935476eb00c38"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/fp32-concurrent-full1000-root-a0001/launch.json",
+      "bytes": 269,
+      "sha256": "6456249758cf50ab6aa16732cc985b02bbbbe1b5c1a5cf7c28c9c579d68fc48e"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/root-verification.json",
+      "bytes": 2137,
+      "sha256": "907a20cfcc88c247380d1fcc1fedcdd4bb39ae63dc235979dc604252a433943b"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/comparison.json",
+      "bytes": 3954,
+      "sha256": "4cf6119a75b48382d27f5291059982091c7a3c9c7d0b007a1a5e2e505455d2b4"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/sdk-reduction.json",
+      "bytes": 1580,
+      "sha256": "07131103f2b1744b8784eb0f6b186ba4f7bfca21e6925ba113e06a01cd04e920"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/independent-absence.json",
+      "bytes": 242,
+      "sha256": "f8de9c4bd5522ba599cf645b9c28697a921883ebcd3f890c0c44e9ec064b0df3"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/whole-unit-resources.json",
+      "bytes": 528,
+      "sha256": "f73f2bc3105ed70b0404ae3200d8ee867f4226f75201b40e4aacfbe3fc60e2a9"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-closure-a0001/original-full.journal",
+      "bytes": 2016,
+      "sha256": "0144ffa44818960bc84a318a862eae1314e034d4f43d305d489f67f56f857f59"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/admission.json",
+      "bytes": 836,
+      "sha256": "705b3a6b48a12980ed02f0fd8b9c1d3dd64e3007c1cd30aaf00e2801196d58f5"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/published.json",
+      "bytes": 1891,
+      "sha256": "6ea25bf729e43284421f4476677b28290996d059bb9dcdaf3b7aaf1ed24d4ea0"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/response-seal.json",
+      "bytes": 984,
+      "sha256": "ca1255805e488a048dce5b8c5c7ddbdb6adb56eba7d26e8a6019667146686f11"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/reduction.json",
+      "bytes": 1580,
+      "sha256": "07131103f2b1744b8784eb0f6b186ba4f7bfca21e6925ba113e06a01cd04e920"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/cleanup.json",
+      "bytes": 913,
+      "sha256": "6588db77f0e3d5d281611bee82ecac04c025f53cee7fda0d0ec1f1a94244f7d3"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/owned-bucket.json",
+      "bytes": 345,
+      "sha256": "ec8fd2e75656963de0820e1c85f20936f59c3db34bf6fda32077907d806b3c8a"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/full-state/owned-index.json",
+      "bytes": 392,
+      "sha256": "199ff7e4bca232cbca46aeb902f9e0401d870ca92910170e78dfe1b73a0928bc"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/verify-full/absence.json",
+      "bytes": 242,
+      "sha256": "f8de9c4bd5522ba599cf645b9c28697a921883ebcd3f890c0c44e9ec064b0df3"
+    },
+    {
+      "path": "/mnt/borsuk-workspace/evidence/matched-raw-sdk-experiment-a0001/verify-canary-a0002/absence.json",
+      "bytes": 242,
+      "sha256": "60aff4ea7f8cd3475e45bf0609d3a92fed29d9512e49264c6d2d359cbefc4077"
+    }
+  ]
+}
