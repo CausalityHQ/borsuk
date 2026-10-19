@@ -1,0 +1,11 @@
+# Next bounded step: measure the cold SOURCE critical path
+
+Do not run another fetch-width sweep or repeat the known full1000 result. Retain64 as a useful mean-latency/CPU/RAM Pareto option and128 as incumbent; no global default change.
+
+Existing full output authenticates SOURCE wall intervals but has no CPU attribution. The retained fixed8 traceON diagnostic [0,14,125,375,454,546,687,859] is blocked BEFORE execution: diagnostic-pinned927313 + minimum SOURCE peak262144 =1189457, exceeding its unchanged1MiB value cap. No invalid profile was run and no historical cap/gate was relaxed.
+
+Use one contextless bounded end-to-end specialist packet to source-check and prospectively qualify the smallest diagnostic-only envelope that admits THIS unchanged leaf64/cache0/Q1/Offload2/FP32 pipeline. A2MiB diagnostic value envelope is a proposal, not an established sufficient bound. Preserve production algorithm, limits and defaults; explicitly charge actual transient JSON/range/proof capacities and bind strict reader to new diagnostic authority. Keep unresolved acquisition/poll CPU unresolved rather than counting across awaits. Qualify affected native tests, exact workspace Clippy and real unset test-build once for stable source; do not atomize the packet into many workers.
+
+Root then owns real input admission + separate disposable canary and ONE bounded fixed8 profile, not a latency/recall benchmark. Compare returned IDs/bits/plans/charges against the current frozen reference. Use measured per-range lifecycle, auth/scoring CPU and SOURCE completion path to select ONE next causal library improvement. Relevant simulated perspectives: systems researcher predicts contention/queue waves; retrieval engineer insists on identical nomination; skeptical evaluator objects to inferring network occupancy or repeatable p95 gains. These are hypotheses, not expert evidence. Verify with source and measured clocks.
+
+All work/preparation/builds on Causality EC2/EBS, fresh bounded host and one original handle, no cache feature, dataset-specific algorithm constant, retrospective gate change, new broad campaign or competitor claim. Root integrates and decides. Current diagnostic must not silently reduce leaf breadth or reorder/select easier queries to fit its cap.

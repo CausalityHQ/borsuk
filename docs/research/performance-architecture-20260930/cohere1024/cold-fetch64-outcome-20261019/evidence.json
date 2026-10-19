@@ -1,0 +1,48 @@
+{
+  "S3_bucket": "borsuk-bench-453182569524-euc1",
+  "closed_attempts": {
+    "full": {
+      "protocol_sha256": "a2b25ef3fd14c2f411b5f5ad36b572da33055d87f4ed4c1b5dda1919d9b87b9a",
+      "report_sha256": "3565b22ff82fe9016655b42853ff5a1c9163052c26de3f2172228ad9ae2522d7",
+      "terminal": {
+        "archive": {
+          "bytes": 103556865,
+          "key": "research/semantic-router/20261019/cold-fetch64-full1000-a0001/evidence.tar.gz",
+          "sha256": "2857c64ad76147178371050da26e5fbdd19e5db920232807a0b70a00018e97bf"
+        },
+        "instance": "i-04e58bcab75727bd0",
+        "native_pipeline_exit": 0,
+        "terminal_epoch": 1792415413.523059
+      }
+    },
+    "screen": {
+      "protocol_sha256": "c209b506b2139535fd80005660ad875bf2d93d6d463a23a14183db9c56984bc0",
+      "report_sha256": "f67bae774593c94fa4bfc3547f96ec48f9038e73acbb429c541693f27c499c42",
+      "terminal": {
+        "archive": {
+          "bytes": 8825568,
+          "key": "research/semantic-router/20261019/cold-fetch64-a0001/evidence.tar.gz",
+          "sha256": "af7e8ea411f43292390ff9916171467c69e7a1fdaf7f66b3ec8782ab03c43704"
+        },
+        "instance": "i-077937fcb9546004c",
+        "native_pipeline_exit": 0,
+        "terminal_epoch": 1792413138.9524379
+      }
+    }
+  },
+  "crates_tree": "ab73789e2b2ee642f893123d8d2e96a90c26e77c",
+  "native_SSM": "f9d08047-8ecb-41ed-9170-a616d4caf8c1",
+  "production_default_promoted": false,
+  "provider_cache_eviction_proven": false,
+  "qualified_source": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+  "research_acceptance": "Retain mean-latency/CPU/RAM Pareto; strict negative preserved",
+  "root_verification_SSM": "4e373966-822a-4069-81ce-4931081ec438",
+  "schema": "borsuk-cold-fetch64-outcome-v1",
+  "source_packets": [
+    "80db9dece3a05b19f52dfac079ccda0cc4e28087",
+    "7b0963a838f339b664109d69e0223ea39b21490c"
+  ],
+  "source_unchanged": true,
+  "vendor_win": false,
+  "verification_sha256": "d56b4029e7aa3889c7c77b116965a8b858a01ff138c9b9e073e1441306574205"
+}
