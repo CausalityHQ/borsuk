@@ -18,15 +18,12 @@ pub(super) fn enabled(v: &Value) -> bool {
 }
 pub(super) fn limits(v: &Value) -> Result<borsuk::fp32_rerank::Fp32RerankLimits> {
     let v = &v["serving"];
-    fields(
-        v,
-        if v.get("coalesce").is_some() {
-            "mode coalesce shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets"
-        } else {
-            "mode shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets"
-        },
-    )?;
+    let mut names = String::from("mode shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets");
+    if v.get("coalesce").is_some() { names.push_str(" coalesce"); }
+    if v.get("direct").is_some() { names.push_str(" direct"); }
+    fields(v, &names)?;
     let limits = borsuk::fp32_rerank::Fp32RerankLimits {
+            direct: v.get("direct").filter(|v| !v.is_null()).map(|v| serde_json::from_value(v.clone())).transpose()?,
         coalesce: v.get("coalesce").map(|v| v.as_bool().ok_or("FP32 coalesce boolean")).transpose()?.unwrap_or(false),
         shortlist: usize::try_from(number(&v["shortlist"])?)?,
         max_bytes: usize::try_from(number(&v["max_fp32_bytes"])?)?,
@@ -42,7 +39,19 @@ pub(super) fn limits(v: &Value) -> Result<borsuk::fp32_rerank::Fp32RerankLimits>
             && limits.max_parallel_gets > 0,
         "FP32 explicit limits",
     )?;
+    if let Some(direct) = limits.direct {
+        require(direct.max_sq8_bytes > 0 && (1..=128).contains(&direct.max_sq8_gets), "FP32 direct limits")?;
+    }
     Ok(limits)
+}
+pub(super) fn direct(v: &Value) -> bool {
+    enabled(v) && v["serving"]["direct"].is_object()
+}
+pub(super) fn sq8_bytes(v: &Value) -> Result<u64> {
+    number(if direct(v) { &v["serving"]["direct"]["max_sq8_bytes"] } else { &v["sq8_byte_budget"] })
+}
+pub(super) fn sq8_gets(v: &Value) -> Result<u64> {
+    number(if direct(v) { &v["serving"]["direct"]["max_sq8_gets"] } else { &v["sq8_get_budget"] })
 }
 pub(super) fn validate_query(raw: &Value, inputs: &Value) -> Result<()> {
     let limits = limits(inputs)?;
@@ -63,7 +72,14 @@ pub(super) fn validate_query(raw: &Value, inputs: &Value) -> Result<()> {
         "FP32 stage scalar/geometry/time",
     )?;
     let shortlist = stage["shortlist"].as_array().ok_or("FP32 shortlist")?;
-    require(shortlist.len() <= limits.shortlist, "FP32 shortlist cap")?;
+    let fetched_rows = raw["plan"]["ranges"].as_array().ok_or("FP32 SQ8 ranges")?
+        .iter().try_fold(0_u64, |n, r| -> Result<u64> {
+            let bytes = number(&r[1])?.checked_sub(number(&r[0])?).ok_or("FP32 SQ8 range")?;
+            require(bytes % (d as u64 + 12) == 0, "FP32 SQ8 record width")?;
+            super::plus(n, bytes / (d as u64 + 12))
+        })?;
+    require(shortlist.len() == limits.shortlist.min(usize::try_from(fetched_rows)?),
+        "FP32 complete fetched shortlist")?;
     let mut ids = std::collections::BTreeSet::new();
     let mut ordinals = std::collections::BTreeSet::new();
     let mut previous: Option<(f32, u64)> = None;

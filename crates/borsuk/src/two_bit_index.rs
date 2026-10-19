@@ -223,7 +223,7 @@ impl TwoBitIndex {
                 source_stats: Default::default(),
                 router_stats: Default::default(),
                 stages: Default::default(),
-                source_nomination_skipped: false,
+                source_nomination_skipped: limits.direct.is_some(),
             },
             candidates,
             canonical_ranges: Vec::new(),

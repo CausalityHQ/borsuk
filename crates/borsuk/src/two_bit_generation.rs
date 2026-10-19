@@ -204,7 +204,8 @@ pub struct TwoBitGenerationLimits {
 /// Explicit positive SQ8 caps for one opt-in direct-closure query. They are
 /// independent of the historical `max_query_*` limits, which direct search never
 /// reads or relaxes. The library carries no dataset, dimension or benchmark pin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DirectClosureLimits {
     /// Physical SQ8 bytes, including every bridge page, per query.
     pub max_sq8_bytes: usize,
@@ -2030,6 +2031,67 @@ pub(crate) fn range_scheduler_memory(
             .checked_mul(limits.max_active_queries as u64)
     };
     bytes().ok_or(TwoBitGenerationError::Invalid("range scheduler memory"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn direct_closure_memory_model(
+    rows: usize, dimensions: usize, coverage: Option<SemanticCoverage>,
+    trace_scratch_bytes: usize, resident_bytes: u64, admission: TwoBitGenerationLimits,
+    source: bool, split: Option<crate::sq8_s3_range::Sq8RangeSplit>, limits: DirectClosureLimits,
+) -> Result<DirectClosureMemory> {
+        let bad = TwoBitGenerationError::Invalid;
+        if limits.max_sq8_bytes == 0 || limits.max_sq8_gets == 0 {
+            return Err(bad("direct closure limits"));
+        }
+        let planner = coverage_planner_reserve(coverage)
+            .checked_add(trace_scratch_bytes as u64)
+            .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
+            .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
+            .ok_or(bad("direct closure planner memory"))?;
+        let split_scratch = split
+            .map_or(Some(0), |split| {
+                split
+                    .scratch_bytes(limits.max_sq8_bytes, admission.max_parallel_gets)
+                    .and_then(|bytes| {
+                        bytes.checked_sub(Sq8RangeTrace::checked_pending_futures_bytes(
+                            split.max_physical_gets,
+                            admission.max_parallel_gets,
+                        )?)
+                    })
+            })
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(bad("SQ8 split scratch overflow"))?;
+        let scheduler = range_scheduler_memory(
+            admission,
+            false,
+            split.map_or(limits.max_sq8_gets, |s| s.max_physical_gets),
+        )?
+        .saturating_sub(range_scheduler_memory(
+            admission,
+            source,
+            split.map_or(admission.max_query_gets, |s| s.max_physical_gets),
+        )?);
+        let direct = crate::returned_sq8::query_payload_bytes(
+            crate::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
+            limits.max_sq8_bytes as u64,
+            planner
+                .checked_add(split_scratch)
+                .ok_or(bad("SQ8 split scratch overflow"))?,
+            admission.max_active_queries as u64,
+        )
+        .map_err(|_| bad("direct closure query memory"))?
+        .checked_add(scheduler)
+        .ok_or(bad("direct closure query memory"))?;
+        Ok(DirectClosureMemory {
+            resident_bytes: resident_bytes,
+            direct_planner_bytes: planner,
+            direct_query_bytes: direct,
+            total_bytes: resident_bytes
+                .checked_add(direct)
+                .ok_or(bad("direct closure memory"))?,
+            cap_bytes: admission.max_memory_bytes,
+        })
+
 }
 
 impl TwoBitGeneration {
@@ -3871,14 +3933,18 @@ impl TwoBitGeneration {
     pub fn fp32_rerank_memory(&self, limits: crate::fp32_rerank::Fp32RerankLimits) -> Result<u64> {
         let query = crate::fp32_rerank::query_bytes(self.pages.dimensions(), limits)
             .ok_or(TwoBitGenerationError::Invalid("FP32 rerank limits"))?;
+        let base = match limits.direct {
+            Some(direct) => self.direct_closure_memory(direct)?.total_bytes,
+            None => self.modeled_memory_bytes,
+        };
         (query as u64)
             .checked_mul(self.limits.max_active_queries as u64)
-            .and_then(|n| n.checked_add(self.modeled_memory_bytes))
+            .and_then(|n| n.checked_add(base))
             .ok_or(TwoBitGenerationError::Invalid("FP32 rerank memory"))
     }
 
-    /// Exact refinement over the unchanged control fetch population. Visibility
-    /// is applied during SQ8 ranking, before the shortlist is truncated.
+    /// Exact refinement over SOURCE nominees, or the explicitly selected direct
+    /// SQ8 closure. Visibility precedes shortlist truncation; one slot spans both stages.
     pub async fn search_fp32_with_store(
         &self,
         store: &dyn ObjectStore,
@@ -3932,6 +3998,10 @@ impl TwoBitGeneration {
         {
             return Err(bad("FP32 query binding/admission"));
         }
+        if let Some(direct) = limits.direct {
+            self.admit_direct_closure(query, top_k.min(self.rows()),
+                Some(mutations.map_or(&[], |m| m.excluded_ids())), direct, trace.is_some(), None)?;
+        }
         if self.fp32_rerank_memory(limits)? > self.limits.max_memory_bytes {
             return Err(bad("FP32 rerank memory cap"));
         }
@@ -3961,7 +4031,13 @@ impl TwoBitGeneration {
         if let std::borrow::Cow::Owned(ref values) = normalized {
             FP32_NORMALIZED_BYTES.with(|n| n.set(n.get() + values.capacity() * 4));
         }
-        let base = self
+        let base = if let Some(direct) = limits.direct {
+            self.direct_closure_search_unadmitted(
+                store, query, limits.shortlist.min(self.rows()),
+                Some(mutations.map_or(&[], |m| m.excluded_ids())), direct, trace, None,
+            ).await?
+        } else {
+            self
             .search_store_shortlist_unadmitted(
                 store,
                 query,
@@ -3971,7 +4047,8 @@ impl TwoBitGeneration {
                 trace,
                 None,
             )
-            .await?;
+            .await?
+        };
         let started = std::time::Instant::now();
         let charged = |failure: RankedSq8Failure| TwoBitGenerationError::Fp32Read {
             source: base.source_stats,
@@ -4523,62 +4600,10 @@ impl TwoBitGeneration {
         &self,
         limits: DirectClosureLimits,
     ) -> Result<DirectClosureMemory> {
-        let bad = TwoBitGenerationError::Invalid;
-        if limits.max_sq8_bytes == 0 || limits.max_sq8_gets == 0 {
-            return Err(bad("direct closure limits"));
-        }
-        let rows = self.rows();
-        let dimensions = self.pages.dimensions();
-        let planner = coverage_planner_reserve(self.semantic_coverage())
-            .checked_add(self.trace_scratch_bytes() as u64)
-            .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
-            .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
-            .ok_or(bad("direct closure planner memory"))?;
-        let split_scratch = self
-            .sq8_range_split
-            .map_or(Some(0), |split| {
-                split
-                    .scratch_bytes(limits.max_sq8_bytes, self.limits.max_parallel_gets)
-                    .and_then(|bytes| {
-                        bytes.checked_sub(Sq8RangeTrace::checked_pending_futures_bytes(
-                            split.max_physical_gets,
-                            self.limits.max_parallel_gets,
-                        )?)
-                    })
-            })
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or(bad("SQ8 split scratch overflow"))?;
-        let scheduler = range_scheduler_memory(
-            self.limits,
-            false,
-            self.physical_sq8_cap(limits.max_sq8_gets),
-        )?
-        .saturating_sub(range_scheduler_memory(
-            self.limits,
-            self.source.is_some(),
-            self.physical_sq8_cap(self.limits.max_query_gets),
-        )?);
-        let direct = crate::returned_sq8::query_payload_bytes(
-            crate::exact_sq8_nominee::Sq8Geometry { rows, dimensions },
-            limits.max_sq8_bytes as u64,
-            planner
-                .checked_add(split_scratch)
-                .ok_or(bad("SQ8 split scratch overflow"))?,
-            self.limits.max_active_queries as u64,
+        direct_closure_memory_model(
+            self.rows(), self.pages.dimensions(), self.semantic_coverage(), self.trace_scratch_bytes(),
+            self.modeled_memory_bytes, self.limits, self.source.is_some(), self.sq8_range_split, limits,
         )
-        .map_err(|_| bad("direct closure query memory"))?
-        .checked_add(scheduler)
-        .ok_or(bad("direct closure query memory"))?;
-        Ok(DirectClosureMemory {
-            resident_bytes: self.modeled_memory_bytes,
-            direct_planner_bytes: planner,
-            direct_query_bytes: direct,
-            total_bytes: self
-                .modeled_memory_bytes
-                .checked_add(direct)
-                .ok_or(bad("direct closure memory"))?,
-            cap_bytes: self.limits.max_memory_bytes,
-        })
     }
 
     // Allocation-free admission: no query/plan/payload allocation, no slot and no I/O
@@ -4830,6 +4855,17 @@ impl TwoBitGeneration {
             .acquire()
             .await
             .map_err(|_| TwoBitGenerationError::Invalid("query admission"))?;
+        self.direct_closure_search_unadmitted(
+            store, query, top_k, excluded_ids, limits, trace, range_trace,
+        ).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn direct_closure_search_unadmitted(
+        &self, store: &dyn ObjectStore, query: &[f32], top_k: usize,
+        excluded_ids: Option<&[i64]>, limits: DirectClosureLimits,
+        trace: Option<&mut TwoBitPlanTrace>, mut range_trace: Option<&mut QueryProfile>,
+    ) -> Result<TwoBitSearchResult> {
         let started = std::time::Instant::now();
         if let Some(range_trace) = range_trace.as_deref_mut() {
             range_trace.begin(started);
@@ -13158,13 +13194,17 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_http_control_plan_scalar_oracle_and_failure_charges() {
-        fp32_http_case(false).await;
+        fp32_http_case(false, false).await;
     }
     #[tokio::test]
     async fn fp32_http_coalescing_plan_scalar_oracle_and_failure_charges() {
-        fp32_http_case(true).await;
+        fp32_http_case(true, false).await;
     }
-    async fn fp32_http_case(coalesce: bool) {
+    #[tokio::test]
+    async fn fp32_direct_http_scalar_model_slot_drain_cancel_recovery() {
+        fp32_http_case(false, true).await;
+    }
+    async fn fp32_http_case(coalesce: bool, direct: bool) {
         use crate::fp32_rerank::Fp32RerankLimits;
         use futures_util::TryStreamExt;
         use sha2::{Digest, Sha256};
@@ -13210,11 +13250,14 @@ mod source_walk_tests {
         assert_eq!(opened.head_requests, 1);
         let query = tiny_query(7);
         let unit = cosine_unit(&query);
-        let (control, control_trace) = generation
-            .diagnostic_search_with_store(fixture.reader.store(), &query, 10)
-            .await
-            .unwrap();
+        let direct = direct.then_some(DirectClosureLimits { max_sq8_bytes: 1_000_000, max_sq8_gets: 128 });
+        let (control, control_trace) = if let Some(direct) = direct {
+            generation.diagnostic_direct_closure_search_with_store(fixture.reader.store(), &query, 10, direct).await.unwrap()
+        } else {
+            generation.diagnostic_search_with_store(fixture.reader.store(), &query, 10).await.unwrap()
+        };
         let limits = Fp32RerankLimits {
+            direct,
             coalesce,
             shortlist: 16,
             max_bytes: (if coalesce {33} else {16}) * 36,
@@ -13384,8 +13427,7 @@ mod source_walk_tests {
             assert_eq!(generation.slots.available_permits(), 1);
         }
         fixture.response_fault(None);
-        fixture.arm(None);
-        fixture.release(0);
+        fixture.arm_key(canonical_key.clone(), None);
         let mut first = Box::pin(generation.search_fp32_with_store(
             fixture.reader.store(),
             &query,
@@ -13394,10 +13436,11 @@ mod source_walk_tests {
             limits,
         ));
         tokio::select! {
-            _=fixture.wait(|s|s.active[1]>0)=>{},
+            _=fixture.wait(|s|s.active[2]>0)=>{},
             result=&mut first=>panic!("query completed before body release: {}",result.is_ok()),
         }
         assert_eq!(generation.slots.available_permits(), 0);
+        assert!(fixture.snapshot().requests.iter().any(|r| r.0 == canonical_key && !r.1));
         let nonunit = query.iter().map(|v| v * 3.0).collect::<Vec<_>>();
         let allocations = FP32_NORMALIZED_BYTES.with(|n| n.get());
         let mut second = Box::pin(generation.search_fp32_with_store(
@@ -13410,12 +13453,15 @@ mod source_walk_tests {
         assert!(futures_util::poll!(second.as_mut()).is_pending());
         assert_eq!(FP32_NORMALIZED_BYTES.with(|n| n.get()), allocations);
         let before = fixture.snapshot().requests.len();
+        drop(second);
+        assert_eq!(generation.slots.available_permits(), 0, "waiter cancellation must retain active canonical slot");
+        assert_eq!(fixture.snapshot().requests.len(), before);
+        assert_eq!(FP32_NORMALIZED_BYTES.with(|n| n.get()), allocations);
         drop(first);
         assert_eq!(fixture.snapshot().requests.len(), before);
-        drop(second);
         assert_eq!(generation.slots.available_permits(), 1);
-        fixture.release(1);
-        fixture.wait(|s| s.active[1] == 0).await;
+        fixture.release(2);
+        fixture.wait(|s| s.active[2] == 0).await;
         let recovered = generation
             .search_fp32_with_store(fixture.reader.store(), &nonunit, 10, None, limits)
             .await
@@ -13423,6 +13469,37 @@ mod source_walk_tests {
         assert_eq!(recovered.canonical_stats.submitted_gets, planned_gets);
         assert!(FP32_NORMALIZED_BYTES.with(|n| n.get()) > allocations);
         assert_eq!(generation.slots.available_permits(), 1);
+        if direct.is_some() && !coalesce {
+            let starts = [exact.canonical_ranges[0].start, exact.canonical_ranges[1].start,
+                exact.canonical_ranges[2].start];
+            let last = exact.canonical_ranges.last().unwrap().start;
+            fixture.arm_key(canonical_key.clone(), Some(starts));
+            let mut work = Box::pin(generation.search_fp32_with_store(
+                fixture.reader.store(), &query, 10, None, limits));
+            tokio::select! {
+                result = &mut work => panic!("returned before earliest canonical body: {}", result.is_ok()),
+                () = fixture.wait(|s| s.finished[2].contains(&starts[1])) => {}
+            }
+            assert_eq!(generation.slots.available_permits(), 0);
+            fixture.release_error();
+            tokio::select! {
+                result = &mut work => panic!("returned before canonical sibling drain: {}", result.is_ok()),
+                () = fixture.wait(|s| s.finished[2].contains(&last)) => {}
+            }
+            assert!(!fixture.snapshot().finished[2].contains(&starts[2]));
+            assert_eq!(generation.slots.available_permits(), 0);
+            fixture.release_sibling();
+            let failure = work.await.err().unwrap();
+            assert_eq!(failure.canonical_stats().submitted_gets, planned_gets);
+            assert_eq!(failure.canonical_stats().failed_gets, 2);
+            assert_eq!(fixture.snapshot().finished[2].len(), planned_gets);
+            assert_eq!(generation.slots.available_permits(), 1);
+            fixture.arm_key(canonical_key.clone(), None);
+            fixture.release(2);
+            generation.search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits)
+                .await.unwrap();
+            assert_eq!(generation.slots.available_permits(), 1);
+        }
         fixture.finish();
         if coalesce {
             let selected = exact.base.ranked.candidates[0].ordinal;
@@ -13595,15 +13672,19 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_mutation_visibility_and_canonical_transport_refusals() {
-        fp32_mutation_case(false).await;
+        fp32_mutation_case(false, false).await;
     }
 
     #[tokio::test]
     async fn fp32_coalescing_mutation_visibility_and_canonical_transport_refusals() {
-        fp32_mutation_case(true).await;
+        fp32_mutation_case(true, false).await;
     }
 
-    async fn fp32_mutation_case(coalesce: bool) {
+    #[tokio::test]
+    async fn fp32_direct_mutation_visibility_and_transport_refusals() {
+        fp32_mutation_case(false, true).await;
+    }
+    async fn fp32_mutation_case(coalesce: bool, direct: bool) {
         use crate::fp32_rerank::Fp32RerankLimits;
         use crate::two_bit_mutations::{
             TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations,
@@ -13623,6 +13704,7 @@ mod source_walk_tests {
         generation.enable_fp32_rerank(&tiny.store).await.unwrap();
         let query = tiny_query(7);
         let exact = Fp32RerankLimits {
+            direct: direct.then_some(DirectClosureLimits { max_sq8_bytes: 1_000_000, max_sq8_gets: 128 }),
             coalesce,
             shortlist: 16,
             max_bytes: if coalesce { 33 * 36 } else { 16 * 36 },
@@ -13864,6 +13946,13 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_compaction_empty_pending_reopen_and_gc_roster() {
+        fp32_compaction_case(false).await;
+    }
+    #[tokio::test]
+    async fn fp32_direct_compaction_empty_pending_reopen_and_gc_roster() {
+        fp32_compaction_case(true).await;
+    }
+    async fn fp32_compaction_case(direct: bool) {
         use crate::{
             canonical_source::TwoBitCompactionLimits,
             fp32_rerank::Fp32RerankLimits,
@@ -13945,6 +14034,7 @@ mod source_walk_tests {
         .unwrap();
         generation.enable_fp32_rerank(store.as_ref()).await.unwrap();
         let exact = Fp32RerankLimits {
+            direct: direct.then_some(DirectClosureLimits { max_sq8_bytes: 1_000_000, max_sq8_gets: 128 }),
             coalesce: false,
             shortlist: 33,
             max_bytes: 33 * 36,

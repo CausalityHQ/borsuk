@@ -82,6 +82,8 @@ enum Serving {
     Baseline {},
     /// Exact canonical refinement of the unchanged baseline fetch.
     Fp32Rerank {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direct: Option<DirectClosureLimits>,
         #[serde(default)]
         coalesce: bool,
         shortlist: usize,
@@ -100,12 +102,14 @@ impl Serving {
     fn fp32(self) -> Option<borsuk::fp32_rerank::Fp32RerankLimits> {
         match self {
             Self::Fp32Rerank {
+                direct,
                 coalesce,
                 shortlist,
                 max_fp32_bytes,
                 max_fp32_gets,
                 max_parallel_fp32_gets,
             } => Some(borsuk::fp32_rerank::Fp32RerankLimits {
+                direct,
                 coalesce,
                 shortlist,
                 max_bytes: max_fp32_bytes,
@@ -990,6 +994,10 @@ fn config_schema(c: &Config) -> bool {
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     if let Some(limits) = c.serving.fp32() {
+        if let Some(direct) = limits.direct {
+            require(direct.max_sq8_bytes > 0 && direct.max_sq8_bytes as u64 <= c.max_memory_bytes
+                && (1..=128).contains(&direct.max_sq8_gets), "FP32 direct closure explicit caps")?;
+        }
         require(
             !concurrent_config(c)
                 && !c.execution.trace()
@@ -1642,8 +1650,7 @@ fn trace_ranges(c: &Config) -> usize {
     if let Some(split) = c.sq8_range_split {
         return split.max_physical_gets;
     }
-    c.serving
-        .direct()
+    c.serving.direct().or_else(|| c.serving.fp32().and_then(|limits| limits.direct))
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
 fn source_trace_ranges(c: &Config) -> usize {
@@ -2908,7 +2915,7 @@ async fn query_and_seal_with(
                 continue;
             }
         };
-        if c.serving.direct().is_some() {
+        if c.serving.direct().or_else(|| c.serving.fp32().and_then(|limits| limits.direct)).is_some() {
             require(
                 result.source_stats == Sq8ReadStats::default()
                     && result.router_stats == Sq8ReadStats::default()
@@ -3667,6 +3674,14 @@ pub(crate) fn fp32_reducer_native_fixture() -> Result<(tempfile::TempDir, PathBu
 }
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture_with(coalesce: bool, leaf_limit: Option<usize>) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_selection(coalesce, leaf_limit, false)
+}
+#[cfg(test)]
+pub(crate) fn fp32_reducer_native_fixture_selection(coalesce: bool, leaf_limit: Option<usize>, direct: bool) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_caps(coalesce, leaf_limit, direct, None)
+}
+#[cfg(test)]
+pub(crate) fn fp32_reducer_native_fixture_caps(coalesce: bool, leaf_limit: Option<usize>, direct: bool, caps: Option<(usize, usize)>) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
@@ -3677,6 +3692,13 @@ pub(crate) fn fp32_reducer_native_fixture_with(coalesce: bool, leaf_limit: Optio
     }
     value["serving"] = json!({"mode":"fp32_rerank","coalesce":coalesce,"shortlist":16,"max_fp32_bytes":(if coalesce {33} else {16})*(D*4+8),
         "max_fp32_gets":16,"max_parallel_fp32_gets":3});
+    if direct {
+        value["serving"]["direct"] = json!({"max_sq8_bytes":1_000_000,"max_sq8_gets":128});
+    }
+    if let Some((ordinary, source)) = caps {
+        value["sq8_get_budget"] = json!(ordinary);
+        value["source_get_budget"] = json!(source);
+    }
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("fp32-native-result.jsonl");
     let status = execute_paths_status(&config, &sha, &result, shape, |c, shape, out, progress| {
