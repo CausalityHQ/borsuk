@@ -143,6 +143,53 @@ impl SemanticProfile {
         }
     }
 }
+/// Runtime coverage over an unchanged authenticated semantic partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticCoverage {
+    profile: SemanticProfile,
+    leaves: usize,
+}
+impl SemanticCoverage {
+    /// Omission preserves profile selection; only Scale1m accepts explicit 1..=64.
+    pub fn new(profile: SemanticProfile, limit: Option<usize>) -> Result<Self> {
+        if let Some(limit) = limit {
+            require(profile == SemanticProfile::Scale1m && (1..=64).contains(&limit),
+                "semantic leaf limit requires Scale1m and 1..=64")?;
+        }
+        Ok(Self { profile, leaves: limit.unwrap_or(profile.selected_leaf_limit()) })
+    }
+    /// Selected leaf ceiling.
+    pub const fn selected_leaf_limit(self) -> usize { self.leaves }
+    /// Admission retains the default reserve for smaller explicit prefixes.
+    pub(crate) const fn admitted_leaves(self) -> usize {
+        if self.leaves > self.profile.selected_leaf_limit() { 64 }
+        else { self.profile.selected_leaf_limit() }
+    }
+    pub(crate) const fn walk_unit_limit(self) -> usize {
+        if self.admitted_leaves() > self.profile.selected_leaf_limit() { self.admitted_leaves() * LEAF_UNITS + 7 }
+        else { self.profile.walk_unit_limit() }
+    }
+    /// Maximum original SOURCE page closure.
+    pub const fn closure_page_limit(self) -> usize {
+        if matches!(self.profile, SemanticProfile::Scale1m) { self.admitted_leaves() * LEAF_UNITS }
+        else { self.profile.closure_page_limit() }
+    }
+    /// Maximum SOURCE scoring completion units.
+    pub const fn source_unit_limit(self) -> usize {
+        if matches!(self.profile, SemanticProfile::Scale1m) { self.closure_page_limit() * 8 }
+        else { self.profile.source_unit_limit() }
+    }
+    pub(crate) fn valid_geometry(self, rows: usize, dimensions: usize) -> bool {
+        self.profile.valid_geometry(rows, dimensions)
+    }
+    pub(crate) const fn is_scale(self) -> bool { matches!(self.profile, SemanticProfile::Scale1m) }
+}
+impl From<SemanticProfile> for SemanticCoverage {
+    fn from(profile: SemanticProfile) -> Self {
+        Self { profile, leaves: profile.selected_leaf_limit() }
+    }
+}
+
 #[allow(missing_docs)]
 #[derive(Clone, Copy)]
 pub struct Geometry {
@@ -1603,6 +1650,21 @@ impl SemanticUnitRouter {
         )
     }
 
+    pub(crate) fn select_leaves_with_coverage(
+        &self, normalized_query: &[f32], coverage: SemanticCoverage,
+    ) -> Result<Vec<usize>> {
+        require(coverage.profile == self.manifest.profile, "coverage profile")?;
+        if coverage.leaves <= self.manifest.profile.selected_leaf_limit() {
+            let mut ids = self.select_leaves(normalized_query)?;
+            ids.truncate(coverage.leaves);
+            return Ok(ids);
+        }
+        let ranked = rank_prototypes(normalized_query,
+            self.manifest.leaves.iter().map(|leaf| leaf.prototype.as_slice()),
+            &VectorMetric::SquaredEuclidean)?;
+        Ok(ranked.into_iter().take(coverage.leaves).map(|(_, id)| id).collect())
+    }
+
     /// Rank every authenticated leaf by an explicit metric, with leaf-ID ties.
     /// Supports squared Euclidean and cosine distance. Cosine accepts finite,
     /// nonzero queries; a zero prototype has zero similarity (distance one).
@@ -1632,9 +1694,16 @@ impl SemanticUnitRouter {
     /// Nominate every unit in the selected root-authenticated membership slices.
     /// No leaf payload or source record is needed to establish this partition.
     pub fn nominate_selected(&self, leaf_ids: &[usize]) -> Result<Nomination> {
+        self.nominate_selected_with_coverage(leaf_ids, self.manifest.profile.into())
+    }
+
+    pub(crate) fn nominate_selected_with_coverage(
+        &self, leaf_ids: &[usize], coverage: SemanticCoverage,
+    ) -> Result<Nomination> {
+        require(coverage.profile == self.manifest.profile, "coverage profile")?;
         require(
             !leaf_ids.is_empty()
-                && leaf_ids.len() <= self.manifest.profile.selected_leaf_limit()
+                && leaf_ids.len() <= coverage.selected_leaf_limit()
                 && (self.manifest.profile != SemanticProfile::Fresh1m || leaf_ids.len() == 48),
             "selected leaf count",
         )?;
@@ -1649,7 +1718,7 @@ impl SemanticUnitRouter {
                     .map(|&unit| unit as usize),
             );
         }
-        Self::complete_nomination(leaf_ids, units, self.manifest.rows, self.manifest.profile)
+        Self::complete_nomination(leaf_ids, units, self.manifest.rows, coverage)
     }
 
     /// Validate one exact whole-leaf range. Digest authentication fixes record order.
@@ -1712,16 +1781,16 @@ impl SemanticUnitRouter {
                 require(units.insert(unit), "disjoint selected units")?;
             }
         }
-        Self::complete_nomination(leaf_ids, units, self.manifest.rows, self.manifest.profile)
+        Self::complete_nomination(leaf_ids, units, self.manifest.rows, self.manifest.profile.into())
     }
 
     fn complete_nomination(
         leaf_ids: &[usize],
         units: BTreeSet<usize>,
         rows: usize,
-        profile: SemanticProfile,
+        profile: SemanticCoverage,
     ) -> Result<Nomination> {
-        let (seed_page, walk_units, seed_additions) = seed_walk(&units, rows, profile)?;
+        let (seed_page, walk_units, seed_additions) = seed_walk_with_coverage(&units, rows, profile)?;
         let page_closure = units.iter().map(|u| u / 8).collect();
         Ok(Nomination {
             leaf_ids: leaf_ids.to_vec(),
@@ -1957,8 +2026,13 @@ pub fn seed_walk(
     rows: usize,
     profile: SemanticProfile,
 ) -> Result<(usize, Vec<usize>, Vec<usize>)> {
+    seed_walk_with_coverage(units, rows, profile.into())
+}
+fn seed_walk_with_coverage(
+    units: &BTreeSet<usize>, rows: usize, profile: SemanticCoverage,
+) -> Result<(usize, Vec<usize>, Vec<usize>)> {
     require(
-        match profile {
+        match profile.profile {
             SemanticProfile::Native100k => (1..=100_000).contains(&rows),
             SemanticProfile::Fresh1m => rows == 1_000_000,
             SemanticProfile::Scale1m => (1..=1_000_000).contains(&rows),

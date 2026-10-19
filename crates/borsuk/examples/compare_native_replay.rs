@@ -2175,6 +2175,8 @@ fn read_run_observed_policy(
                 )?;
                 if v10 {
                     current_v10::validate_geometry(&raw, &c.expected_bound_inputs)?;
+                    current_v10::validate_coverage_router(&raw, &c.expected_bound_inputs,
+                        &completed.as_ref().ok_or("coverage authority")?.generation_authority)?;
                     if rows.source_layout {
                         current_v10::validate_source_capsules(&raw, &c.expected_bound_inputs)?;
                     }
@@ -6512,8 +6514,11 @@ fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
     )?;
     let t: SourceTrace = serde_json::from_value(raw["trace"].clone())?;
     require(t.discoveries.is_empty(), "semantic loss trace required")?;
+    let coverage = borsuk::semantic_unit_router::SemanticCoverage::new(
+        borsuk::semantic_unit_router::SemanticProfile::Scale1m, i.semantic_leaf_limit)?;
+    let closure_cap = coverage.closure_page_limit();
     let unit_count = i.rows.div_ceil(32);
-    let semantic = source_ordinals(&t.semantic_units, unit_count, 3072)?;
+    let semantic = source_ordinals(&t.semantic_units, unit_count, closure_cap)?;
     require(
         !semantic.is_empty() && t.semantic_units.windows(2).all(|p| p[0] < p[1]),
         "sorted semantic loss units",
@@ -6533,12 +6538,12 @@ fn loss_coverage(line: &[u8], q: &Query, i: &Inputs) -> Result<LossCoverage> {
     let pages = walked.iter().map(|u| u / 8).collect::<BTreeSet<_>>();
     require(
         !pages.is_empty()
-            && pages.len() <= 3072
-            && source_ordinals(&t.ranked_candidate_pages, i.rows.div_ceil(256), 3072)? == pages
+            && pages.len() <= closure_cap
+            && source_ordinals(&t.ranked_candidate_pages, i.rows.div_ceil(256), closure_cap)? == pages
             && t.ranked_candidate_pages.first() == Some(&t.primary_page),
         "loss ranked SOURCE closure",
     )?;
-    let scored = source_ordinals(&t.nomination_evaluated_units, unit_count, 24576)?;
+    let scored = source_ordinals(&t.nomination_evaluated_units, unit_count, coverage.source_unit_limit())?;
     let expected = pages
         .iter()
         .flat_map(|p| p * 8..((p + 1) * 8).min(unit_count))
@@ -16511,7 +16516,7 @@ mod tests {
 
     #[test]
     fn fp32_coalescing_native_producer_strict_reader_and_actual_writer_refusals() {
-        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_with(true).unwrap();
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_with(true, None).unwrap();
         let rows = std::fs::read_to_string(&result)
             .unwrap()
             .lines()
@@ -16613,6 +16618,52 @@ mod tests {
             assert_eq!(written["status"], "INVALID", "{case}");
             assert_eq!(written["complete"], false, "{case}");
         }
+    }
+
+    #[test]
+    fn coverage64_actual_runner_resealed_accounting_refusals() {
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_with(false, Some(64)).unwrap();
+        let rows = std::fs::read_to_string(&result).unwrap().lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        let admission = rows.iter().position(|r| r["phase"] == "diagnostic_admission").unwrap();
+        assert_eq!(rows[admission]["panel_line_cap_bytes"], 262144);
+        assert_eq!(rows[admission]["diagnostic_pinned_bytes"], 524288);
+        for (case, index, pointer) in [
+            ("model", startup, "/fp32_rerank/modeled_memory_bytes"),
+            ("panel-cap", admission, "/panel_line_cap_bytes"),
+            ("panel-pins", admission, "/diagnostic_pinned_bytes"),
+            ("trace-reserve", startup, "/trace_scratch_bytes"),
+            ("source-bytes", query, "/charges/source/verified_bytes"),
+            ("canonical-bytes", query, "/charges/canonical/verified_bytes"),
+        ] {
+            let mut bad = rows.clone();
+            let old = bad[index].pointer(pointer).unwrap().as_u64().unwrap();
+            *bad[index].pointer_mut(pointer).unwrap() = json!(old - 1);
+            let (path, _) = write_fixture(dir.path(), &format!("coverage64-{case}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+        }
+        let binding = rows.iter().find(|r| r["phase"] == "source_binding").unwrap();
+        let root: Value = serde_json::from_str(binding["generation_authority"]["root_manifest"].as_str().unwrap()).unwrap();
+        let leaf_count = (root["discovery"]["root_bytes"].as_u64().unwrap() - 512) / (64 + 4 * 1024);
+        assert_eq!(rows[query]["trace"]["semantic_leaves"].as_array().unwrap().len() as u64, 64.min(leaf_count));
+        for case in ["impossible-leaf", "missing-leaf"] {
+            let mut bad = rows.clone();
+            if case == "impossible-leaf" { bad[query]["trace"]["semantic_leaves"][0] = json!(leaf_count); }
+            else { bad[query]["trace"]["semantic_leaves"].as_array_mut().unwrap().pop(); }
+            let (path, _) = write_fixture(dir.path(), &format!("coverage64-{case}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+        }
+        let mut bad = rows.clone();
+        bad[query]["trace"]["nomination_evaluated_units"] = json!([0]);
+        let (path, _) = write_fixture(dir.path(), "coverage64-incomplete.jsonl", bad.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &bad);
+        assert!(fp32_serving::reduce(&config, &pin).is_err());
     }
 
     #[test]

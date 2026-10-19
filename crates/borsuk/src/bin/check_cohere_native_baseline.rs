@@ -1031,8 +1031,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
     }
     if let Some(limit) = c.semantic_leaf_limit {
         require(
-            c.profile == SemanticProfile::Scale1m && (1..=48).contains(&limit),
-            "semantic leaf limit requires Scale1m and integer 1..=48",
+            borsuk::semantic_unit_router::SemanticCoverage::new(c.profile, Some(limit)).is_ok(),
+            "semantic leaf limit requires Scale1m and integer 1..=64",
         )?;
     }
     validate_population(c)?;
@@ -1528,6 +1528,10 @@ fn scratch_bytes(rows: usize) -> Result<usize> {
         .checked_add(TwoBitPlanTrace::scratch_bytes(rows))
         .ok_or_else(|| "trace scratch overflow".into())
 }
+fn trace_scratch_bytes(c: &Config) -> usize {
+    c.semantic_leaf_limit.map_or_else(|| TwoBitPlanTrace::scratch_bytes(c.rows),
+        |limit| TwoBitPlanTrace::scratch_bytes_with_leaf_limit(c.rows, limit).expect("validated coverage"))
+}
 fn caller_bytes(c: &Config) -> usize {
     let backend = match &c.backend {
         Backend::Local { store_root } => store_root.capacity(),
@@ -1596,7 +1600,7 @@ fn caller_bytes(c: &Config) -> usize {
         + size_of::<Reader>();
     // Returned trace/result remain caller-owned while streaming, then drop before the next query.
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
-    let returned = TwoBitPlanTrace::scratch_bytes(c.rows)
+    let returned = trace_scratch_bytes(c)
         + 2 * c.rows.div_ceil(256) * (size_of::<usize>() + size_of::<std::ops::Range<usize>>())
         + K * (size_of::<ScoredNominee>() + size_of::<Hit>())
         + size_of::<[usize; K]>();
@@ -1672,11 +1676,14 @@ fn source_authentication_bytes(c: &Config) -> Result<u64> {
 // panel; for trace additionally the range trace with its pending-future, outcome and
 // completed-probe state, both host snapshots with the bounded /proc read buffer, the host
 // delta map, and the one JSON tree a failed query builds of its diagnostic object.
+fn panel_line_cap(c: &Config) -> usize {
+    if c.semantic_leaf_limit.is_some_and(|limit| limit > 48) { LINE_CAP } else { PANEL_LINE_CAP }
+}
 fn diagnostic_bytes(c: &Config) -> Result<usize> {
     let bytes = match &c.execution {
         Execution::Full {} => return Ok(0),
         Execution::DiagnosticPanel { trace, .. } => {
-            let lines = 2 * PANEL_LINE_CAP;
+            let lines = 2 * panel_line_cap(c);
             if *trace {
                 lines
                     + trace_peak_bytes(c)
@@ -1742,7 +1749,8 @@ fn limits(c: &Config) -> Result<TwoBitGenerationLimits> {
         max_source_bytes: c.source_byte_budget,
         max_source_gets: c.source_get_budget,
         max_parallel_source_gets: c.fetch_parallelism,
-        max_query_scratch_bytes: scratch_bytes(c.rows)?,
+        max_query_scratch_bytes: scratch_bytes(c.rows)?.checked_sub(TwoBitPlanTrace::scratch_bytes(c.rows))
+            .and_then(|n| n.checked_add(trace_scratch_bytes(c))).ok_or("coverage scratch")?,
         already_pinned_bytes: pinned_bytes(c)?,
     })
 }
@@ -2528,7 +2536,7 @@ async fn query_and_seal_with(
         .transpose()?;
     let receipt = validate_receipts(c)?;
     if c.execution.panel() {
-        out.admit_panel_lines(PANEL_LINE_CAP);
+        out.admit_panel_lines(panel_line_cap(c));
     }
     p.stage = "requests";
     let (requests, request_identity) = checked(&c.requests, c.count * D * 4)?;
@@ -2649,7 +2657,7 @@ async fn query_and_seal_with(
     let mut startup = json!({"phase":"startup","metadata":generation.remote_open_stats(),
         "serving":c.serving,
         "library_cap_bytes":c.max_memory_bytes,"caller_pinned_bytes":admission.already_pinned_bytes,
-        "codec_scratch_bytes":532480,"trace_scratch_bytes":TwoBitPlanTrace::scratch_bytes(c.rows),
+        "codec_scratch_bytes":532480,"trace_scratch_bytes":trace_scratch_bytes(c),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
     startup["source_layout"] = json!(c.source_layout);
     if let Some(fp32) = fp32_startup {
@@ -3655,14 +3663,18 @@ pub(crate) fn scale_reducer_native_fixture_count(
 
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
-    fp32_reducer_native_fixture_with(false)
+    fp32_reducer_native_fixture_with(false, None)
 }
 #[cfg(test)]
-pub(crate) fn fp32_reducer_native_fixture_with(coalesce: bool) -> Result<(tempfile::TempDir, PathBuf)> {
+pub(crate) fn fp32_reducer_native_fixture_with(coalesce: bool, leaf_limit: Option<usize>) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":33,"end":35});
+    if let Some(limit) = leaf_limit {
+        value["semantic_leaf_limit"] = json!(limit);
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[0,1],"trace":false});
+    }
     value["serving"] = json!({"mode":"fp32_rerank","coalesce":coalesce,"shortlist":16,"max_fp32_bytes":(if coalesce {33} else {16})*(D*4+8),
         "max_fp32_gets":16,"max_parallel_fp32_gets":3});
     let (config, sha) = tests::write_config(dir.path(), &value);
@@ -4219,6 +4231,116 @@ mod tests {
     }
 
     #[test]
+    fn coverage64_panel_model_minus_one_refuses_before_query_payload() {
+        let shape = Shape::tiny(33);
+        let (dir, mut value) = query_runtime(default_fetch_parallelism()).unwrap()
+            .block_on(fixture_with_profile(shape, SemanticProfile::Scale1m));
+        value["semantic_leaf_limit"] = json!(64);
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[0],"trace":false});
+        let (path, sha) = write_config(dir.path(), &value);
+        let c = config(&path, &sha, shape).unwrap();
+        let model = query_runtime(default_fetch_parallelism()).unwrap().block_on(async {
+            let reader = Reader::new(&c.backend, None).unwrap();
+            TwoBitGeneration::open_remote(reader.store(), &ObjectPath::from(c.generation_prefix.clone()),
+                &c.generation_root_sha256, limits(&c).unwrap(), &c.scratch_parent).await.unwrap()
+                .with_semantic_leaf_limit(64).unwrap().direct_closure_memory(DirectClosureLimits {
+                    max_sq8_bytes: c.sq8_byte_budget, max_sq8_gets: c.sq8_get_budget,
+                }).unwrap().resident_bytes
+        });
+        for cap in [model - 1, model] {
+            value["max_memory_bytes"] = json!(cap);
+            let (status, rows) = run_status(dir.path(), &format!("coverage-model-{cap}"), &value, shape);
+            if cap == model { assert_eq!(status, Status::Measured, "{rows:?}"); }
+            else {
+                assert_eq!(status, Status::Invalid);
+                assert!(rows.iter().all(|r| r["phase"] != "query"));
+                let terminal = &rows.last().unwrap()["summary"];
+                assert_eq!(terminal["completed_queries"], 0);
+                assert_eq!(terminal["truth_opened"], false);
+                assert_eq!(terminal["charges"]["source"]["submitted_gets"], 0);
+                assert_eq!(terminal["charges"]["sq8"]["submitted_gets"], 0);
+            }
+        }
+    }
+
+    #[test]
+    fn coverage64_production_writer_panel_full_failure_and_global_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = config_value(dir.path(), Shape::tiny(32));
+        value["profile"] = json!("scale1m");
+        value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[0],"trace":false});
+        let mut c: Config = serde_json::from_value(value).unwrap();
+        let old_pins = diagnostic_pinned_bytes(&c).unwrap();
+        assert_eq!(TwoBitPlanTrace::scratch_bytes(1_000_000), 246360);
+        assert_eq!(TwoBitPlanTrace::scratch_bytes_with_leaf_limit(1_000_000, 64), Some(314752));
+        let mut forecast = config_value(dir.path(), Shape::PRODUCTION);
+        forecast["profile"] = json!("scale1m");
+        forecast["rows"] = json!(1_000_000);
+        forecast["semantic_leaf_limit"] = json!(48);
+        let parsed = |v: &Value| serde_json::from_slice::<Config>(&serde_json::to_vec(v).unwrap()).unwrap();
+        let control = parsed(&forecast);
+        forecast["semantic_leaf_limit"] = json!(64);
+        let full64 = parsed(&forecast);
+        assert_eq!(caller_bytes(&full64) - caller_bytes(&control), 68392);
+        for count in [1, 110] {
+            forecast["execution"] = json!({"mode":"diagnostic_panel","ordinals":(0..count).collect::<Vec<_>>(),"trace":false});
+            let panel = parsed(&forecast);
+            let Execution::DiagnosticPanel { ordinals, .. } = &panel.execution else { unreachable!() };
+            assert_eq!(ordinals.capacity(), count);
+            assert_eq!(pinned_bytes(&panel).unwrap() - pinned_bytes(&full64).unwrap(), 524288 + 8 * count as u64);
+        }
+        let trace = TwoBitPlanTrace {
+            ranked_candidate_pages: (0..3907).collect(),
+            nomination_evaluated_units: (0..31250).collect(),
+            primary_page: 3906,
+            semantic_leaves: (31186..31250).collect(),
+            semantic_units: (27154..31250).collect(),
+            semantic_seed_additions: (0..7).collect(),
+            ..Default::default()
+        };
+        // Every ID list is at its maximal admitted cardinality; 32KiB covers
+        // the remaining production query fields without growing their budgets.
+        let record = json!({"phase":"query","trace":trace,"envelope": "x".repeat(32768)});
+        let bytes = serde_json::to_vec(&record).unwrap().len() + 1;
+        assert!(bytes > PANEL_LINE_CAP && bytes < LINE_CAP, "{bytes}");
+        for limit in [None, Some(40), Some(48), Some(64)] {
+            c.semantic_leaf_limit = limit;
+            let cap = panel_line_cap(&c);
+            let mut out = Output::create(&dir.path().join(format!("panel-{limit:?}.jsonl"))).unwrap();
+            out.admit_panel_lines(cap);
+            assert_eq!(out.emit(&record).is_ok(), limit == Some(64));
+            assert_eq!(out.bytes as usize, if limit == Some(64) { bytes } else { 0 });
+            assert_eq!(diagnostic_pinned_bytes(&c).unwrap(),
+                if limit == Some(64) { old_pins + 2 * (LINE_CAP - PANEL_LINE_CAP) } else { old_pins });
+        }
+        let mut out = Output::create(&dir.path().join("new-boundary.jsonl")).unwrap();
+        out.admit_panel_lines(LINE_CAP);
+        out.emit(&"x".repeat(LINE_CAP - 3)).unwrap(); // quotes + newline: exact cap
+        let before = out.bytes;
+        assert!(out.emit(&"x".repeat(LINE_CAP - 2)).is_err());
+        assert_eq!(out.bytes, before, "+1 refusal publishes no partial line");
+        let mut full = Output::create(&dir.path().join("full.jsonl")).unwrap();
+        full.emit(&record).unwrap();
+        assert_eq!(full.line_cap, LINE_CAP);
+        assert_eq!(full.cap, OUTPUT_CAP - TERMINAL_RESERVE);
+        // Global byte admission remains hard and independent of per-line admission.
+        full.bytes = full.cap;
+        assert!(full.emit(&json!({"phase":"query"})).is_err());
+        let mut failed = Output::create(&dir.path().join("failed.jsonl")).unwrap();
+        failed.admit_panel_lines(LINE_CAP);
+        emit_failure(&mut failed, json!({"phase":"query_failure","error":"original"}),
+            Some(json!({"oversized":"x".repeat(LINE_CAP)}))).unwrap();
+        let failure: Value = serde_json::from_slice(&std::fs::read(dir.path().join("failed.jsonl")).unwrap()).unwrap();
+        assert_eq!(failure["error"], "original");
+        assert_eq!(failure["diagnostic"]["omitted"], "serialized_line_cap");
+        assert_eq!(failure["diagnostic"]["cap_bytes"], LINE_CAP);
+        // Trace-OFF 110-query screen fits the unchanged global output envelope.
+        assert!(110 * LINE_CAP + 16 * LINE_CAP + SOURCE_BINDING_LINE_CAP < OUTPUT_CAP as usize - TERMINAL_RESERVE as usize);
+        // Full1000 is not guaranteed by the total cap; overruns must remain invalid.
+        assert!(1000 * LINE_CAP > OUTPUT_CAP as usize);
+    }
+
+    #[test]
     fn semantic_leaf_limit_config_strict_and_bound_before_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::tiny(32);
@@ -4228,7 +4350,7 @@ mod tests {
         validate_config(&default, shape).unwrap();
         assert_eq!(default.semantic_leaf_limit, None);
         let pinned = pinned_bytes(&default).unwrap();
-        for limit in [None, Some(1), Some(40), Some(48)] {
+        for limit in [None, Some(1), Some(40), Some(48), Some(64)] {
             let mut selected = value.clone();
             if let Some(limit) = limit {
                 selected["semantic_leaf_limit"] = json!(limit);
@@ -4236,7 +4358,8 @@ mod tests {
             let config: Config = serde_json::from_value(selected.clone()).unwrap();
             validate_config(&config, shape).unwrap();
             assert_eq!(config.semantic_leaf_limit, limit);
-            assert_eq!(pinned_bytes(&config).unwrap(), pinned);
+            if limit.is_none_or(|n| n <= 48) { assert_eq!(pinned_bytes(&config).unwrap(), pinned); }
+            else { assert!(pinned_bytes(&config).unwrap() >= pinned); }
             let (path, sha) = write_config(dir.path(), &selected);
             let output = dir.path().join(format!("leaf-limit-{limit:?}.jsonl"));
             assert!(
@@ -4270,7 +4393,7 @@ mod tests {
         let runtime = query_runtime(16).unwrap();
         for (profile, limit) in [
             ("scale1m", 0),
-            ("scale1m", 49),
+            ("scale1m", 65),
             ("scale1m", usize::MAX),
             ("native100k", 1),
             ("native100k", 40),
@@ -4300,7 +4423,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 error.to_string(),
-                "semantic leaf limit requires Scale1m and integer 1..=48"
+                "semantic leaf limit requires Scale1m and integer 1..=64"
             );
             assert!(!progress.truth_opened);
             assert_eq!(progress.completed, 0);

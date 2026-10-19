@@ -1,4 +1,5 @@
 //! A single authenticated root for frozen two-bit nomination and on-demand SQ8.
+use crate::semantic_unit_router::SemanticCoverage;
 use crate::semantic_unit_router::{SemanticProfile, SemanticUnitRouter, SourceIdentity};
 #[cfg(test)]
 use crate::sq8_s3_range::rank_verified_sq8_pages_inner;
@@ -322,8 +323,12 @@ impl SourceLayout {
 pub(crate) fn generation_memory(
     manifest: &Manifest, mut limits: TwoBitGenerationLimits, paged: bool,
     validate_local_records: bool, disk: u64, router_bytes: u64,
+    leaf_limit: Option<usize>,
 ) -> Result<(u64, usize, usize)> {
     let bad = TwoBitGenerationError::Invalid;
+    if leaf_limit.is_some() && manifest.discovery.semantic_profile().is_none() {
+        return Err(bad("semantic coverage profile"));
+    }
     let rows = manifest.canonical.rows;
     let dimensions = manifest.canonical.dimensions;
     let padded = crate::rotated_two_bit::RotatedTwoBitCodec::padded_dimensions(dimensions)
@@ -336,7 +341,10 @@ pub(crate) fn generation_memory(
     }
         // Scale reserves 3MiB for its full closure/scoring geometry; historical
         // profiles retain 1MiB. Retained diagnostic arrays are charged separately.
-        let planner_reserve = query_planner_reserve(manifest.discovery.semantic_profile());
+        let coverage = manifest.discovery.semantic_profile()
+            .map(|p| SemanticCoverage::new(p, leaf_limit))
+            .transpose().map_err(|_| bad("semantic coverage"))?;
+        let planner_reserve = coverage_planner_reserve(coverage);
         let block_scratch = TwoBitScoreBlock::scratch_bytes()
             .and_then(|bytes| u64::try_from(bytes).ok())
             .ok_or(bad("query memory"))?;
@@ -369,36 +377,7 @@ pub(crate) fn generation_memory(
         };
         // Page references, selected descriptors and their actual capacities are
         // separate from the two framed transport copies. Flat models stay exact.
-        let capsule_query_memory = if let Some(profile) = manifest.discovery.semantic_profile()
-            && manifest.source_layout.is_capsules()
-        {
-            rows
-                .div_ceil(32)
-                .min(profile.selected_leaf_limit() * 64)
-                .checked_mul(128)
-                .and_then(|n| {
-                    n.checked_add(profile.selected_leaf_limit().checked_mul(
-                        512 + std::mem::size_of::<usize>()
-                            + std::mem::size_of::<std::ops::Range<usize>>(),
-                    )?)
-                })
-                .and_then(|n| {
-                    n.checked_add(
-                        profile
-                            .walk_unit_limit()
-                            .checked_mul(std::mem::size_of::<usize>())?,
-                    )
-                })
-                .and_then(|n| {
-                    n.checked_add(crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
-                        crate::source_capsule::VerifiedPageSpan<'_, '_>,
-                    >(profile.selected_leaf_limit())?)
-                })
-                .and_then(|n| n.checked_add(4096))
-                .ok_or(bad("capsule query memory"))?
-        } else {
-            0
-        };
+        let capsule_query_memory = capsule_coverage_memory(rows, manifest.source_layout.is_capsules(), coverage)?;
         let source_query_memory = if paged {
             limits
                 .max_source_bytes
@@ -487,6 +466,47 @@ pub(crate) fn generation_memory(
             .and_then(|n| n.checked_add(limits.already_pinned_bytes))
             .ok_or(bad("memory overflow"))?;
     Ok((modeled, source_payload_bytes, capsule_query_memory))
+}
+
+
+fn capsule_coverage_memory(rows: usize, capsules: bool, coverage: Option<SemanticCoverage>) -> Result<usize> {
+    let bad = TwoBitGenerationError::Invalid;
+    Ok(if let Some(profile) = coverage
+            && capsules
+        {
+            rows
+                .div_ceil(32)
+                .min(profile.admitted_leaves() * 64)
+                .checked_mul(128)
+                .and_then(|n| {
+                    n.checked_add(profile.admitted_leaves().checked_mul(
+                        512 + std::mem::size_of::<usize>()
+                            + std::mem::size_of::<std::ops::Range<usize>>(),
+                    )?)
+                })
+                .and_then(|n| {
+                    n.checked_add(
+                        profile
+                            .walk_unit_limit()
+                            .checked_mul(std::mem::size_of::<usize>())?,
+                    )
+                })
+                .and_then(|n| {
+                    n.checked_add(crate::sq8_s3_range::capsule_fetch_descriptor_bytes::<
+                        crate::source_capsule::VerifiedPageSpan<'_, '_>,
+                    >(profile.admitted_leaves())?)
+                })
+                .and_then(|n| n.checked_add(4096))
+                .ok_or(bad("capsule query memory"))?
+        } else {
+            0
+        })
+}
+fn coverage_planner_reserve(coverage: Option<SemanticCoverage>) -> u64 {
+    match coverage {
+        Some(c) if c.is_scale() => (if c.admitted_leaves() > 48 { 4 } else { 3 }) * 1024 * 1024 + SOURCE_SHORTLIST_RESERVE,
+        _ => query_planner_reserve(None),
+    }
 }
 
 #[cfg(test)]
@@ -1367,13 +1387,9 @@ struct SemanticLeafLimit(usize);
 
 impl SemanticLeafLimit {
     fn new(limit: usize, profile: Option<SemanticProfile>) -> Result<Self> {
-        if !(1..=SemanticProfile::Scale1m.selected_leaf_limit()).contains(&limit)
-            || profile != Some(SemanticProfile::Scale1m)
-        {
-            return Err(TwoBitGenerationError::Invalid(
-                "semantic leaf limit requires Scale1m and 1..=48",
-            ));
-        }
+        let profile = profile.ok_or(TwoBitGenerationError::Invalid("semantic coverage profile"))?;
+        SemanticCoverage::new(profile, Some(limit))
+            .map_err(|_| TwoBitGenerationError::Invalid("semantic leaf limit requires Scale1m and 1..=64"))?;
         Ok(Self(limit))
     }
 }
@@ -1462,6 +1478,15 @@ pub struct TwoBitPlanTrace {
 impl TwoBitPlanTrace {
     /// Conservative retained ID/record payload excluding allocator overhead.
     pub fn scratch_bytes(rows: usize) -> usize {
+        Self::coverage_scratch_bytes(rows, SemanticProfile::Scale1m.into())
+    }
+    /// Checked trace payload for explicit generic Scale1m coverage.
+    pub fn scratch_bytes_with_leaf_limit(rows: usize, limit: usize) -> Option<usize> {
+        let coverage = SemanticCoverage::new(SemanticProfile::Scale1m, Some(limit)).ok()?;
+        if !(1..=1_000_000).contains(&rows) { return None; }
+        Some(Self::coverage_scratch_bytes(rows, coverage))
+    }
+    fn coverage_scratch_bytes(rows: usize, scale: SemanticCoverage) -> usize {
         let units = rows.div_ceil(32);
         // Graph discoveries and semantic IDs are mutually exclusive. Charge the
         // larger retained capacity, including nomination's full completion reserve
@@ -1469,10 +1494,9 @@ impl TwoBitPlanTrace {
         let graph_ids = 2 * rows.div_ceil(256).min(159)
             + 2 * (units.min(128) + units.min(1272))
             + units.min(2544);
-        let scale = SemanticProfile::Scale1m;
         let semantic_ids = rows.div_ceil(256).min(scale.closure_page_limit())
             + units.min(scale.source_unit_limit())
-            + scale.selected_leaf_limit()
+            + scale.admitted_leaves()
             + units.min(scale.walk_unit_limit() - 7)
             + 8;
         let graph_bytes = graph_ids * std::mem::size_of::<usize>()
@@ -1486,7 +1510,9 @@ impl TwoBitPlanTrace {
 // codec scratch, trace, directory ranking and fetched response buffers. At
 // Scale's maxima: eight walk vectors (3079*8), four score vectors (24576*16),
 // eight page vectors (3072*16), two BTreeSets (3079*64), plus 64KiB controls
-// total 2,622,784B < 3MiB. The reservations include temporary sorts/clones;
+// total 2,622,784B < 3MiB. Explicit coverage64 raises these bounds to
+// 4103 walk / 32768 scored units / 4096 pages: 3,475,648B < 4MiB.
+// The reservations include temporary sorts/clones;
 // the 64B/set-entry allowance is modeled payload, not an allocator guarantee.
 // Actual native RSS remains an independent host gate.
 const fn query_planner_reserve(profile: Option<SemanticProfile>) -> u64 {
@@ -1599,6 +1625,19 @@ pub fn plan_two_bit_source_walks<'a>(
     semantic_profile: Option<SemanticProfile>,
     walks: &[(usize, Vec<usize>)],
     prepared: &PreparedTwoBit,
+    record: impl FnMut(usize) -> Option<&'a [u8]>,
+    limits: SelectedSq8Limits,
+    trace: Option<&mut TwoBitPlanTrace>,
+) -> Result<BudgetedPagePlan> {
+    plan_two_bit_source_walks_with_coverage(authority, nomination_page_limit,
+        semantic_profile.map(Into::into), walks, prepared, record, limits, trace)
+}
+fn plan_two_bit_source_walks_with_coverage<'a>(
+    authority: &PageAuthority,
+    nomination_page_limit: usize,
+    semantic_profile: Option<SemanticCoverage>,
+    walks: &[(usize, Vec<usize>)],
+    prepared: &PreparedTwoBit,
     mut record: impl FnMut(usize) -> Option<&'a [u8]>,
     limits: SelectedSq8Limits,
     trace: Option<&mut TwoBitPlanTrace>,
@@ -1630,7 +1669,7 @@ pub fn plan_two_bit_source_walks<'a>(
     if semantic_profile.is_some_and(|profile| !profile.valid_geometry(rows, dimensions)) {
         return Err(TwoBitGenerationError::Invalid("source semantic profile"));
     }
-    let source_unit_limit = semantic_profile.map_or(2544, SemanticProfile::source_unit_limit);
+    let source_unit_limit = semantic_profile.map_or(2544, SemanticCoverage::source_unit_limit);
     let mut nomination_evaluated_units = Vec::with_capacity(if trace.is_some() {
         rows.div_ceil(32).min(source_unit_limit)
     } else {
@@ -1672,7 +1711,7 @@ pub fn plan_two_bit_source_walks<'a>(
         Ok(maximum)
     };
     let ranked =
-        rank_walked_source_with_limit(rows, walks, nomination_page_limit, semantic_profile, score)?;
+        rank_walked_source_with_limit_coverage(rows, walks, nomination_page_limit, semantic_profile, score)?;
     if let Some(trace) = trace {
         trace.primary_page = ranked[0].0;
         trace.nomination_evaluated_units = nomination_evaluated_units;
@@ -1749,13 +1788,17 @@ fn rank_walked_source(
     rank_walked_source_with_limit(rows, walks, rows.div_ceil(256).min(159), None, score)
 }
 
-fn admit_source_walks(
+#[cfg(test)]
+fn admit_source_walks(rows: usize, walks: &[(usize, Vec<usize>)], semantic_profile: Option<SemanticProfile>) -> Result<Vec<usize>> {
+    admit_source_walks_coverage(rows, walks, semantic_profile.map(Into::into))
+}
+fn admit_source_walks_coverage(
     rows: usize,
     walks: &[(usize, Vec<usize>)],
-    semantic_profile: Option<SemanticProfile>,
+    semantic_profile: Option<SemanticCoverage>,
 ) -> Result<Vec<usize>> {
     let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
-    let walk_limit = semantic_profile.map_or(1272, SemanticProfile::walk_unit_limit);
+    let walk_limit = semantic_profile.map_or(1272, SemanticCoverage::walk_unit_limit);
     let walk_count = if semantic_profile.is_some() { 1 } else { 2 };
     if rows == 0 || walks.is_empty() || walks.len() > walk_count {
         return Err(invalid());
@@ -1787,11 +1830,15 @@ fn admit_source_walks(
     Ok(units)
 }
 
-fn rank_walked_source_with_limit(
+#[cfg(test)]
+fn rank_walked_source_with_limit(rows: usize, walks: &[(usize, Vec<usize>)], page_limit: usize, semantic_profile: Option<SemanticProfile>, score: impl FnMut(usize) -> Result<f64>) -> Result<Vec<(usize, f64)>> {
+    rank_walked_source_with_limit_coverage(rows, walks, page_limit, semantic_profile.map(Into::into), score)
+}
+fn rank_walked_source_with_limit_coverage(
     rows: usize,
     walks: &[(usize, Vec<usize>)],
     page_limit: usize,
-    semantic_profile: Option<SemanticProfile>,
+    semantic_profile: Option<SemanticCoverage>,
     mut score: impl FnMut(usize) -> Result<f64>,
 ) -> Result<Vec<(usize, f64)>> {
     let invalid = || TwoBitGenerationError::Invalid("walked source geometry");
@@ -1803,7 +1850,7 @@ fn rank_walked_source_with_limit(
         return Err(invalid());
     }
     let count = page_limit;
-    let units = admit_source_walks(rows, walks, semantic_profile)?;
+    let units = admit_source_walks_coverage(rows, walks, semantic_profile)?;
     if semantic_profile.is_some()
         && units
             .iter()
@@ -1814,8 +1861,8 @@ fn rank_walked_source_with_limit(
     {
         return Err(invalid());
     }
-    let source_unit_limit = semantic_profile.map_or(2544, SemanticProfile::source_unit_limit);
-    let page_capacity = semantic_profile.map_or(2544, SemanticProfile::closure_page_limit);
+    let source_unit_limit = semantic_profile.map_or(2544, SemanticCoverage::source_unit_limit);
+    let page_capacity = semantic_profile.map_or(2544, SemanticCoverage::closure_page_limit);
     let mut memo = Vec::with_capacity(rows.div_ceil(32).min(source_unit_limit));
     for unit in units {
         let value = score(unit)?;
@@ -1845,7 +1892,7 @@ fn rank_walked_source_with_limit(
         page_capacity,
     );
     let walked_count = memo.len();
-    let complete_units = if semantic_profile == Some(SemanticProfile::Scale1m) {
+    let complete_units = if semantic_profile.is_some_and(SemanticCoverage::is_scale) {
         let count = global.iter().try_fold(0_usize, |total, &(page, _)| {
             total.checked_add((rows.div_ceil(32) - page * 8).min(8))
         });
@@ -1994,11 +2041,40 @@ impl TwoBitGeneration {
     pub fn semantic_profile(&self) -> Option<SemanticProfile> {
         self.manifest.discovery.semantic_profile()
     }
-    /// Limit frozen squared-Euclidean leaf selection to an ordered prefix.
-    /// Only authenticated Scale1m semantic generations admit explicit limits 1..=48.
-    /// Omission retains the profile default; admission reserves remain unchanged.
+    fn semantic_coverage(&self) -> Option<SemanticCoverage> {
+        self.semantic_profile().map(|profile| SemanticCoverage::new(
+            profile, self.semantic_leaf_limit.map(|limit| limit.0)).expect("admitted coverage"))
+    }
+    fn trace_scratch_bytes(&self) -> usize {
+        match self.semantic_leaf_limit {
+            Some(SemanticLeafLimit(limit)) if limit > 48 =>
+                TwoBitPlanTrace::scratch_bytes_with_leaf_limit(self.rows(), limit).expect("admitted geometry"),
+            _ => TwoBitPlanTrace::scratch_bytes(self.rows()),
+        }
+    }
+    /// Select an ordered squared-Euclidean prefix; explicit Scale1m admits 1..=64.
+    /// Omission keeps 48. Coverage above 48 reserves larger planner/capsule bounds.
     pub fn with_semantic_leaf_limit(mut self, limit: usize) -> Result<Self> {
         let limit = SemanticLeafLimit::new(limit, self.semantic_profile())?;
+        let before = self.semantic_coverage();
+        let after = Some(SemanticCoverage::new(SemanticProfile::Scale1m, Some(limit.0))
+            .map_err(|_| TwoBitGenerationError::Invalid("semantic coverage"))?);
+        let old_capsule = capsule_coverage_memory(self.rows(), self.capsules.is_some(), before)?;
+        let new_capsule = capsule_coverage_memory(self.rows(), self.capsules.is_some(), after)?;
+        let old = coverage_planner_reserve(before) + old_capsule as u64;
+        let new = coverage_planner_reserve(after) + new_capsule as u64;
+        let active = self.limits.max_active_queries as u64;
+        let modeled = self.modeled_memory_bytes
+            .checked_sub(old.checked_mul(active).ok_or(TwoBitGenerationError::Invalid("coverage memory"))?)
+            .and_then(|n| n.checked_add(new.checked_mul(active)?))
+            .filter(|&n| n <= self.limits.max_memory_bytes)
+            .ok_or(TwoBitGenerationError::Invalid("coverage memory"))?;
+        if let Some(capsules) = self.capsules.as_mut() {
+            capsules.query_memory_bytes = capsules.query_memory_bytes.checked_sub(old_capsule)
+                .and_then(|n| n.checked_add(new_capsule))
+                .ok_or(TwoBitGenerationError::Invalid("capsule coverage memory"))?;
+        }
+        self.modeled_memory_bytes = modeled;
         self.semantic_leaf_limit = Some(limit);
         Ok(self)
     }
@@ -2646,6 +2722,7 @@ impl TwoBitGeneration {
         } else { 0 };
         let (modeled, source_payload_bytes, capsule_query_memory) = generation_memory(
             &manifest, limits, paged, validate_local_records, disk, router_bytes,
+            None,
         )?;
         if modeled > limits.max_memory_bytes {
             return Err(bad("memory cap"));
@@ -2985,13 +3062,22 @@ impl TwoBitGeneration {
         self.manifest.discovery.mode()
     }
 
+    #[cfg(test)]
     fn semantic_walks(
         router: &SemanticUnitRouter,
         ids: &[usize],
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<Vec<(usize, Vec<usize>)>> {
+        Self::semantic_walks_with_coverage(router, ids, trace, router.manifest().profile.into())
+    }
+    fn semantic_walks_with_coverage(
+        router: &SemanticUnitRouter,
+        ids: &[usize],
+        trace: Option<&mut TwoBitPlanTrace>,
+        coverage: SemanticCoverage,
+    ) -> Result<Vec<(usize, Vec<usize>)>> {
         let nomination = router
-            .nominate_selected(ids)
+            .nominate_selected_with_coverage(ids, coverage)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
         if let Some(trace) = trace {
             trace.semantic_leaves = nomination.leaf_ids;
@@ -3019,13 +3105,10 @@ impl TwoBitGeneration {
                 .discover_walks(normalized, trace)
                 .map(|walks| (walks, Vec::new()));
         };
-        let mut ids = router
-            .select_leaves(normalized)
+        let coverage = self.semantic_coverage().ok_or(TwoBitGenerationError::Invalid("semantic coverage"))?;
+        let ids = router.select_leaves_with_coverage(normalized, coverage)
             .map_err(|e| TwoBitGenerationError::Router(e.to_string()))?;
-        if let Some(SemanticLeafLimit(limit)) = self.semantic_leaf_limit {
-            ids.truncate(limit);
-        }
-        Ok((Self::semantic_walks(router, &ids, trace)?, ids))
+        Ok((Self::semantic_walks_with_coverage(router, &ids, trace, coverage)?, ids))
     }
     fn plan_inner<'a>(
         &self,
@@ -3036,7 +3119,7 @@ impl TwoBitGeneration {
             return Err(TwoBitGenerationError::Invalid("paged plan requires reader"));
         }
         let trace_bytes = if trace.is_some() {
-            TwoBitPlanTrace::scratch_bytes(self.pages.rows())
+            self.trace_scratch_bytes()
         } else {
             0
         };
@@ -3054,7 +3137,7 @@ impl TwoBitGeneration {
         let normalized = normalize_two_bit_diagnostic_query(query)?;
         let (walks, ids) = self.source_walks(normalized.as_ref(), trace.as_deref_mut())?;
         let plan = if let Some(capsules) = &self.capsules {
-            let units = admit_source_walks(self.rows(), &walks, self.semantic_profile())?;
+            let units = admit_source_walks_coverage(self.rows(), &walks, self.semantic_coverage())?;
             let authority = &capsules
                 .local
                 .as_ref()
@@ -3072,7 +3155,7 @@ impl TwoBitGeneration {
                 &mut QueryStages::default(),
             )?
         } else if let Some(frames) = &self.frames {
-            let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
+            let closure = admit_source_walks_coverage(self.rows(), &walks, self.semantic_coverage())?
                 .into_iter()
                 .map(|unit| unit / 8)
                 .collect::<BTreeSet<_>>();
@@ -3312,7 +3395,7 @@ impl TwoBitGeneration {
         let discovery_cpu = profile.as_deref().map(|_| SyncStart::now());
         let discovered: Result<_> = (|| {
             let trace_bytes = if trace.is_some() {
-                TwoBitPlanTrace::scratch_bytes(self.rows())
+                self.trace_scratch_bytes()
             } else {
                 0
             };
@@ -3338,7 +3421,7 @@ impl TwoBitGeneration {
         if let Some(capsules) = &self.capsules {
             let cover_cpu = profile.as_deref().map(|_| SyncStart::now());
             let cover: Result<_> = (|| {
-                let units = admit_source_walks(self.rows(), &walks, self.semantic_profile())?;
+                let units = admit_source_walks_coverage(self.rows(), &walks, self.semantic_coverage())?;
                 let authority = self
                     .source
                     .as_ref()
@@ -3466,7 +3549,7 @@ impl TwoBitGeneration {
             let cover_cpu = profile.as_deref().map(|_| SyncStart::now());
             let covered: Result<_> = (|| {
                 // Validate the same explicit discovery bounds before SOURCE cover/I/O.
-                let closure = admit_source_walks(self.rows(), &walks, self.semantic_profile())?
+                let closure = admit_source_walks_coverage(self.rows(), &walks, self.semantic_coverage())?
                     .into_iter()
                     .map(|unit| unit / 8)
                     .collect::<BTreeSet<_>>();
@@ -3624,7 +3707,7 @@ impl TwoBitGeneration {
         record: impl FnMut(usize) -> Option<&'a [u8]>,
         trace: Option<&mut TwoBitPlanTrace>,
     ) -> Result<BudgetedPagePlan> {
-        plan_two_bit_source_walks(
+        plan_two_bit_source_walks_with_coverage(
             &self.pages,
             if self.manifest.discovery.mode() == DiscoveryMode::Semantic {
                 walks
@@ -3635,7 +3718,7 @@ impl TwoBitGeneration {
             } else {
                 self.pages.rows().div_ceil(256).min(159)
             },
-            self.semantic_profile(),
+            self.semantic_coverage(),
             walks,
             prepared,
             record,
@@ -3817,7 +3900,7 @@ impl TwoBitGeneration {
         top_k: usize,
         limits: crate::fp32_rerank::Fp32RerankLimits,
     ) -> Result<(crate::fp32_rerank::Fp32RerankResult, TwoBitPlanTrace)> {
-        if TwoBitPlanTrace::scratch_bytes(self.rows()) > self.limits.max_query_scratch_bytes {
+        if self.trace_scratch_bytes() > self.limits.max_query_scratch_bytes {
             return Err(TwoBitGenerationError::Invalid("diagnostic scratch"));
         }
         let mut trace = TwoBitPlanTrace::default();
@@ -4446,8 +4529,8 @@ impl TwoBitGeneration {
         }
         let rows = self.rows();
         let dimensions = self.pages.dimensions();
-        let planner = query_planner_reserve(self.semantic_profile())
-            .checked_add(TwoBitPlanTrace::scratch_bytes(rows) as u64)
+        let planner = coverage_planner_reserve(self.semantic_coverage())
+            .checked_add(self.trace_scratch_bytes() as u64)
             .and_then(|n| n.checked_add((dimensions as u64).checked_mul(4)?))
             .and_then(|n| n.checked_add((rows.div_ceil(256) as u64).checked_mul(512)?))
             .ok_or(bad("direct closure planner memory"))?;
@@ -4543,7 +4626,7 @@ impl TwoBitGeneration {
             return Err(bad("direct closure limits"));
         }
         if traced
-            && self.limits.max_query_scratch_bytes < TwoBitPlanTrace::scratch_bytes(self.rows())
+            && self.limits.max_query_scratch_bytes < self.trace_scratch_bytes()
         {
             return Err(bad("diagnostic scratch"));
         }
@@ -4572,7 +4655,7 @@ impl TwoBitGeneration {
         walks: &[(usize, Vec<usize>)],
         limits: DirectClosureLimits,
     ) -> Result<BudgetedPagePlan> {
-        let closure = admit_source_walks(self.rows(), walks, self.semantic_profile())?
+        let closure = admit_source_walks_coverage(self.rows(), walks, self.semantic_coverage())?
             .into_iter()
             .map(|unit| unit / 8)
             .collect::<BTreeSet<_>>();
@@ -12049,6 +12132,107 @@ mod source_walk_tests {
         }
     }
 
+    #[test]
+    fn coverage64_checked_geometry_and_complete_source() {
+        let coverage = SemanticCoverage::new(SemanticProfile::Scale1m, Some(64)).unwrap();
+        assert_eq!(coverage.walk_unit_limit(), 4103);
+        assert_eq!(coverage.closure_page_limit(), 4096);
+        assert_eq!(coverage.source_unit_limit(), 32768);
+        for dimensions in [1, 257, 1024] {
+            assert!(coverage.valid_geometry(1_000_000, dimensions));
+        }
+        for limit in [0, 65, usize::MAX] {
+            assert!(SemanticCoverage::new(SemanticProfile::Scale1m, Some(limit)).is_err());
+            assert!(TwoBitPlanTrace::scratch_bytes_with_leaf_limit(1_000_000, limit).is_none());
+        }
+        assert!(TwoBitPlanTrace::scratch_bytes_with_leaf_limit(usize::MAX, 64).is_none());
+        // One nominated unit per page reaches every physical page of a 1M-row source.
+        let pages = 1_000_000_usize.div_ceil(256);
+        let mut units = (0..pages).map(|p| p * 8).collect::<Vec<_>>();
+        units.extend(1..8);
+        let walks = [(0, units)];
+        let mut scored = BTreeSet::new();
+        let ranked = rank_walked_source_with_limit_coverage(1_000_000, &walks, pages,
+            Some(coverage), |unit| { assert!(scored.insert(unit)); Ok(unit as f64) }).unwrap();
+        assert_eq!(ranked.len(), pages);
+        assert_eq!(scored, (0..1_000_000_usize.div_ceil(32)).collect());
+        assert!(admit_source_walks(1_000_000, &walks, Some(SemanticProfile::Scale1m)).is_err());
+    }
+
+    #[tokio::test]
+    async fn coverage64_selects_beyond48_and_admits_model_before_io() {
+        for dimensions in [1, 257, 1024] {
+            let rows = if dimensions == 1 { 131_073 } else { 257 };
+            let mut tiny = tiny_direct_with_profile(rows, dimensions, SemanticProfile::Scale1m).await;
+            tiny.limits.max_query_scratch_bytes = crate::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap()
+                + TwoBitPlanTrace::scratch_bytes_with_leaf_limit(rows, 64).unwrap();
+            let open = || TwoBitGeneration::open(
+                &tiny.temp.path().join("generation"), &tiny.root_sha, tiny.limits).unwrap();
+            let baseline = open();
+            let old_model = baseline.modeled_memory_bytes();
+            let configured = baseline.with_semantic_leaf_limit(64).unwrap();
+            let model = configured.modeled_memory_bytes();
+            assert_eq!(model - old_model, 1024 * 1024);
+            assert_eq!(configured.with_semantic_leaf_limit(40).unwrap().modeled_memory_bytes(), old_model);
+            let mut rejected = open();
+            rejected.limits.max_memory_bytes = model - 1;
+            tiny.store.inner.reads.lock().unwrap().clear();
+            assert!(rejected.with_semantic_leaf_limit(64).is_err());
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            let mut accepted = open();
+            accepted.limits.max_memory_bytes = model;
+            let mut accepted = accepted.with_semantic_leaf_limit(64).unwrap();
+            let query = vec![1.; dimensions];
+            let mut trace = TwoBitPlanTrace::default();
+            let (_, leaves) = accepted.source_walks(&query, Some(&mut trace)).unwrap();
+            assert!(!leaves.is_empty());
+            if dimensions == 1 {
+                assert_eq!(leaves, (0..64).collect::<Vec<_>>());
+                assert!(trace.semantic_units.len() > 48 * 64);
+            }
+            // Diagnostic scratch refusal must release its query slot without payload reads.
+            let scratch = accepted.limits.max_query_scratch_bytes;
+            accepted.limits.max_query_scratch_bytes = accepted.trace_scratch_bytes() - 1;
+            assert!(accepted.diagnostic_search_with_store(&tiny.store, &query, 10).await.is_err());
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+            accepted.limits.max_query_scratch_bytes = scratch;
+            let (local, traced) = accepted.diagnostic_search_with_store(&tiny.store, &query, 10).await.unwrap();
+            assert_eq!(traced.semantic_leaves, leaves);
+            assert!(traced.nomination_evaluated_units.len() <= 32768);
+            let remote = TwoBitGeneration::open_remote(&tiny.store, &tiny.prefix, &tiny.root_sha,
+                tiny.limits, tiny.temp.path()).await.unwrap().with_semantic_leaf_limit(64).unwrap();
+            let (remote, remote_trace) = remote.diagnostic_search_with_store(&tiny.store, &query, 10).await.unwrap();
+            assert_eq!(serde_json::to_value(remote_trace).unwrap(), serde_json::to_value(traced).unwrap());
+            assert_eq!(ranking_bits(&remote), ranking_bits(&local));
+            assert_eq!(remote.plan, local.plan);
+        }
+    }
+
+    #[tokio::test]
+    async fn coverage64_capsule_and_frame_admission_roundtrip() {
+        let tiny = tiny_direct_with_profile(257, 257, SemanticProfile::Scale1m).await;
+        for layout in [SourceLayoutMode::LeafCapsulesV2, SourceLayoutMode::FramedRecordsV1] {
+            let output = tiny.temp.path().join(format!("coverage-{layout:?}"));
+            let sha = crate::two_bit_build::repackage_source_layout(
+                &tiny.temp.path().join("generation"), &tiny.root_sha, &output, 2, layout, tiny.limits).unwrap();
+            let open = || TwoBitGeneration::open(&output, &sha, tiny.limits).unwrap();
+            let baseline = open().modeled_memory_bytes();
+            let expanded = open().with_semantic_leaf_limit(64).unwrap();
+            let model = expanded.modeled_memory_bytes();
+            let old = SemanticCoverage::new(SemanticProfile::Scale1m, None).unwrap();
+            let new = SemanticCoverage::new(SemanticProfile::Scale1m, Some(64)).unwrap();
+            let extra = capsule_coverage_memory(257, expanded.manifest.source_layout.is_capsules(), Some(new)).unwrap()
+                - capsule_coverage_memory(257, expanded.manifest.source_layout.is_capsules(), Some(old)).unwrap();
+            assert_eq!(model - baseline, 1024 * 1024 + extra as u64);
+            assert_eq!(expanded.with_semantic_leaf_limit(40).unwrap().modeled_memory_bytes(), baseline);
+            let mut rejected = open();
+            rejected.limits.max_memory_bytes = model - 1;
+            tiny.store.inner.reads.lock().unwrap().clear();
+            assert!(rejected.with_semantic_leaf_limit(64).is_err());
+            assert!(tiny.store.inner.reads.lock().unwrap().is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn semantic_leaf_limit_invalid_policies_do_no_io() {
         for profile in [SemanticProfile::Native100k, SemanticProfile::Fresh1m] {
@@ -12060,7 +12244,7 @@ mod source_walk_tests {
         assert!(SemanticLeafLimit::new(40, None).is_err());
         for profile in [SemanticProfile::Native100k, SemanticProfile::Scale1m] {
             let tiny = tiny_direct_with_profile(513, 2, profile).await;
-            for limit in [0, 49, usize::MAX, 40] {
+            for limit in [0, 65, usize::MAX, 40] {
                 let generation = TwoBitGeneration::open_remote(
                     &tiny.store,
                     &tiny.prefix,
@@ -15525,7 +15709,7 @@ mod source_walk_tests {
             let rows = 513;
             let codec = RotatedTwoBitCodec::new(&vec![0.; dimensions], 20260923).unwrap();
             let query = vec![1.; dimensions];
-            let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
+            let scratch = crate::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(dimensions).unwrap();
             assert!(matches!(
                 codec.prepare_query(&query, scratch - 1),
                 Err(crate::rotated_two_bit::TwoBitError::MemoryBudget)

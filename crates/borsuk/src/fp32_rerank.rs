@@ -348,6 +348,7 @@ pub fn modeled_remote_memory(
     authentication: crate::sq8_s3_range::SourceAuthentication,
     split: Option<crate::sq8_s3_range::Sq8RangeSplit>,
     byte_window_state_bytes: usize,
+    semantic_leaf_limit: Option<usize>,
 ) -> Result<u64, crate::two_bit_generation::TwoBitGenerationError> {
     use crate::two_bit_generation::{Discovery, Manifest, TwoBitGenerationError};
     let bad = TwoBitGenerationError::Invalid;
@@ -364,7 +365,7 @@ pub fn modeled_remote_memory(
         limits.max_source_gets = limits.max_source_gets.min(128);
     }
     let (mut modeled, _, _) = crate::two_bit_generation::generation_memory(
-        &root, limits, true, false, metadata_bytes, router,
+        &root, limits, true, false, metadata_bytes, router, semantic_leaf_limit,
     )?;
     modeled = modeled.checked_add(authentication.additional_memory_bytes(
         limits.max_parallel_source_gets, limits.max_source_gets, limits.max_active_queries,

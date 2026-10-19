@@ -365,7 +365,7 @@ pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
     require(
         cpu_profile_config(header)
             && header["range_scheduler_owner"] == "library"
-            && (1..=48).contains(&limit)
+            && (1..=64).contains(&limit)
             && match header["phase"].as_str() {
                 Some("identity") => matches!(
                     header["schema"].as_str(),
@@ -379,7 +379,7 @@ pub(super) fn semantic_leaf_limit(header: &Value) -> Result<Option<usize>> {
                 Some("bound_inputs") => header["profile"] == "scale1m",
                 _ => false,
             },
-        "semantic leaf limit requires current Scale1m and integer 1..=48",
+        "semantic leaf limit requires current Scale1m and integer 1..=64",
     )?;
     Ok(Some(limit))
 }
@@ -904,6 +904,39 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
             && (1..=memory_cap(inputs)?).contains(&max_bytes),
         "v10 geometry limits",
     )?;
+    if semantic_leaf_limit(inputs)?.is_some_and(|limit| limit > 48) {
+        let coverage = borsuk::semantic_unit_router::SemanticCoverage::new(
+            borsuk::semantic_unit_router::SemanticProfile::Scale1m, semantic_leaf_limit(inputs)?)?;
+        let trace = &raw["trace"];
+        let ids = |key: &str, bound: u64, cap: usize| -> Result<std::collections::BTreeSet<u64>> {
+            let values = trace[key].as_array().ok_or("coverage trace IDs")?;
+            let mut ids = std::collections::BTreeSet::new();
+            require(values.len() <= cap, "coverage trace capacity")?;
+            for value in values {
+                let value = number(value)?;
+                require(value < bound && ids.insert(value), "coverage trace unique bounded ID")?;
+            }
+            Ok(ids)
+        };
+        let leaves = ids("semantic_leaves", 2 * rows.div_ceil(32).div_ceil(64) - 1, coverage.selected_leaf_limit())?;
+        let units = ids("semantic_units", rows.div_ceil(32), leaves.len() * 64)?;
+        require(!units.is_empty(), "coverage semantic membership")?;
+        let pages = units.iter().map(|unit| unit / 8).collect::<std::collections::BTreeSet<_>>();
+        require(pages.len() <= coverage.closure_page_limit(), "coverage closure capacity")?;
+        let seed = units.first().ok_or("coverage seed")? / 8;
+        let additions = (seed * 8..((seed + 1) * 8).min(rows.div_ceil(32)))
+            .filter(|unit| !units.contains(unit)).collect::<std::collections::BTreeSet<_>>();
+        require(ids("semantic_seed_additions", rows.div_ceil(32), 7)? == additions,
+            "coverage exact seed additions")?;
+        if raw["source_nomination_skipped"] != true {
+            require(ids("ranked_candidate_pages", rows.div_ceil(256), coverage.closure_page_limit())? == pages,
+                "coverage exact ranked closure")?;
+            let expected = pages.iter().flat_map(|p| p * 8..((p + 1) * 8).min(rows.div_ceil(32)))
+                .collect::<std::collections::BTreeSet<_>>();
+            require(ids("nomination_evaluated_units", rows.div_ceil(32), coverage.source_unit_limit())? == expected,
+                "coverage complete SOURCE scoring")?;
+        }
+    }
     let plan = &raw["plan"];
     fields(plan, PLAN_FIELDS)?;
     logical_count(raw)?;
@@ -1111,6 +1144,7 @@ pub(super) enum DiagnosticModel {
     Sq8V3,
     SourceSummaryV4,
     SourceRangesV5,
+    Coverage64RangesV5,
 }
 
 impl DiagnosticModel {
@@ -1118,6 +1152,7 @@ impl DiagnosticModel {
         match self {
             Self::Sq8V3 | Self::SourceSummaryV4 => 65_536,
             Self::SourceRangesV5 => 131_072,
+            Self::Coverage64RangesV5 => 262_144,
         }
     }
 
@@ -1127,7 +1162,7 @@ impl DiagnosticModel {
                 == match self {
                     Self::Sq8V3 => "borsuk-sq8-range-attribution-diagnostic-v3",
                     Self::SourceSummaryV4 => "borsuk-sq8-range-attribution-diagnostic-v4",
-                    Self::SourceRangesV5 => "borsuk-sq8-range-attribution-diagnostic-v5",
+                    Self::SourceRangesV5 | Self::Coverage64RangesV5 => "borsuk-sq8-range-attribution-diagnostic-v5",
                 },
             "diagnostic schema/admission model agreement",
         )
@@ -1521,10 +1556,12 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
         "v10 producer sampler ABI",
     )?;
     // Trace-OFF has no query schema: admit only the two frozen panel models.
+    let expanded = semantic_leaf_limit(inputs)?.is_some_and(|limit| limit > 48);
     let model = match (profile, number(&raw["panel_line_cap_bytes"])?) {
-        (false, 65_536) => DiagnosticModel::Sq8V3,
-        (true, 65_536) => DiagnosticModel::SourceSummaryV4,
-        (true, 131_072) => DiagnosticModel::SourceRangesV5,
+        (false, 65_536) if !expanded => DiagnosticModel::Sq8V3,
+        (true, 65_536) if !expanded => DiagnosticModel::SourceSummaryV4,
+        (true, 131_072) if !expanded => DiagnosticModel::SourceRangesV5,
+        (true, 262_144) if expanded => DiagnosticModel::Coverage64RangesV5,
         _ => return Err("versioned diagnostic panel memory model".into()),
     };
     let diagnostic = 2 * model.line_cap()
@@ -1658,9 +1695,12 @@ pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
     let codec =
         borsuk::rotated_two_bit::RotatedTwoBitCodec::required_query_scratch_bytes(dimensions)?
             as u64;
-    let trace = borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(usize::try_from(
-        number(&inputs["rows"])?,
-    )?) as u64;
+    let rows = usize::try_from(number(&inputs["rows"])?)?;
+    let trace = match semantic_leaf_limit(inputs)? {
+        Some(limit) => borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes_with_leaf_limit(rows, limit)
+            .ok_or("coverage trace geometry")?,
+        None => borsuk::two_bit_generation::TwoBitPlanTrace::scratch_bytes(rows),
+    } as u64;
     let query = plus(codec, trace)?;
     require(
         cap == memory_cap(inputs)?
@@ -1908,6 +1948,21 @@ fn generation_manifests(raw: &Value, inputs: &Value) -> Result<(Value, Value)> {
         )?;
     }
     Ok((root, page))
+}
+
+pub(super) fn validate_coverage_router(raw: &Value, inputs: &Value, authority: &Value) -> Result<()> {
+    let Some(limit) = semantic_leaf_limit(inputs)?.filter(|limit| *limit > 48) else { return Ok(()); };
+    let (root, _) = generation_manifests(authority, inputs)?;
+    let bytes = number(&root["discovery"]["root_bytes"])?.checked_sub(512).ok_or("coverage root bytes")?;
+    let stride = 64 + 4 * number(&inputs["dimensions"])?;
+    let count = bytes / stride;
+    require(bytes % stride == 0 && count > 0
+        && count <= 2 * number(&inputs["rows"])?.div_ceil(32).div_ceil(64) - 1,
+        "coverage authenticated router geometry")?;
+    let leaves = raw["trace"]["semantic_leaves"].as_array().ok_or("coverage leaves")?;
+    require(leaves.len() as u64 == (limit as u64).min(count)
+        && leaves.iter().all(|id| id.as_u64().is_some_and(|id| id < count)),
+        "coverage authenticated leaf IDs and exact selection count")
 }
 
 pub(super) fn validate_generation_authority(raw: &Value, inputs: &Value) -> Result<()> {
@@ -3149,7 +3204,7 @@ mod tests {
         for invalid in [
             Value::Null,
             json!(0),
-            json!(49),
+            json!(65),
             json!(usize::MAX),
             json!("40"),
             json!(40.0),
@@ -3180,6 +3235,35 @@ mod tests {
                 .remove("semantic_leaf_limit");
             assert_eq!(semantic_leaf_limit(&header).unwrap(), None);
             header["semantic_leaf_limit"] = json!(40);
+        }
+    }
+
+    #[test]
+    fn coverage64_reader_refuses_incomplete_or_duplicate_source_trace() {
+        let (mut query, mut inputs) = geometry();
+        inputs["phase"] = json!("bound_inputs");
+        inputs["config_schema"] = json!(CPU_PROFILE_CONFIG_SCHEMA);
+        inputs["max_memory_bytes"] = json!(MEMORY_CAP);
+        inputs["profile"] = json!("scale1m");
+        inputs["range_scheduler_owner"] = json!("library");
+        inputs["semantic_leaf_limit"] = json!(64);
+        let units = number(&inputs["rows"]).unwrap().div_ceil(32);
+        let first_page = units.min(8);
+        query["trace"] = json!({"semantic_leaves":[0],"semantic_units":[0],
+            "semantic_seed_additions":(1..first_page).collect::<Vec<_>>(),
+            "ranked_candidate_pages":[0],
+            "nomination_evaluated_units":(0..first_page).collect::<Vec<_>>()});
+        validate_geometry(&query, &inputs).unwrap();
+        for (key, value) in [
+            ("semantic_leaves", json!([0,0])),
+            ("semantic_units", json!([units])),
+            ("semantic_seed_additions", json!([])),
+            ("ranked_candidate_pages", json!([])),
+            ("nomination_evaluated_units", json!([0])),
+        ] {
+            let mut bad = query.clone();
+            bad["trace"][key] = value;
+            assert!(validate_geometry(&bad, &inputs).is_err(), "{key}");
         }
     }
 
