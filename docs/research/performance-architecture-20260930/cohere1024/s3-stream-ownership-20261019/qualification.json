@@ -1,0 +1,83 @@
+{
+  "diagnostic": {
+    "all_exits": {
+      "affected": 0,
+      "clippy": 0,
+      "full-test-build": 0,
+      "native": 0,
+      "range-regression": 0
+    },
+    "base": "da8c54fb33b5bcb811f6978fe85d17493c0d65e6",
+    "commands": {
+      "mocked_local_http_canary": "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/borsuk-ownership-test --exact sq8_s3_range::tests::source_ownership_local_http_canary --nocapture --test-threads=1",
+      "root_only_witness": "BORSUK_SOURCE_OWNERSHIP_INPUT=/absolute/input.json /mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/borsuk-ownership-test --exact sq8_s3_range::tests::source_ownership_native_witness --ignored --nocapture --test-threads=1",
+      "source_only_admission": "BORSUK_SOURCE_OWNERSHIP_INPUT=/absolute/input.json /mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/borsuk-ownership-test --exact sq8_s3_range::tests::source_ownership_admission --ignored --nocapture --test-threads=1"
+    },
+    "commit": "a4987a0ec6c17ffe0ec25aff44831403e63e4fa9",
+    "controller_ssm": "363fa42c-aa68-4667-bc48-0934d40d63d6",
+    "diagnostic_delta": "One source HEAD preflight on same reader, exact pinned ETag/length, then baseline and one unchanged conditional data GET; preflight transport totals separately recorded; 7-case local HTTP canary",
+    "disposition": "HOLD same worker; no agent_complete until parent disposition",
+    "elf": "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/borsuk-ownership-test",
+    "evidence": "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002",
+    "focused_tests": {
+      "failed": 0,
+      "ignored": 2,
+      "passed": 4
+    },
+    "hashes": {
+      "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/borsuk-ownership-test": "da05e04836ed12254d0cd9a5b405bfa941cef093de74b08c4071e6ced422007d",
+      "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/contract.md": "840feaaf7ea66f0873447bb6865a5f66d3c6675690f35af1b327b70b2181054a",
+      "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/source-audit.json": "70922c287e58d558326f8a421ad8f6ec6eb92b67c06f48b5d701de0fceeee636",
+      "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/source.bundle": "d0747fd96e8f5bbc83adb822e54ad0cd2100f2d5a4940ecda2f090ddc3429399",
+      "/mnt/borsuk-workspace/evidence/s3-stream-ownership-witness-a0002/unowned-equality.json": "33f58e6627bc04ac82eb2a7d882043b5820ce15d01fa9995745820d14410d623"
+    },
+    "invocation": "30460a0f21b8472b8e3a434442f72f33",
+    "limitations": [
+      "debug ELF; no timing or serving optimization claim",
+      "address equality is not allocation identity",
+      "visible Bytes length cannot bound backend owner/RSS",
+      "root owns trusted metadata admission, separate canary and real witness"
+    ],
+    "main_pid": 0,
+    "original_execution_invalid": "root a0001 transport baseline included IMDS discovery; original receipts preserved",
+    "production_behavior_changes": false,
+    "range_tests": {
+      "failed": 0,
+      "ignored": 3,
+      "passed": 64
+    },
+    "real_s3_get_by_child": false,
+    "real_s3_head_by_child": false,
+    "root_witness_limits": {
+      "cpus": 1,
+      "memory_bytes": 536870912,
+      "seconds": 120,
+      "swap_bytes": 0,
+      "tasks": 128
+    },
+    "source": "/mnt/borsuk-workspace/s3-stream-ownership-witness-a0001",
+    "unit": "s3-ownership-native-a0002"
+  },
+  "first_attempt": {
+    "admission_exit": 0,
+    "canary_exit": 0,
+    "invocation": "3e3c00e045cf425fad0ccf0a55e3e01c",
+    "native_exit": 101,
+    "original_ssm": "f717f55b-8c00-4f7d-ab29-2d301875dbc7",
+    "status": "EXECUTION_INVALID_COUNTER_SCOPE",
+    "terminal_sha256": "b4bd8e960de98c379068f913ddef39a1fbdf48361cfeccc26ed5f8ed277845a7"
+  },
+  "schema": "borsuk-source-ownership-qualification-v1",
+  "scope": "No full-workspace runtime suite or cold ANN performance/quality result is claimed.",
+  "valid_attempt": {
+    "admission_exit": 0,
+    "canary_exit": 0,
+    "controller_exit": 0,
+    "input_sha256": "832ee36dc8aaf2cd82f294e60fd67dd6a0ffaca7fae01ed2e110198e4776b631",
+    "invocation": "480aa6d7009b45afb153752871331142",
+    "original_ssm": "c0a46fb0-53c4-4d9f-86fc-fcbc649b0cdb",
+    "report_sha256": "f13d9c05a7e3f0aa24ad6187fa767c490ae5ac70e7c961263f83bd3dcc6b3aa1",
+    "status": "VALID_AUTHENTICATED_SINGLE_RESPONSE_MECHANISM",
+    "witness_exit": 0
+  }
+}
