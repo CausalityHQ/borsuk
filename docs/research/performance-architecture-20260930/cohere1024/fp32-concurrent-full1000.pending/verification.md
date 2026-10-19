@@ -20,3 +20,9 @@ Roman Bartusiak / riomus@gmail.com; no hooks, trailers, merge or push.
 
 Root-only API is in README.md. Interruption/incomplete output remains INVALID;
 this static check does not establish native Full1000 success or performance.
+
+Final root schema-label correction: gold48684516B SHA256
+ce13a10a30f0cbaafe2a8aaefdeea54a5e1118ed3bf812168d371d690c18f74c,
+schema borsuk-historical-gold-full1000-v1. No payload read by child.
+Rechecked SSM8d048025-47f3-4a2a-85b4-cfe4c2411668 terminal0 at20:57:13UTC,
+PASS15 plus preservation/launch guards and bash-n,50ms/4.5MiB/swap0.

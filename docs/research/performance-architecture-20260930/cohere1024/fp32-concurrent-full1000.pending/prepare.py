@@ -56,7 +56,8 @@ def files_to_create():
  assert authority['schema']=='borsuk-fp32-full1000-gold-authority-v1'
  assert authority['gold_path']==str(E/'gold-full1000.json') and authority['records']==1000 and authority['ordinals']=='0..999'
  assert authority['source_sha256']=='69b56a0464d9db152625b32051438fdc644785f6dc18564f68e0980a06e6b8b1'
- assert authority['gold_sha256']=='955ef2319cf831710048fbec2697ad2fa7f1c399358a5b0fea817e5977abe5b0'
+ assert authority['gold_sha256']=='ce13a10a30f0cbaafe2a8aaefdeea54a5e1118ed3bf812168d371d690c18f74c'
+ assert authority['gold_schema']=='borsuk-historical-gold-full1000-v1' and authority['gold_bytes']==48684516
  assert authority['source_completed_measured'] is True
  files={'oracle-reused.py':(E0/'oracle-reused.py').read_bytes()}
  for name in NAMES:

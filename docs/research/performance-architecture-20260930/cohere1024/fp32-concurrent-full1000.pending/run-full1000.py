@@ -99,8 +99,9 @@ def main():
  authority=json.loads((E/'gold-authority.json').read_bytes())
  assert authority['gold_path']==str(E/'gold-full1000.json') and authority['records']==1000
  assert authority['source_sha256']=='69b56a0464d9db152625b32051438fdc644785f6dc18564f68e0980a06e6b8b1' and authority['source_completed_measured'] is True
- raw=(E/'gold-full1000.json').read_bytes();assert len(raw)==authority['gold_bytes'] and sha(raw)==authority['gold_sha256']=='955ef2319cf831710048fbec2697ad2fa7f1c399358a5b0fea817e5977abe5b0'
+ raw=(E/'gold-full1000.json').read_bytes();assert len(raw)==authority['gold_bytes'] and sha(raw)==authority['gold_sha256']=='ce13a10a30f0cbaafe2a8aaefdeea54a5e1118ed3bf812168d371d690c18f74c'
  gold=json.loads(raw);refs={}
+ assert gold['schema']==authority['gold_schema']=='borsuk-historical-gold-full1000-v1'
  for q in gold['records']:
   q['canonical_stage']={'shortlist':q['canonical_shortlist']};refs[q['ordinal']]=q
  assert list(refs)==list(range(1000)) and len(gold['records'])==1000
