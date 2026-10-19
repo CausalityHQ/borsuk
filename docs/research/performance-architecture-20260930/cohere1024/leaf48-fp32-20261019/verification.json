@@ -1,0 +1,206 @@
+{
+  "base": "b327cf87df3406635c49537ea14cf5f958dde2e3",
+  "checks": {
+    "all_native_and_reader_exits_zero": true,
+    "current_config_budget_invariants": true,
+    "frozen_config_and_expected_hashes": true,
+    "full_gain_49_queries_43_regressions_0": true,
+    "histogram_totals_and_nearest_rank_quantiles": true,
+    "initial_sparse_index_all_34876_entries_equal_base": true,
+    "original_controller_hash": true,
+    "parent_closed_quality_recount_matches": true,
+    "report_matches_full_verification": true
+  },
+  "historical_authority_scope": "authority.json reuses qualification metadata from a prior instance/attempt; its guest_shutdown_usec and instance_id do not govern this run. Current configs, measurement-addendum.json, original launch SSM and terminal markers govern.",
+  "inputs": {
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-config.json": {
+      "bytes": 3050,
+      "sha256": "5e21f52fc571f9efe000ccd22e4b70432855cd721d628195764d3040f213c6ce"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-expected.json": {
+      "bytes": 6706,
+      "sha256": "bfaa858388acd02ee38577e4e03c8d7e028106a16eea631189317312ac1ba0d3"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-reader.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-report.json": {
+      "bytes": 675,
+      "sha256": "b2f8372bd865a4de26559dccf2c3541eeef142ca441d38fc97cb88113f6f66c1"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/admit-verification.json": {
+      "bytes": 2831,
+      "sha256": "d91a11030b8585f8583c73ce139c67a5c3b55d4e5874c1b54b013a4f2d07d31e"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/authority.json": {
+      "bytes": 2571,
+      "sha256": "760917c8c5dd57f1ed238e0cea1e1b4fb9243f4e27f12d1e36f52f2f1697d86a"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-config.json": {
+      "bytes": 3051,
+      "sha256": "52c42bd755db953b92bb00ef9ed28aadfb60b63838252a4d8191cdf95e4b7d0c"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-expected.json": {
+      "bytes": 6706,
+      "sha256": "897ba45220d305195935b1f7cff71fdfa310db1211d9c381df68f89220ad376b"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-reader.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-report.json": {
+      "bytes": 676,
+      "sha256": "4599fd33fbcc71cef02a13644fb91ecbe2680e7659c212fec9dfcc208cbb9eaf"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/canary-verification.json": {
+      "bytes": 2833,
+      "sha256": "6f1f3ff831bf4e4590e6cd57e5b2442307b353a9729ee64a4dbf46261ee3b892"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/frozen.json": {
+      "bytes": 900,
+      "sha256": "6ab61880418a37618a7d63c4d50da6a0eb8df872b132c1806ede60db04d21484"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-config.json": {
+      "bytes": 3011,
+      "sha256": "3d156e09054121356e82b33db6fc1d0b0480f63dc91e80505d52f5139720c8a4"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-expected.json": {
+      "bytes": 6625,
+      "sha256": "46fb020e6454a8eed8dba19ab552e83d59e136d92435e8781cf97fc2db8a251c"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-reader.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-report.json": {
+      "bytes": 712,
+      "sha256": "64a05f3de4e722c2735fea8f64d58c8331265961106cea1ec3c09a152501da0f"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/full1000-verification.json": {
+      "bytes": 5609,
+      "sha256": "5d67067909988e1993e735441401b32adca315004c236380a1e2e65d799259f8"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/measurement-addendum.json": {
+      "bytes": 1886,
+      "sha256": "b7598a81672547980a92fc3e11fb61419daf8e84883feba2045b3b76bb6e1697"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/report.json": {
+      "bytes": 5845,
+      "sha256": "c0a90e70051993ba20966042bcaa2a03c25438a8f46916a641f4c1ee90cd4561"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/root-boundary-verification.json": {
+      "bytes": 23349,
+      "sha256": "59ab2e7778e94c50170416e5bd86fc9767abbca10c43d3ffe138cfcf3990b8a9"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/root-quality-verification.json": {
+      "bytes": 2041,
+      "sha256": "649cc3418b1af19532ae87800c8950568fef39be38276f6ad47826f60efd18e9"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen-decision.json": {
+      "bytes": 103,
+      "sha256": "06765f7924a2f6def13d306f5dc96a33d2ad32f10491cd00a2ceb3ec5f2c38e5"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-config.json": {
+      "bytes": 3552,
+      "sha256": "f69221d81a1742b74941f817709c4990e77b09fe322e7f8604d8a8e37a8429b6"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-expected.json": {
+      "bytes": 7708,
+      "sha256": "849cd967956a6ad39c9e2329a074ac922d0015e8f8b8ca4d913fc48d1c3c2239"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-reader.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-report.json": {
+      "bytes": 701,
+      "sha256": "07f2fe273ad5df6368496aceb6d2c10ba345734af1c88352aba69512dd6ce799"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen0-verification.json": {
+      "bytes": 6126,
+      "sha256": "f49c420e08c2045acebbfd242397917900205eb5d4d69786689b00123936a24c"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-config.json": {
+      "bytes": 3069,
+      "sha256": "c3236ccff52cf156de8e36da02bb94e97045532abb29908c98dd3d6cc763b59e"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-expected.json": {
+      "bytes": 6740,
+      "sha256": "e4868349a534715780a67481f91cecc28332c07c214941c4ee829068397659d7"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-reader.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-report.json": {
+      "bytes": 682,
+      "sha256": "22162727909ddae7d9e1fa4357dbb3aa76321c767dcc97186773154ad0332d9e"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-a0001/screen1-verification.json": {
+      "bytes": 2998,
+      "sha256": "90307375706de6f8ef17f3dd0a15be5cb7c83dea5bda5b743b78f435e2fc6cc3"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-control-a0001/pipeline.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-control-a0001/run.py": {
+      "bytes": 10587,
+      "sha256": "b14c7701b4a8aa85c1909e93f22599183925e0ab91e643ec4a8210b8d60db6e5"
+    },
+    "/mnt/borsuk-workspace/evidence/leaf48-fp32-control-a0001/terminal.json": {
+      "bytes": 280,
+      "sha256": "1c203507381787d26dc8d1d5c0ebb72155c377a1dbf1ecf5a1084dd3c950f3c4"
+    }
+  },
+  "metadata_guard": {
+    "allowed_cpus": "12",
+    "cpu_quota": "100%",
+    "memory_max_bytes": 536870912,
+    "memory_swap_max_bytes": 0,
+    "runtime_max_s": 120,
+    "tasks_max": 128
+  },
+  "oracle_scope": "Original controller asserted row-SHA authenticated sequential-f64 cosine score bits and reproduced baseline oracle; docs worker read closed metadata only and did not rerun oracle/native code.",
+  "parent_quality_terminal_ssm": "1ed49377-416e-4298-a097-80bf7fbf8a1e",
+  "post_commit_checks_location": "closure.json and handoff-receipt.json in the S3 decision prefix; outside commit to avoid self-reference.",
+  "qualified_binary_identity": {
+    "native_elf_sha256": "c150beb61198876b29a3fa9320db3c8a7f206f9dcf719d2a0db91b7dc92f26df",
+    "qualified_bundle_sha256": "53a3e1ae966209ebee4f265769bcf2e753b110174aac41cea45ad477a85963ce",
+    "qualified_source_terminal": {
+      "key": "research/semantic-router/20261019/fp32-coalescing-qualified-closure-a0001/terminal.json",
+      "sha256": "8ba4c2412a4e33c67aeb170cfd70e0e36fc3db128e9a2729f2e788305fdab6ff"
+    },
+    "reader_elf_sha256": "716754d6a5f8e80c6a93a475d23f8f6bbdf00d6c4ed207e8cd3933b09f1ea216",
+    "source_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1"
+  },
+  "root_boundary_verification": {
+    "closed_metadata_unit": "borsuk-leaf48-root-boundary-a0001",
+    "sha256": "59ab2e7778e94c50170416e5bd86fc9767abbca10c43d3ffe138cfcf3990b8a9",
+    "valid": true
+  },
+  "schema": "borsuk-leaf48-docs-verification-v1",
+  "source_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1",
+  "valid": true
+}

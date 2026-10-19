@@ -1,0 +1,2022 @@
+{
+  "complete": true,
+  "cost_delta_vs_historical_baseline": {
+    "canonical": {
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "router": {
+      "submitted_gets": 0,
+      "verified_bytes": 0
+    },
+    "source": {
+      "submitted_gets": 12075,
+      "verified_bytes": 4712294400
+    },
+    "sq8": {
+      "submitted_gets": 27,
+      "verified_bytes": 748439552
+    },
+    "total": {
+      "submitted_gets": 12102,
+      "verified_bytes": 5460733952
+    }
+  },
+  "cost_scope": "Logical verified query GETs/bytes; historical baseline has different execution/cache history. Candidate-only timings; no paired speed, wire/billing, cache eviction, holdout, vendor or production-qualification claim.",
+  "decision": "retain quality Pareto gain",
+  "full": {
+    "baseline_hits": 9803,
+    "candidate_hits": 9852,
+    "denominator": 10000,
+    "gained": [
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          948332
+        ],
+        "ordinal": 38
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          175203
+        ],
+        "ordinal": 40
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          366751
+        ],
+        "ordinal": 43
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          621767
+        ],
+        "ordinal": 102
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          854493
+        ],
+        "ordinal": 149
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          562112
+        ],
+        "ordinal": 150
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          711790
+        ],
+        "ordinal": 177
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          269975
+        ],
+        "ordinal": 292
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          737055
+        ],
+        "ordinal": 304
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          540196
+        ],
+        "ordinal": 305
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          282828
+        ],
+        "ordinal": 336
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          934559
+        ],
+        "ordinal": 370
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          439653
+        ],
+        "ordinal": 378
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          40692
+        ],
+        "ordinal": 402
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          166912
+        ],
+        "ordinal": 521
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          109033
+        ],
+        "ordinal": 526
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          738657
+        ],
+        "ordinal": 565
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          738657
+        ],
+        "ordinal": 567
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          757551
+        ],
+        "ordinal": 583
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          655932
+        ],
+        "ordinal": 612
+      },
+      {
+        "after": 10,
+        "before": 8,
+        "gained_truth_ids": [
+          84257,
+          655421
+        ],
+        "ordinal": 617
+      },
+      {
+        "after": 8,
+        "before": 7,
+        "gained_truth_ids": [
+          606647
+        ],
+        "ordinal": 619
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          692133
+        ],
+        "ordinal": 628
+      },
+      {
+        "after": 9,
+        "before": 6,
+        "gained_truth_ids": [
+          32541,
+          328679,
+          328682
+        ],
+        "ordinal": 649
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          930418
+        ],
+        "ordinal": 650
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          917018
+        ],
+        "ordinal": 652
+      },
+      {
+        "after": 8,
+        "before": 6,
+        "gained_truth_ids": [
+          848279,
+          848281
+        ],
+        "ordinal": 657
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          533517
+        ],
+        "ordinal": 661
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          222463
+        ],
+        "ordinal": 663
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          598509
+        ],
+        "ordinal": 665
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          258437
+        ],
+        "ordinal": 672
+      },
+      {
+        "after": 10,
+        "before": 8,
+        "gained_truth_ids": [
+          400517,
+          411494
+        ],
+        "ordinal": 673
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          889343
+        ],
+        "ordinal": 710
+      },
+      {
+        "after": 8,
+        "before": 7,
+        "gained_truth_ids": [
+          669440
+        ],
+        "ordinal": 742
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          385239
+        ],
+        "ordinal": 769
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          376192
+        ],
+        "ordinal": 831
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          173135
+        ],
+        "ordinal": 856
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          637007
+        ],
+        "ordinal": 870
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          545091
+        ],
+        "ordinal": 873
+      },
+      {
+        "after": 10,
+        "before": 8,
+        "gained_truth_ids": [
+          223734,
+          556328
+        ],
+        "ordinal": 928
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          32108
+        ],
+        "ordinal": 940
+      },
+      {
+        "after": 9,
+        "before": 8,
+        "gained_truth_ids": [
+          889504
+        ],
+        "ordinal": 991
+      },
+      {
+        "after": 10,
+        "before": 9,
+        "gained_truth_ids": [
+          457898
+        ],
+        "ordinal": 994
+      }
+    ],
+    "independent_f64_scorebits_and_baseline_oracle": true,
+    "label": "full1000",
+    "queries": 1000,
+    "raw_sha256": "3116a078ff5abf0c15e38d65ea1dc1905a7993ec057de375acf84ea81137007b",
+    "regressed": [],
+    "summary": {
+      "all_queries_sealed": true,
+      "binding_charge": {
+        "failed_gets": 0,
+        "submitted_gets": 3,
+        "verified_bytes": 28594
+      },
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "complete": true,
+      "diagnostic_panel": false,
+      "diagnostic_prefix": false,
+      "direct_memory": null,
+      "executed_count": 1000,
+      "execution": {
+        "mode": "full"
+      },
+      "external_gate_required": true,
+      "full_cohort_qualification": false,
+      "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+      "k": 10,
+      "mean_recall10": 0.9852,
+      "observed_process_peak_bytes": 140640256,
+      "physical_s3_measured": false,
+      "population_count": 1000,
+      "population_percentiles_valid": true,
+      "prefix_bytes": 39495017,
+      "prefix_sha256": "cb7844c870c345c48abf3057643e357064d0b59cc215ae3a805aa3079f5bb539",
+      "process_cpu_ns": 124925295420,
+      "process_wall_ns": 212592479120,
+      "queries": 1000,
+      "query_process_cpu_ns": 118665706817,
+      "query_wall_ns": 205826055340,
+      "recall_denominator": 10000,
+      "recall_numerator": 9852,
+      "requests_sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e",
+      "reserved_query_count": 1000,
+      "sealed_bytes": 39495514,
+      "sealed_sha256": "18cf5d957f388742b4d21ef5e4da334612e0050e7ea1667ec0fc413152357881",
+      "selected_count": 1000,
+      "serving": {
+        "coalesce": false,
+        "max_fp32_bytes": 65664,
+        "max_fp32_gets": 16,
+        "max_parallel_fp32_gets": 16,
+        "mode": "fp32_rerank",
+        "shortlist": 16
+      },
+      "status": "MEASURED",
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 155913,
+        "verified_bytes": 39755864320
+      },
+      "total_hits10": 9852,
+      "transport_last_boundary": {
+        "after": {
+          "attempts": 155940,
+          "consumed_payload_bytes": 39793093739,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            155934,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "before": {
+          "attempts": 155802,
+          "consumed_payload_bytes": 39758896107,
+          "dropped_error_bodies": 0,
+          "method_counts": [
+            155796,
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "status_counts": null,
+          "status_counts_entries": 2,
+          "stream_failures": 0,
+          "transport_failures": 0
+        },
+        "billed_bytes": null,
+        "billed_requests": null,
+        "ordinal": 999,
+        "scope": "cumulative_process_native_transport",
+        "stage": "query",
+        "status_counts_omitted_from_terminal": true,
+        "unread_bytes": null,
+        "wire_bytes": null
+      },
+      "truth_sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+      "underfilled_queries": 0
+    },
+    "upstream_plan_change_is_intervention": true
+  },
+  "matched_vendor_win_claim": false,
+  "measurement_addendum": {
+    "baseline_full1000_hits": 9803,
+    "baseline_input_sha256": "2bda08997e598964b556ced9b5993271696045855bf9026b736d84c3ef260407",
+    "bounds": "library model already48, max2GiB; host8GiB/noSwap; no source/default/build change",
+    "evidence_main": "b327cf87df3406635c49537ea14cf5f958dde2e3",
+    "failure_enriched_ordinals": [
+      14,
+      37,
+      38,
+      40,
+      43,
+      49,
+      54,
+      64,
+      92,
+      102,
+      117,
+      118,
+      120,
+      122,
+      126,
+      142,
+      143,
+      145,
+      149,
+      150,
+      173,
+      175,
+      177,
+      180,
+      182,
+      213,
+      231,
+      252,
+      276,
+      281,
+      284,
+      289,
+      292,
+      295,
+      304,
+      305,
+      306,
+      333,
+      334,
+      335,
+      336,
+      346,
+      347,
+      360,
+      370,
+      378,
+      384,
+      397,
+      402,
+      409,
+      414,
+      428,
+      434,
+      446,
+      447,
+      453,
+      454,
+      455,
+      467,
+      480,
+      482,
+      487,
+      503,
+      504,
+      505,
+      507,
+      512,
+      521,
+      526,
+      541,
+      543,
+      557,
+      563,
+      565,
+      567,
+      583,
+      600,
+      601,
+      612,
+      617,
+      619,
+      621,
+      624,
+      628,
+      649,
+      650,
+      652,
+      657,
+      658,
+      661,
+      663,
+      665,
+      672,
+      673,
+      685,
+      687,
+      709,
+      710,
+      718,
+      738,
+      742,
+      746,
+      769,
+      775,
+      779,
+      810,
+      815,
+      823,
+      831,
+      853,
+      854,
+      855,
+      856,
+      860,
+      870,
+      872,
+      873,
+      886,
+      887,
+      889,
+      893,
+      928,
+      934,
+      940,
+      944,
+      949,
+      967,
+      971,
+      975,
+      989,
+      991,
+      994,
+      999
+    ],
+    "full1000_success": "actual full1000>9803/10000, report querywise gains/losses and recall tails",
+    "go": "screen nettruthgain>0 then full1000; preserve every per-query regression and resource cost; valid quality improvements are Pareto research candidates not production qualification",
+    "intervention": "semantic_leaf_limit40->48 ONLY; FP32shortlist16/coalescefalse; canonical65664B/16GET/parallel16; source64MiB128GET/SQ832MiB32GET/download128/offload2/Q1 unchanged",
+    "invariants": "root/data/source/ELFs unchanged; exact independently authenticated f64 results; original16 baseline oracle reproduced; upstream plans may change as intended",
+    "native_full_deadline_s": 900,
+    "native_screen_deadline_s": 270,
+    "not_claimed": [
+      "paired speed win",
+      "holdout",
+      "vendor win",
+      "provider cache eviction"
+    ],
+    "oracle": "same row-hash authenticated sequentialf64 cosine and query normalization, control scores independently reproduced",
+    "schema": "borsuk-leaf48-fp32-protocol-v1",
+    "selection_frozen_before_new_route_results": true,
+    "source_code_commit": "70c1c1d094b2ab926ec38fd9220d78ea1ecfcbf1"
+  },
+  "provider_cache_eviction_proven": false,
+  "root_boundary_verification": {
+    "closed_full1000_raw_sha256": "3116a078ff5abf0c15e38d65ea1dc1905a7993ec057de375acf84ea81137007b",
+    "counts": {
+      "not_semantic_nominated_or_SOURCE_scored": 148
+    },
+    "previous_pinned_SQ8_mapping_sha256": "3dacd3e968b623494ace397b092bfe83491de11869db52732bd3de796b879adb",
+    "residual_truth_hits": 148,
+    "rows": [
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 305009,
+        "query_ordinal": 14,
+        "source_unit": 9531,
+        "truth_id": 575784
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 933623,
+        "query_ordinal": 37,
+        "source_unit": 29175,
+        "truth_id": 268102
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 933691,
+        "query_ordinal": 40,
+        "source_unit": 29177,
+        "truth_id": 268140
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 506329,
+        "query_ordinal": 43,
+        "source_unit": 15822,
+        "truth_id": 683999
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 884654,
+        "query_ordinal": 49,
+        "source_unit": 27645,
+        "truth_id": 50106
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 884652,
+        "query_ordinal": 49,
+        "source_unit": 27645,
+        "truth_id": 50113
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 565724,
+        "query_ordinal": 54,
+        "source_unit": 17678,
+        "truth_id": 622679
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 123567,
+        "query_ordinal": 64,
+        "source_unit": 3861,
+        "truth_id": 775559
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 300885,
+        "query_ordinal": 92,
+        "source_unit": 9402,
+        "truth_id": 266328
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 273722,
+        "query_ordinal": 117,
+        "source_unit": 8553,
+        "truth_id": 857826
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 592241,
+        "query_ordinal": 118,
+        "source_unit": 18507,
+        "truth_id": 312610
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 737171,
+        "query_ordinal": 120,
+        "source_unit": 23036,
+        "truth_id": 118782
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 114330,
+        "query_ordinal": 122,
+        "source_unit": 3572,
+        "truth_id": 660768
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 67935,
+        "query_ordinal": 126,
+        "source_unit": 2122,
+        "truth_id": 348816
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 12320,
+        "query_ordinal": 142,
+        "source_unit": 385,
+        "truth_id": 591810
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 558147,
+        "query_ordinal": 143,
+        "source_unit": 17442,
+        "truth_id": 207747
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 949161,
+        "query_ordinal": 145,
+        "source_unit": 29661,
+        "truth_id": 248907
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 289432,
+        "query_ordinal": 150,
+        "source_unit": 9044,
+        "truth_id": 446091
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 521480,
+        "query_ordinal": 173,
+        "source_unit": 16296,
+        "truth_id": 77841
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 576356,
+        "query_ordinal": 175,
+        "source_unit": 18011,
+        "truth_id": 822303
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 845036,
+        "query_ordinal": 180,
+        "source_unit": 26407,
+        "truth_id": 547849
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 225144,
+        "query_ordinal": 182,
+        "source_unit": 7035,
+        "truth_id": 95959
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 224876,
+        "query_ordinal": 182,
+        "source_unit": 7027,
+        "truth_id": 95961
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 747907,
+        "query_ordinal": 213,
+        "source_unit": 23372,
+        "truth_id": 70685
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 869475,
+        "query_ordinal": 231,
+        "source_unit": 27171,
+        "truth_id": 733242
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 869475,
+        "query_ordinal": 252,
+        "source_unit": 27171,
+        "truth_id": 733242
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 326058,
+        "query_ordinal": 276,
+        "source_unit": 10189,
+        "truth_id": 958248
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 524868,
+        "query_ordinal": 281,
+        "source_unit": 16402,
+        "truth_id": 991764
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 239822,
+        "query_ordinal": 284,
+        "source_unit": 7494,
+        "truth_id": 277756
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 930581,
+        "query_ordinal": 289,
+        "source_unit": 29080,
+        "truth_id": 813823
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 166507,
+        "query_ordinal": 292,
+        "source_unit": 5203,
+        "truth_id": 519976
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 774651,
+        "query_ordinal": 295,
+        "source_unit": 24207,
+        "truth_id": 34597
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 900115,
+        "query_ordinal": 295,
+        "source_unit": 28128,
+        "truth_id": 585225
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 790278,
+        "query_ordinal": 306,
+        "source_unit": 24696,
+        "truth_id": 423729
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 723569,
+        "query_ordinal": 333,
+        "source_unit": 22611,
+        "truth_id": 943270
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 892682,
+        "query_ordinal": 334,
+        "source_unit": 27896,
+        "truth_id": 131133
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 202717,
+        "query_ordinal": 334,
+        "source_unit": 6334,
+        "truth_id": 567715
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 884,
+        "query_ordinal": 335,
+        "source_unit": 27,
+        "truth_id": 152409
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 711985,
+        "query_ordinal": 346,
+        "source_unit": 22249,
+        "truth_id": 98067
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 153379,
+        "query_ordinal": 347,
+        "source_unit": 4793,
+        "truth_id": 683694
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 443132,
+        "query_ordinal": 360,
+        "source_unit": 13847,
+        "truth_id": 223732
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 217022,
+        "query_ordinal": 384,
+        "source_unit": 6781,
+        "truth_id": 967607
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 31497,
+        "query_ordinal": 397,
+        "source_unit": 984,
+        "truth_id": 260708
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 528303,
+        "query_ordinal": 409,
+        "source_unit": 16509,
+        "truth_id": 176362
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 428888,
+        "query_ordinal": 409,
+        "source_unit": 13402,
+        "truth_id": 295530
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 259934,
+        "query_ordinal": 409,
+        "source_unit": 8122,
+        "truth_id": 811637
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 718308,
+        "query_ordinal": 414,
+        "source_unit": 22447,
+        "truth_id": 508057
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 27601,
+        "query_ordinal": 428,
+        "source_unit": 862,
+        "truth_id": 130763
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 313842,
+        "query_ordinal": 434,
+        "source_unit": 9807,
+        "truth_id": 886566
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 493863,
+        "query_ordinal": 446,
+        "source_unit": 15433,
+        "truth_id": 984898
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 312544,
+        "query_ordinal": 447,
+        "source_unit": 9767,
+        "truth_id": 442546
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776818,
+        "query_ordinal": 453,
+        "source_unit": 24275,
+        "truth_id": 183251
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776818,
+        "query_ordinal": 454,
+        "source_unit": 24275,
+        "truth_id": 183251
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776339,
+        "query_ordinal": 454,
+        "source_unit": 24260,
+        "truth_id": 573071
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 20850,
+        "query_ordinal": 454,
+        "source_unit": 651,
+        "truth_id": 751514
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776818,
+        "query_ordinal": 455,
+        "source_unit": 24275,
+        "truth_id": 183251
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776339,
+        "query_ordinal": 455,
+        "source_unit": 24260,
+        "truth_id": 573071
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 776243,
+        "query_ordinal": 455,
+        "source_unit": 24257,
+        "truth_id": 866379
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 20488,
+        "query_ordinal": 467,
+        "source_unit": 640,
+        "truth_id": 131575
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 519131,
+        "query_ordinal": 480,
+        "source_unit": 16222,
+        "truth_id": 492908
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 445375,
+        "query_ordinal": 480,
+        "source_unit": 13917,
+        "truth_id": 552619
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 258322,
+        "query_ordinal": 480,
+        "source_unit": 8072,
+        "truth_id": 721808
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 591855,
+        "query_ordinal": 482,
+        "source_unit": 18495,
+        "truth_id": 895545
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 753678,
+        "query_ordinal": 487,
+        "source_unit": 23552,
+        "truth_id": 573085
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 520459,
+        "query_ordinal": 503,
+        "source_unit": 16264,
+        "truth_id": 655349
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 319574,
+        "query_ordinal": 504,
+        "source_unit": 9986,
+        "truth_id": 452821
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 429973,
+        "query_ordinal": 505,
+        "source_unit": 13436,
+        "truth_id": 404564
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 653274,
+        "query_ordinal": 507,
+        "source_unit": 20414,
+        "truth_id": 1541
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 492545,
+        "query_ordinal": 507,
+        "source_unit": 15392,
+        "truth_id": 852267
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 242399,
+        "query_ordinal": 512,
+        "source_unit": 7574,
+        "truth_id": 13123
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 262592,
+        "query_ordinal": 521,
+        "source_unit": 8206,
+        "truth_id": 549005
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 101717,
+        "query_ordinal": 541,
+        "source_unit": 3178,
+        "truth_id": 96243
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 352429,
+        "query_ordinal": 541,
+        "source_unit": 11013,
+        "truth_id": 185775
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 704252,
+        "query_ordinal": 543,
+        "source_unit": 22007,
+        "truth_id": 439723
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 864374,
+        "query_ordinal": 557,
+        "source_unit": 27011,
+        "truth_id": 284885
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 148912,
+        "query_ordinal": 563,
+        "source_unit": 4653,
+        "truth_id": 554658
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 522042,
+        "query_ordinal": 565,
+        "source_unit": 16313,
+        "truth_id": 206004
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 526579,
+        "query_ordinal": 583,
+        "source_unit": 16455,
+        "truth_id": 325276
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 749783,
+        "query_ordinal": 600,
+        "source_unit": 23430,
+        "truth_id": 347428
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 524852,
+        "query_ordinal": 601,
+        "source_unit": 16401,
+        "truth_id": 382945
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 1585,
+        "query_ordinal": 601,
+        "source_unit": 49,
+        "truth_id": 382953
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 473051,
+        "query_ordinal": 601,
+        "source_unit": 14782,
+        "truth_id": 639674
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 601360,
+        "query_ordinal": 601,
+        "source_unit": 18792,
+        "truth_id": 673133
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 474314,
+        "query_ordinal": 601,
+        "source_unit": 14822,
+        "truth_id": 673140
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 179545,
+        "query_ordinal": 601,
+        "source_unit": 5610,
+        "truth_id": 828116
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 215112,
+        "query_ordinal": 601,
+        "source_unit": 6722,
+        "truth_id": 985445
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 618772,
+        "query_ordinal": 619,
+        "source_unit": 19336,
+        "truth_id": 393484
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 553677,
+        "query_ordinal": 619,
+        "source_unit": 17302,
+        "truth_id": 506077
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 295010,
+        "query_ordinal": 621,
+        "source_unit": 9219,
+        "truth_id": 406291
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 44806,
+        "query_ordinal": 624,
+        "source_unit": 1400,
+        "truth_id": 395224
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 505828,
+        "query_ordinal": 628,
+        "source_unit": 15807,
+        "truth_id": 607708
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 43232,
+        "query_ordinal": 649,
+        "source_unit": 1351,
+        "truth_id": 179881
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 751665,
+        "query_ordinal": 650,
+        "source_unit": 23489,
+        "truth_id": 254790
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 442155,
+        "query_ordinal": 657,
+        "source_unit": 13817,
+        "truth_id": 131278
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 442228,
+        "query_ordinal": 657,
+        "source_unit": 13819,
+        "truth_id": 131279
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 485700,
+        "query_ordinal": 658,
+        "source_unit": 15178,
+        "truth_id": 535059
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 235877,
+        "query_ordinal": 658,
+        "source_unit": 7371,
+        "truth_id": 939436
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 16957,
+        "query_ordinal": 661,
+        "source_unit": 529,
+        "truth_id": 802100
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 271349,
+        "query_ordinal": 665,
+        "source_unit": 8479,
+        "truth_id": 708553
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 218229,
+        "query_ordinal": 672,
+        "source_unit": 6819,
+        "truth_id": 377165
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 976838,
+        "query_ordinal": 685,
+        "source_unit": 30526,
+        "truth_id": 830455
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 976808,
+        "query_ordinal": 685,
+        "source_unit": 30525,
+        "truth_id": 947592
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 539453,
+        "query_ordinal": 687,
+        "source_unit": 16857,
+        "truth_id": 841518
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 842886,
+        "query_ordinal": 709,
+        "source_unit": 26340,
+        "truth_id": 361776
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 70514,
+        "query_ordinal": 710,
+        "source_unit": 2203,
+        "truth_id": 559520
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 305915,
+        "query_ordinal": 718,
+        "source_unit": 9559,
+        "truth_id": 806015
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 295714,
+        "query_ordinal": 718,
+        "source_unit": 9241,
+        "truth_id": 914029
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 842588,
+        "query_ordinal": 738,
+        "source_unit": 26330,
+        "truth_id": 571305
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 61160,
+        "query_ordinal": 742,
+        "source_unit": 1911,
+        "truth_id": 465355
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 816878,
+        "query_ordinal": 742,
+        "source_unit": 25527,
+        "truth_id": 896283
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 760976,
+        "query_ordinal": 746,
+        "source_unit": 23780,
+        "truth_id": 283357
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 926685,
+        "query_ordinal": 775,
+        "source_unit": 28958,
+        "truth_id": 324120
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 957496,
+        "query_ordinal": 779,
+        "source_unit": 29921,
+        "truth_id": 301996
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 633291,
+        "query_ordinal": 810,
+        "source_unit": 19790,
+        "truth_id": 274269
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 446134,
+        "query_ordinal": 810,
+        "source_unit": 13941,
+        "truth_id": 388801
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 844346,
+        "query_ordinal": 815,
+        "source_unit": 26385,
+        "truth_id": 810127
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 233282,
+        "query_ordinal": 823,
+        "source_unit": 7290,
+        "truth_id": 253166
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 507439,
+        "query_ordinal": 823,
+        "source_unit": 15857,
+        "truth_id": 317376
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 269979,
+        "query_ordinal": 823,
+        "source_unit": 8436,
+        "truth_id": 858461
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 396363,
+        "query_ordinal": 831,
+        "source_unit": 12386,
+        "truth_id": 308096
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 102145,
+        "query_ordinal": 853,
+        "source_unit": 3192,
+        "truth_id": 569048
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 499632,
+        "query_ordinal": 854,
+        "source_unit": 15613,
+        "truth_id": 818240
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 494189,
+        "query_ordinal": 854,
+        "source_unit": 15443,
+        "truth_id": 818242
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 499632,
+        "query_ordinal": 855,
+        "source_unit": 15613,
+        "truth_id": 818240
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 561403,
+        "query_ordinal": 860,
+        "source_unit": 17543,
+        "truth_id": 418474
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 742208,
+        "query_ordinal": 872,
+        "source_unit": 23194,
+        "truth_id": 517985
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 471603,
+        "query_ordinal": 872,
+        "source_unit": 14737,
+        "truth_id": 615119
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 101951,
+        "query_ordinal": 872,
+        "source_unit": 3185,
+        "truth_id": 628607
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 867142,
+        "query_ordinal": 886,
+        "source_unit": 27098,
+        "truth_id": 965935
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 193619,
+        "query_ordinal": 887,
+        "source_unit": 6050,
+        "truth_id": 263416
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 192532,
+        "query_ordinal": 887,
+        "source_unit": 6016,
+        "truth_id": 369332
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 867947,
+        "query_ordinal": 889,
+        "source_unit": 27123,
+        "truth_id": 343891
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 191463,
+        "query_ordinal": 893,
+        "source_unit": 5983,
+        "truth_id": 634897
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 605839,
+        "query_ordinal": 893,
+        "source_unit": 18932,
+        "truth_id": 993849
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 256254,
+        "query_ordinal": 934,
+        "source_unit": 8007,
+        "truth_id": 934533
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 976491,
+        "query_ordinal": 940,
+        "source_unit": 30515,
+        "truth_id": 687767
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 43254,
+        "query_ordinal": 944,
+        "source_unit": 1351,
+        "truth_id": 851385
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 269546,
+        "query_ordinal": 949,
+        "source_unit": 8423,
+        "truth_id": 792967
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 384,
+        "query_ordinal": 967,
+        "source_unit": 12,
+        "truth_id": 195279
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 719678,
+        "query_ordinal": 971,
+        "source_unit": 22489,
+        "truth_id": 641128
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 40750,
+        "query_ordinal": 975,
+        "source_unit": 1273,
+        "truth_id": 415696
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 39972,
+        "query_ordinal": 975,
+        "source_unit": 1249,
+        "truth_id": 650245
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 977290,
+        "query_ordinal": 989,
+        "source_unit": 30540,
+        "truth_id": 488271
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 141840,
+        "query_ordinal": 991,
+        "source_unit": 4432,
+        "truth_id": 724201
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 142644,
+        "query_ordinal": 999,
+        "source_unit": 4457,
+        "truth_id": 100000
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 142657,
+        "query_ordinal": 999,
+        "source_unit": 4458,
+        "truth_id": 100001
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 848311,
+        "query_ordinal": 999,
+        "source_unit": 26509,
+        "truth_id": 100004
+      },
+      {
+        "classification": "not_semantic_nominated_or_SOURCE_scored",
+        "physical_ordinal": 784874,
+        "query_ordinal": 999,
+        "source_unit": 24527,
+        "truth_id": 973179
+      }
+    ],
+    "schema": "borsuk-leaf48-residual-boundary-v1",
+    "scope": "closed metadata inference; shared authenticated source/SQ8 physical-order unit32; no inference separating router geometry versus capacity policy",
+    "valid": true
+  },
+  "root_quality_verification": {
+    "baseline_charges": {
+      "canonical": {
+        "failed_gets": 0,
+        "submitted_gets": 16000,
+        "verified_bytes": 65664000
+      },
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 97797,
+        "verified_bytes": 24255289344
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 30014,
+        "verified_bytes": 9974177024
+      }
+    },
+    "baseline_hit_histogram": {
+      "10": 867,
+      "3": 1,
+      "6": 3,
+      "7": 8,
+      "8": 33,
+      "9": 88
+    },
+    "baseline_hits": 9803,
+    "baseline_raw_sha256": "2bda08997e598964b556ced9b5993271696045855bf9026b736d84c3ef260407",
+    "baseline_recall_quantiles": {
+      "0.01": 0.7,
+      "0.05": 0.9,
+      "0.1": 0.9,
+      "0.5": 1.0
+    },
+    "cache_eviction_proven": false,
+    "candidate_charges": {
+      "canonical": {
+        "failed_gets": 0,
+        "submitted_gets": 16000,
+        "verified_bytes": 65664000
+      },
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 109872,
+        "verified_bytes": 28967583744
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 30041,
+        "verified_bytes": 10722616576
+      }
+    },
+    "candidate_hit_histogram": {
+      "10": 890,
+      "3": 1,
+      "6": 1,
+      "7": 6,
+      "8": 17,
+      "9": 85
+    },
+    "candidate_hits": 9852,
+    "candidate_observed_process_peak_bytes": 140640256,
+    "candidate_p_ns": {
+      "0.5": 185507708,
+      "0.9": 284869145,
+      "0.95": 378560419,
+      "0.99": 450099070
+    },
+    "candidate_process_cpu_ns": 124925295420,
+    "candidate_process_wall_ns": 212592479120,
+    "candidate_query_cpu_sum_ns": 118665706817,
+    "candidate_query_wall_sum_ns": 205826055340,
+    "candidate_raw_sha256": "3116a078ff5abf0c15e38d65ea1dc1905a7993ec057de375acf84ea81137007b",
+    "candidate_recall_quantiles": {
+      "0.01": 0.8,
+      "0.05": 0.9,
+      "0.1": 0.9,
+      "0.5": 1.0
+    },
+    "denominator": 10000,
+    "gross_hits_gained": 49,
+    "gross_hits_lost": 0,
+    "method": "Root independently recounts both closed cohorts against original authenticated truth; oracle scorebit assertions were performed by original controller before closure. Nearest-rank quantiles.",
+    "no_paired_runtime_or_vendor_claim": true,
+    "queries_gained": 43,
+    "queries_regressed": 0,
+    "schema": "borsuk-leaf48-root-quality-verification-v1",
+    "valid": true
+  },
+  "schema": "borsuk-leaf48-fp32-result-v1",
+  "screen_gained_truth_hits": 49,
+  "screen_regressed_queries": 0,
+  "stage_costs_and_outcomes": {
+    "admit": {
+      "baseline_hits": 9,
+      "candidate_hits": 9,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16,
+          "verified_bytes": 65664
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 115,
+          "verified_bytes": 30007296
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 32,
+          "verified_bytes": 8851584
+        }
+      },
+      "denominator": 10,
+      "native_exit": 0,
+      "observed_process_peak_bytes": 101990400,
+      "process_cpu_ns": 368617005,
+      "process_wall_ns": 1144645822,
+      "queries": 1,
+      "reader_exit": 0,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 163,
+        "verified_bytes": 38924544
+      }
+    },
+    "canary": {
+      "baseline_hits": 9,
+      "candidate_hits": 9,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16,
+          "verified_bytes": 65664
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 128,
+          "verified_bytes": 34940928
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 32,
+          "verified_bytes": 14752640
+        }
+      },
+      "denominator": 10,
+      "native_exit": 0,
+      "observed_process_peak_bytes": 114204672,
+      "process_cpu_ns": 405936181,
+      "process_wall_ns": 1011884137,
+      "queries": 1,
+      "reader_exit": 0,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 176,
+        "verified_bytes": 49759232
+      }
+    },
+    "full1000": {
+      "baseline_hits": 9803,
+      "candidate_hits": 9852,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 16000,
+          "verified_bytes": 65664000
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 109872,
+          "verified_bytes": 28967583744
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 30041,
+          "verified_bytes": 10722616576
+        }
+      },
+      "denominator": 10000,
+      "native_exit": 0,
+      "observed_process_peak_bytes": 140640256,
+      "process_cpu_ns": 124925295420,
+      "process_wall_ns": 212592479120,
+      "queries": 1000,
+      "reader_exit": 0,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 155913,
+        "verified_bytes": 39755864320
+      }
+    },
+    "screen0": {
+      "baseline_hits": 1093,
+      "candidate_hits": 1140,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 2048,
+          "verified_bytes": 8404992
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 15201,
+          "verified_bytes": 3904733184
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 4095,
+          "verified_bytes": 2709446656
+        }
+      },
+      "denominator": 1280,
+      "native_exit": 0,
+      "observed_process_peak_bytes": 141037568,
+      "process_cpu_ns": 18861313395,
+      "process_wall_ns": 34951702408,
+      "queries": 128,
+      "reader_exit": 0,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 21344,
+        "verified_bytes": 6622584832
+      }
+    },
+    "screen1": {
+      "baseline_hits": 40,
+      "candidate_hits": 42,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 80,
+          "verified_bytes": 328320
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 560,
+          "verified_bytes": 144089088
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 160,
+          "verified_bytes": 58281216
+        }
+      },
+      "denominator": 50,
+      "native_exit": 0,
+      "observed_process_peak_bytes": 123518976,
+      "process_cpu_ns": 876370414,
+      "process_wall_ns": 2021251400,
+      "queries": 5,
+      "reader_exit": 0,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 800,
+        "verified_bytes": 202698624
+      }
+    }
+  }
+}

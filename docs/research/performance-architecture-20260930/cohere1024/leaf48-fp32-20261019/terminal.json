@@ -1,0 +1,27 @@
+{
+  "closed_inputs_read_only": true,
+  "current_unit_observation": "MainPID=0\nResult=success\nExecMainStatus=0\nActiveState=inactive\nSubState=dead\nInvocationID=\n",
+  "invocation_observation_note": "Transient unit was collected: current InvocationID is empty. Original launch SSM output bound unit, PID1345, invocation and controller SHA; pipeline.exit and terminal.json establish closed outcome.",
+  "launch_ssm_verified_response_code": 0,
+  "launch_ssm_verified_status": "Success",
+  "no_native_reruns_or_cloud_lifecycle_actions": true,
+  "original_instance": "i-0424fbcd99f9777de",
+  "original_invocation_id": "19a125c8573a42b69c5f92a65993bbeb",
+  "original_launch_ssm": "1d1c9cda-f21f-4c7b-809e-032cb0126aeb",
+  "original_terminal": {
+    "archive": {
+      "bytes": 19942502,
+      "key": "research/semantic-router/20261019/leaf48-fp32-a0001/evidence.tar.gz",
+      "sha256": "1cb3bce1e42c40cfb2022b7405226d191fe35982deb9326334c597d5cf3b09f7"
+    },
+    "instance": "i-0424fbcd99f9777de",
+    "native_pipeline_exit": 0,
+    "terminal_utc_epoch": 1792376633.253099
+  },
+  "original_unit": "borsuk-leaf48-fp32-a0001.service",
+  "pipeline_exit": 0,
+  "recorded_utc": "2026-10-19T02:27:24.218498+00:00",
+  "root_quality_metadata_unit_terminal": "MainPID=0\nResult=success\nExecMainStatus=0\n",
+  "schema": "borsuk-leaf48-docs-terminal-v1",
+  "terminal_probe_ssm": "8bf60142-c037-4454-aa06-fc778087dcb1"
+}
