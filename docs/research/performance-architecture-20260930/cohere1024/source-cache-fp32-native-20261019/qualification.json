@@ -1,0 +1,153 @@
+{
+  "ELFs": {
+    "check_cohere_native_baseline": {
+      "bytes": 19637192,
+      "path": "/mnt/borsuk-workspace/evidence/source-cache-fp32-root-remaining-a0001/bin/check_cohere_native_baseline",
+      "sha256": "262e20bb6bb43615d66fb4f722570bd3e9b68e3d2768aafe023f26ce23df6f2d"
+    },
+    "compare_native_replay": {
+      "bytes": 17352520,
+      "path": "/mnt/borsuk-workspace/evidence/source-cache-fp32-root-remaining-a0001/bin/compare_native_replay",
+      "sha256": "11f70589d210a102d4808358fc416bfd2c2cb80b2f993b56243f6504e7b85dfb"
+    }
+  },
+  "candidate": "124aa368f0ed77ff0549c90782ef885150477604",
+  "child_historical_summary": {
+    "commit": "124aa368f0ed77ff0549c90782ef885150477604",
+    "controller": {
+      "cgroup": "absent",
+      "inactive_at": "2026-10-19T06:23:58Z",
+      "invocation": "6caf9ff96780428da114998ed40f16de",
+      "main_pid": 0,
+      "memory_peak_bytes": 21198934016,
+      "original_pid": 5049,
+      "result": "timeout",
+      "signal": 15,
+      "trap_exit_file": "0; not success evidence because service timeout terminated child build",
+      "unit": "source-cache-fp32-packet-a0001.service"
+    },
+    "final_stage": "012",
+    "final_stage_exit": null,
+    "limits": [
+      "No actual-data or performance measurement",
+      "Synthetic S3 counter envelope around actual local native plan/charge stream",
+      "Historical protocol/decision blobs unavailable; parent accepted limitation",
+      "Warm full-cover refusal is direct reader/model fixture, not native over-budget producer workload",
+      "Original frozen-bin ELFs match reviewed22f8 source, not final commit",
+      "No final release ELF may be treated as qualified"
+    ],
+    "passed": {
+      "affected_compile": "19.06s",
+      "library_source_cache_tests": 2,
+      "native_combined_memory_boundary": 1,
+      "real_env_unset_full_test_build": "0.31s",
+      "replay_and_native_tests": 4,
+      "workspace_clippy_correctness_suspicious": "5.23s"
+    },
+    "prior_attempts_preserved": [
+      {
+        "exit": 101,
+        "stage": "001"
+      },
+      {
+        "exit": 0,
+        "stage": "002"
+      },
+      {
+        "exit": 101,
+        "stage": "003"
+      },
+      {
+        "exit": 0,
+        "stage": "004"
+      },
+      {
+        "exit": 101,
+        "stage": "005"
+      },
+      {
+        "exit": 0,
+        "stage": "006"
+      },
+      {
+        "exit": 0,
+        "stage": "007"
+      },
+      {
+        "exit": 0,
+        "stage": "008"
+      },
+      {
+        "exit": 101,
+        "stage": "009"
+      },
+      {
+        "exit": 0,
+        "stage": "010"
+      },
+      {
+        "exit": 0,
+        "stage": "011"
+      }
+    ],
+    "qualification": "UNVERIFIED_REQUIRED_RELEASE_GATE",
+    "release_command": "cargo build --locked --release -p borsuk --bin check_cohere_native_baseline --example compare_native_replay",
+    "source_frozen_at": "2026-10-19T06:19:58Z",
+    "source_patch_sha256": "0938e6956136fcd7ff0210823618ee3aa76188765094406ec4ff8b53bca925ff",
+    "source_provenance": "clean committed source; final-source-files.sha256 == terminal-source-files.sha256",
+    "unverified": [
+      "final release runner+replay build",
+      "final release ELF hashes"
+    ]
+  },
+  "limits": [
+    "Compiler/native synthetic correctness only; no real-input admission/performance yet",
+    "new cache SDK positive is a synthetic S3 envelope around native local plan stream",
+    "historical cache performance protocol blobs unavailable",
+    "structural replay is not a truth/score/timing oracle; root actual experiment must verify independently",
+    "cache budget is bounded generation-local memory; no cold-provider or vendor claim"
+  ],
+  "owned_paths": [
+    "crates/borsuk/examples/compare_native_replay.rs",
+    "crates/borsuk/examples/compare_native_replay/current_v10.rs",
+    "crates/borsuk/examples/compare_native_replay/fp32_serving.rs",
+    "crates/borsuk/examples/compare_native_replay/source_cache.rs",
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+    "crates/borsuk/src/two_bit_generation.rs"
+  ],
+  "parent": "c34142e56a3966eddcc1caa6f38dfd9a4834561a",
+  "recovery": {
+    "new_instance": "i-0f932ce667c587593",
+    "no_rebuild": true,
+    "old_instance": "i-0f3796cff7889862d",
+    "recovery_ssm": "d0b053ae-6913-4a8a-897b-f9310ce2aa4f",
+    "spot_termination": "2026-10-19T06:32:26Z",
+    "volume": "vol-02541c376657a5814"
+  },
+  "review": {
+    "engineering": "a898ae5cd1ad43b4",
+    "group": "21f7e95c138941ff",
+    "original_verdict": "NO_GO",
+    "reconciliation_sha256": "2b83460767b9ebac5d3c007e4f9dafa00a1885256e161b9fdfa527299702161d",
+    "research": "09b505e88fe24aba",
+    "root_full_repair_delta_sha256": "ac538638392a851efe525a223a34401bad695500ee37c74063f793aa0199237e"
+  },
+  "root_remaining": {
+    "invocation": "442730b89f1f441785f8693ec123a38c",
+    "launch_ssm": "ebc4ae05-4ba9-4bad-afcd-33cf8702d9a1",
+    "script_sha256": "5a729bf3ef63572688fed5a5f0bc6868fc61a93d945d581b329e753eda495209",
+    "source_after": "c5be8b9cc9682054d9e49a55ced4868e301a4fc173f5ae3282b07a092de5df37",
+    "source_before": "c5be8b9cc9682054d9e49a55ced4868e301a4fc173f5ae3282b07a092de5df37",
+    "statuses": {
+      "Clippy": 0,
+      "actual-testbuild": 0,
+      "controller": 0,
+      "release": 0
+    },
+    "terminal_success": true,
+    "unit": "source-cache-fp32-root-remaining-a0001"
+  },
+  "schema": "borsuk-source-cache-fp32-root-qualification-v1",
+  "source_patch_sha256": "0938e6956136fcd7ff0210823618ee3aa76188765094406ec4ff8b53bca925ff",
+  "status": "QUALIFIED_CODE_NOT_MEASURED"
+}

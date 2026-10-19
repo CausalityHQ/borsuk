@@ -1,0 +1,42 @@
+**Verdict: NO_GO for the pinned patch.** The producer-to-reader test fails, and cache replay omits a native admission invariant.
+
+What this change does: It exposes the existing authenticated SOURCE cache for opt-in serial FP32 serving and adds cumulative counters plus reader-side cache reconstruction.
+
+Paths below are relative to `/mnt/borsuk-workspace/source-cache-fp32-packet-source-a0001`.
+
+1. **P1 — Every configured cached stream is rejected before replay. Confirmed source bug and test failure.**
+
+   `crates/borsuk/examples/compare_native_replay.rs:660` still requires `source_cache == "off"`. The new producer emits `authenticated_direct_mapped256_v1`, which the new envelope validator requires.
+
+   The original `005.log` confirms failure at `compare_native_replay.rs:16540`: `"explicit scale input geometry/profile/cap"`. Stage 005 exited **101**; consequently, this test never reaches its cache-counter refusal cases.
+
+   **Smallest fix:** Update the shared input predicate to admit the exact new policy only under the validated opt-in contract. Preserve historical cache-off requirements. The existing positive producer-to-reader test is the immediate reproducer.
+
+2. **P1 — Replay accepts cache hits without checking the original full-cover byte budget. Source-validation bug; counterexample not executed.**
+
+   `crates/borsuk/examples/compare_native_replay/source_cache.rs:173` discards the cover’s total bytes. Lines 193–200 validate only fetched misses. Native execution checks the **whole original cover** before lookup: `crates/borsuk/src/two_bit_generation.rs:3619`, through the rejection at line 1774.
+
+   **Smallest replay-level counterexample:** Use 512 rows, D1024, two cache slots, and `source_byte_budget = 67,584`. Warm blocks 0 and 1 in separate queries, then request their combined cover. Replay records a hit with zero fetched bytes; native admission rejects the 135,168-byte cover.
+
+   **Smallest fix:** Retain the cover-byte total and check it against `source_byte_budget` before changing replay counters. Add this refusal case. The new 33-row producer-reader fixture exercises only one cache block and cannot catch it.
+
+3. **P1 for measurement qualification — Logical charges are not conserved against observed SDK query transport. Inherited limitation.**
+
+   `crates/borsuk/examples/compare_native_replay.rs:1187–1224` checks cumulative consistency and continuity, but imposes no query GET/payload lower bound against logical charges. The fixture at lines **16899–16910** explicitly leaves query transport unchanged and accepts the resealed stream despite positive logical reads.
+
+   **Reproducer:** Preserve the valid canonical HEAD, set every subsequent query’s transport `before == after`, update the terminal boundary, and reseal. Cache reconstruction still validates logical misses; it does not establish actual SOURCE transfers.
+
+   **Smallest correction:** For the new protocol, enforce appropriate GET/payload conservation bounds while allowing retries and extra traffic. Precise SOURCE attribution still needs independently captured transport evidence. Keep historical acceptance rules unchanged.
+
+I verified the supplied parent, both supplied SHA-256 pins, and all six source-file hashes. Stage 005/006/007 patch snapshots match the frozen patch. Original receipts show:
+
+- **004:** affected compilation passed.
+- **005:** three focused native cache tests passed; FP32 replay tests finished **6 passed, 1 failed**.
+- **006:** required workspace Clippy passed.
+- **007:** full workspace test-build passed.
+
+The inspected native code preserves generation ownership, admission before cache allocation, full-cover payload charging, and insertion only after the complete miss batch succeeds. Existing failure/drain and isolation tests provide supporting evidence.
+
+Coherent resealing can also change reported recall and internally consistent timings; this reader does not independently recompute them. Cached results therefore remain memory-for-I/O evidence, with no established cold-cache speed or quality qualification.
+
+Not checked: no new execution, payload reads, edits, or infrastructure changes. Fixes require a new frozen revision and verification; findings 2–3 were established by source inspection, not newly executed falsifiers.

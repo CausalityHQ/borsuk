@@ -506,6 +506,14 @@ pub(super) fn validate_row_envelope(
         _ => "",
     };
     let mut roster = format!("{} {extras}", super::v2_row_fields(phase)?);
+    if matches!(phase, "identity" | "bound_inputs") && raw.get("source_cache_bytes").is_some() {
+        super::source_cache::budget(&raw)?;
+        roster.push_str(" source_cache_bytes");
+    }
+    if matches!(phase, "startup" | "query") && raw.get("source_cache").is_some() {
+        roster.push_str(" source_cache");
+        super::source_cache::validate_counters(&raw["source_cache"])?;
+    }
     if super::fp32_serving::enabled(&raw) {
         super::fp32_serving::limits(&raw)?;
         match phase {
@@ -713,7 +721,9 @@ pub(super) fn validate_row_envelope(
                     )?;
                 }
             } else {
-                require(raw["source_cache"] == "off", "source cache must be off")?;
+                require(raw["source_cache"] == if super::source_cache::budget(&raw)? > 0 {
+                    "authenticated_direct_mapped256_v1"
+                } else { "off" }, "SOURCE cache policy/budget binding")?;
             }
         }
         "startup" => {
@@ -821,6 +831,7 @@ pub(super) fn validate_completed(c: &CompletedConfig) -> Result<()> {
         "range_scheduler_owner",
         "source_layout",
         "source_byte_budget",
+        "source_cache_bytes",
         "source_capsule_verification_policy",
         "source_authentication",
         "semantic_leaf_limit",
@@ -2357,7 +2368,8 @@ pub(super) fn validate_source_capsules(raw: &Value, inputs: &Value) -> Result<()
         return Ok(());
     }
     require(
-        number(&raw["charges"]["source"]["submitted_gets"])? > 0
+        (super::source_cache::budget(inputs)? > 0
+            || number(&raw["charges"]["source"]["submitted_gets"])? > 0)
             && number(&raw["charges"]["source"]["submitted_gets"])?
                 <= number(&inputs["source_get_budget"])?,
         "v13 successful SOURCE requires a payload GET within budget",

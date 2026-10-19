@@ -1,0 +1,37 @@
+What this change does: It exposes the existing authenticated SOURCE cache to serial, untraced, nondirect FP32 runs and adds stateful replay of cache counters and SOURCE charges. It trades memory for fewer reads; it establishes no cold-cache speed result.
+
+**Verdict: NO_GO for release or measurement acceptance as submitted.** One replay invariant is missing. Combined-memory admission and broader replay tests also need attention. These are static findings; I did not execute reproducers.
+
+All paths below are relative to the specified EC2 source directory.
+
+1. **P1 — Replay omits full-cover byte admission. Source bug.**
+   `crates/borsuk/examples/compare_native_replay/source_cache.rs:173` discards the byte total returned by `cover_pages`. Lines 193–200 validate only miss bytes. Native `two_bit_generation.rs:3619` calls `plan_two_bit_source_cover`, which rejects an oversized **original cover before lookup** (`:1774`).
+
+   **Smallest reproducer:** With three resident-capable slots, let one block contain B bytes and set `source_byte_budget=B`. Replay queries covering page 0, page 2, then pages {0,2}. The first two queries each fetch B; the third has two hits and zero fetched bytes, so cache replay accepts it. Native admission rejects its 2B original cover. This is a model-level reproducer; full-reader execution remains unverified.
+
+   **Smallest fix:** Retain the cover byte total and require it to fit `source_byte_budget` before changing replay state. Add this sequence as a negative oracle. Otherwise coherent counters and seals can describe execution that native admission forbids.
+
+2. **P2 — Cache allocation precedes combined FP32 admission. Contract gap.**
+   `crates/borsuk/src/bin/check_cohere_native_baseline.rs:2681` allocates through `with_source_cache`; the complete FP32 memory check follows at `:2683`. The cache allocator checks baseline-plus-cache at `two_bit_generation.rs:2339`, while FP32 memory adds its query reservation at `:3940`.
+
+   **Smallest reproducer:** Choose a cap C where baseline+cache ≤ C < baseline+cache+FP32-query-reservation. Cache allocation succeeds before startup rejects the configuration.
+
+   **Smallest fix:** Preflight the combined reservation before allocating cache storage, reusing the same cache-charge calculation. This is avoidable allocation for an inadmissible configuration—not evidence that a query exceeds the configured cap.
+
+3. **P2 — New replay tests cannot exercise replacement or mixed-range ordering. Test gap.**
+   `crates/borsuk/examples/compare_native_replay.rs:16533` uses the 33-row fixture created at runner `:3738`. That provides one block and no replacement. Individual counter mutations do not test whether replay computes the correct state across collisions.
+
+   **Smallest discriminating test:** Use 513 rows, one slot, and two original ranges covering blocks 0 and 2. Repeat the query. On the second pass, block 0 misses and block 2 hits **before insertion**; inserting block 0 then evicts the tail. Check all counters, tail occupancy and transport charges. Also add finding 1’s over-budget warm-cover refusal. Existing native tests provide useful coverage but do not verify this new reader.
+
+The ownership and failure design is otherwise coherent in the inspected code: generation-local ownership, copied hit bodies, lookups before miss fetching, and insertion only after a complete successful batch. Inherited tests explicitly cover failed-batch partial success, retained copies across eviction, reopened generations and pinned-generation charges. I found no demonstrated scoring or persistent-layout change.
+
+Three simulated perspectives give useful predictions:
+
+- A storage engineer would favor this small direct-mapped design until measured collision loss justifies associativity or LRU. A cover containing more distinct blocks than available slots cannot become a whole-range hit.
+- A memory reviewer would distinguish budget from allocation. At 1M rows and D1024, SOURCE records occupy 264,000,000 bytes; padded cache payload capacity is 264,050,688 bytes. A 384 MiB budget can therefore hold the entire supported SOURCE object.
+- A measurement reviewer would require frozen executable provenance and actual execution receipts. Structural replay does not independently recompute cosine scores or observe elapsed time. Coherent resealing remains a trust-boundary limitation, including in the existing FP32 reader (`fp32_serving.rs:123`, `:228`).
+
+I verified the exact parent, both supplied hashes and all six manifest entries; the six entries also matched at the final check. Initial SSM receipt: `27c19ee8-0322-4f5a-84d8-3399741ddf2a`; final verification: `efdc8171-d07d-4e97-bb82-ece22b80ab1a`. Operator notification was queued.
+
+Not checked: compilation, test outcomes, Clippy, workspace assurance, payloads or performance. No files or running jobs were changed.
+Residual limit: acceptance remains conditional on fixes and exact-source verification; experiment authority remains with the root.
