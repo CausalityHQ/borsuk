@@ -8859,11 +8859,21 @@ mod tests {
         value["profile"] = json!("scale1m");
         value["semantic_leaf_limit"] = json!(64);
         value["fetch_parallelism"] = json!(128);
-        value["sq8_get_budget"] = json!(128);
+        // The 128-range fixture fits; 256 ranges exceed the unchanged diagnostic cap.
+        value["sq8_get_budget"] = json!(256);
         value["serving"] = json!({"mode":"fp32_rerank","coalesce":false,"shortlist":256,
             "max_fp32_bytes":256*(D*4+8),"max_fp32_gets":256,"max_parallel_fp32_gets":128});
         let c: Config = serde_json::from_value(value).unwrap();
         validate_config(&c, Shape::PRODUCTION).unwrap();
+        assert!(
+            diagnostic_bytes(&c)
+                .unwrap_err()
+                .to_string()
+                .contains("diagnostic budget exceeds 2 MiB")
+        );
+        for receipt in [&c.cohort_receipt, &c.derivation_receipt] {
+            std::fs::remove_file(&receipt.path).unwrap();
+        }
         let mut out = Output::create(&dir.path().join("cap-refusal")).unwrap();
         let mut progress = Progress::default();
         let error = query_and_seal_with(&c, Shape::PRODUCTION, &mut out, &mut progress, || {
