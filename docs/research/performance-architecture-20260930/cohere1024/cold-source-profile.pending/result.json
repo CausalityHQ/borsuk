@@ -1,0 +1,273 @@
+{
+  "status": "VALID_SELECTED8_DIAGNOSTIC_ONLY",
+  "qualified_source_commit": "de78d618409973aa22ffab2b0fdd142beaac7c23",
+  "documentation_only_descendant_of": "de78d618409973aa22ffab2b0fdd142beaac7c23",
+  "base_source_commit": "72a51e9cf2a9c675e675299331c9a5d421f2ebe9",
+  "configuration": {
+    "semantic_leaf_limit": 64,
+    "fetch_parallelism": 128,
+    "offload": 2,
+    "source_cache_bytes": 0,
+    "fp32_shortlist": 16,
+    "trace": true
+  },
+  "selected_profile_ordinals": [
+    0,
+    14,
+    125,
+    375,
+    454,
+    546,
+    687,
+    859
+  ],
+  "qualification": {
+    "directory": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005",
+    "controller_exit": 0,
+    "controller_exit_receipt": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/controller.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "controller": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/controller.sh",
+      "sha256": "1f451f8629660d85de17d4e14be2db9342c1fac2ccc4f87cd2fe39bc42d207c3"
+    },
+    "source_manifest": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/source.sha256",
+      "sha256": "18d817fe34bcdb967af2ec6ffb28f6226efacd9dad5b74a4bd51d86a39e84d57"
+    },
+    "qualified_source_file_sha256": {
+      "crates/borsuk/src/two_bit_generation.rs": "cfc13530e4bb5d0fd4dd4197f7c27db08b75e4624ad4d583b65ca0d73455d3ed",
+      "crates/borsuk/src/sq8_s3_range.rs": "23b009720a5d3fdcfc41680612e0f3c4f1183ffe24b62d5295e895bdb44561b2",
+      "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "f2170d08412fece078061be2e98895a7a9a1102d5c4c5046ed67d52e09647969",
+      "crates/borsuk/examples/compare_native_replay.rs": "cf59787bc3feccaee3a41e62bc0494b68870b7ccef038de159836a00661b6474",
+      "crates/borsuk/examples/compare_native_replay/current_v10.rs": "7b3bcdf13d074986e922b0246f52433e29dbeaab89b8405b4dc95a80958d008c",
+      "docs/research/performance-architecture-20260930/cohere1024/cold-source-profile.pending/README.md": "190516f78ff2c9d9cb43d357593be12b56d7340bba36a087f7097d7f3386b033",
+      "docs/research/performance-architecture-20260930/cohere1024/cold-source-profile.pending/root-recipe.sh": "4c97ce825b01ca2f819c0ad8846d143383273078a101dd7bedd3e5282a419c0a"
+    },
+    "embedded_source_proof": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/own-frozen-elf.json",
+      "sha256": "4bbb8d9b5ef12c645ebccacfd9f3ef9e8e9a42a7c06b94821633ca58aaa795b9"
+    },
+    "gates": {
+      "compile": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/compile.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/compile.log"
+      },
+      "embedded-proof": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/embedded-proof.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/embedded-proof.log"
+      },
+      "runner-changed": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/runner-changed.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/runner-changed.log"
+      },
+      "profile-reader": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/profile-reader.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/profile-reader.log"
+      },
+      "fp32-library": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/fp32-library.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/fp32-library.log"
+      },
+      "fp32-reader": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/fp32-reader.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/fp32-reader.log"
+      },
+      "coverage-reader": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/coverage-reader.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/coverage-reader.log"
+      },
+      "clippy": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/clippy.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/clippy.log"
+      },
+      "testbuild": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/testbuild.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/testbuild.log"
+      },
+      "release": {
+        "exit": 0,
+        "exit_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/release.exit",
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        "log_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/release.log"
+      }
+    },
+    "release_elfs": {
+      "check_cohere_native_baseline": {
+        "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/bin/check_cohere_native_baseline",
+        "sha256": "d7fd945e861ea2e5675b71f509999eea4a5a159fd07d679a2980457484e369dc"
+      },
+      "compare_native_replay": {
+        "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0005/bin/compare_native_replay",
+        "sha256": "522993a4df7b431747eb11f894bf2f4c15c3a803217172b1f827cf7cbfb50945"
+      }
+    },
+    "retained_runner_evidence": {
+      "directory": "/mnt/borsuk-workspace/evidence/cold-source-profile-root-qualification-a0003",
+      "unchanged_passes": 84,
+      "historical_controller_exit": 101,
+      "sole_failed_case_repaired_and_retested": true
+    }
+  },
+  "diagnostic": {
+    "directory": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003",
+    "controller_exit": 0,
+    "terminal_receipt": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/terminal.json",
+      "sha256": "22c5cf8c08973c275f73b9c9b627cc01955a588e23baff0a4c6cfe50fe96bacd"
+    },
+    "execution_authority": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/execution-authority.json",
+      "sha256": "e82e47e3c8b385d94f08843c61d789036e925ccdd241b58b3a97e8beb706b4c3"
+    },
+    "analysis_receipt": {
+      "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/analysis.json",
+      "sha256": "542638f5ed9864255f336041a6a55ad615726008f71cc5f3db88500eba761a43"
+    },
+    "phases": {
+      "admit": {
+        "denominator": 80,
+        "diagnostic_not_latency_comparison": true,
+        "gold_exact": true,
+        "hits": 80,
+        "independent_f64_oracle": true,
+        "queries": 8,
+        "raw_bytes": 713023,
+        "raw_sha256": "05ff61b8bc0cad65534f99f51b31e34144b4624d7550b870ffa5db83d6a0d0c5",
+        "scratch_cleanup": true,
+        "source_cache_bytes": 0,
+        "strict_reader_exit": 0,
+        "verification_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/admit-verification.json",
+          "sha256": "79d8cefdf5fcbe573e3ac2db85ae3c6233b07b67b87878982fe11aa955465bea"
+        },
+        "raw_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/admit.jsonl"
+      },
+      "canary": {
+        "denominator": 20,
+        "diagnostic_not_latency_comparison": true,
+        "gold_exact": true,
+        "hits": 19,
+        "independent_f64_oracle": true,
+        "queries": 2,
+        "raw_bytes": 218378,
+        "raw_sha256": "3cba6e10b5b6977e06f66bed475ec624e025663fff99ec460e55ad078ee527a8",
+        "scratch_cleanup": true,
+        "source_cache_bytes": 0,
+        "strict_reader_exit": 0,
+        "verification_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/canary-verification.json",
+          "sha256": "a6b9c0f0fef107a270e51b6535f6b3ce5354a55e7d7e70f1a7bf0f133be2f96d"
+        },
+        "raw_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/canary.jsonl"
+      },
+      "profile": {
+        "denominator": 80,
+        "diagnostic_not_latency_comparison": true,
+        "gold_exact": true,
+        "hits": 80,
+        "independent_f64_oracle": true,
+        "queries": 8,
+        "raw_bytes": 712972,
+        "raw_sha256": "7e1212fef160e3bb70126076c21a6121dfbdf604ea1889a4fe10a4edce194ba8",
+        "scratch_cleanup": true,
+        "source_cache_bytes": 0,
+        "strict_reader_exit": 0,
+        "verification_receipt": {
+          "path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/profile-verification.json",
+          "sha256": "c11247e984d950474a11074c0dbac339ef0c1bfc748bfd07c58e42d0b7b9b892"
+        },
+        "raw_path": "/mnt/borsuk-workspace/evidence/cold-source-profile-diagnostic-a0003/profile.jsonl"
+      }
+    },
+    "gold_exact_fields": [
+      "IDs",
+      "f64 score bits",
+      "physical ordinals",
+      "plans",
+      "trace",
+      "charges"
+    ],
+    "gold_exact_field_scope_source": "authenticated parent message immediate-1792425781550109062-846583",
+    "root_original_receipts": {
+      "terminal_ssm_id_prefix": "83b08470",
+      "analysis_ssm_id_prefix": "f5c2f241",
+      "status": "Success0"
+    }
+  },
+  "source_cpu": {
+    "totals": {
+      "query_cpu_ns": 1357685666,
+      "query_wall_ns": 2567545642,
+      "source_phase_process_cpu_ns": 863629689,
+      "source_unattributed_process_cpu_ns": 408156114,
+      "source_collector_allocation_thread_cpu_ns": 1555541,
+      "source_collector_copy_thread_cpu_ns": 58881493,
+      "source_authentication_thread_cpu_ns": 230274778,
+      "source_source_scoring_thread_cpu_ns": 164761763,
+      "source_copied_bytes": 342515712,
+      "source_residual_fraction": 0.4726054687543286
+    },
+    "means_ms": {
+      "query_cpu_ns": 169.71070825,
+      "query_wall_ns": 320.94320525,
+      "source_phase_process_cpu_ns": 107.953711125,
+      "source_unattributed_process_cpu_ns": 51.01951425,
+      "source_collector_allocation_thread_cpu_ns": 0.194442625,
+      "source_collector_copy_thread_cpu_ns": 7.360186625,
+      "source_authentication_thread_cpu_ns": 28.78434725,
+      "source_source_scoring_thread_cpu_ns": 20.595220375
+    },
+    "residual_attribution": "UNATTRIBUTED",
+    "acquisition_poll_cpu": "unresolved_not_instrumented"
+  },
+  "limits": [
+    "worker CPU components are explicit synchronous spans; wall spans may overlap",
+    "SOURCE process residual remains unattributed; acquisition/poll unresolved; not TLS or network CPU",
+    "no population recall, comparative latency, vendor win, or production readiness conclusion",
+    "source_cache_bytes=0; same incumbent plans/charges/results verified"
+  ],
+  "documentation_evidence_reads": {
+    "raw_query_data_read": false,
+    "builds_or_tests_run": false
+  }
+}
