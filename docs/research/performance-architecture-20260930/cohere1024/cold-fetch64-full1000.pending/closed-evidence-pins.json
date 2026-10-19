@@ -1,0 +1,14 @@
+{
+  "measurement-addendum.json": {
+    "bytes": 4280,
+    "sha256": "c209b506b2139535fd80005660ad875bf2d93d6d463a23a14183db9c56984bc0"
+  },
+  "report.json": {
+    "bytes": 28582,
+    "sha256": "f67bae774593c94fa4bfc3547f96ec48f9038e73acbb429c541693f27c499c42"
+  },
+  "terminal.json": {
+    "bytes": 277,
+    "sha256": "a30b88a06183568c9d5ead03ea8d9ccfddb090f3ff9484b98b407f7f779b0f58"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "cases": 8,
+  "frozen_cases": {
+    "A1": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "222192350aaf17f4550a6fd4517564786c0eb07efaec22723ab91fab40b44424",
+      "expected_sha256": "f2c619c57ec4f2a17745b3fdfb2d296e769a7b30c90dba1325e5a912d695337c"
+    },
+    "A2": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "222192350aaf17f4550a6fd4517564786c0eb07efaec22723ab91fab40b44424",
+      "expected_sha256": "f2c619c57ec4f2a17745b3fdfb2d296e769a7b30c90dba1325e5a912d695337c"
+    },
+    "B1": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "178d146c3bae64a786da813cc541582e0628d363007601b5e79f67e0e1689336",
+      "expected_sha256": "a6f1285c498f31721c72d25caf266b101314aa06a019843f0246bb5814251142"
+    },
+    "B2": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "178d146c3bae64a786da813cc541582e0628d363007601b5e79f67e0e1689336",
+      "expected_sha256": "a6f1285c498f31721c72d25caf266b101314aa06a019843f0246bb5814251142"
+    },
+    "admit-A": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "0dcbd9a28f72e309d7cf4417facc7710cd644ec84dfe89ecfd834b3e0bb5e694",
+      "expected_sha256": "8a4860ddb60984426eccacaa6971e027720dd50b8d376dcd6fabffa35d5874fe"
+    },
+    "admit-B": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "eed4ce8ed483ac4e579b448b01062b3406dc2e35196a6cacbc8d47e1110c0a23",
+      "expected_sha256": "324b5b995f73232fafca5bb35a283bb224241186544a2fcbc7f71906860f828b"
+    },
+    "canary-A": {
+      "arm": "A",
+      "cached": false,
+      "config_sha256": "d4764835323612aa49a75f1d93a7633deb15ede52d065e93a697624973ae059f",
+      "expected_sha256": "050cb5828addb34d1b1b427b6bf850ccd8685887a7a0b54e0c1d2ec80d513935"
+    },
+    "canary-B": {
+      "arm": "B",
+      "cached": false,
+      "config_sha256": "7755bd0d9b7652d3b8227e1c7907aadb55cddf2b190b49ff83b8af84c9e8d60d",
+      "expected_sha256": "8d4c53e54992c358df0af008b2b4ac887907fd2dc452abda663f05d42ef05b29"
+    }
+  },
+  "native_executed": false,
+  "payloads_read": false,
+  "status": "PASS"
+}

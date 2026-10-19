@@ -1,0 +1,38 @@
+{
+  "128": {
+    "caller_pinned_bytes": 7010842,
+    "diagnostic_pinned_bytes": 524288,
+    "fp32_modeled_memory_bytes": 471434981,
+    "query_scratch_bytes": 847232,
+    "range_state_charged_by_library_bytes": 312320,
+    "source_authentication_extra_library_bytes": 4865750,
+    "trace_scratch_bytes": 314752
+  },
+  "64": {
+    "caller_pinned_bytes": 7010842,
+    "diagnostic_pinned_bytes": 524288,
+    "fp32_modeled_memory_bytes": 471043301,
+    "query_scratch_bytes": 847232,
+    "range_state_charged_by_library_bytes": 174592,
+    "source_authentication_extra_library_bytes": 4611798,
+    "trace_scratch_bytes": 314752
+  },
+  "evidence": {
+    "ABI_evidence": "Inferred from closed scheduler312320 at128, confirmed closed174592 at64; unchanged outcome types/dependencies; actual strict reader recomputes compiled ABI. Prospective pins, not native qualification.",
+    "auth_formula": "min(128,width+2)*4096 + 2*(1048576+4096)+4096+256+2231766",
+    "diagnostic_formula": "add524288+8*n to caller AND model, both leaf64",
+    "model_delta_B_minus_A": -391680,
+    "outcome_ABI_bytes": 96,
+    "parent_receipt": "1792412517882167414-2287866",
+    "qualified_source": "cd8cac6bbda4066f7277114ac3b9706c75129785",
+    "runtime_reserve_Q1": 0,
+    "scheduler_formula": "min(128,width)*(2048+96+8)+128*96*3; SQ8 max32 nonlimiting",
+    "source_lines": "runner670-698,1549-1552,1675-1779,4385-4409; range56-62,199-210,1804-1817,1944-1959,3198-3211; reader current_v10:402-442,1600-1614,1750-1815; fp32_serving:188-220",
+    "worker_source_receipts": [
+      "7778dd4e-4495-4a9e-8106-799ea9a1f289",
+      "b3411378-99a5-4da2-956d-94c2bc42e912",
+      "ff14cef6-79e5-4e4f-aa5c-da463ee2c1ce",
+      "4fcb60e6-229f-418e-bda8-407f849a15d8"
+    ]
+  }
+}

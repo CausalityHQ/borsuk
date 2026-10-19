@@ -1,0 +1,10 @@
+{
+  "base": "80db9dece3a05b19f52dfac079ccda0cc4e28087",
+  "email": "riomus@gmail.com",
+  "hooks": "disabled for commit",
+  "inherited_missing_blobs": "Preserved; no object fetching or restoration. Only new packet staged.",
+  "native_or_payload_execution": false,
+  "operator": "Roman Bartusiak",
+  "scope": "docs/research/performance-architecture-20260930/cohere1024/cold-fetch64-full1000.pending",
+  "static_ssm": "05c0962f-e1ab-4e4b-9637-722f3c8ec284"
+}
