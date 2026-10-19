@@ -14136,6 +14136,11 @@ mod tests {
         for row in rows {
             if row["phase"] == "diagnostic_admission" {
                 row["panel_line_cap_bytes"] = json!(65536);
+                row["diagnostic_cap_bytes"] = json!(1048576);
+                row.as_object_mut().unwrap().remove("diagnostic_schema");
+                row.as_object_mut()
+                    .unwrap()
+                    .remove("diagnostic_transient_bytes");
                 row["diagnostic_pinned_bytes"] = json!(old_pinned);
                 let total = row["diagnostic_bytes_per_active_query"].as_u64().unwrap();
                 row["diagnostic_bytes_per_active_query"] = json!(total - delta);
@@ -14608,7 +14613,7 @@ mod tests {
                 if traced {
                     assert_eq!(
                         rows[query]["diagnostic"]["schema"],
-                        "borsuk-sq8-range-attribution-diagnostic-v5"
+                        "borsuk-sq8-range-attribution-diagnostic-v6"
                     );
                     for mutation in [
                         "schema",
@@ -16895,6 +16900,169 @@ mod tests {
     }
 
     #[test]
+    fn cold_source_profile_actual_producer_strict_reader_and_parity() {
+        let mut prior = None;
+        for traced in [false, true] {
+            let (dir, result) =
+                scale_native_runner::cold_source_profile_native_fixture(traced).unwrap();
+            let rows = std::fs::read_to_string(&result)
+                .unwrap()
+                .lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap())
+                .collect::<Vec<_>>();
+            let (config, pin) = scale_config(dir.path(), &result, &rows);
+            fp32_serving::reduce(&config, &pin).unwrap();
+            let fingerprints = rows
+                .iter()
+                .filter(|r| r["phase"] == "query")
+                .map(|r| {
+                    json!([
+                        r["returned"],
+                        r["returned_physical_ordinals"],
+                        r["plan"],
+                        r["trace"],
+                        r["charges"],
+                        r["sum"],
+                        r["canonical_stage"]["shortlist"],
+                        r["canonical_stage"]["ranges"]
+                    ])
+                })
+                .collect::<Vec<_>>();
+            if let Some(prior) = &prior {
+                assert_eq!(&fingerprints, prior);
+            }
+            prior = Some(fingerprints);
+            let admission = rows
+                .iter()
+                .position(|r| r["phase"] == "diagnostic_admission")
+                .unwrap();
+            let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+            if traced {
+                assert!(
+                    rows[query]["diagnostic"]["source_range_trace"]["cpu"]["authentication"]
+                        .is_object()
+                );
+                assert!(
+                    rows[query]["diagnostic"]["source_range_trace"]["cpu"]["source_scoring"]
+                        .is_object()
+                );
+                assert_eq!(
+                    rows[query]["diagnostic"]["cpu_profile"]["acquisition_poll_cpu"],
+                    "unresolved_not_instrumented"
+                );
+            }
+            for (case, index, key, replacement) in [
+                (
+                    "old-authority",
+                    admission,
+                    "diagnostic_schema",
+                    json!("borsuk-sq8-range-attribution-diagnostic-v5"),
+                ),
+                ("cap", admission, "diagnostic_cap_bytes", json!(2097151)),
+                (
+                    "transient",
+                    admission,
+                    "diagnostic_transient_bytes",
+                    json!(
+                        rows[admission]["diagnostic_transient_bytes"]
+                            .as_u64()
+                            .unwrap()
+                            - 1
+                    ),
+                ),
+                (
+                    "peak",
+                    admission,
+                    "diagnostic_bytes_per_active_query",
+                    json!(
+                        rows[admission]["diagnostic_bytes_per_active_query"]
+                            .as_u64()
+                            .unwrap()
+                            - 1
+                    ),
+                ),
+            ] {
+                let mut bad = rows.clone();
+                bad[index][key] = replacement;
+                let (path, _) =
+                    write_fixture(dir.path(), &format!("profile-{case}.jsonl"), bad.clone());
+                let (config, pin) = scale_config(dir.path(), &path, &bad);
+                assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+            }
+            if traced {
+                let mut bad = rows.clone();
+                bad[query]["diagnostic"]["schema"] =
+                    json!("borsuk-sq8-range-attribution-diagnostic-v5");
+                let (path, _) = write_fixture(dir.path(), "profile-old-query.jsonl", bad.clone());
+                let (config, pin) = scale_config(dir.path(), &path, &bad);
+                assert!(fp32_serving::reduce(&config, &pin).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn cold_source_profile_complete_reader_model_and_legacy_refusals() {
+        let (dir, result) =
+            scale_native_runner::cold_source_profile_native_fixture_leaf(true, 48).unwrap();
+        let rows = std::fs::read_to_string(&result)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        let admission = rows
+            .iter()
+            .position(|r| r["phase"] == "diagnostic_admission")
+            .unwrap();
+        let original = rows[startup]["fp32_rerank"]["modeled_memory_bytes"]
+            .as_u64()
+            .unwrap();
+        for (case, model) in [("zero", 0), ("minus-one", original - 1)] {
+            let mut bad = rows.clone();
+            bad[startup]["fp32_rerank"]["modeled_memory_bytes"] = json!(model);
+            let (path, _) = write_fixture(
+                dir.path(),
+                &format!("profile-model-{case}.jsonl"),
+                bad.clone(),
+            );
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let error = fp32_serving::reduce(&config, &pin)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains("FP32 complete generation/query/pins model"),
+                "{case}: {error}"
+            );
+        }
+        let mut legacy = rows.clone();
+        let old_pinned = rows[admission]["diagnostic_pinned_bytes"].as_u64().unwrap();
+        author_historical_panel_memory(&mut legacy);
+        let delta = old_pinned
+            - legacy[admission]["diagnostic_pinned_bytes"]
+                .as_u64()
+                .unwrap();
+        legacy[startup]["fp32_rerank"]["modeled_memory_bytes"] = json!(original - delta);
+        for row in &mut legacy {
+            if let Some(diag) = row.get_mut("diagnostic") {
+                author_profile_v4_diagnostic(diag);
+            }
+        }
+        let (path, _) = write_fixture(dir.path(), "profile-coherent-v4.jsonl", legacy.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &legacy);
+        let error = fp32_serving::reduce(&config, &pin)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("traced FP32 requires current v6 diagnostic authority"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn coverage64_actual_runner_resealed_accounting_refusals() {
         let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_with(false, Some(64)).unwrap();
         let rows = std::fs::read_to_string(&result).unwrap().lines()
@@ -16905,7 +17073,13 @@ mod tests {
         let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
         let admission = rows.iter().position(|r| r["phase"] == "diagnostic_admission").unwrap();
         assert_eq!(rows[admission]["panel_line_cap_bytes"], 262144);
-        assert_eq!(rows[admission]["diagnostic_pinned_bytes"], 524288);
+        assert_eq!(
+            rows[admission]["diagnostic_pinned_bytes"].as_u64().unwrap(),
+            524288
+                + rows[admission]["diagnostic_transient_bytes"]
+                    .as_u64()
+                    .unwrap()
+        );
         for (case, index, pointer) in [
             ("model", startup, "/fp32_rerank/modeled_memory_bytes"),
             ("panel-cap", admission, "/panel_line_cap_bytes"),

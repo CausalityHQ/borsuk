@@ -4092,7 +4092,7 @@ impl TwoBitGeneration {
         mutations: Option<&TwoBitMutationSnapshot>,
         limits: crate::fp32_rerank::Fp32RerankLimits,
     ) -> Result<crate::fp32_rerank::Fp32RerankResult> {
-        self.search_fp32_inner(store, query, top_k, mutations, limits, None)
+        self.search_fp32_inner(store, query, top_k, mutations, limits, None, None)
             .await
     }
 
@@ -4110,7 +4110,50 @@ impl TwoBitGeneration {
         }
         let mut trace = TwoBitPlanTrace::default();
         let result = self
-            .search_fp32_inner(store, query, top_k, None, limits, Some(&mut trace))
+            .search_fp32_inner(store, query, top_k, None, limits, Some(&mut trace), None)
+            .await?;
+        Ok((result, trace))
+    }
+
+    /// Opt-in SOURCE/SQ8 profile over the same exact-refinement path and outer slot.
+    #[doc(hidden)]
+    pub async fn diagnostic_search_fp32_with_store_traced(
+        &self,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        top_k: usize,
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+        profile: &mut QueryProfile,
+    ) -> Result<(crate::fp32_rerank::Fp32RerankResult, TwoBitPlanTrace)> {
+        profile.refuse();
+        if self.trace_scratch_bytes() > self.limits.max_query_scratch_bytes {
+            return Err(TwoBitGenerationError::Invalid("diagnostic scratch"));
+        }
+        self.admit_range_trace(
+            profile,
+            self.physical_sq8_cap(
+                limits
+                    .direct
+                    .map_or(self.limits.max_query_gets, |d| d.max_sq8_gets),
+            ),
+            self.fp32_rerank_memory(limits)?,
+            if limits.direct.is_none() && self.source.is_some() {
+                self.limits.max_source_gets
+            } else {
+                0
+            },
+        )?;
+        let mut trace = TwoBitPlanTrace::default();
+        let result = self
+            .search_fp32_inner(
+                store,
+                query,
+                top_k,
+                None,
+                limits,
+                Some(&mut trace),
+                Some(profile),
+            )
             .await?;
         Ok((result, trace))
     }
@@ -4124,6 +4167,7 @@ impl TwoBitGeneration {
         mutations: Option<&TwoBitMutationSnapshot>,
         limits: crate::fp32_rerank::Fp32RerankLimits,
         trace: Option<&mut TwoBitPlanTrace>,
+        profile: Option<&mut QueryProfile>,
     ) -> Result<crate::fp32_rerank::Fp32RerankResult> {
         use crate::fp32_rerank::Fp32RerankResult;
         let bad = TwoBitGenerationError::Invalid;
@@ -4172,9 +4216,15 @@ impl TwoBitGeneration {
         }
         let base = if let Some(direct) = limits.direct {
             self.direct_closure_search_unadmitted(
-                store, query, limits.shortlist.min(self.rows()),
-                Some(mutations.map_or(&[], |m| m.excluded_ids())), direct, trace, None,
-            ).await?
+                store,
+                query,
+                limits.shortlist.min(self.rows()),
+                Some(mutations.map_or(&[], |m| m.excluded_ids())),
+                direct,
+                trace,
+                profile,
+            )
+            .await?
         } else {
             self
             .search_store_shortlist_unadmitted(
@@ -4184,7 +4234,7 @@ impl TwoBitGeneration {
                 limits.shortlist.min(self.rows()),
                 Some(mutations.map_or(&[], |m| m.excluded_ids())),
                 trace,
-                None,
+                profile,
             )
             .await?
         };
@@ -13550,17 +13600,42 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_http_control_plan_scalar_oracle_and_failure_charges() {
-        fp32_http_case(false, false).await;
+        for traced in [false, true] {
+            fp32_http_case(false, false, traced).await;
+        }
     }
     #[tokio::test]
     async fn fp32_http_coalescing_plan_scalar_oracle_and_failure_charges() {
-        fp32_http_case(true, false).await;
+        for traced in [false, true] {
+            fp32_http_case(true, false, traced).await;
+        }
     }
     #[tokio::test]
     async fn fp32_direct_http_scalar_model_slot_drain_cancel_recovery() {
-        fp32_http_case(false, true).await;
+        for traced in [false, true] {
+            fp32_http_case(false, true, traced).await;
+        }
     }
-    async fn fp32_http_case(coalesce: bool, direct: bool) {
+    async fn fp32_http_search(
+        generation: &TwoBitGeneration,
+        store: &dyn ObjectStore,
+        query: &[f32],
+        limits: crate::fp32_rerank::Fp32RerankLimits,
+        profile: &mut QueryProfile,
+        traced: bool,
+    ) -> Result<(crate::fp32_rerank::Fp32RerankResult, TwoBitPlanTrace)> {
+        if traced {
+            generation
+                .diagnostic_search_fp32_with_store_traced(store, query, 10, limits, profile)
+                .await
+        } else {
+            generation
+                .search_fp32_with_store(store, query, 10, None, limits)
+                .await
+                .map(|result| (result, TwoBitPlanTrace::default()))
+        }
+    }
+    async fn fp32_http_case(coalesce: bool, direct: bool, traced: bool) {
         use crate::fp32_rerank::Fp32RerankLimits;
         use futures_util::TryStreamExt;
         use sha2::{Digest, Sha256};
@@ -13631,7 +13706,7 @@ mod source_walk_tests {
         assert_eq!(exact.base.ranked.stats, control.ranked.stats);
         assert_eq!(
             serde_json::to_value(trace).unwrap(),
-            serde_json::to_value(control_trace).unwrap()
+            serde_json::to_value(&control_trace).unwrap()
         );
         let requests = fixture.snapshot().requests;
         let rows = requests[before..]
@@ -13657,6 +13732,75 @@ mod source_walk_tests {
                     .any(|h| h.ordinal == start / 36)
             );
         }
+        let mut profile = QueryProfile::new(128, 128).unwrap();
+        let (profiled, profiled_trace) = generation
+            .diagnostic_search_fp32_with_store_traced(
+                fixture.reader.store(),
+                &query,
+                10,
+                limits,
+                &mut profile,
+            )
+            .await
+            .unwrap();
+        assert_eq!(profiled.base.plan, exact.base.plan);
+        assert_eq!(profiled.base.source_stats, exact.base.source_stats);
+        assert_eq!(profiled.base.ranked.stats, exact.base.ranked.stats);
+        assert_eq!(profiled.canonical_stats, exact.canonical_stats);
+        assert_eq!(profiled.canonical_ranges, exact.canonical_ranges);
+        assert_eq!(
+            profiled
+                .candidates
+                .iter()
+                .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                .collect::<Vec<_>>(),
+            exact
+                .candidates
+                .iter()
+                .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            serde_json::to_value(profiled_trace).unwrap(),
+            serde_json::to_value(&control_trace).unwrap()
+        );
+        let combined = generation.fp32_rerank_memory(limits).unwrap()
+            + QueryProfile::additional_bytes(128, 128) as u64
+                * generation.limits.max_active_queries as u64;
+        generation.limits.max_memory_bytes = combined - 1;
+        let before_refusal = fixture.snapshot().requests.len();
+        let held = generation.slots.acquire().await.unwrap();
+        let refused = tokio::time::timeout(
+            Duration::from_millis(100),
+            generation.diagnostic_search_fp32_with_store_traced(
+                fixture.reader.store(),
+                &query,
+                10,
+                limits,
+                &mut profile,
+            ),
+        )
+        .await
+        .expect("memory refusal precedes held query slot");
+        assert!(matches!(
+            refused,
+            Err(TwoBitGenerationError::Invalid("diagnostic memory"))
+        ));
+        assert_eq!(fixture.snapshot().requests.len(), before_refusal);
+        assert_eq!(profile.source.outcome, "admission_refused");
+        drop(held);
+        generation.limits.max_memory_bytes = combined;
+        generation
+            .diagnostic_search_fp32_with_store_traced(
+                fixture.reader.store(),
+                &query,
+                10,
+                limits,
+                &mut profile,
+            )
+            .await
+            .unwrap();
+        generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
         let mut oracle = exact
             .base
             .ranked
@@ -13768,11 +13912,17 @@ mod source_walk_tests {
 
         for fault in ["auth", "200", "etag", "size", "range", "short", "long"] {
             fixture.response_fault(Some((canonical_key.clone(), fault)));
-            let error = generation
-                .search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits)
-                .await
-                .err()
-                .unwrap();
+            let error = fp32_http_search(
+                &generation,
+                fixture.reader.store(),
+                &query,
+                limits,
+                &mut profile,
+                traced,
+            )
+            .await
+            .err()
+            .unwrap();
             assert_eq!(
                 error.read_stats(),
                 (control.source_stats, control.ranked.stats),
@@ -13784,27 +13934,31 @@ mod source_walk_tests {
         }
         fixture.response_fault(None);
         fixture.arm_key(canonical_key.clone(), None);
-        let mut first = Box::pin(generation.search_fp32_with_store(
+        let mut first_profile = QueryProfile::new(128, 128).unwrap();
+        let mut second_profile = QueryProfile::new(128, 128).unwrap();
+        let mut first = Box::pin(fp32_http_search(
+            &generation,
             fixture.reader.store(),
             &query,
-            10,
-            None,
             limits,
+            &mut first_profile,
+            traced,
         ));
         tokio::select! {
-            _=fixture.wait(|s|s.active[2]>0)=>{},
+            _=fixture.wait(|s|s.active[2] == planned_gets.min(limits.max_parallel_gets))=>{},
             result=&mut first=>panic!("query completed before body release: {}",result.is_ok()),
         }
         assert_eq!(generation.slots.available_permits(), 0);
         assert!(fixture.snapshot().requests.iter().any(|r| r.0 == canonical_key && !r.1));
         let nonunit = query.iter().map(|v| v * 3.0).collect::<Vec<_>>();
         let allocations = FP32_NORMALIZED_BYTES.with(|n| n.get());
-        let mut second = Box::pin(generation.search_fp32_with_store(
+        let mut second = Box::pin(fp32_http_search(
+            &generation,
             fixture.reader.store(),
             &nonunit,
-            10,
-            None,
             limits,
+            &mut second_profile,
+            traced,
         ));
         assert!(futures_util::poll!(second.as_mut()).is_pending());
         assert_eq!(FP32_NORMALIZED_BYTES.with(|n| n.get()), allocations);
@@ -13816,12 +13970,22 @@ mod source_walk_tests {
         drop(first);
         assert_eq!(fixture.snapshot().requests.len(), before);
         assert_eq!(generation.slots.available_permits(), 1);
+        fixture.release_cancelled(2);
+        fixture.wait(|state| state.active[2] == 0).await;
+        assert_eq!(fixture.snapshot().active, [0; 3]);
+        fixture.arm_key(canonical_key.clone(), None);
         fixture.release(2);
-        fixture.wait(|s| s.active[2] == 0).await;
-        let recovered = generation
-            .search_fp32_with_store(fixture.reader.store(), &nonunit, 10, None, limits)
-            .await
-            .unwrap();
+        let recovered = fp32_http_search(
+            &generation,
+            fixture.reader.store(),
+            &nonunit,
+            limits,
+            &mut profile,
+            traced,
+        )
+        .await
+        .unwrap()
+        .0;
         assert_eq!(recovered.canonical_stats.submitted_gets, planned_gets);
         assert!(FP32_NORMALIZED_BYTES.with(|n| n.get()) > allocations);
         assert_eq!(generation.slots.available_permits(), 1);
@@ -13830,8 +13994,14 @@ mod source_walk_tests {
                 exact.canonical_ranges[2].start];
             let last = exact.canonical_ranges.last().unwrap().start;
             fixture.arm_key(canonical_key.clone(), Some(starts));
-            let mut work = Box::pin(generation.search_fp32_with_store(
-                fixture.reader.store(), &query, 10, None, limits));
+            let mut work = Box::pin(fp32_http_search(
+                &generation,
+                fixture.reader.store(),
+                &query,
+                limits,
+                &mut profile,
+                traced,
+            ));
             tokio::select! {
                 result = &mut work => panic!("returned before earliest canonical body: {}", result.is_ok()),
                 () = fixture.wait(|s| s.finished[2].contains(&starts[1])) => {}

@@ -55,7 +55,7 @@ const QUERY_FUTURE_BYTES: usize = 512 * 1024;
 // Cohort snapshot JSON and its terminal copy can coexist after query futures drain.
 const COHORT_RECORD_BYTES: usize = 1024 * 1024;
 const SOURCE_CAPSULE_VERIFICATION_POLICY: &str = "directory_page_ranges_original_units_v2";
-const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v5";
+const DIAGNOSTIC_SCHEMA: &str = "borsuk-sq8-range-attribution-diagnostic-v6";
 // Diagnostic panel bounds. A panel line is serialized and admitted whole (newline included)
 // below this cap BEFORE any byte is published; full execution keeps LINE_CAP unchanged.
 const PANEL_MAX_ORDINALS: usize = 128;
@@ -65,7 +65,7 @@ const PANEL_LINE_CAP: usize = 128 * 1024;
 const SOURCE_BINDING_LINE_CAP: usize = 2 * 6 * CONFIG_CAP + 64 * 1024;
 const PANEL_ERROR_CHARS: usize = 2048;
 // Per active query: range trace, host snapshot buffers and serialization together.
-const DIAGNOSTIC_CAP: usize = 1 << 20;
+const DIAGNOSTIC_CAP: usize = 2 << 20;
 const HOST_READ_CAP: usize = 128 * 1024;
 const HOST_JSON_BYTES: usize = 8 * 1024;
 // A failed diagnostic query also materializes one JSON tree of its diagnostic object.
@@ -1010,7 +1010,6 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         }
         require(
             !concurrent_config(c)
-                && !c.execution.trace()
                 && (K..=256).contains(&limits.shortlist)
                 && limits.max_gets > 0
                 && (limits.coalesce || limits.max_gets >= limits.shortlist)
@@ -1019,7 +1018,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
                     .shortlist
                     .checked_mul(D * 4 + 8)
                     .is_some_and(|n| n <= limits.max_bytes),
-            "FP32 runner requires serial untraced execution and bounded explicit limits",
+            "FP32 runner requires serial execution and bounded explicit limits",
         )?;
     }
     require(
@@ -1665,7 +1664,11 @@ fn trace_ranges(c: &Config) -> usize {
         .map_or(c.sq8_get_budget, |direct| direct.max_sq8_gets)
 }
 fn source_trace_ranges(c: &Config) -> usize {
-    if c.serving.direct().is_some() {
+    if c.serving
+        .direct()
+        .or_else(|| c.serving.fp32().and_then(|l| l.direct))
+        .is_some()
+    {
         1
     } else {
         c.source_get_budget
@@ -1704,27 +1707,51 @@ fn source_authentication_bytes(c: &Config) -> Result<u64> {
 fn panel_line_cap(c: &Config) -> usize {
     if c.semantic_leaf_limit.is_some_and(|limit| limit > 48) { LINE_CAP } else { PANEL_LINE_CAP }
 }
-fn diagnostic_bytes(c: &Config) -> Result<usize> {
-    let bytes = match &c.execution {
-        Execution::Full {} => return Ok(0),
-        Execution::DiagnosticPanel { trace, .. } => {
-            let lines = 2 * panel_line_cap(c);
-            if *trace {
-                lines
-                    + trace_peak_bytes(c)
-                    + size_of::<HostSampler>()
-                    + HOST_READ_CAP
-                    + 1
-                    + HOST_JSON_BYTES
-                    + FAILURE_VALUE_BYTES
-            } else {
-                lines
-            }
-        }
+// The plan range copy and FP32 proof construction coexist with the returned plan.
+// Value arrays reserve their known length. Charge two trees during to_value, each
+// shortlist map's full BTree node, key allocations, range arrays and an 8-KiB envelope.
+fn diagnostic_transient_bytes(c: &Config) -> Result<usize> {
+    let ranges = trace_ranges(c)
+        .checked_mul(size_of::<[usize; 2]>())
+        .and_then(|n| n.checked_add(32))
+        .ok_or("diagnostic range memory overflow")?;
+    let Some(limits) = c.serving.fp32() else {
+        return Ok(ranges);
     };
+    let node = 64 + 11 * (size_of::<String>() + size_of::<Value>()) + 12 * size_of::<usize>();
+    let nominee = node + 3 * 64 + size_of::<Value>();
+    let range = 3 * size_of::<Value>() + 32 + size_of::<[usize; 2]>();
+    limits
+        .shortlist
+        .checked_mul(nominee + range)
+        .and_then(|n| n.checked_add(8192))
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| n.checked_add(ranges))
+        .ok_or_else(|| "diagnostic proof memory overflow".into())
+}
+fn diagnostic_bytes(c: &Config) -> Result<usize> {
+    let trace = match &c.execution {
+        Execution::Full {} => return Ok(0),
+        Execution::DiagnosticPanel { trace, .. } => *trace,
+    };
+    let components = [
+        panel_line_cap(c),
+        panel_line_cap(c),
+        diagnostic_transient_bytes(c)?,
+        if trace { trace_peak_bytes(c) } else { 0 },
+        if trace {
+            size_of::<HostSampler>() + HOST_READ_CAP + 1 + HOST_JSON_BYTES + FAILURE_VALUE_BYTES
+        } else {
+            0
+        },
+    ];
+    let bytes = components
+        .into_iter()
+        .try_fold(0usize, |sum, n| sum.checked_add(n))
+        .ok_or("diagnostic memory overflow")?;
     require(
         bytes <= DIAGNOSTIC_CAP,
-        "diagnostic budget exceeds 1 MiB per active query",
+        "diagnostic budget exceeds 2 MiB per active query",
     )?;
     Ok(bytes)
 }
@@ -2580,6 +2607,7 @@ async fn query_and_seal_with(
     reader: impl FnOnce() -> Result<Reader>,
 ) -> Result<Seal> {
     validate_config(c, shape)?;
+    let admission = limits(c)?;
     let observed_runtime = concurrent_config(c)
         .then(|| observed_query_runtime(c))
         .transpose()?;
@@ -2593,7 +2621,6 @@ async fn query_and_seal_with(
     for ordinal in 0..c.count {
         request_row(&requests, ordinal).map_err(|e| format!("request {ordinal}: {e}"))?;
     }
-    let admission = limits(c)?;
     let mut diag = if c.execution.trace() {
         Some(Diag::new(c)?)
     } else {
@@ -2604,7 +2631,8 @@ async fn query_and_seal_with(
         let mut admission_record = json!({"phase":"diagnostic_admission","execution":c.execution,
             "selected_count":selected_len(c),"population_count":c.count,
             "trace":c.execution.trace(),"diagnostic_bytes_per_active_query":bytes,
-            "diagnostic_cap_bytes":DIAGNOSTIC_CAP,"max_active_queries":admission.max_active_queries,
+            "diagnostic_cap_bytes":DIAGNOSTIC_CAP,"diagnostic_schema":DIAGNOSTIC_SCHEMA,
+            "diagnostic_transient_bytes":diagnostic_transient_bytes(c)?,"max_active_queries":admission.max_active_queries,
             "charged_in_caller_pinned_bytes":true,"caller_pinned_bytes":admission.already_pinned_bytes,
             "panel_line_cap_bytes":out.panel_cap,"host_read_cap_bytes":HOST_READ_CAP,
             "trace_ranges":trace_ranges(c),"source_trace_ranges":source_trace_ranges(c),
@@ -2697,6 +2725,16 @@ async fn query_and_seal_with(
         require(
             memory <= c.max_memory_bytes,
             "FP32 total modeled memory cap",
+        )?;
+        require(
+            memory
+                .checked_add(
+                    (library_trace_bytes(c) as u64)
+                        .checked_mul(active_queries(c) as u64)
+                        .ok_or("FP32 diagnostic memory overflow")?,
+                )
+                .is_some_and(|n| n <= c.max_memory_bytes),
+            "FP32 diagnostic memory cap",
         )?;
         p.transport.begin(&reader, "canonical_open", None);
         let opened = generation.enable_fp32_rerank(store).await;
@@ -2862,10 +2900,22 @@ async fn query_and_seal_with(
         let prefetched_wall = prefetched.as_ref().map(|(_, wall)| *wall);
         let mut fp32_result = None;
         let result = if let Some(limits) = c.serving.fp32() {
-            generation
-                .diagnostic_search_fp32_with_store(store, &query, K, limits)
-                .await
-                .map(|(result, trace)| {
+            let searched = if let Some(diag) = diag.as_mut() {
+                generation
+                    .diagnostic_search_fp32_with_store_traced(
+                        store,
+                        &query,
+                        K,
+                        limits,
+                        &mut diag.trace,
+                    )
+                    .await
+            } else {
+                generation
+                    .diagnostic_search_fp32_with_store(store, &query, K, limits)
+                    .await
+            };
+            searched.map(|(result, trace)| {
                     fp32_result = Some((
                         result.candidates,
                         result.canonical_stats,
@@ -3039,6 +3089,15 @@ async fn query_and_seal_with(
             "bridge_records":ranges.iter().map(|r|r.len()/(D*4+8)).sum::<usize>()-result.ranked.candidates.len(),
             "shortlist":result.ranked.candidates.iter().map(|h| json!({"id":h.id,"ordinal":h.ordinal,"sq8_score_bits":h.score.to_bits()})).collect::<Vec<_>>()
         }));
+        #[cfg(test)]
+        if c.execution.panel() {
+            if let Some(stage) = &canonical_stage {
+                assert!(
+                    2 * (size_of::<Value>() + tests::diagnostic_value_heap_bound(stage))
+                        <= diagnostic_transient_bytes(c)?
+                );
+            }
+        }
         // Full ordered range identity, not just totals: `selected_pages` is the required
         // closure (direct) or the admitted pages (baseline); bridges live only in `ranges`.
         #[derive(Serialize)]
@@ -3750,6 +3809,30 @@ pub(crate) fn fp32_reducer_native_fixture_caps(coalesce: bool, leaf_limit: Optio
 }
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture_cached(coalesce: bool, leaf_limit: Option<usize>, direct: bool, caps: Option<(usize, usize)>, cache_bytes: usize) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_options(coalesce, leaf_limit, direct, caps, cache_bytes, None)
+}
+#[cfg(test)]
+pub(crate) fn cold_source_profile_native_fixture(
+    trace: bool,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    cold_source_profile_native_fixture_leaf(trace, 64)
+}
+#[cfg(test)]
+pub(crate) fn cold_source_profile_native_fixture_leaf(
+    trace: bool,
+    leaf: usize,
+) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_options(false, Some(leaf), false, None, 0, Some(trace))
+}
+#[cfg(test)]
+fn fp32_reducer_native_fixture_options(
+    coalesce: bool,
+    leaf_limit: Option<usize>,
+    direct: bool,
+    caps: Option<(usize, usize)>,
+    cache_bytes: usize,
+    profile: Option<bool>,
+) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
@@ -3769,6 +3852,11 @@ pub(crate) fn fp32_reducer_native_fixture_cached(coalesce: bool, leaf_limit: Opt
     if let Some((ordinary, source)) = caps {
         value["sq8_get_budget"] = json!(ordinary);
         value["source_get_budget"] = json!(source);
+    }
+    if let Some(trace) = profile {
+        value["execution"]["trace"] = json!(trace);
+        value["fetch_parallelism"] = json!(128);
+        value["source_authentication"] = json!("offload2");
     }
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("fp32-native-result.jsonl");
@@ -4402,7 +4490,10 @@ mod tests {
             let panel = parsed(&forecast);
             let Execution::DiagnosticPanel { ordinals, .. } = &panel.execution else { unreachable!() };
             assert_eq!(ordinals.capacity(), count);
-            assert_eq!(pinned_bytes(&panel).unwrap() - pinned_bytes(&full64).unwrap(), 524288 + 8 * count as u64);
+            assert_eq!(
+                pinned_bytes(&panel).unwrap() - pinned_bytes(&full64).unwrap(),
+                524288 + 8 * count as u64 + diagnostic_transient_bytes(&panel).unwrap() as u64
+            );
         }
         let trace = TwoBitPlanTrace {
             ranked_candidate_pages: (0..3907).collect(),
@@ -4988,6 +5079,20 @@ mod tests {
         [20, 0, 1, 2, 3, 4, 5, 6, 7, 8],
         [21, 16, 17, 18, 19, 22, 23, 24, 25, 8],
     ];
+    fn fixture_sq8_cosine_bits(record: &[u8], axis: usize) -> u32 {
+        // Independently decode the dyadic fixture and normalize its full stored vector.
+        let mut norm2 = 0.0_f64;
+        for &code in &record[12..] {
+            let value = -1.0 + f64::from(code) / 16.0;
+            norm2 += value * value;
+        }
+        assert_eq!(
+            norm2 as f32,
+            f32::from_le_bytes(record[8..12].try_into().unwrap())
+        );
+        let coordinate = -1.0 + f64::from(record[12 + axis]) / 16.0;
+        ((1.0 - coordinate / norm2.sqrt()) as f32).to_bits()
+    }
     fn fixture_direction(id: usize) -> [f32; D] {
         // Independently specified dyadic unit directions: 9+7=16 or 4*4=16.
         // Different residual coordinates make all 32 (or 257) directions distinct.
@@ -5679,30 +5784,27 @@ mod tests {
             assert_eq!(queries.len(), 2);
             let sq8 = std::fs::read(dir.path().join("sq8")).unwrap();
             let literal_bits = [
-                0x3d80_0000_u32,
+                0_u32,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
+                0x3e80_0000,
                 0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f00_0000,
-                0x3f80_0000,
             ];
             for (i, query) in queries.iter().enumerate() {
                 // Independently normalize the specified 3e0/5e1 queries to e0/e1.
-                // Decode one scalar coordinate from stored SQ8 code with low=-1,
-                // step=1/16: squared distance = stored_norm + 1 - 2*coordinate.
+                // Decode stored SQ8 codes with low=-1, step=1/16 for scalar cosine.
                 // No production normalization, scoring, or returned IDs feed this oracle.
                 let mut oracle = sq8
                     .chunks_exact(D + 12)
                     .enumerate()
                     .map(|(physical, record)| {
                         let id = u64::from_le_bytes(record[..8].try_into().unwrap());
-                        let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
-                        let coordinate = -1. + f32::from(record[12 + i]) / 16.;
-                        (physical, id, (norm + 1. - 2. * coordinate).to_bits())
+                        (physical, id, fixture_sq8_cosine_bits(record, i))
                     })
                     .collect::<Vec<_>>();
                 oracle.sort_by(|a, b| {
@@ -5902,7 +6004,7 @@ mod tests {
                         assert_eq!(row["plan"]["logical_range_count"], 1);
                         assert_eq!(row["plan"]["planned_bytes"], object_bytes);
                         let diag = &row["diagnostic"];
-                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v5");
+                        assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v6");
                         let trace = &diag["sq8_range_trace"];
                         let fields = trace["range_fields"].as_array().unwrap();
                         let at = |name: &str| fields.iter().position(|f| f == name).unwrap();
@@ -6225,10 +6327,10 @@ mod tests {
                     hit["id"],
                     u64::from_le_bytes(record[..8].try_into().unwrap())
                 );
-                let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
-                let coordinate =
-                    -1. + f32::from(record[12 + row["ordinal"].as_u64().unwrap() as usize]) / 16.;
-                assert_eq!(hit["score_bits"], (norm + 1. - 2. * coordinate).to_bits());
+                assert_eq!(
+                    hit["score_bits"],
+                    fixture_sq8_cosine_bits(record, row["ordinal"].as_u64().unwrap() as usize)
+                );
             }
         }
         let mut capped = Output::create(&dir.path().join("capped")).unwrap();
@@ -6446,11 +6548,11 @@ mod tests {
                 assert_eq!(
                     hit["score_bits"],
                     if rank == 0 {
-                        0x3d80_0000_u32
+                        0_u32
                     } else if rank < 9 {
-                        0x3f00_0000
+                        0x3e80_0000
                     } else {
-                        0x3f80_0000
+                        0x3f00_0000
                     }
                 );
             }
@@ -8434,9 +8536,7 @@ mod tests {
                 .enumerate()
                 .map(|(physical, record)| {
                     let id = u64::from_le_bytes(record[..8].try_into().unwrap());
-                    let norm = f32::from_le_bytes(record[8..12].try_into().unwrap());
-                    let coordinate = -1. + f32::from(record[12 + i]) / 16.;
-                    (physical, id, (norm + 1. - 2. * coordinate).to_bits())
+                    (physical, id, fixture_sq8_cosine_bits(record, i))
                 })
                 .collect::<Vec<_>>();
             oracle.sort_by(|a, b| {
@@ -8565,6 +8665,30 @@ mod tests {
         }
     }
     // ===== Diagnostic panel: selection, bounded lines, host counters, trace parity =====
+    pub(super) fn diagnostic_value_heap_bound(value: &Value) -> usize {
+        match value {
+            Value::String(text) => text.capacity() + 32,
+            Value::Array(rows) => {
+                rows.capacity() * size_of::<Value>()
+                    + 32
+                    + rows.iter().map(diagnostic_value_heap_bound).sum::<usize>()
+            }
+            Value::Object(fields) => {
+                // BTreeMap: <= one root plus one node per five non-root keys.
+                let node =
+                    64 + 11 * (size_of::<String>() + size_of::<Value>()) + 12 * size_of::<usize>();
+                node * (1 + fields.len().saturating_sub(1) / 5)
+                    + fields
+                        .iter()
+                        .map(|(key, value)| {
+                            key.capacity() + 32 + diagnostic_value_heap_bound(value)
+                        })
+                        .sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+
     fn with_panel(mut value: Value, ordinals: &[usize], trace: bool) -> Value {
         value["execution"] = json!({"mode":"diagnostic_panel","ordinals":ordinals,"trace":trace});
         value
@@ -8706,7 +8830,82 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_one_mebibyte() {
+    fn cold_source_profile_fp32_trace_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
+        value["profile"] = json!("scale1m");
+        value["semantic_leaf_limit"] = json!(64);
+        value["fetch_parallelism"] = json!(128);
+        value["source_authentication"] = json!("offload2");
+        value["serving"] = json!({"mode":"fp32_rerank","coalesce":false,"shortlist":16,
+            "max_fp32_bytes":16*(D*4+8),"max_fp32_gets":16,"max_parallel_fp32_gets":16});
+        let c: Config = serde_json::from_value(value).unwrap();
+        validate_config(&c, Shape::PRODUCTION).unwrap();
+        let bytes = diagnostic_bytes(&c).unwrap();
+        eprintln!(
+            "cold-source-profile pinned={} trace_peak={} total={} cap={}",
+            diagnostic_pinned_bytes(&c).unwrap(),
+            trace_peak_bytes(&c),
+            bytes,
+            DIAGNOSTIC_CAP
+        );
+        assert!(bytes <= DIAGNOSTIC_CAP);
+    }
+
+    #[tokio::test]
+    async fn cold_source_profile_cap_refuses_before_receipts_requests_or_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
+        value["profile"] = json!("scale1m");
+        value["semantic_leaf_limit"] = json!(64);
+        value["fetch_parallelism"] = json!(128);
+        value["sq8_get_budget"] = json!(128);
+        value["serving"] = json!({"mode":"fp32_rerank","coalesce":false,"shortlist":256,
+            "max_fp32_bytes":256*(D*4+8),"max_fp32_gets":256,"max_parallel_fp32_gets":128});
+        let c: Config = serde_json::from_value(value).unwrap();
+        validate_config(&c, Shape::PRODUCTION).unwrap();
+        let mut out = Output::create(&dir.path().join("cap-refusal")).unwrap();
+        let mut progress = Progress::default();
+        let error = query_and_seal_with(&c, Shape::PRODUCTION, &mut out, &mut progress, || {
+            panic!("backend must remain unopened")
+        })
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("diagnostic budget exceeds 2 MiB"), "{error}");
+        assert_eq!(out.bytes, 0);
+        assert!(!progress.truth_opened);
+    }
+
+    #[test]
+    fn cold_source_profile_proof_value_capacity_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        for shortlist in [16, 256] {
+            let mut value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
+            value["serving"] = json!({"mode":"fp32_rerank","coalesce":false,"shortlist":shortlist,
+                "max_fp32_bytes":shortlist*(D*4+8),"max_fp32_gets":shortlist,"max_parallel_fp32_gets":16});
+            let c: Config = serde_json::from_value(value).unwrap();
+            let proof = json!({"score_precision":"f64","wall_ns":u64::MAX,"record_bytes":D*4+8,
+                "ranges":vec![[usize::MAX;2];shortlist],"covered_records":u64::MAX,"bridge_records":u64::MAX,
+                "shortlist":(0..shortlist).map(|_| json!({"id":i64::MAX,"ordinal":usize::MAX,
+                    "sq8_score_bits":u32::MAX})).collect::<Vec<_>>()});
+            let peak = 2 * (size_of::<Value>() + diagnostic_value_heap_bound(&proof))
+                + shortlist * size_of::<[usize; 2]>()
+                + 32;
+            assert!(
+                peak <= diagnostic_transient_bytes(&c).unwrap(),
+                "{shortlist}: {peak}"
+            );
+            eprintln!(
+                "proof shortlist={shortlist} actual_capacity_bound={peak} reserved={}",
+                diagnostic_transient_bytes(&c).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_budget_is_charged_before_open_per_active_query_and_bounded_by_two_mebibytes() {
         let dir = tempfile::tempdir().unwrap();
         let shape = Shape::PRODUCTION;
         let full: Config = serde_json::from_value(config_value(dir.path(), shape)).unwrap();
@@ -8731,7 +8930,7 @@ mod tests {
             validate_config(&c, shape).unwrap();
             let bytes = diagnostic_bytes(&c).unwrap();
             assert!(bytes <= DIAGNOSTIC_CAP, "{bytes}");
-            let lines = 2 * PANEL_LINE_CAP;
+            let lines = 2 * PANEL_LINE_CAP + diagnostic_transient_bytes(&c).unwrap();
             if trace {
                 let ranges = if direct { 128 } else { BASELINE_QUERY_GETS };
                 assert_eq!(trace_ranges(&c), ranges);
@@ -8784,21 +8983,14 @@ mod tests {
     }
 
     #[test]
-    fn source_diagnostic_refuses_a_peak_above_one_mebibyte_without_widening_the_cap() {
+    fn source_diagnostic_refuses_overflow_before_open() {
         let dir = tempfile::tempdir().unwrap();
-        let mut value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
-        value["fetch_parallelism"] = json!(128);
-        let c: Config = serde_json::from_value(value.clone()).unwrap();
+        let value = with_panel(config_value(dir.path(), Shape::PRODUCTION), &[0], true);
+        let mut c: Config = serde_json::from_value(value).unwrap();
+        c.source_get_budget = usize::MAX;
         let error = diagnostic_bytes(&c).unwrap_err().to_string();
-        assert!(error.contains("diagnostic budget exceeds 1 MiB"), "{error}");
+        assert!(error.contains("overflow"), "{error}");
         assert_eq!(pinned_bytes(&c).unwrap_err().to_string(), error);
-        assert!(
-            configured_query_runtime(&c).is_ok(),
-            "legacy runtime construction preserves deferred diagnostic admission"
-        );
-        value["execution"]["trace"] = json!(false);
-        let off: Config = serde_json::from_value(value).unwrap();
-        assert_eq!(diagnostic_bytes(&off).unwrap(), 2 * PANEL_LINE_CAP);
     }
 
     #[test]
@@ -8878,7 +9070,7 @@ mod tests {
                 finish_ns: u64::MAX,
             });
             trace.cpu = borsuk::sq8_s3_range::RangeCpu {
-                source_scoring: None,
+                source_scoring: scope,
                 collector_allocation: scope,
                 collector_copy: scope,
                 owned_allocation: scope,
@@ -8912,29 +9104,7 @@ mod tests {
         );
         assert!(worst + 8192 < PANEL_LINE_CAP, "{worst}");
         // Bound the failed query's materialized Value tree, including allocation allowances.
-        fn heap_bound(value: &Value) -> usize {
-            match value {
-                Value::String(text) => text.capacity() + 32,
-                Value::Array(rows) => {
-                    rows.capacity() * size_of::<Value>()
-                        + 32
-                        + rows.iter().map(heap_bound).sum::<usize>()
-                }
-                Value::Object(fields) => {
-                    // BTreeMap: <= one root plus one node per five non-root keys.
-                    let node = 64
-                        + 11 * (size_of::<String>() + size_of::<Value>())
-                        + 12 * size_of::<usize>();
-                    node * (1 + fields.len().saturating_sub(1) / 5)
-                        + fields
-                            .iter()
-                            .map(|(key, value)| key.capacity() + 32 + heap_bound(value))
-                            .sum::<usize>()
-                }
-                _ => 0,
-            }
-        }
-        let failure_tree = size_of::<Value>() + heap_bound(&diagnostic);
+        let failure_tree = size_of::<Value>() + diagnostic_value_heap_bound(&diagnostic);
         assert!(failure_tree <= FAILURE_VALUE_BYTES, "{failure_tree}");
         eprintln!(
             "diagnostic bounds: maximal_serialized_bytes={worst} failure_value_heap_bound={failure_tree} panel_line_cap={PANEL_LINE_CAP} failure_value_allowance={FAILURE_VALUE_BYTES}"
@@ -9368,7 +9538,7 @@ mod tests {
             for query in &on {
                 let diag = &query["diagnostic"];
                 assert_eq!(diag["schema"], DIAGNOSTIC_SCHEMA);
-                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v5");
+                assert_eq!(diag["schema"], "borsuk-sq8-range-attribution-diagnostic-v6");
                 assert_eq!(
                     diag["cpu_profile"]["acquisition_poll_cpu"],
                     "unresolved_not_instrumented"

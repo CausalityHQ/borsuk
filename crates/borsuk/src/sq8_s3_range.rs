@@ -3331,6 +3331,7 @@ pub(crate) mod cold_http_fixture {
         pub finished: [Vec<usize>; 3],
         pub errors: Vec<String>,
         released: [bool; 3],
+        cancelled: [bool; 3],
         // Stage, then starts of delayed stream error, early digest error, held sibling.
         fault: Option<(usize, [usize; 3])>,
         retry_status: bool,
@@ -3511,6 +3512,14 @@ pub(crate) mod cold_http_fixture {
 
         pub fn release(&self, stage: usize) {
             self.state.0.lock().unwrap().released[stage] = true;
+            self.state.1.notify_all();
+        }
+
+        pub fn release_cancelled(&self, stage: usize) {
+            let mut state = self.state.0.lock().unwrap();
+            assert!(!state.released[stage]);
+            state.cancelled[stage] = true;
+            state.released[stage] = true;
             self.state.1.notify_all();
         }
 
@@ -3778,7 +3787,20 @@ pub(crate) mod cold_http_fixture {
         };
         state.active[stage] -= 1;
         state.finished[stage].push(first);
-        result
+        match result {
+            Err(error)
+                if state.cancelled[stage]
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                    ) =>
+            {
+                Ok(())
+            }
+            result => result,
+        }
     }
 }
 

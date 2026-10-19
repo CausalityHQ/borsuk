@@ -487,7 +487,14 @@ pub(super) fn validate_row_envelope(
                 "range_state_pinned_by_runner_bytes trace_peak_charged_by_library_at_traced_admission"
             };
             let mut profile_fields = if cpu_profile {
-                "source_trace_ranges".to_owned()
+                if raw["panel_line_cap_bytes"]
+                    .as_u64()
+                    .is_some_and(|n| n >= 131072)
+                {
+                    "source_trace_ranges diagnostic_schema diagnostic_transient_bytes".to_owned()
+                } else {
+                    "source_trace_ranges".to_owned()
+                }
             } else {
                 String::new()
             };
@@ -1071,7 +1078,7 @@ pub(super) fn validate_geometry(raw: &Value, inputs: &Value) -> Result<()> {
     if let Some(diag) = raw.get("diagnostic") {
         diagnostic_shape(diag, cpu_profile_config(inputs))?;
         source_scoring_context(raw, inputs)?;
-        if diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v5" {
+        if diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v6" {
             validate_source_trace(raw, inputs)?;
         }
         let trace = &diag["sq8_range_trace"];
@@ -1206,16 +1213,16 @@ fn range_cpu(value: &Value) -> Result<()> {
 pub(super) enum DiagnosticModel {
     Sq8V3,
     SourceSummaryV4,
-    SourceRangesV5,
-    Coverage64RangesV5,
+    SourceRangesV6,
+    Coverage64RangesV6,
 }
 
 impl DiagnosticModel {
     pub(super) fn line_cap(self) -> usize {
         match self {
             Self::Sq8V3 | Self::SourceSummaryV4 => 65_536,
-            Self::SourceRangesV5 => 131_072,
-            Self::Coverage64RangesV5 => 262_144,
+            Self::SourceRangesV6 => 131_072,
+            Self::Coverage64RangesV6 => 262_144,
         }
     }
 
@@ -1225,7 +1232,9 @@ impl DiagnosticModel {
                 == match self {
                     Self::Sq8V3 => "borsuk-sq8-range-attribution-diagnostic-v3",
                     Self::SourceSummaryV4 => "borsuk-sq8-range-attribution-diagnostic-v4",
-                    Self::SourceRangesV5 | Self::Coverage64RangesV5 => "borsuk-sq8-range-attribution-diagnostic-v5",
+                    Self::SourceRangesV6 | Self::Coverage64RangesV6 => {
+                        "borsuk-sq8-range-attribution-diagnostic-v6"
+                    }
                 },
             "diagnostic schema/admission model agreement",
         )
@@ -1313,7 +1322,7 @@ pub(super) fn diagnostic_shape(diag: &Value, cpu_profile: bool) -> Result<()> {
             }
         ),
     )?;
-    let full_source = diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v5";
+    let full_source = diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v6";
     require(
         (if cpu_profile {
             full_source || diag["schema"] == "borsuk-sq8-range-attribution-diagnostic-v4"
@@ -1386,7 +1395,7 @@ fn validate_source_trace(raw: &Value, inputs: &Value) -> Result<()> {
         "SOURCE exact range roster and non-ranking phase",
     )?;
     let charge = &raw["charges"]["source"];
-    if inputs["serving"]["mode"] == "direct_closure" {
+    if inputs["serving"]["mode"] == "direct_closure" || super::fp32_serving::direct(inputs) {
         require(
             raw["source_nomination_skipped"] == true
                 && charge == &json!({"submitted_gets":0,"verified_bytes":0,"failed_gets":0})
@@ -1620,6 +1629,12 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
     let width = usize::try_from(number(&inputs["fetch_parallelism"])?)?;
     let profile = cpu_profile_config(inputs);
     let source = usize::try_from(number(&inputs["source_get_budget"])?)?;
+    let source =
+        if inputs["serving"]["mode"] == "direct_closure" || super::fp32_serving::direct(inputs) {
+            1
+        } else {
+            source
+        };
     let peak = if !traced {
         0
     } else if profile {
@@ -1663,23 +1678,67 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
     let model = match (profile, number(&raw["panel_line_cap_bytes"])?) {
         (false, 65_536) if !expanded => DiagnosticModel::Sq8V3,
         (true, 65_536) if !expanded => DiagnosticModel::SourceSummaryV4,
-        (true, 131_072) if !expanded => DiagnosticModel::SourceRangesV5,
-        (true, 262_144) if expanded => DiagnosticModel::Coverage64RangesV5,
+        (true, 131_072) if !expanded => DiagnosticModel::SourceRangesV6,
+        (true, 262_144) if expanded => DiagnosticModel::Coverage64RangesV6,
         _ => return Err("versioned diagnostic panel memory model".into()),
     };
-    let diagnostic = 2 * model.line_cap()
+    let current = matches!(
+        model,
+        DiagnosticModel::SourceRangesV6 | DiagnosticModel::Coverage64RangesV6
+    );
+    require(
+        !traced || !super::fp32_serving::enabled(inputs) || current,
+        "traced FP32 requires current v6 diagnostic authority",
+    )?;
+    let transient = if current {
+        require(
+            raw["diagnostic_schema"] == "borsuk-sq8-range-attribution-diagnostic-v6",
+            "incompatible diagnostic authority: require v6",
+        )?;
+        let ranges_bytes = ranges
+            .checked_mul(16)
+            .and_then(|n| n.checked_add(32))
+            .ok_or("diagnostic range memory overflow")?;
+        let bytes = if super::fp32_serving::enabled(inputs) {
+            let shortlist = super::fp32_serving::limits(inputs)?.shortlist;
+            // Frozen 64-bit Value/BTree ABI, independently bound against the producer.
+            require(std::mem::size_of::<Value>() == 32, "diagnostic Value ABI")?;
+            shortlist
+                .checked_mul(1000 + 144)
+                .and_then(|n| n.checked_add(8192))
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| n.checked_add(ranges_bytes))
+                .ok_or("diagnostic proof memory overflow")?
+        } else {
+            ranges_bytes
+        };
+        require(
+            raw["diagnostic_transient_bytes"] == bytes,
+            "diagnostic transient capacity binding",
+        )?;
+        bytes
+    } else {
+        0
+    };
+    let cap = if current { 2_097_152 } else { 1_048_576 };
+    let diagnostic = (2 * model.line_cap()
         + if traced {
             2 * 49 * 16 + 24 + 24 + 131072 + 1 + 8192 + 262144
         } else {
             0
-        };
+        })
+    .checked_add(transient)
+    .ok_or("diagnostic pinned overflow")?;
+    let total = diagnostic
+        .checked_add(peak)
+        .ok_or("diagnostic peak overflow")?;
     require(
         raw["trace"] == traced
             && raw["trace_ranges"] == ranges
             && raw["diagnostic_pinned_bytes"] == diagnostic
-            && raw["diagnostic_bytes_per_active_query"] == diagnostic + peak
-            && diagnostic + peak <= 1048576
-            && raw["diagnostic_cap_bytes"] == 1048576
+            && raw["diagnostic_bytes_per_active_query"] == total
+            && total <= cap
+            && raw["diagnostic_cap_bytes"] == cap
             && raw["host_read_cap_bytes"] == 131072
             && raw["range_state_both_paths_bytes"] == both
             && (if library_scheduler {
@@ -1746,6 +1805,23 @@ pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<Diagnost
 pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
     if super::fp32_serving::enabled(inputs) {
         super::fp32_serving::validate_startup(raw, inputs)?;
+        if inputs["execution"]["trace"] == true {
+            let source = if super::fp32_serving::direct(inputs) {
+                1
+            } else {
+                usize::try_from(number(&inputs["source_get_budget"])?)?
+            };
+            let extra = borsuk::sq8_s3_range::QueryProfile::additional_bytes(
+                source,
+                usize::try_from(physical_cap(inputs)?)?,
+            );
+            require(
+                number(&raw["fp32_rerank"]["modeled_memory_bytes"])?
+                    .checked_add(extra as u64)
+                    .is_some_and(|n| n <= number(&raw["library_cap_bytes"]).unwrap_or(0)),
+                "FP32 combined diagnostic model cap",
+            )?;
+        }
     }
     if concurrent_config(&inputs["config_schema"]) {
         let active = concurrent_queries(inputs)?;
