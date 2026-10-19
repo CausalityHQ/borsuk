@@ -191,7 +191,9 @@ pub(super) fn validate_model(raw: &Value, inputs: &Value, authority: &Value) -> 
         .iter().try_fold(0_u64, |n, e| super::plus(n, number(&e["bytes"])?))?;
     let limits = borsuk::two_bit_generation::TwoBitGenerationLimits {
         max_memory_bytes: number(&inputs["max_memory_bytes"])?,
-        max_active_queries: 1,
+        max_active_queries: if inputs.get("max_active_queries").is_some() {
+            super::current_v10::concurrent_queries(inputs)?
+        } else { 1 },
         max_query_bytes: u("sq8_byte_budget")?, max_query_gets: u("sq8_get_budget")?,
         max_parallel_gets: u("fetch_parallelism")?,
         max_source_bytes: u("source_byte_budget")?, max_source_gets: u("source_get_budget")?,
@@ -215,6 +217,74 @@ pub(super) fn validate_model(raw: &Value, inputs: &Value, authority: &Value) -> 
         "FP32 complete generation/query/pins model")
 }
 
+pub(super) fn validate_concurrent_resources(raw: &Value, inputs: &Value) -> Result<()> {
+    let limits = limits(inputs)?;
+    let active = super::current_v10::concurrent_queries(inputs)? as u64;
+    let d = usize::try_from(number(&inputs["dimensions"])?)?;
+    let r = &raw["concurrent_resources"]["fp32"];
+    fields(r, "canonical_bytes_per_query canonical_bytes_global_bound canonical_downloads_per_query canonical_downloads_global_bound query_bytes_per_query query_bytes_global_bound returned_bytes_per_query additional_caller_pins_bytes")?;
+    let global = |n: u64| n.checked_mul(active).ok_or("FP32 global overflow");
+    // Bind the 64-bit ABI independently of the producer's size_of expressions.
+    require(std::mem::size_of::<borsuk::exact_sq8_nominee::ScoredNominee>() == 24
+        && std::mem::size_of::<borsuk::fp32_rerank::Fp32RerankHit>() == 32,
+        "FP32 retained result ABI")?;
+    let retained = (limits.shortlist as u64).checked_mul(2 * (24 + 16))
+        .and_then(|n| n.checked_add(super::K as u64 * 32)).ok_or("FP32 returned overflow")?;
+    let proof = if inputs["execution"]["mode"] == "full" {
+        (limits.shortlist as u64).checked_mul(1000 + 144)
+            .and_then(|n| n.checked_add(8192)).and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(super::current_v10::physical_cap(inputs).ok()?.checked_mul(16)?))
+            .and_then(|n| n.checked_add(32)).ok_or("FP32 proof overflow")?
+    } else { 0 };
+    let pins = global(super::plus(retained, proof)?)?;
+    let query = borsuk::fp32_rerank::query_bytes(d, limits).ok_or("FP32 query model")? as u64;
+    let width = limits.shortlist.min(limits.max_parallel_gets) as u64;
+    require(r["canonical_bytes_per_query"] == limits.max_bytes
+        && r["canonical_bytes_global_bound"] == global(limits.max_bytes as u64)?
+        && r["canonical_downloads_per_query"] == width
+        && r["canonical_downloads_global_bound"] == global(width)?
+        && r["query_bytes_per_query"] == query && r["query_bytes_global_bound"] == global(query)?
+        && r["returned_bytes_per_query"] == retained && r["additional_caller_pins_bytes"] == pins
+        && number(&raw["caller_pinned_bytes"])? >= super::plus(pins,
+            super::plus(active * 512 * 1024 + 1024 * 1024,
+                number(&raw["concurrent_resources"]["runtime_reserve_bytes"])?)?)?,
+        "FP32 concurrent buffers and caller ownership")
+}
+
+pub(super) fn validate_cohort_transport(raw: &Value, inputs: &Value, charges: &super::Charges) -> Result<()> {
+    let total = charges.sum()?;
+    let span = &raw["transport"];
+    let before = &span["before"];
+    let after = &span["after"];
+    let delta = |key: &str| -> Result<u64> {
+        number(&after[key])?.checked_sub(number(&before[key])?)
+            .ok_or_else(|| "FP32 cohort counter decrease".into())
+    };
+    let gets = number(&after["method_counts"][0])?.checked_sub(number(&before["method_counts"][0])?).ok_or("FP32 GET decrease")?;
+    let before_typed: super::TransportStats = serde_json::from_value(before.clone())?;
+    let after_typed: super::TransportStats = serde_json::from_value(after.clone())?;
+    before_typed.validate()?;
+    after_typed.validate()?;
+    after_typed.follows(&before_typed)?;
+    let success = |stats: &super::TransportStats| -> Result<u64> {
+        stats.status_counts.iter().filter(|(code, _)| (200..300).contains(code))
+            .try_fold(0, |n, (_, count)| super::plus(n, *count))
+    };
+    let successes = success(&after_typed)?.checked_sub(success(&before_typed)?).ok_or("FP32 successes decrease")?;
+    // SDK counters include credential traffic and retries, not billed or wire accounting.
+    require(total.failed_gets == 0 && gets >= total.submitted_gets
+        && successes >= total.submitted_gets
+        && delta("consumed_payload_bytes")? >= total.verified_bytes,
+        "FP32 cohort SDK conservation")?;
+    let clean = inputs["s3_read_retry"]["policy"] != "one_retry_100ms"
+        && gets == total.submitted_gets && successes == total.submitted_gets
+        && delta("attempts")? == total.submitted_gets
+        && ["transport_failures", "stream_failures", "dropped_error_bodies"].iter()
+            .try_fold(true, |clean, key| -> Result<bool> { Ok(clean && delta(key)? == 0) })?;
+    require(!clean || delta("consumed_payload_bytes")? == total.verified_bytes,
+        "FP32 clean cohort payload conservation")
+}
+
 pub(super) fn reduce(path: &std::path::Path, sha: &str) -> Result<Value> {
     let (config, _): (super::CompletedConfig, _) = super::read_config(path, sha)?;
     require(
@@ -230,10 +300,15 @@ pub(super) fn reduce(path: &std::path::Path, sha: &str) -> Result<Value> {
         hits = super::plus(hits, sample.hits10)?;
         wall = super::plus(wall, sample.wall_ns)?;
     }
-    Ok(
-        json!({"schema":REPORT_SCHEMA,"valid":true,"input_sha256":config.input.sha256,
+    let cohort = run.completed.as_ref().and_then(|e| e.terminal.get("query_cohort")).cloned();
+    let mut report = json!({"schema":REPORT_SCHEMA,"valid":true,"input_sha256":config.input.sha256,
         "queries":run.samples.len(),"recall_numerator":hits,"recall_denominator":run.samples.len()*super::K,
         "charges":charges,"sum":charges.sum()?,"query_wall_ns":wall,
-        "score_precision":"f64","physical_s3_measured":false,"external_gate_required":true}),
-    )
+        "score_precision":"f64","physical_s3_measured":false,"external_gate_required":true});
+    if let Some(cohort) = cohort {
+        report["sum_query_wall_ns"] = json!(wall);
+        report["query_wall_ns"] = cohort["elapsed_ns"].clone();
+        report["query_cohort"] = cohort;
+    }
+    Ok(report)
 }

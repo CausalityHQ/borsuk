@@ -61,13 +61,21 @@ pub(super) fn concurrent_queries(inputs: &Value) -> Result<usize> {
                 == "dispatch_to_completion_including_initial_runtime_queue"
             && inputs["fetch_parallelism"] == 64
             && inputs["source_authentication"] == "offload2"
-            && inputs["execution"] == json!({"mode":"full"})
-            && inputs["serving"] == json!({"mode":"baseline"})
+            && (if super::fp32_serving::enabled(inputs) {
+                super::fp32_serving::limits(inputs).is_ok()
+                    && (inputs["execution"] == json!({"mode":"full"})
+                        || (inputs["execution"]["mode"] == "diagnostic_panel" && inputs["execution"]["trace"] == false))
+                    && super::source_cache::budget(inputs)? == 0
+            } else {
+                inputs["execution"] == json!({"mode":"full"})
+                    && inputs["serving"] == json!({"mode":"baseline"})
+            })
             && inputs.get("shared_byte_window").is_none()
             && inputs["sq8_range_split"].is_null(),
         "explicit closed-loop batch Q1/Q2 configuration",
     )?;
-    if inputs["phase"] == "bound_inputs" && (!cfg!(test) || number(&inputs["rows"])? == 1_000_000) {
+    if !super::fp32_serving::enabled(inputs) && inputs["phase"] == "bound_inputs"
+        && (!cfg!(test) || number(&inputs["rows"])? == 1_000_000) {
         validate_concurrent_geometry(inputs)?;
     }
     Ok(active as usize)
@@ -150,10 +158,15 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
         }
         "startup" => {
             let r = &raw["concurrent_resources"];
+            let fp32 = r.get("fp32");
+            let extra = if fp32.is_some() { " fp32" } else { "" };
             fields(
                 r,
-                "query_slots downloads_per_query downloads_global_bound compute_workers_global compute_slots_global query_future_bytes_per_query modeled_memory_bound_bytes external_memory_limit_bytes source_bytes_per_query sq8_bytes_per_query query_bytes_global_bound scheduler_bytes_global cohort_record_bytes query_runtime query_dispatch query_wall_semantics runtime_num_workers runtime_charged_worker_threads runtime_worker_threads runtime_max_blocking_threads runtime_stack_bytes_per_thread runtime_thread_state_bytes runtime_reserve_bytes task_state_bytes_per_query",
+                &format!("query_slots downloads_per_query downloads_global_bound compute_workers_global compute_slots_global query_future_bytes_per_query modeled_memory_bound_bytes external_memory_limit_bytes source_bytes_per_query sq8_bytes_per_query query_bytes_global_bound scheduler_bytes_global cohort_record_bytes query_runtime query_dispatch query_wall_semantics runtime_num_workers runtime_charged_worker_threads runtime_worker_threads runtime_max_blocking_threads runtime_stack_bytes_per_thread runtime_thread_state_bytes runtime_reserve_bytes task_state_bytes_per_query{extra}"),
             )?;
+            require(fp32.is_some() == super::fp32_serving::enabled(&raw), "FP32 resource selector")?;
+            let canonical_width = fp32.map(|v| number(&v["canonical_downloads_per_query"])).transpose()?.unwrap_or(0);
+            let width = 64.max(canonical_width);
             let active = number(&r["query_slots"])?;
             let workers = match r["query_runtime"].as_str() {
                 Some("current_thread") => 0,
@@ -177,18 +190,17 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
             )?;
             require(
                 matches!(active, 1 | 2)
-                    && r["downloads_per_query"] == 64
-                    && r["downloads_global_bound"] == active * 64
+                    && r["downloads_per_query"] == width
+                    && r["downloads_global_bound"] == active.checked_mul(width).ok_or("global downloads overflow")?
                     && r["compute_workers_global"] == 2
                     && r["compute_slots_global"] == 2
                     && r["query_future_bytes_per_query"] == 512 * 1024
                     && r["cohort_record_bytes"] == 1024 * 1024
                     && r["query_bytes_global_bound"]
-                        == active
-                            * plus(
-                                number(&r["source_bytes_per_query"])?,
-                                number(&r["sq8_bytes_per_query"])?,
-                            )?
+                        == active.checked_mul(plus(
+                            plus(number(&r["source_bytes_per_query"])?, number(&r["sq8_bytes_per_query"])?)?,
+                            fp32.map(|v| number(&v["canonical_bytes_per_query"])).transpose()?.unwrap_or(0),
+                        )?).ok_or("global payload overflow")?
                     && number(&r["scheduler_bytes_global"])? > 0
                     && r["modeled_memory_bound_bytes"] == raw["library_cap_bytes"]
                     && r["external_memory_limit_bytes"] == 8_u64 * 1024 * 1024 * 1024,
@@ -214,7 +226,11 @@ pub(super) fn validate_concurrent_row(line: &[u8], phase: &str) -> Result<()> {
                 .ok_or("terminal")?
                 .remove("query_cohort");
         }
-        "diagnostic_admission" => return Err("concurrent trace is unsupported".into()),
+        "diagnostic_admission" => {
+            require(raw["trace"] == false && matches!(number(&raw["max_active_queries"])?, 1 | 2),
+                "concurrent panel must be untraced")?;
+            raw["max_active_queries"] = json!(1);
+        }
         _ => (),
     }
     validate_row_envelope(&serde_json::to_vec(&raw)?, phase, true, true, true)
@@ -1623,6 +1639,9 @@ fn library_scheduler_bytes(inputs: &Value) -> Result<usize> {
 
 pub(super) fn validate_admission(raw: &Value, inputs: &Value) -> Result<DiagnosticModel> {
     validate_source_authentication_charge(raw, inputs)?;
+    require(raw["max_active_queries"] == if concurrent_config(&inputs["config_schema"]) {
+        concurrent_queries(inputs)?
+    } else { 1 }, "diagnostic active query binding")?;
     use borsuk::sq8_s3_range::Sq8RangeTrace;
     let traced = inputs["execution"]["trace"] == true;
     let ranges = usize::try_from(physical_cap(inputs)?)?;
@@ -1826,6 +1845,9 @@ pub(super) fn validate_startup(raw: &Value, inputs: &Value) -> Result<()> {
     if concurrent_config(&inputs["config_schema"]) {
         let active = concurrent_queries(inputs)?;
         let r = &raw["concurrent_resources"];
+        if super::fp32_serving::enabled(inputs) {
+            super::fp32_serving::validate_concurrent_resources(raw, inputs)?;
+        }
         require(
             r["query_slots"] == active
                 && r["query_runtime"] == inputs["query_runtime"]

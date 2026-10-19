@@ -808,16 +808,24 @@ impl<T> Drop for QueryTasks<T> {
         }
     }
 }
+type Fp32QueryOutput = (
+    Vec<borsuk::fp32_rerank::Fp32RerankHit>,
+    Sq8ReadStats,
+    u128,
+    Vec<std::ops::Range<usize>>,
+);
 fn owned_query(
     generation: Arc<TwoBitGeneration>,
     reader: Arc<Reader>,
     query: [f32; D],
+    refinement: Option<borsuk::fp32_rerank::Fp32RerankLimits>,
 ) -> impl std::future::Future<
     Output = (
         std::result::Result<
             (
                 borsuk::two_bit_generation::TwoBitSearchResult,
                 TwoBitPlanTrace,
+                Option<Fp32QueryOutput>,
             ),
             TwoBitGenerationError,
         >,
@@ -828,9 +836,17 @@ fn owned_query(
     // This executes synchronously at dispatch, before spawn and the first poll.
     let wall = Instant::now();
     async move {
-        let result = generation
-            .diagnostic_search_with_store(reader.store(), &query, K)
-            .await;
+        let result = if let Some(limits) = refinement {
+            generation.diagnostic_search_fp32_with_store(reader.store(), &query, K, limits)
+                .await.map(|(result, trace)| {
+                    let exact = (result.candidates, result.canonical_stats,
+                        result.rerank_wall_ns, result.canonical_ranges);
+                    (result.base, trace, Some(exact))
+                })
+        } else {
+            generation.diagnostic_search_with_store(reader.store(), &query, K)
+                .await.map(|(result, trace)| (result, trace, None))
+        };
         (result, wall.elapsed().as_nanos())
     }
 }
@@ -1009,8 +1025,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
                 && (1..=128).contains(&direct.max_sq8_gets), "FP32 direct closure explicit caps")?;
         }
         require(
-            !concurrent_config(c)
-                && (K..=256).contains(&limits.shortlist)
+            (K..=256).contains(&limits.shortlist)
+                && borsuk::fp32_rerank::query_bytes(D, limits).is_some()
                 && limits.max_gets > 0
                 && (limits.coalesce || limits.max_gets >= limits.shortlist)
                 && limits.max_parallel_gets > 0
@@ -1018,7 +1034,7 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
                     .shortlist
                     .checked_mul(D * 4 + 8)
                     .is_some_and(|n| n <= limits.max_bytes),
-            "FP32 runner requires serial execution and bounded explicit limits",
+            "FP32 runner requires bounded explicit limits",
         )?;
     }
     require(
@@ -1026,17 +1042,19 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
         "multi_thread2 requires the concurrent task probe",
     )?;
     if c.max_active_queries.is_some() {
+        if c.serving.fp32().is_some() { fp32_concurrent_resources(c)?; }
         require(
             config_schema(c)
-                && !c.execution.panel()
-                && c.serving == Serving::Baseline {}
+                && (if c.serving.fp32().is_some() {
+                    !c.execution.trace() && c.source_cache_bytes == 0
+                } else { !c.execution.panel() && c.serving == Serving::Baseline {} })
                 && c.fetch_parallelism == 64
                 && c.source_authentication == borsuk::sq8_s3_range::SourceAuthentication::Offload2
                 && c.shared_byte_window.is_none()
                 && c.sq8_range_split.is_none(),
-            "concurrent probe requires explicit Q1/Q2, full baseline, fetch64, Offload2",
+            "concurrent probe requires Q1/Q2 baseline or untraced cache-off FP32, fetch64, Offload2",
         )?;
-        if !cfg!(test) || c.rows == 1_000_000 {
+        if c.serving.fp32().is_none() && (!cfg!(test) || c.rows == 1_000_000) {
             require(
                 c.rows == 1_000_000
                     && c.profile == SemanticProfile::Scale1m
@@ -1784,10 +1802,47 @@ fn diagnostic_pinned_bytes(c: &Config) -> Result<usize> {
 fn uninstrumented_pinned_bytes(c: &Config) -> u64 {
     caller_bytes(c) as u64
 }
+fn concurrent_payload_bytes(c: &Config) -> Result<usize> {
+    c.source_byte_budget.checked_add(c.sq8_byte_budget)
+        .and_then(|n| n.checked_add(c.serving.fp32().map_or(0, |limits| limits.max_bytes)))
+        .and_then(|n| n.checked_mul(active_queries(c)))
+        .ok_or_else(|| "concurrent payload bound overflow".into())
+}
+// Base ranking copies at most shortlist entries; exact merge allocates K; ranges reserve shortlist.
+fn fp32_retained_bytes(limits: borsuk::fp32_rerank::Fp32RerankLimits) -> Result<usize> {
+    limits.shortlist.checked_mul(2 * (size_of::<ScoredNominee>() + size_of::<std::ops::Range<usize>>()))
+        .and_then(|n| n.checked_add(K * size_of::<borsuk::fp32_rerank::Fp32RerankHit>()))
+        .ok_or_else(|| "FP32 retained result overflow".into())
+}
+fn fp32_concurrent_pins(c: &Config) -> Result<usize> {
+    let Some(limits) = c.serving.fp32().filter(|_| concurrent_config(c)) else { return Ok(0); };
+    let proof = if c.execution.panel() { 0 } else { diagnostic_transient_bytes(c)? };
+    fp32_retained_bytes(limits)?.checked_add(proof)
+        .and_then(|n| n.checked_mul(active_queries(c)))
+        .ok_or_else(|| "FP32 concurrent pins overflow".into())
+}
+fn fp32_concurrent_resources(c: &Config) -> Result<Value> {
+    let limits = c.serving.fp32().ok_or("FP32 serving selector")?;
+    concurrent_payload_bytes(c)?;
+    let query = borsuk::fp32_rerank::query_bytes(D, limits).ok_or("FP32 query memory overflow")?;
+    let global = |n: usize| n.checked_mul(active_queries(c)).ok_or("FP32 global resource overflow");
+    let downloads = limits.shortlist.min(limits.max_parallel_gets);
+    Ok(json!({
+        "canonical_bytes_per_query":limits.max_bytes,
+        "canonical_bytes_global_bound":global(limits.max_bytes)?,
+        "canonical_downloads_per_query":downloads,
+        "canonical_downloads_global_bound":global(downloads)?,
+        "query_bytes_per_query":query,
+        "query_bytes_global_bound":global(query)?,
+        "returned_bytes_per_query":fp32_retained_bytes(limits)?,
+        "additional_caller_pins_bytes":fp32_concurrent_pins(c)?
+    }))
+}
 fn pinned_bytes(c: &Config) -> Result<u64> {
     let diagnostic = diagnostic_pinned_bytes(c)? as u64;
     (caller_bytes(c) as u64)
-        .checked_add(runtime_reserve(c)? as u64)
+        .checked_add(fp32_concurrent_pins(c)? as u64)
+        .and_then(|n| n.checked_add(runtime_reserve(c).ok()? as u64))
         .and_then(|n| n.checked_add(diagnostic.checked_mul(active_queries(c) as u64)?))
         .ok_or_else(|| "caller memory overflow".into())
 }
@@ -2769,7 +2824,7 @@ async fn query_and_seal_with(
             "query_slots":active_queries(c),"downloads_per_query":c.fetch_parallelism,
             "downloads_global_bound":active_queries(c) * c.fetch_parallelism,
             "source_bytes_per_query":c.source_byte_budget,"sq8_bytes_per_query":c.sq8_byte_budget,
-            "query_bytes_global_bound":active_queries(c) * (c.source_byte_budget + c.sq8_byte_budget),
+            "query_bytes_global_bound":concurrent_payload_bytes(c)?,
             "scheduler_bytes_global":active_queries(c) * range_scheduler_bytes(c)?,
             "cohort_record_bytes":COHORT_RECORD_BYTES,
             "compute_workers_global":2,"compute_slots_global":2,
@@ -2786,6 +2841,13 @@ async fn query_and_seal_with(
             "query_future_bytes_per_query":QUERY_FUTURE_BYTES,
             "modeled_memory_bound_bytes":c.max_memory_bytes,
             "external_memory_limit_bytes":8_u64 * 1024 * 1024 * 1024});
+    }
+    if concurrent_config(c) && c.serving.fp32().is_some() {
+        let resources = fp32_concurrent_resources(c)?;
+        let width = c.fetch_parallelism.max(resources["canonical_downloads_per_query"].as_u64().unwrap() as usize);
+        startup["concurrent_resources"]["downloads_per_query"] = json!(width);
+        startup["concurrent_resources"]["downloads_global_bound"] = json!(active_queries(c) * width);
+        startup["concurrent_resources"]["fp32"] = resources;
     }
     out.emit(&startup)?;
     if let Some(direct) = c.serving.direct() {
@@ -2855,6 +2917,7 @@ async fn query_and_seal_with(
                     Arc::clone(&generation),
                     Arc::clone(&reader),
                     query,
+                    c.serving.fp32(),
                 ))?;
             }
             attempted += end - slot;
@@ -2899,7 +2962,12 @@ async fn query_and_seal_with(
         };
         let prefetched_wall = prefetched.as_ref().map(|(_, wall)| *wall);
         let mut fp32_result = None;
-        let result = if let Some(limits) = c.serving.fp32() {
+        let result = if let Some((result, _)) = prefetched {
+            result.map(|(base, trace, exact)| {
+                fp32_result = exact;
+                (base, trace)
+            })
+        } else if let Some(limits) = c.serving.fp32() {
             let searched = if let Some(diag) = diag.as_mut() {
                 generation
                     .diagnostic_search_fp32_with_store_traced(
@@ -2924,8 +2992,6 @@ async fn query_and_seal_with(
                     ));
                     (result.base, trace)
                 })
-        } else if let Some((result, _)) = prefetched {
-            result
         } else {
             match (c.serving.direct(), diag.as_mut()) {
                 (None, None) => {
@@ -3809,7 +3875,7 @@ pub(crate) fn fp32_reducer_native_fixture_caps(coalesce: bool, leaf_limit: Optio
 }
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture_cached(coalesce: bool, leaf_limit: Option<usize>, direct: bool, caps: Option<(usize, usize)>, cache_bytes: usize) -> Result<(tempfile::TempDir, PathBuf)> {
-    fp32_reducer_native_fixture_options(coalesce, leaf_limit, direct, caps, cache_bytes, None)
+    fp32_reducer_native_fixture_options(coalesce, leaf_limit, direct, caps, cache_bytes, None, None)
 }
 #[cfg(test)]
 pub(crate) fn cold_source_profile_native_fixture(
@@ -3822,7 +3888,7 @@ pub(crate) fn cold_source_profile_native_fixture_leaf(
     trace: bool,
     leaf: usize,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
-    fp32_reducer_native_fixture_options(false, Some(leaf), false, None, 0, Some(trace))
+    fp32_reducer_native_fixture_options(false, Some(leaf), false, None, 0, Some(trace), None)
 }
 #[cfg(test)]
 fn fp32_reducer_native_fixture_options(
@@ -3832,6 +3898,7 @@ fn fp32_reducer_native_fixture_options(
     caps: Option<(usize, usize)>,
     cache_bytes: usize,
     profile: Option<bool>,
+    concurrent: Option<(usize, QueryRuntime, bool)>,
 ) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
@@ -3858,6 +3925,19 @@ fn fp32_reducer_native_fixture_options(
         value["fetch_parallelism"] = json!(128);
         value["source_authentication"] = json!("offload2");
     }
+    if let Some((active, runtime, panel)) = concurrent {
+        value["source_byte_budget"] = json!(1024 * 1024);
+        value["sq8_byte_budget"] = json!(1024 * 1024);
+        value["serving"]["max_fp32_bytes"] = json!(4 * 1024 * 1024);
+        value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+        value["max_active_queries"] = json!(active);
+        value["query_runtime"] = json!(runtime);
+        value["fetch_parallelism"] = json!(64);
+        value["source_authentication"] = json!("offload2");
+        value["execution"] = if panel {
+            json!({"mode":"diagnostic_panel","ordinals":[0,1],"trace":false})
+        } else { json!({"mode":"full"}) };
+    }
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("fp32-native-result.jsonl");
     let status = execute_paths_status(&config, &sha, &result, shape, |c, shape, out, progress| {
@@ -3865,9 +3945,14 @@ fn fp32_reducer_native_fixture_options(
     })?;
     require(
         matches!(status, Status::Measured),
-        "native FP32 fixture must seal",
+        &format!("native FP32 fixture must seal: {}", std::fs::read_to_string(&result)?.lines().last().unwrap_or("")),
     )?;
     Ok((dir, result))
+}
+#[cfg(test)]
+pub(crate) fn fp32_concurrent_native_fixture(active: usize, threaded: bool, panel: bool, direct: bool) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_options(false, Some(40), direct, None, 0, None,
+        Some((active, if threaded { QueryRuntime::MultiThread2 } else { QueryRuntime::CurrentThread }, panel)))
 }
 #[cfg(test)]
 pub(crate) fn source_layout_reducer_native_fixture() -> Result<(tempfile::TempDir, [PathBuf; 2])> {
@@ -4019,7 +4104,7 @@ pub(crate) fn scale_reducer_retry_header_fixture(dir: &Path) -> Result<PathBuf> 
         count: value["count"].as_u64().ok_or("fixture count")? as usize,
         returned_limit: K,
     };
-    value["schema"] = json!(CONFIG_SCHEMA);
+    if value.get("max_active_queries").is_none() { value["schema"] = json!(CONFIG_SCHEMA); }
     value["s3_read_retry"] = json!("one_retry_100ms");
     value["backend"] = json!({
         "kind":"s3","bucket":"fixture-bucket","region":"eu-central-1",
@@ -7389,7 +7474,7 @@ mod tests {
                     let mut tasks = QueryTasks::new(2).unwrap();
                     for _ in 0..2 {
                         tasks
-                            .spawn(owned_query(generation.clone(), reader.clone(), query))
+                            .spawn(owned_query(generation.clone(), reader.clone(), query, None))
                             .unwrap();
                     }
                     tokio::time::timeout(Duration::from_secs(5), async {
@@ -7476,7 +7561,7 @@ mod tests {
             }
             runtime.block_on(async {
                 let mut tasks = QueryTasks::new(1).unwrap();
-                tasks.spawn(owned_query(generation, reader, query)).unwrap();
+                tasks.spawn(owned_query(generation, reader, query, None)).unwrap();
                 let held = Instant::now();
                 // Current-thread cannot poll while this coordinator blocks; both M2 workers
                 // are independently held above. No query can receive its first poll yet.
@@ -7572,7 +7657,7 @@ mod tests {
                     // Bind physical first fault to ordinal zero before starting ordinal one.
                     for expected in 1..=2 {
                         tasks
-                            .spawn(owned_query(generation.clone(), reader.clone(), query))
+                            .spawn(owned_query(generation.clone(), reader.clone(), query, None))
                             .unwrap();
                         tokio::time::timeout(Duration::from_secs(5), async {
                             while store.entered.load(SeqCst) < expected {
@@ -7615,7 +7700,7 @@ mod tests {
                     let mut replacements = QueryTasks::new(2).unwrap();
                     for _ in 0..2 {
                         replacements
-                            .spawn(owned_query(generation.clone(), reader.clone(), query))
+                            .spawn(owned_query(generation.clone(), reader.clone(), query, None))
                             .unwrap();
                     }
                     tokio::time::timeout(Duration::from_secs(5), async {
@@ -7908,6 +7993,63 @@ mod tests {
     }
 
     #[test]
+    fn fp32_concurrent_configuration_refuses_unmodeled_paths() {
+        let shape = Shape::tiny(33);
+        let (_dir, mut value) = query_runtime(64).unwrap().block_on(fixture(shape));
+        value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+        value["max_active_queries"] = json!(2);
+        value["fetch_parallelism"] = json!(64);
+        value["source_authentication"] = json!("offload2");
+        value["serving"] = json!({"mode":"fp32_rerank","shortlist":16,"max_fp32_bytes":16*(D*4+8),
+            "max_fp32_gets":16,"max_parallel_fp32_gets":3});
+        let config: Config = serde_json::from_value(value.clone()).unwrap();
+        validate_config(&config, shape).unwrap();
+        for (pointer, bad) in [
+            ("/source_cache_bytes", json!(1024)),
+            ("/execution", json!({"mode":"diagnostic_panel","ordinals":[0,1],"trace":true})),
+            ("/max_active_queries", json!(3)),
+            ("/serving/max_fp32_bytes", json!(usize::MAX)),
+            ("/max_memory_bytes", json!(1)),
+        ] {
+            let mut changed = value.clone();
+            if pointer == "/source_cache_bytes" { changed["source_cache_bytes"] = bad; }
+            else { *changed.pointer_mut(pointer).unwrap() = bad; }
+            assert!(validate_config(&serde_json::from_value(changed).unwrap(), shape).is_err(), "{pointer}");
+        }
+    }
+
+    #[test]
+    fn fp32_concurrent_native_answers_plans_and_scorebits() {
+        for (threaded, direct) in [(false, false), (true, false), (true, true)] {
+            for panel in [false, true] {
+                let (_one, a) = fp32_concurrent_native_fixture(1, threaded, panel, direct).unwrap();
+                let (_two, b) = fp32_concurrent_native_fixture(2, threaded, panel, direct).unwrap();
+                let read = |p| std::fs::read_to_string(p).unwrap().lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .filter(|r| r["phase"] == "query").collect::<Vec<_>>();
+                let (a, b) = (read(a), read(b));
+                assert_eq!(a.len(), 2);
+                assert_eq!(b.len(), a.len());
+                for (i, (a, b)) in a.iter().zip(&b).enumerate() {
+                    assert_eq!(a["ordinal"], i);
+                    assert_eq!(b["ordinal"], i);
+                    for key in ["returned", "returned_physical_ordinals", "plan", "trace", "charges", "sum"] {
+                        assert_eq!(a[key], b[key], "{key}");
+                    }
+                    for key in ["shortlist", "ranges", "score_precision"] {
+                        assert_eq!(a["canonical_stage"][key], b["canonical_stage"][key], "{key}");
+                    }
+                    assert_eq!(a["canonical_stage"]["score_precision"], "f64");
+                    for row in [a, b] {
+                        assert!(row["query_process_cpu_ns"].is_null());
+                        assert!(row["transport"].is_null());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn concurrent_probe_exact_results_plans_charges_and_cohort() {
         let (_a, one) = concurrent_fixture(1);
         let (_b, two) = concurrent_fixture(2);
@@ -7977,6 +8119,7 @@ mod tests {
         ) -> object_store::Result<object_store::GetResult> {
             if !options.head
                 && (path.as_ref() == self.key
+                    || path.as_ref().contains("/objects/")
                     || path.as_ref().ends_with("/plane/records.bin")
                     || path.as_ref().ends_with("/router/leaves.bin"))
             {
@@ -8085,6 +8228,196 @@ mod tests {
             o: object_store::CopyOptions,
         ) -> object_store::Result<()> {
             self.inner.copy_opts(a, b, o).await
+        }
+    }
+
+    #[test]
+    fn fp32_concurrent_retained_capacity_boundaries() {
+        build_query_runtime(64, QueryRuntime::MultiThread2).unwrap().block_on(async {
+            let shape = Shape::tiny(257);
+            let (dir, value) = fixture(shape).await;
+            for shortlist in [33, 129, 256] {
+                let mut value = value.clone();
+                value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+                value["max_active_queries"] = json!(2);
+                value["query_runtime"] = json!(QueryRuntime::MultiThread2);
+                value["fetch_parallelism"] = json!(64);
+                value["source_authentication"] = json!("offload2");
+                value["serving"] = json!({"mode":"fp32_rerank","shortlist":shortlist,
+                    "coalesce":false,"max_fp32_bytes":shortlist*(D*4+8),
+                    "max_fp32_gets":shortlist,"max_parallel_fp32_gets":3,
+                    "direct":{"max_sq8_bytes":1_000_000,"max_sq8_gets":128}});
+                let c: Config = serde_json::from_value(value).unwrap();
+                validate_config(&c, shape).unwrap();
+                let refinement = c.serving.fp32().unwrap();
+                let reader = Arc::new(Reader::new(&c.backend, None).unwrap());
+                let mut generation = TwoBitGeneration::open_remote(reader.store(),
+                    &ObjectPath::from(c.generation_prefix.clone()), &c.generation_root_sha256,
+                    limits(&c).unwrap(), &c.scratch_parent).await.unwrap()
+                    .with_source_authentication(borsuk::sq8_s3_range::SourceAuthentication::Offload2).unwrap();
+                generation.enable_fp32_rerank(reader.store()).await.unwrap();
+                let generation = Arc::new(generation);
+                let query = request_row(&std::fs::read(&c.requests.path).unwrap(), 0).unwrap();
+                let mut tasks = QueryTasks::new(2).unwrap();
+                for _ in 0..2 {
+                    tasks.spawn(owned_query(generation.clone(), reader.clone(), query, Some(refinement))).unwrap();
+                }
+                let results = tasks.drain().await;
+                assert_eq!(results.len(), 2);
+                for result in &results {
+                    let (base, _, exact) = result.as_ref().unwrap().0.as_ref().unwrap();
+                    let exact = exact.as_ref().unwrap();
+                    assert_eq!(base.ranked.candidates.len(), shortlist);
+                    assert_eq!(exact.3.len(), shortlist);
+                    assert_eq!(exact.0.len(), K);
+                    let retained = base.ranked.candidates.capacity() * size_of::<ScoredNominee>()
+                        + exact.0.capacity() * size_of::<borsuk::fp32_rerank::Fp32RerankHit>()
+                        + exact.3.capacity() * size_of::<std::ops::Range<usize>>();
+                    eprintln!("FP32_CAPACITY shortlist={shortlist} base={} exact={} ranges={} retained={retained} bound={}",
+                        base.ranked.candidates.capacity(), exact.0.capacity(), exact.3.capacity(),
+                        fp32_retained_bytes(refinement).unwrap());
+                    assert!(retained <= fp32_retained_bytes(refinement).unwrap());
+                }
+            }
+            drop(dir);
+        });
+    }
+
+    #[test]
+    fn fp32_concurrent_canonical_barrier_drain_recovery_and_cap() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use std::time::Duration;
+        for mode in [QueryRuntime::CurrentThread, QueryRuntime::MultiThread2] {
+            let runtime = build_query_runtime(64, mode).unwrap();
+            runtime.block_on(async {
+                let shape = Shape::tiny(33);
+                let (dir, value) = fixture(shape).await;
+                let root: Value = serde_json::from_slice(
+                    &std::fs::read(dir.path().join("generation/manifest.json")).unwrap()).unwrap();
+                for active in [1, 2] {
+                    for fault in 0..4 {
+                        let mut value = value.clone();
+                        value["schema"] = json!(CONCURRENT_CONFIG_SCHEMA);
+                        value["max_active_queries"] = json!(active);
+                        value["query_runtime"] = json!(mode);
+                        value["fetch_parallelism"] = json!(64);
+                        value["source_authentication"] = json!("offload2");
+                        value["serving"] = json!({"mode":"fp32_rerank","shortlist":16,
+                            "coalesce":true,"max_fp32_bytes":33*(D*4+8),
+                            "max_fp32_gets":16,"max_parallel_fp32_gets":1});
+                        let c: Config = serde_json::from_value(value).unwrap();
+                        validate_config(&c, shape).unwrap();
+                        let refinement = c.serving.fp32().unwrap();
+                        let store = Arc::new(HeldQueryStore {
+                            inner: ChunkedStore::new(Arc::new(LocalFileSystem::new_with_prefix(
+                                dir.path().join("store")).unwrap()), 8192),
+                            key: root["canonical"]["object_key"].as_str().unwrap().into(),
+                            entered: Default::default(), payload_reads: Default::default(),
+                            release: Arc::new(tokio::sync::Semaphore::new(0)),
+                            hold_body: fault == 0 || fault == 3,
+                            active_bodies: Default::default(), ordered_faults: false,
+                            second_fault: Default::default(), fail_first: fault == 1,
+                            panic_first: fault == 2,
+                        });
+                        let reader = Arc::new(Reader::Stub {
+                            store: store.clone(),
+                            stats: Arc::new(std::sync::Mutex::new(NativeTransportStats {
+                                attempts: 0, method_counts: [0; 10], status_counts: vec![],
+                                transport_failures: 0, stream_failures: 0,
+                                consumed_payload_bytes: 0, dropped_error_bodies: 0,
+                            })),
+                        });
+                        let mut admission = limits(&c).unwrap();
+                        let open = |admission| {
+                            let (store, c) = (&store, &c);
+                            async move {
+                            TwoBitGeneration::open_remote(store.as_ref(),
+                                &ObjectPath::from(c.generation_prefix.clone()),
+                                &c.generation_root_sha256, admission, &c.scratch_parent)
+                                .await.unwrap().with_source_authentication(
+                                    borsuk::sq8_s3_range::SourceAuthentication::Offload2).unwrap()
+                            }
+                        };
+                        let mut generation = open(admission).await;
+                        generation.enable_fp32_rerank(store.as_ref()).await.unwrap();
+                        let model = generation.fp32_rerank_memory(refinement).unwrap();
+                        let query = request_row(&std::fs::read(&c.requests.path).unwrap(), 0).unwrap();
+                        admission.max_memory_bytes = model - 1;
+                        let mut refused = open(admission).await;
+                        refused.enable_fp32_rerank(store.as_ref()).await.unwrap();
+                        let before = store.payload_reads.load(SeqCst);
+                        assert!(refused.diagnostic_search_fp32_with_store(store.as_ref(),
+                            &query, K, refinement).await.is_err());
+                        assert_eq!(store.payload_reads.load(SeqCst), before,
+                            "cap-1 refuses before SOURCE, SQ8 or canonical payload");
+                        drop(refused);
+                        // At the exact admitted cap the same owned task succeeds.
+                        admission.max_memory_bytes = model;
+                        drop(generation);
+                        let mut generation = open(admission).await;
+                        generation.enable_fp32_rerank(store.as_ref()).await.unwrap();
+                        let generation = Arc::new(generation);
+                        let wait = |target| {
+                            let store = store.clone();
+                            async move {
+                                tokio::time::timeout(Duration::from_secs(5), async {
+                                    while store.entered.load(SeqCst) < target {
+                                        tokio::task::yield_now().await;
+                                    }
+                                }).await.unwrap();
+                            }
+                        };
+                        // Queue two tasks even at Q1 to test the library slot through real canonical IO.
+                        let mut tasks = QueryTasks::new(2).unwrap();
+                        tasks.spawn(owned_query(generation.clone(), reader.clone(), query, Some(refinement))).unwrap();
+                        wait(1).await;
+                        tasks.spawn(owned_query(generation.clone(), reader.clone(), query, Some(refinement))).unwrap();
+                        wait(active).await;
+                        for _ in 0..32 { tokio::task::yield_now().await; }
+                        assert_eq!(store.entered.load(SeqCst), active);
+                        if store.hold_body { assert_eq!(store.active_bodies.load(SeqCst), active); }
+                        if fault == 3 { tasks.abort(); } else { store.release.add_permits(2); }
+                        let results = tokio::time::timeout(Duration::from_secs(5), tasks.drain()).await.unwrap();
+                        assert_eq!(store.active_bodies.load(SeqCst), 0);
+                        assert_eq!(Arc::strong_count(&generation), 1);
+                        assert_eq!(Arc::strong_count(&reader), 1);
+                        if fault == 3 {
+                            assert!(results.iter().all(|r| r.as_ref().err().unwrap().is_cancelled()));
+                        } else {
+                            assert!(results[1].as_ref().unwrap().0.is_ok(), "successful sibling fully drained");
+                            match fault {
+                                0 => {
+                                    let (base, _, exact) = results[0].as_ref().unwrap().0.as_ref().unwrap();
+                                    let exact = exact.as_ref().unwrap();
+                                    assert_eq!(exact.3.len(), 1);
+                                    let retained = base.ranked.candidates.capacity() * size_of::<ScoredNominee>()
+                                        + exact.0.capacity() * size_of::<borsuk::fp32_rerank::Fp32RerankHit>()
+                                        + exact.3.capacity() * size_of::<std::ops::Range<usize>>();
+                                    assert!(retained <= fp32_retained_bytes(refinement).unwrap());
+                                    assert_eq!(exact.0.iter().map(|h| (h.id, h.score.to_bits())).collect::<Vec<_>>(),
+                                        results[1].as_ref().unwrap().0.as_ref().unwrap().2.as_ref().unwrap().0
+                                            .iter().map(|h| (h.id, h.score.to_bits())).collect::<Vec<_>>());
+                                }
+                                1 => assert!(results[0].as_ref().unwrap().0.is_err()),
+                                2 => assert!(results[0].as_ref().err().unwrap().is_panic()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        drop(results);
+                        let entered = store.entered.load(SeqCst);
+                        let mut replacements = QueryTasks::new(2).unwrap();
+                        for _ in 0..2 {
+                            replacements.spawn(owned_query(generation.clone(), reader.clone(), query, Some(refinement))).unwrap();
+                        }
+                        wait(entered + active).await;
+                        store.release.add_permits(2);
+                        assert!(tokio::time::timeout(Duration::from_secs(5), replacements.drain()).await.unwrap()
+                            .iter().all(|r| r.as_ref().unwrap().0.is_ok()));
+                        assert_eq!(store.active_bodies.load(SeqCst), 0);
+                        assert_eq!(Arc::strong_count(&generation), 1);
+                    }
+                }
+            });
         }
     }
 

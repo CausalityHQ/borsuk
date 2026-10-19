@@ -632,7 +632,8 @@ fn validate_scale_input_values(i: &Inputs, raw: &Value, current: bool, v10: bool
     let exact_fp32 = fp32_serving::enabled(raw);
     if exact_fp32 {
         require(
-            current && v10 && raw["config_schema"] == current_v10::FRAMED_CONFIG_SCHEMA,
+            current && v10 && (raw["config_schema"] == current_v10::FRAMED_CONFIG_SCHEMA
+                || raw["config_schema"] == current_v10::FRAMED_CONCURRENT_CONFIG_SCHEMA),
             "FP32 current config binding",
         )?;
         fp32_serving::limits(raw)?;
@@ -2360,6 +2361,9 @@ fn read_run_observed_policy(
         cpu = cohort["process_cpu_ns"].as_u64().ok_or("cohort CPU")?;
         if let Some(e) = &mut completed {
             e.transport_scale(&rows.line, "query_cohort", None, local)?;
+            if !local && fp32_serving::enabled(inputs) {
+                fp32_serving::validate_cohort_transport(&cohort, inputs, &charges)?;
+            }
         }
         Some(cohort)
     } else {
@@ -14920,7 +14924,19 @@ mod tests {
                 }
                 "startup" => {
                     row["source_layout"] = layout.clone();
-                    for entry in row["metadata"]["metadata"].as_array_mut().unwrap() {
+                    let entries = row["metadata"]["metadata"].as_array_mut().unwrap();
+                    entries.retain(|entry| entry["name"] != "canonical_row_digests.bin");
+                    for index in 0..entries.len() {
+                        let wave = if index == 0 { 0 } else { (index - 1) / 8 + 1 };
+                        let start = if index == 0 { 0 } else { 1 + (wave - 1) * 8 };
+                        let count = if index == 0 { 1 } else { (entries.len() - start).min(8) };
+                        let wall = entries[start]["metadata_wave_wall_ns"].clone();
+                        entries[index]["metadata_wave"] = json!(wave);
+                        entries[index]["metadata_wave_wall_ns"] = wall;
+                        let bytes = entries[index]["bytes"].as_u64().unwrap();
+                        entries[index]["payload_buffer_bound_bytes"] = json!(bytes.min(4 * 1024 * 1024 * (8 / count) as u64));
+                    }
+                    for entry in entries {
                         let bytes = match entry["name"].as_str().unwrap() {
                             "manifest.json" => root_body.len() as u64,
                             "page_manifest.json" => page_body.len() as u64,
@@ -16621,6 +16637,143 @@ mod tests {
                 let (config, pin) = scale_config(dir.path(), &path, &historical);
                 let error = reduce_scale(&config, &pin).unwrap_err().to_string();
                 assert_eq!(error, "v10 logical range count", "{schema}");
+            }
+        }
+    }
+
+    #[test]
+    fn fp32_concurrent_transport_counts_the_cohort_once() {
+        let stats = |gets, bytes| json!({"attempts":gets,"method_counts":[gets,0,0,0,0,0,0,0,0,0],
+            "consumed_payload_bytes":bytes,"status_counts":[[200,gets]],
+            "transport_failures":0,"stream_failures":0,"dropped_error_bodies":0});
+        let row = json!({"transport":{"before":stats(7,70),"after":stats(12,570)}});
+        let inputs = json!({"s3_read_retry":{"policy":"one_attempt"}});
+        let charges: Charges = serde_json::from_value(json!({
+            "router":{"submitted_gets":0,"verified_bytes":0,"failed_gets":0},
+            "source":{"submitted_gets":1,"verified_bytes":100,"failed_gets":0},
+            "sq8":{"submitted_gets":2,"verified_bytes":200,"failed_gets":0},
+            "canonical":{"submitted_gets":2,"verified_bytes":200,"failed_gets":0}
+        })).unwrap();
+        fp32_serving::validate_cohort_transport(&row, &inputs, &charges).unwrap();
+        let mut extra = row.clone();
+        extra["transport"]["after"]["consumed_payload_bytes"] = json!(571);
+        assert!(fp32_serving::validate_cohort_transport(&extra, &inputs, &charges).is_err());
+        for retry in [false, true] {
+            let mut extra = row.clone();
+            extra["transport"]["after"]["attempts"] = json!(13);
+            extra["transport"]["after"]["status_counts"] = json!([[200,13]]);
+            if retry {
+                extra["transport"]["after"]["method_counts"][0] = json!(13);
+                extra["transport"]["after"]["stream_failures"] = json!(1);
+            } else {
+                extra["transport"]["after"]["method_counts"][2] = json!(1);
+                extra["transport"]["after"]["consumed_payload_bytes"] = json!(577);
+            }
+            let policy = json!({"s3_read_retry":{"policy":if retry {"one_retry_100ms"} else {"one_attempt"}}});
+            fp32_serving::validate_cohort_transport(&extra, &policy, &charges).unwrap();
+        }
+        for pointer in ["/transport/after/attempts", "/transport/after/method_counts/0",
+            "/transport/after/consumed_payload_bytes", "/transport/after/status_counts/0/1"] {
+            let mut bad = row.clone();
+            *bad.pointer_mut(pointer).unwrap() = json!(7);
+            assert!(fp32_serving::validate_cohort_transport(&bad, &inputs, &charges).is_err(), "{pointer}");
+        }
+    }
+
+    #[test]
+    fn fp32_concurrent_native_producer_reader_and_resealed_refusals() {
+        for active in [1, 2] {
+            for (panel, direct) in [(false, false), (true, false), (false, true)] {
+                let (dir, result) = scale_native_runner::fp32_concurrent_native_fixture(active, true, panel, direct).unwrap();
+                let rows = std::fs::read_to_string(&result).unwrap().lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+                let (config, pin) = scale_config(dir.path(), &result, &rows);
+                let report = fp32_serving::reduce(&config, &pin).unwrap();
+                assert_eq!(report["queries"], 2);
+                assert_eq!(report["query_cohort"]["max_active_queries"], active);
+                let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+                let query = rows.iter().position(|r| r["phase"] == "query").unwrap();
+                let cohort = rows.iter().position(|r| r["phase"] == "query_cohort").unwrap();
+                assert!(rows[startup]["concurrent_resources"]["fp32"]["canonical_bytes_per_query"].as_u64().unwrap()
+                    > rows[startup]["concurrent_resources"]["source_bytes_per_query"].as_u64().unwrap()
+                        + rows[startup]["concurrent_resources"]["sq8_bytes_per_query"].as_u64().unwrap());
+                if active == 2 && !panel && !direct {
+                    let headers = scale_native_runner::scale_reducer_retry_header_fixture(dir.path()).unwrap();
+                    let headers = std::fs::read_to_string(headers).unwrap().lines().take(2)
+                        .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+                    let mut total = Charges::default();
+                    for row in rows.iter().filter(|row| row["phase"] == "query") {
+                        total.add(serde_json::from_value(row["charges"].clone()).unwrap()).unwrap();
+                    }
+                    let total = total.sum().unwrap();
+                    for case in ["clean", "imds", "retry", "undercount", "extra-byte"] {
+                        let mut s3 = rows.clone();
+                        s3[..2].clone_from_slice(&headers);
+                        if case != "retry" {
+                            for header in &mut s3[..2] { header.as_object_mut().unwrap().remove("s3_read_retry"); }
+                        }
+                        let binding_index = s3.iter().position(|r| r["phase"] == "source_binding").unwrap();
+                        let root: Value = serde_json::from_str(s3[binding_index]["generation_authority"]["root_manifest"].as_str().unwrap()).unwrap();
+                        s3[1]["backend"]["sq8_object_key"] = root["sq8_object_key"].clone();
+                        s3[1]["backend"]["sq8_etag"] = root["sq8_etag"].clone();
+                        let binding = json!({"submitted_gets":3,"verified_bytes":1,"failed_gets":0});
+                        s3[binding_index]["charges"] = binding.clone();
+                        let mut stats = json!({"attempts":0,"method_counts":[0,0,0,0,0,0,0,0,0,0],"status_counts":[],
+                            "transport_failures":0,"stream_failures":0,"consumed_payload_bytes":0,"dropped_error_bodies":0});
+                        for row in &mut s3 {
+                            if row["phase"] == "startup" {
+                                let before = stats.clone();
+                                stats["attempts"] = json!(1);
+                                stats["method_counts"][1] = json!(1);
+                                stats["status_counts"] = json!([[200,1]]);
+                                row["fp32_rerank"]["transport"] = json!({"stage":"canonical_open","ordinal":null,"before":before,"after":stats});
+                            } else if row["transport"].is_object() {
+                                row["transport"]["before"] = stats.clone();
+                                if row["phase"] == "query_cohort" {
+                                    let gets = total.submitted_gets + u64::from(case == "retry")
+                                        - u64::from(case == "undercount");
+                                    let puts = u64::from(case == "imds");
+                                    stats["attempts"] = json!(1 + gets + puts);
+                                    stats["method_counts"][0] = json!(gets);
+                                    stats["method_counts"][2] = json!(puts);
+                                    stats["status_counts"] = json!([[200,1 + gets + puts]]);
+                                    stats["stream_failures"] = json!(u64::from(case == "retry"));
+                                    stats["consumed_payload_bytes"] = json!(total.verified_bytes
+                                        + if case == "imds" { 7 } else { u64::from(case == "extra-byte") });
+                                }
+                                row["transport"]["after"] = stats.clone();
+                            }
+                        }
+                        let last: TransportSpan = serde_json::from_value(s3[cohort]["transport"].clone()).unwrap();
+                        let cohort_row = s3[cohort].clone();
+                        s3.last_mut().unwrap()["summary"]["query_cohort"] = cohort_row;
+                        s3.last_mut().unwrap()["summary"]["binding_charge"] = binding;
+                        s3.last_mut().unwrap()["summary"]["transport_last_boundary"] = last.compact();
+                        let (path, _) = write_fixture(dir.path(), &format!("fp32-concurrent-s3-{case}.jsonl"), s3.clone());
+                        let (config, pin) = scale_config(dir.path(), &path, &s3);
+                        let result = fp32_serving::reduce(&config, &pin);
+                        assert_eq!(result.is_ok(), !matches!(case, "undercount" | "extra-byte"), "{case}: {result:?}");
+                    }
+                }
+                for (case, index, pointer, value) in [
+                    ("model", startup, "/fp32_rerank/modeled_memory_bytes", json!(1)),
+                    ("returned", startup, "/concurrent_resources/fp32/returned_bytes_per_query", json!(1)),
+                    ("buffers", startup, "/concurrent_resources/fp32/query_bytes_global_bound", json!(1)),
+                    ("payload", startup, "/concurrent_resources/query_bytes_global_bound",
+                        json!(active as u64 * (rows[startup]["concurrent_resources"]["source_bytes_per_query"].as_u64().unwrap()
+                            + rows[startup]["concurrent_resources"]["sq8_bytes_per_query"].as_u64().unwrap()))),
+                    ("downloads", startup, "/concurrent_resources/fp32/canonical_downloads_global_bound", json!(1)),
+                    ("pins", startup, "/concurrent_resources/fp32/additional_caller_pins_bytes", json!(1)),
+                    ("cpu", query, "/query_process_cpu_ns", json!(0)),
+                    ("canonical", query, "/charges/canonical/submitted_gets", json!(0)),
+                    ("cohort", cohort, "/process_cpu_ns", json!(0)),
+                ] {
+                    let mut bad = rows.clone();
+                    *bad[index].pointer_mut(pointer).unwrap() = value;
+                    let (path, _) = write_fixture(dir.path(), &format!("fp32-concurrent-{case}.jsonl"), bad.clone());
+                    let (config, pin) = scale_config(dir.path(), &path, &bad);
+                    assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+                }
             }
         }
     }
