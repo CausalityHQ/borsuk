@@ -1,0 +1,9 @@
+{
+  "status": "CONDITIONAL_PUT_AND_CHECKSUM_HEAD_PASS",
+  "key": "research/semantic-router/20261019/source-lut-exact-a0001/study-closure.tar.gz",
+  "bytes": 344452567,
+  "sha256": "f8f81a2c2434415630ce6ac5596c00168d7398bd939052379f6ba81ba75e9a2b",
+  "started_epoch": 1792451857.0990078,
+  "finished_epoch": 1792451874.4019685,
+  "all_source_native_and_pair_handles_terminal_before_archive": true
+}

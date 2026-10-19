@@ -1,0 +1,18 @@
+{
+  "decision": "RETAIN_MEMORY_PARETO_CANDIDATE_KEEP_INCUMBENT_DEFAULT",
+  "candidate": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+  "incumbent_main": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+  "cold_prefix_queries_per_cell": 32,
+  "hits_per_cell": 320,
+  "possible_hits_per_cell": 320,
+  "weighted_control_qps": 5.953444910283752,
+  "weighted_candidate_qps": 5.914617133606841,
+  "candidate_qps_change_percent": -0.6521900725047547,
+  "candidate_cohort_cpu_change_percent": 7.370380778638919,
+  "sdk_gets_each_cell": 5256,
+  "sdk_consumed_bytes_each_cell": 1341837184,
+  "compiler_environment_parity": "old deployed control flags not fully recorded; artifact comparison, not isolated codec causal proof",
+  "cache": "library disabled; fresh process and scratch; provider cache eviction unproven",
+  "generalization": "Cohere is only an evaluation fixture; no general or vendor win established",
+  "next": "68-entry exact reconstruction; both single-query reuse and 16-query interleaved primitive; fresh same-environment 256-entry baseline build"
+}

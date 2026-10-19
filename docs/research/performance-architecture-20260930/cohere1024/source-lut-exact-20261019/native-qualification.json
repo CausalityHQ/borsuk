@@ -1,0 +1,191 @@
+{
+  "delivery": "bounded implementation complete; known broader runtime fixture failure retained",
+  "head": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+  "base": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+  "qualified_patch_sha256": "a4b50754186117a1bafd7fafec4364d4e072e30fd2f3860af63ec7b6a0b0d1e2",
+  "bundle_sha256": "99a1aac08ea40c8da0a00b11b17bb893d2f832526be0095107ed369434384f06",
+  "source_timing": "last edit22:41:09;freeze22:41:34;22:40targetMISSED with prospective correction-only22:43 amendment met;handoff23:00 fixed",
+  "source_and_snapshots_final_verified": true,
+  "remaining_chain_complete": true,
+  "remaining_native_receipt": "8c6124c7-baf8-4799-b8b3-614078e6a041",
+  "remaining_native_terminal": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainCode=0\nExecMainStatus=0\nMemoryPeak=[not set]\nMemorySwapPeak=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=34778\nActiveState=inactive\nSubState=dead\n",
+  "remaining_gate_steps": [
+    {
+      "step": "qualified-workspace-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "clippy::correctness",
+        "-D",
+        "clippy::suspicious"
+      ],
+      "started": "2026-10-19T22:44:27.182686+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:45:24.801612+00:00"
+    },
+    {
+      "step": "qualified-real-testbuild",
+      "command": [
+        "env",
+        "-u",
+        "BORSUK_TEST_BUILD_COMMAND",
+        "bash",
+        "scripts/check_rust_test_build.sh"
+      ],
+      "started": "2026-10-19T22:45:24.802200+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:47:33.166411+00:00"
+    },
+    {
+      "step": "qualified-release-lib-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--release",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "started": "2026-10-19T22:47:33.166765+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:51:53.400802+00:00"
+    },
+    {
+      "step": "qualified-release-codec",
+      "command": [
+        "/mnt/borsuk-workspace/evidence/source-lut-exact-a0001/elf/borsuk-release",
+        "rotated_two_bit::tests::",
+        "--test-threads=1"
+      ],
+      "started": "2026-10-19T22:51:53.538780+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:51:53.766221+00:00"
+    },
+    {
+      "step": "qualified-release-baseline-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--message-format=json"
+      ],
+      "started": "2026-10-19T22:51:53.766673+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:54:32.547046+00:00"
+    },
+    {
+      "step": "qualified-release-replay-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--example",
+        "compare_native_replay",
+        "--message-format=json"
+      ],
+      "started": "2026-10-19T22:54:32.582236+00:00",
+      "status": "PASS",
+      "exit": 0,
+      "finished": "2026-10-19T22:57:27.615909+00:00"
+    }
+  ],
+  "release_artifacts": {
+    "borsuk-release": {
+      "source": "/mnt/borsuk-workspace/target/release/deps/borsuk-5cf8b5378fd2bfbb",
+      "path": "/mnt/borsuk-workspace/evidence/source-lut-exact-a0001/elf/borsuk-release",
+      "sha256": "86194a319fcb7d789ead078d9df966b6e3d318ded79e8fe35f03603ffbd12cfd",
+      "bytes": 95976096,
+      "head": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+      "pinned_at": "2026-10-19T22:51:53.538520+00:00",
+      "verification": "PIN_VERIFIED"
+    },
+    "check_cohere_native_baseline-release": {
+      "source": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+      "path": "/mnt/borsuk-workspace/evidence/source-lut-exact-a0001/elf/check_cohere_native_baseline-release",
+      "sha256": "a6eec933bb31200e159711fb4d9d3a445ca7d99859f2b75b1bd747a2be920dca",
+      "bytes": 19613784,
+      "head": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+      "pinned_at": "2026-10-19T22:54:32.582052+00:00",
+      "verification": "PIN_VERIFIED"
+    },
+    "compare_native_replay-release": {
+      "source": "/mnt/borsuk-workspace/target/release/examples/compare_native_replay",
+      "path": "/mnt/borsuk-workspace/evidence/source-lut-exact-a0001/elf/compare_native_replay-release",
+      "sha256": "b066f98206c5b8b08a72d191c37dea6c7f6a01243aa705481d11742ffefb2923",
+      "bytes": 17709680,
+      "head": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+      "pinned_at": "2026-10-19T22:57:27.648132+00:00",
+      "verification": "PIN_VERIFIED"
+    }
+  },
+  "release_runtime_codec": "8PASS,2timingIGNORED",
+  "known_runtime_failure": {
+    "test": "tests::cpu_profile_current_producer_reader_and_resealed_refusals",
+    "exit": 101,
+    "receipt": "b7b9d8e1-20ac-4e3d-bfea-c13c21e6b80c",
+    "error": "v13 exact startup roster length",
+    "classification": "synthetic historical-v15 downgrade retains current canonical digest startup roster; source unchanged per parent",
+    "exact_parent_native_baseline": "UNVERIFIED",
+    "details": "qualified-known-historical-fixture-failure.json"
+  },
+  "affected_runtime_reuse": "qualified-reuse-ledger.json",
+  "source_pins": "qualified-source-pins.json",
+  "toolchain": "qualified-toolchain-and-build-inputs.json",
+  "recovery_and_failed_receipts": "qualified-recovery-and-failures.json",
+  "review": "originalfd8c4fcec9e54cec only; no second review",
+  "primitive_recipe": "qualified-root-primitive-recipe.json; root executes after checking pinned ELF",
+  "model": {
+    "padding": "P=256*floor(D/256)+next_power_of_two(D%256), zero tail adds0",
+    "B": "ceil(P/4)",
+    "retained_bytes": "B*24*8",
+    "prepare_peak_bytes": "(B*24+P)*8",
+    "D1024": {
+      "old_peak": 532480,
+      "new_peak": 57344,
+      "old_retained": 524288,
+      "new_retained": 49152
+    },
+    "native_dimension_coverage": [
+      1,
+      2,
+      3,
+      7,
+      257,
+      768,
+      1024,
+      1025
+    ],
+    "limits": "generic checked geometry; padded<=u32MAX; overflow rejects; native x86_64 only; allocator/codec/control memory separately charged"
+  },
+  "not_executed": [
+    "timing primitives",
+    "actual dataset/request/truth/S3/ANN runs",
+    "full workspace runtime suite",
+    "exact parent baseline native historical test",
+    "other architectures"
+  ],
+  "performance_verdict": "UNMEASURED; memory model reduction alone is no speed/RSS/query-latency claim",
+  "ownership": "no push/merge/cloud controls; no source edits sincefreeze; no children/extra review; all original failed/interrupted receipts preserved",
+  "completed_at_utc": "2026-10-19T22:58:16.556444+00:00"
+}
