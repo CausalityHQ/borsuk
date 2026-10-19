@@ -210,6 +210,7 @@ pub(super) fn validate_model(raw: &Value, inputs: &Value, authority: &Value) -> 
         raw.get("shared_byte_window_state_bytes").map(number).transpose()?.unwrap_or(0).try_into()?,
         super::current_v10::semantic_leaf_limit(inputs)?,
     )?;
+    let model = super::plus(model, super::source_cache::charged_bytes(inputs)?)?;
     require(raw["fp32_rerank"]["modeled_memory_bytes"] == model,
         "FP32 complete generation/query/pins model")
 }

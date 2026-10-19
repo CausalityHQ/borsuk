@@ -657,7 +657,9 @@ fn validate_scale_input_values(i: &Inputs, raw: &Value, current: bool, v10: bool
             && i.requests_bytes == i.count as u64 * i.dimensions as u64 * 4
             && i.truth_bytes == i.count as u64 * K as u64 * 8
             && (raw["serving"] == json!({"mode":"baseline"}) || exact_fp32)
-            && raw["source_cache"] == "off"
+            && (if v10 && source_cache::budget(raw)? > 0 {
+                raw["source_cache"] == "authenticated_direct_mapped256_v1"
+            } else { raw["source_cache"] == "off" })
             && (if current_v10::is_source_layout_config(raw) {
                 raw["max_memory_bytes"]
                     .as_u64()
@@ -2102,6 +2104,9 @@ fn read_run_observed_policy(
             )?;
         }
     }
+    let mut cache_replay = if let (Some(c), Some(e)) = (expected, completed.as_ref()) {
+        source_cache::Replay::open(&c.expected_bound_inputs, &e.startup)?
+    } else { None };
     let mut samples = Vec::with_capacity(count);
     let mut charges = Charges::default();
     let mut stages = StageTotals::default();
@@ -2109,6 +2114,13 @@ fn read_run_observed_policy(
     let mut underfilled = 0;
     for (slot, &ordinal) in ordinals.iter().enumerate() {
         let q: Query = rows.row("query")?;
+        if let Some(cache) = &mut cache_replay {
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            cache.query(&raw, &expected.ok_or("cache expected headers")?.expected_bound_inputs)?;
+        } else {
+            let raw: Value = serde_json::from_slice(&rows.line)?;
+            require(raw.get("source_cache").is_none(), "unconfigured SOURCE cache counters")?;
+        }
         if scale {
             let raw: Value = serde_json::from_slice(&rows.line)?;
             let plan = &raw["plan"];
@@ -16521,6 +16533,95 @@ mod tests {
     }
 
     #[test]
+    fn fp32_source_cache_native_producer_reader_and_resealed_refusals() {
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_cached(
+            false, Some(64), false, None, 384 * 1024 * 1024).unwrap();
+        let rows = std::fs::read_to_string(&result).unwrap().lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        let queries = rows.iter().enumerate().filter(|(_,r)| r["phase"] == "query")
+            .map(|(i,_)| i).collect::<Vec<_>>();
+        assert_eq!(queries.len(), 2);
+        let (cold, warm) = (queries[0], queries[1]);
+        assert_eq!(rows[cold]["source_cache"]["misses"], 1);
+        assert_eq!(rows[warm]["source_cache"]["hits"], 1);
+        assert_eq!(rows[warm]["charges"]["source"]["submitted_gets"], 0);
+        assert_eq!(rows[warm]["source_cache"]["insertions"], 1);
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        for (case, index, pointer, value) in [
+            ("hits", warm, "/source_cache/hits", json!(0)),
+            ("misses", cold, "/source_cache/misses", json!(0)),
+            ("insertions", warm, "/source_cache/insertions", json!(0)),
+            ("capacity", startup, "/source_cache/capacity_bytes", json!(0)),
+            ("charge", startup, "/source_cache/charged_bytes", json!(0)),
+            ("occupancy", warm, "/source_cache/occupied_bytes", json!(0)),
+            ("evictions", warm, "/source_cache/evictions", json!(1)),
+            ("budget-identity", 0, "/source_cache_bytes", json!(1)),
+            ("budget-bound", 1, "/source_cache_bytes", json!(1)),
+        ] {
+            let mut bad = rows.clone();
+            *bad[index].pointer_mut(pointer).unwrap() = value;
+            let (path, _) = write_fixture(dir.path(), &format!("cache-{case}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            assert!(fp32_serving::reduce(&config, &pin).is_err(), "{case}");
+        }
+        let headers = scale_native_runner::scale_reducer_retry_header_fixture(dir.path()).unwrap();
+        let mut s3 = rows.clone();
+        let header_rows = std::fs::read_to_string(headers).unwrap().lines().take(2)
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        s3[..2].clone_from_slice(&header_rows);
+        let binding_index = s3.iter().position(|r| r["phase"] == "source_binding").unwrap();
+        let root: Value = serde_json::from_str(s3[binding_index]["generation_authority"]["root_manifest"].as_str().unwrap()).unwrap();
+        s3[1]["backend"]["sq8_object_key"] = root["sq8_object_key"].clone();
+        s3[1]["backend"]["sq8_etag"] = root["sq8_etag"].clone();
+        let binding = json!({"submitted_gets":3,"verified_bytes":1,"failed_gets":0});
+        s3[binding_index]["charges"] = binding.clone();
+        let mut stats = json!({"attempts":0,"method_counts":[0,0,0,0,0,0,0,0,0,0],"status_counts":[],
+            "transport_failures":0,"stream_failures":0,"consumed_payload_bytes":0,"dropped_error_bodies":0});
+        for row in &mut s3 {
+            if row["phase"] == "startup" {
+                let before = stats.clone();
+                stats["attempts"] = json!(stats["attempts"].as_u64().unwrap()+1);
+                stats["method_counts"][1] = json!(1);
+                stats["status_counts"] = json!([[200,stats["attempts"]]]);
+                row["fp32_rerank"]["transport"] = json!({"stage":"canonical_open","ordinal":null,"before":before,"after":stats});
+            } else if row.get("transport").is_some() {
+                row["transport"]["before"] = stats.clone();
+                if row["phase"] == "query" {
+                    let gets = ["source","sq8","canonical"].iter().map(|key| row["charges"][key]["submitted_gets"].as_u64().unwrap()).sum::<u64>();
+                    let bytes = ["source","sq8","canonical"].iter().map(|key| row["charges"][key]["verified_bytes"].as_u64().unwrap()).sum::<u64>();
+                    let n = stats["attempts"].as_u64().unwrap() + gets + 1;
+                    stats["attempts"] = json!(n);
+                    stats["method_counts"][0] = json!(stats["method_counts"][0].as_u64().unwrap()+gets+1);
+                    stats["consumed_payload_bytes"] = json!(stats["consumed_payload_bytes"].as_u64().unwrap()+bytes+7);
+                    stats["status_counts"] = json!([[200,n]]);
+                }
+                row["transport"]["after"] = stats.clone();
+            }
+        }
+        let last: TransportSpan = serde_json::from_value(
+            s3.iter().rfind(|r| r["phase"] == "query").unwrap()["transport"].clone()).unwrap();
+        s3.last_mut().unwrap()["summary"]["binding_charge"] = binding;
+        s3.last_mut().unwrap()["summary"]["transport_last_boundary"] = last.compact();
+        let (path, _) = write_fixture(dir.path(), "fp32-cache-synthetic-s3-envelope.jsonl", s3.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &s3);
+        fp32_serving::reduce(&config, &pin).unwrap();
+        let mut zero = s3.clone();
+        let boundary = zero[startup]["fp32_rerank"]["transport"]["after"].clone();
+        for row in &mut zero { if row["phase"] == "query" {
+            row["transport"]["before"] = boundary.clone();
+            row["transport"]["after"] = boundary.clone();
+        }}
+        let last: TransportSpan = serde_json::from_value(zero[warm]["transport"].clone()).unwrap();
+        zero.last_mut().unwrap()["summary"]["transport_last_boundary"] = last.compact();
+        let (path, _) = write_fixture(dir.path(), "cache-zero-sdk.jsonl", zero.clone());
+        let (config, pin) = scale_config(dir.path(), &path, &zero);
+        let error = fp32_serving::reduce(&config, &pin).unwrap_err().to_string();
+        assert!(error.contains("SOURCE cache SDK query conservation"), "{error}");
+    }
+
+    #[test]
     fn fp32_direct_native_producer_reader_and_resealed_refusals() {
         let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_selection(false, Some(64), true).unwrap();
         let rows = std::fs::read_to_string(&result).unwrap().lines()
@@ -20721,3 +20822,5 @@ mod tests {
 
 #[path = "compare_native_replay/fp32_serving.rs"]
 mod fp32_serving;
+#[path = "compare_native_replay/source_cache.rs"]
+mod source_cache;

@@ -365,6 +365,8 @@ struct Config {
     native_source: NativeSource,
     max_memory_bytes: u64,
     source_byte_budget: usize,
+    #[serde(default)]
+    source_cache_bytes: usize,
     source_layout: SourceLayout,
     // Explicit operating-point limits, independent of transport concurrency.
     sq8_get_budget: usize,
@@ -993,6 +995,14 @@ fn config_schema(c: &Config) -> bool {
     }
 }
 fn validate_config(c: &Config, shape: Shape) -> Result<()> {
+    if c.source_cache_bytes > 0 {
+        require(
+            matches!(c.source_layout, SourceLayout::FlatRecords)
+                && c.serving.fp32().is_some_and(|limits| limits.direct.is_none())
+                && !concurrent_config(c) && !c.execution.trace(),
+            "SOURCE cache requires serial untraced flat SOURCE FP32 serving",
+        )?;
+    }
     if let Some(limits) = c.serving.fp32() {
         if let Some(direct) = limits.direct {
             require(direct.max_sq8_bytes > 0 && direct.max_sq8_bytes as u64 <= c.max_memory_bytes
@@ -1605,7 +1615,8 @@ fn caller_bytes(c: &Config) -> usize {
         + c.corpus_intervals.capacity() * size_of::<SourceInterval>()
         + c.cohort_receipt.path.capacity()
         + c.derivation_receipt.path.capacity()
-        + size_of::<Reader>();
+        + size_of::<Reader>()
+        + 2 * size_of::<Option<SourceCacheRecord>>();
     // Returned trace/result remain caller-owned while streaming, then drop before the next query.
     // Vec growth is bounded by twice the entire page roster; ranking retains only k entries.
     let returned = trace_scratch_bytes(c)
@@ -2519,6 +2530,30 @@ fn seal(c: &Config, out: &mut Output, p: &mut Progress, requests: FileIdentity) 
     p.sealed = true;
     Ok(seal)
 }
+#[derive(Serialize)]
+struct SourceCacheRecord {
+    charged_bytes: usize,
+    capacity_bytes: usize,
+    occupied_bytes: usize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+    insertions: u64,
+}
+impl SourceCacheRecord {
+    fn snapshot(c: &Config, generation: &TwoBitGeneration) -> Option<Self> {
+        if c.source_cache_bytes == 0 { return None; }
+        let stats = generation.source_cache_stats();
+        // Every replacement evicts one block; the remaining blocks include at most one tail.
+        let insertions = stats.evictions.saturating_add(
+            stats.occupied_bytes.div_ceil(256 * (D / 4 + 8)) as u64);
+        Some(Self {
+            charged_bytes: stats.charged_bytes, capacity_bytes: stats.capacity_bytes,
+            occupied_bytes: stats.occupied_bytes, hits: stats.hits, misses: stats.misses,
+            evictions: stats.evictions, insertions,
+        })
+    }
+}
 async fn query_and_seal(
     c: &Config,
     shape: Shape,
@@ -2643,7 +2678,13 @@ async fn query_and_seal_with(
             && generation.semantic_profile() == Some(c.profile),
         "generation geometry/profile",
     )?;
-    let mut generation = generation;
+    if let Some(limits) = c.serving.fp32() {
+        let combined = generation.fp32_rerank_memory(limits)?
+            .checked_add(generation.source_cache_charge(c.source_cache_bytes)? as u64)
+            .ok_or("FP32 SOURCE cache memory overflow")?;
+        require(combined <= c.max_memory_bytes, "FP32 total modeled memory cap")?;
+    }
+    let mut generation = generation.with_source_cache(c.source_cache_bytes)?;
     let fp32_startup = if let Some(limits) = c.serving.fp32() {
         let memory = generation.fp32_rerank_memory(limits)?;
         require(
@@ -2667,6 +2708,9 @@ async fn query_and_seal_with(
         "codec_scratch_bytes":532480,"trace_scratch_bytes":trace_scratch_bytes(c),
         "query_scratch_bytes":admission.max_query_scratch_bytes,"truth_opened":false});
     startup["source_layout"] = json!(c.source_layout);
+    if let Some(cache) = SourceCacheRecord::snapshot(c, &generation) {
+        startup["source_cache"] = json!(cache);
+    }
     if let Some(fp32) = fp32_startup {
         startup["fp32_rerank"] = fp32;
     }
@@ -2892,6 +2936,9 @@ async fn query_and_seal_with(
                     "charges_so_far":p.charges,"sum_so_far":p.charges.sum(),"stages":e.stages(),
                     "query_wall_ns":wall_ns,"query_process_cpu_ns":cpu_ns,"truth_opened":false,
                     "transport":p.transport});
+                if let Some(cache) = SourceCacheRecord::snapshot(c, &generation) {
+                    failure["source_cache"] = json!(cache);
+                }
                 if concurrent {
                     failure["query_process_cpu_ns"] = Value::Null;
                     failure["transport"] = Value::Null;
@@ -3031,6 +3078,8 @@ async fn query_and_seal_with(
             serving: Serving,
             #[serde(skip_serializing_if = "Option::is_none")]
             canonical_stage: Option<&'a Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            source_cache: Option<SourceCacheRecord>,
             source_nomination_skipped: bool,
             // What `stages.planning` measures: baseline = SOURCE nomination plus cover;
             // direct = the cover computation alone (SOURCE nomination is skipped).
@@ -3068,6 +3117,7 @@ async fn query_and_seal_with(
             truth_opened: false,
             serving: c.serving,
             canonical_stage: canonical_stage.as_ref(),
+            source_cache: SourceCacheRecord::snapshot(c, &generation),
             source_nomination_skipped: result.source_nomination_skipped,
             planning_scope: if result.source_nomination_skipped {
                 "direct_cover_only"
@@ -3425,6 +3475,9 @@ fn execute_paths_status(
         if let Some(limit) = configured.as_ref().ok().and_then(|c| c.semantic_leaf_limit) {
             identity["semantic_leaf_limit"] = json!(limit);
         }
+        if let Some(c) = configured.as_ref().ok().filter(|c| c.source_cache_bytes > 0) {
+            identity["source_cache_bytes"] = json!(c.source_cache_bytes);
+        }
         out.emit(&identity)?;
         let c = configured?;
         let shape = population(&c, shape);
@@ -3444,6 +3497,10 @@ fn execute_paths_status(
             "truth_bytes":c.truth.bytes,"truth_sha256":c.truth.sha256,
             "native_source_sha256":c.native_source.source_sha256,"native_sq8_sha256":c.native_source.sq8_sha256,
             "native_order_sha256":c.native_source.source_order_sha256,"truth_opened":false});
+        if c.source_cache_bytes > 0 {
+            bound["source_cache_bytes"] = json!(c.source_cache_bytes);
+            bound["source_cache"] = json!("authenticated_direct_mapped256_v1");
+        }
         bound["corpus_intervals"] = json!(c.corpus_intervals);
         bound["reserved_query_interval"] = json!(c.reserved_query_interval);
         bound["reserved_queries_sha256"] = json!(reserved_queries_sha256);
@@ -3682,10 +3739,17 @@ pub(crate) fn fp32_reducer_native_fixture_selection(coalesce: bool, leaf_limit: 
 }
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture_caps(coalesce: bool, leaf_limit: Option<usize>, direct: bool, caps: Option<(usize, usize)>) -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_cached(coalesce, leaf_limit, direct, caps, 0)
+}
+#[cfg(test)]
+pub(crate) fn fp32_reducer_native_fixture_cached(coalesce: bool, leaf_limit: Option<usize>, direct: bool, caps: Option<(usize, usize)>, cache_bytes: usize) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":33,"end":35});
+    if cache_bytes > 0 {
+        value["source_cache_bytes"] = json!(cache_bytes);
+    }
     if let Some(limit) = leaf_limit {
         value["semantic_leaf_limit"] = json!(limit);
         value["execution"] = json!({"mode":"diagnostic_panel","ordinals":[0,1],"trace":false});
@@ -4248,6 +4312,28 @@ mod tests {
                     validate_config(&config, shape).is_err(),
                     "unapproved SOURCE budget"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn fp32_source_cache_combined_memory_boundary_before_queries() {
+        let (dir, result) = super::fp32_reducer_native_fixture_cached(false, Some(64), false, None, 384*1024*1024).unwrap();
+        let rows = std::fs::read_to_string(result).unwrap().lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
+        let startup = rows.iter().find(|r| r["phase"] == "startup").unwrap();
+        let model = startup["fp32_rerank"]["modeled_memory_bytes"].as_u64().unwrap();
+        let mut value: Value = serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+        for cap in [model - 1, model] {
+            value["max_memory_bytes"] = json!(cap);
+            let (status, rows) = run_status(dir.path(), &format!("cache-cap-{cap}"), &value, Shape::tiny(33));
+            if cap == model { assert_eq!(status, Status::Measured, "{rows:?}"); }
+            else {
+                assert_eq!(status, Status::Invalid, "{rows:?}");
+                assert!(rows.iter().all(|r| r["phase"] != "query" && r["phase"] != "startup"));
+                assert!(rows.last().unwrap()["summary"]["error"].as_str().unwrap().contains("FP32 total modeled memory cap"), "{rows:?}");
+                assert_eq!(rows.last().unwrap()["summary"]["charges"]["source"]["submitted_gets"], 0);
+                assert_eq!(rows.last().unwrap()["summary"]["truth_opened"], false);
             }
         }
     }

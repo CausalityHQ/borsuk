@@ -2291,13 +2291,51 @@ impl TwoBitGeneration {
         if max_bytes == 0 {
             return Ok(self);
         }
+        let (block_bytes, slots, charged_bytes) = self.source_cache_layout(max_bytes)?;
+        let source = self.source.as_ref().ok_or(bad("source cache requires remote source"))?;
+        let modeled = self
+            .modeled_memory_bytes
+            .checked_add(charged_bytes as u64)
+            .filter(|&n| n <= self.limits.max_memory_bytes)
+            .ok_or(bad("source cache memory cap"))?;
+        // All cache and concurrent query capacity is admitted before either allocation.
+        let capacity_bytes = slots * block_bytes;
+        let mut tags = Vec::new();
+        tags.try_reserve_exact(slots)
+            .map_err(|_| bad("source cache allocation"))?;
+        tags.resize(slots, usize::MAX);
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity_bytes)
+            .map_err(|_| bad("source cache allocation"))?;
+        bytes.resize(capacity_bytes, 0);
+        self.source_cache = Some(std::sync::Mutex::new(SourceCache {
+            block_bytes,
+            object_bytes: source.authority.object_bytes(),
+            tags: tags.into_boxed_slice(),
+            bytes: bytes.into_boxed_slice(),
+            stats: SourceCacheStats {
+                charged_bytes,
+                capacity_bytes,
+                ..SourceCacheStats::default()
+            },
+        }));
+        self.modeled_memory_bytes = modeled;
+        Ok(self)
+    }
+
+    /// Pure admission estimate; allocates no cache payload or tags.
+    pub fn source_cache_charge(&self, max_bytes: usize) -> Result<usize> {
+        if max_bytes == 0 { return Ok(0); }
+        Ok(self.source_cache_layout(max_bytes)?.2)
+    }
+
+    fn source_cache_layout(&self, max_bytes: usize) -> Result<(usize, usize, usize)> {
+        let bad = TwoBitGenerationError::Invalid;
         if self.capsules.is_some() || self.frames.is_some() {
             return Err(bad("encoded SOURCE layouts do not support SOURCE cache"));
         }
-        let source = self
-            .source
-            .as_ref()
-            .ok_or(bad("source cache requires remote source"))?;
+        self.source.as_ref().ok_or(bad("source cache requires remote source"))?;
         let block_bytes = self
             .plane
             .receipt()
@@ -2336,35 +2374,7 @@ impl TwoBitGeneration {
             .checked_mul(slot_bytes)
             .and_then(|n| n.checked_add(fixed))
             .ok_or(bad("source cache memory"))?;
-        let modeled = self
-            .modeled_memory_bytes
-            .checked_add(charged_bytes as u64)
-            .filter(|&n| n <= self.limits.max_memory_bytes)
-            .ok_or(bad("source cache memory cap"))?;
-        // All cache and concurrent query capacity is admitted before either allocation.
-        let capacity_bytes = slots * block_bytes;
-        let mut tags = Vec::new();
-        tags.try_reserve_exact(slots)
-            .map_err(|_| bad("source cache allocation"))?;
-        tags.resize(slots, usize::MAX);
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(capacity_bytes)
-            .map_err(|_| bad("source cache allocation"))?;
-        bytes.resize(capacity_bytes, 0);
-        self.source_cache = Some(std::sync::Mutex::new(SourceCache {
-            block_bytes,
-            object_bytes: source.authority.object_bytes(),
-            tags: tags.into_boxed_slice(),
-            bytes: bytes.into_boxed_slice(),
-            stats: SourceCacheStats {
-                charged_bytes,
-                capacity_bytes,
-                ..SourceCacheStats::default()
-            },
-        }));
-        self.modeled_memory_bytes = modeled;
-        Ok(self)
+        Ok((block_bytes, slots, charged_bytes))
     }
 
     /// Snapshot of cumulative range hits/misses and block occupancy/evictions.
@@ -13190,6 +13200,53 @@ mod source_walk_tests {
                 .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn fp32_source_cache_cold_hit_partial_range_model_and_isolation() {
+        assert_eq!(std::mem::size_of::<Option<std::sync::Mutex<SourceCache>>>(), 112);
+        assert_eq!(std::mem::size_of::<VerifiedRange>(), 40);
+        let tiny = tiny_direct(513, 7).await;
+        let mut generation = TwoBitGeneration::open_remote(
+            &tiny.store, &tiny.prefix, &tiny.root_sha, tiny.limits, tiny.temp.path())
+            .await.unwrap();
+        generation.enable_fp32_rerank(&tiny.store).await.unwrap();
+        let query = tiny_query(7);
+        let limits = crate::fp32_rerank::Fp32RerankLimits {
+            direct: None, coalesce: false, shortlist: 16, max_bytes: 16 * 36,
+            max_gets: 16, max_parallel_gets: 3,
+        };
+        let (control, control_trace) = generation
+            .diagnostic_search_fp32_with_store(&tiny.store, &query, 10, limits).await.unwrap();
+        let before = generation.fp32_rerank_memory(limits).unwrap();
+        let charge = generation.source_cache_charge(1 << 20).unwrap();
+        assert!(generation.source_cache.is_none());
+        let combined = before + charge as u64;
+        assert!(generation.modeled_memory_bytes + (charge as u64) < combined);
+        generation = generation.with_source_cache(1 << 20).unwrap();
+        assert_eq!(charge, generation.source_cache_stats().charged_bytes);
+        assert_eq!(generation.fp32_rerank_memory(limits).unwrap(),
+            before + generation.source_cache_stats().charged_bytes as u64);
+        let bits = |result: &crate::fp32_rerank::Fp32RerankResult| {
+            result.candidates.iter().map(|h| (h.id, h.score.to_bits())).collect::<Vec<_>>()
+        };
+        for pass in 0..2 {
+            let (actual, trace) = generation
+                .diagnostic_search_fp32_with_store(&tiny.store, &query, 10, limits).await.unwrap();
+            assert_eq!(actual.base.plan, control.base.plan);
+            assert_eq!(serde_json::to_value(&trace).unwrap(), serde_json::to_value(&control_trace).unwrap());
+            assert_eq!(bits(&actual), bits(&control));
+            if pass == 1 { assert_eq!(actual.base.source_stats, Sq8ReadStats::default()); }
+        }
+        let reopened = TwoBitGeneration::open_remote(
+            &tiny.store, &tiny.prefix, &tiny.root_sha, tiny.limits, tiny.temp.path())
+            .await.unwrap().with_source_cache(1 << 20).unwrap();
+        assert_eq!(reopened.source_cache_stats().occupied_bytes, 0);
+        let before = generation.source_cache_stats();
+        generation.fetch_source_ranges(&tiny.store, &[(0, 0)]).await.unwrap();
+        let after = generation.source_cache_stats();
+        assert_eq!(after.misses, before.misses + 1);
+        assert_eq!(after.occupied_bytes, before.occupied_bytes);
     }
 
     #[tokio::test]
