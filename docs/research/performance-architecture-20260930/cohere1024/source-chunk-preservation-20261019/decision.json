@@ -1,0 +1,163 @@
+{
+  "artifact_prefix": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261019/source-chunk-preservation-closure-a0001/",
+  "cold_selected8": {
+    "all_36_executions_exact_gold_and_oracle": true,
+    "application_cache_bytes": 0,
+    "candidate": {
+      "denominator": 80,
+      "hits": 80,
+      "mean_cpu_ms": 155.285417125,
+      "mean_wall_ms": 309.884203875,
+      "peak_rss_bytes": 139481088
+    },
+    "control": {
+      "denominator": 80,
+      "hits": 80,
+      "mean_cpu_ms": 154.903778875,
+      "mean_wall_ms": 383.16209125,
+      "peak_rss_bytes": 140251136
+    },
+    "cpu_ratio": 1.0024637116845805,
+    "full_ABBA": "refused before unit due original cutoff; this six-cell one-pair scope preregistered before any native measurement",
+    "identical_charges": {
+      "canonical": {
+        "failed_gets": 0,
+        "submitted_gets": 128,
+        "verified_bytes": 525312
+      },
+      "router": {
+        "failed_gets": 0,
+        "submitted_gets": 0,
+        "verified_bytes": 0
+      },
+      "source": {
+        "failed_gets": 0,
+        "submitted_gets": 1024,
+        "verified_bytes": 342515712
+      },
+      "sq8": {
+        "failed_gets": 0,
+        "submitted_gets": 256,
+        "verified_bytes": 178026240
+      }
+    },
+    "interpretation": "CPU essentially neutral; wall lower in one unreplicated purposive8 pair, causal attribution unproven. No population recall/tails/QPS or competitor-win qualification. Preserve offline mechanical gain separately; actual S3 copy mechanism diagnostic pending.",
+    "measurement_checkpoint_receipts": [
+      {
+        "bytes": 498113,
+        "key": "research/semantic-router/20261019/source-segments-cold-pilot-a0002/A1-checkpoint.tar.gz",
+        "outside_native_timing": true,
+        "sha256": "ee41b2cc37d5afa7507b2b652049eea19e9b4541d5163e02e025adbb32b8b331",
+        "status": "CONDITIONAL_PUT_AND_CHECKSUM_HEAD_PASS"
+      },
+      {
+        "bytes": 498102,
+        "key": "research/semantic-router/20261019/source-segments-cold-pilot-a0002/B1-checkpoint.tar.gz",
+        "outside_native_timing": true,
+        "sha256": "563edec12b3b874c61cd46e5e55a23c91e62771b1888cde3bc659ad788e3645a",
+        "status": "CONDITIONAL_PUT_AND_CHECKSUM_HEAD_PASS"
+      }
+    ],
+    "per_query_cpu_ratios": [
+      1.0141133803893874,
+      0.9857442367393459,
+      0.996269589431406,
+      0.9997423446466743,
+      0.9670174873242297,
+      1.0191630514660093,
+      1.0036904228136498,
+      1.029780422321478
+    ],
+    "per_query_wall_ratios": [
+      0.8081430695762484,
+      1.0681688240016358,
+      0.4842183812318497,
+      0.9867984937967126,
+      0.4436121125428505,
+      1.002605216486093,
+      0.897712624536321,
+      0.979527894942266
+    ],
+    "production_ready": false,
+    "queries_per_cell": 8,
+    "schema": "borsuk-source-segment-cold-one-pair-analysis-v1",
+    "source": "e578c5352f8bf2dcf5ac391854338354a4c5a052",
+    "status": "VALID_EXPLORATORY_SELECTED8_ONLY",
+    "vendor_win": false,
+    "wall_ratio": 0.8087548610669089
+  },
+  "decision": "RETAIN_QUALIFIED_PROTOTYPE_DO_NOT_PROMOTE_S3_PATH",
+  "generic_scope": "generic dimensions1/7/257/1024 fixtures; Cohere evaluation only",
+  "main_rust_incumbent": "1f04de55f84974b6caae15d57812ac8ad66fe217",
+  "next_falsifier": "Inspect exact locked S3 Bytes ownership before new zero-copy code; one bounded authenticated query-free transport witness. Distinguish unique/shared/opaque ownership and feasible backing-memory contract; no unsafe layout introspection.",
+  "offline": {
+    "actual_wire_replay": false,
+    "candidate_copied_bytes": 516552960,
+    "caution": "No production promotion from this selected offline supplied-roster result; actual cold runtime admission/canary and matched pilot remain separate",
+    "cold_latency": false,
+    "control_copied_bytes": 6850314240,
+    "copied_byte_reduction": 0.9245942679558011,
+    "exact_score_fingerprints": true,
+    "improved_blocks": 20,
+    "median_paired_cpu_ratio": 0.9647533743032829,
+    "paired_blocks": 20,
+    "paired_cpu_ratios": [
+      0.966446552942672,
+      0.9742967164575812,
+      0.9725699137746666,
+      0.9679351940895782,
+      0.9635671784320282,
+      0.9681444880482801,
+      0.959976119196803,
+      0.9648152918501952,
+      0.9645059253308443,
+      0.9646914567563706,
+      0.9685326951874005,
+      0.9602651779960116,
+      0.9567848637916541,
+      0.9503965983149423,
+      0.9599700589013359,
+      0.9706825419393802,
+      0.9577652466269931,
+      0.9677235394322167,
+      0.9748571862456621,
+      0.9613362401043153
+    ],
+    "planner_replayed": false,
+    "prediction_pass": true,
+    "queries": 8,
+    "rows": 320,
+    "source": "e578c5352f8bf2dcf5ac391854338354a4c5a052",
+    "status": "VALID_OFFLINE_MECHANICAL_RESULT",
+    "vendor_win": false
+  },
+  "production_ready": false,
+  "prototype_bundle_sha256": "b31255cb1616cf99244c10d22c58733be0412fb61eacbb438a27f2161842d282",
+  "prototype_source": "e578c5352f8bf2dcf5ac391854338354a4c5a052",
+  "real_s3_mechanism": {
+    "baseline": {
+      "body_bytes": 342515712,
+      "collector_copied_bytes": 342515712,
+      "collector_processing_cpu_ns": 58881493,
+      "owned_copied_bytes": 0,
+      "owned_copy_cpu_ns": 0
+    },
+    "candidate": {
+      "body_bytes": 342515712,
+      "collector_copied_bytes": 353793299,
+      "collector_processing_cpu_ns": 59777383,
+      "owned_copied_bytes": 10074504,
+      "owned_copy_cpu_ns": 2611290
+    },
+    "copied_byte_ratio": 1.0623390117648093,
+    "copy_reduction": -0.06233901176480927,
+    "earlier_reducer_error": "absent owned_copy clock is None when zero copies; no native rerun",
+    "interpretation": "Actual S3 observed copies differ from synthetic unique-owned chunks. Baseline counters are from older-host source profile: identical body bytes, not paired timings or ownership. Do not infer timing causality. Cold paired CPU neutral, wall unreplicated. Preserve candidate; do not promote from synthetic result alone.",
+    "latency_qualification": false,
+    "queries": 8,
+    "schema": "borsuk-source-segment-real-s3-mechanism-v1",
+    "status": "VALID_NONPERFORMANCE_DIAGNOSTIC"
+  },
+  "schema": "borsuk-source-chunk-preservation-decision-v1",
+  "vendor_win": false
+}

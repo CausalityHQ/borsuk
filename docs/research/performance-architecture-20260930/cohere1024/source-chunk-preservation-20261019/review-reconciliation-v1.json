@@ -1,0 +1,30 @@
+{
+  "clock_scope": "collector_copy includes normalization/allocation/descriptor processing; report collector processing, not isolated memcpy CPU",
+  "deadlines": {
+    "guest_shutdown_unchanged": "2026-10-19T18:30:00Z",
+    "handoff": "2026-10-19T17:58:00Z",
+    "source_repair_cutoff": "2026-10-19T17:50:00Z"
+  },
+  "engineering": "8e0f5ec8415040a9",
+  "frozen_diff_sha256": "15689477bcef60d80bff47a7ab2496022db1b4fa61fc02d7f19b48577019a8ed",
+  "group": "a75a54c09e264470",
+  "memory": {
+    "disposition": "Both reviewers agree transport-owner boundary is not demonstrated new regression; qualify normalized library-owned payload/scratch only, never process RSS. Preserve explicit external-transport limitation and observed process RSS/headroom. No fabricated owner envelope or universal bound; generic product readiness remains unproven.",
+    "finding": "2B does not bound arbitrary incoming ObjectStore backing owners"
+  },
+  "remaining_gates": [
+    "focused changed fixtures with actual nonzero counts",
+    "workspace Clippy correctness+suspicious",
+    "actual env-u workspace testbuild",
+    "release runner+reader and optimized replay-test executable",
+    "root actual input runtime validator and separate canary before cold measurement"
+  ],
+  "required_falsifiers": [
+    "varied encoded records including signed zero and nonzero multiple range starts; late-completion crossing row absent early SourceScores; actual verified_source_segment_record path; bytes/bits/plan/evaluation-order equality",
+    "ordinary FP32 direct=None with Offload2 segmented SOURCE; hold actual canonical key; query slot/pin/drain/cancel/recovery and byte-window restoration"
+  ],
+  "research": "ec77fb972dac40e7",
+  "schema": "borsuk-source-segment-review-reconciliation-v1",
+  "source_authority": "narrow review-driven tests/docs only, retain frozen production absent concrete reproduced defect",
+  "verdict": "REPAIR_FOCUSED_TEST_GAPS_THEN_QUALIFY_NO_SECOND_REVIEW"
+}
