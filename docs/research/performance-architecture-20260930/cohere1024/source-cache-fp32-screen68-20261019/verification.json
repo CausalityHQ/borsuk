@@ -1,0 +1,215 @@
+{
+  "all_eight_native_replay_exits_zero": true,
+  "all_returned_ID_score_physical_changes_including_net_zero": [],
+  "application_cache_stream_reuse": true,
+  "archive_SHA_EOF_and_S3_checksum_HEAD": true,
+  "arms": {
+    "A1": {
+      "RSS_bytes": 142831616,
+      "cache": null,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "denominator": 680,
+      "external_CPU_ns": 10793434000,
+      "external_wall_ns": 25639477301,
+      "hits": 674,
+      "modeled_bytes": 469728047,
+      "p_ns": {
+        "0.5": 399666357,
+        "0.9": 501340863,
+        "0.95": 512570411,
+        "0.99": 549956633
+      },
+      "query_CPU_ns": 10536835995,
+      "query_wall_ns": 24904054814,
+      "raw_sha256": "53af9dced6c89c526c9934b504c658d8ed651548287959fddcc44c564e9399b1",
+      "sdk_S3_IMDS_query_GETs": 11678,
+      "sdk_S3_IMDS_query_consumed_payload": 3481321088
+    },
+    "A2": {
+      "RSS_bytes": 144273408,
+      "cache": null,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "denominator": 680,
+      "external_CPU_ns": 10528559999,
+      "external_wall_ns": 21252639847,
+      "hits": 674,
+      "modeled_bytes": 469728047,
+      "p_ns": {
+        "0.5": 268902712,
+        "0.9": 454949620,
+        "0.95": 462369285,
+        "0.99": 507076043
+      },
+      "query_CPU_ns": 10296953842,
+      "query_wall_ns": 20555238179,
+      "raw_sha256": "98cbdecb7039cb29025078f79da1d5f727f038d29e418f4e7554c7753ad58019",
+      "sdk_S3_IMDS_query_GETs": 11678,
+      "sdk_S3_IMDS_query_consumed_payload": 3481321088
+    },
+    "B1": {
+      "RSS_bytes": 404303872,
+      "cache": {
+        "capacity_bytes": 264050688,
+        "charged_bytes": 264089528,
+        "evictions": 0,
+        "hits": 7690,
+        "insertions": 3650,
+        "misses": 878,
+        "occupied_bytes": 246681600
+      },
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 878,
+          "verified_bytes": 460449792
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "denominator": 680,
+      "external_CPU_ns": 6126908999,
+      "external_wall_ns": 13670970551,
+      "hits": 674,
+      "modeled_bytes": 733817575,
+      "p_ns": {
+        "0.5": 183564045,
+        "0.9": 259134078,
+        "0.95": 266401213,
+        "0.99": 283859430
+      },
+      "query_CPU_ns": 5790719015,
+      "query_wall_ns": 12827463413,
+      "raw_sha256": "8fd9659fa8f7b2e364b4cb7974889fb0d5932286a8d049b1a2e9a943b451faa0",
+      "sdk_S3_IMDS_query_GETs": 3988,
+      "sdk_S3_IMDS_query_consumed_payload": 1223001728
+    },
+    "B2": {
+      "RSS_bytes": 400977920,
+      "cache": {
+        "capacity_bytes": 264050688,
+        "charged_bytes": 264089528,
+        "evictions": 0,
+        "hits": 7690,
+        "insertions": 3650,
+        "misses": 878,
+        "occupied_bytes": 246681600
+      },
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 878,
+          "verified_bytes": 460449792
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "denominator": 680,
+      "external_CPU_ns": 6127723000,
+      "external_wall_ns": 13162617036,
+      "hits": 674,
+      "modeled_bytes": 733817575,
+      "p_ns": {
+        "0.5": 174550472,
+        "0.9": 246723939,
+        "0.95": 256684088,
+        "0.99": 275549051
+      },
+      "query_CPU_ns": 5790876207,
+      "query_wall_ns": 12367855145,
+      "raw_sha256": "6d8999fb0d37721a0b8851018725c03fc74562089ca8b84395e158bc00cba89f",
+      "sdk_S3_IMDS_query_GETs": 3988,
+      "sdk_S3_IMDS_query_consumed_payload": 1223001728
+    }
+  },
+  "canonical_f64_oracle_recomputed": true,
+  "checks": {
+    "no_process_CPU_regression": true,
+    "no_process_wall_regression": true,
+    "no_query_CPU_regression": true,
+    "no_query_wall_regression": true,
+    "p95_AB1": true,
+    "p95_AB2": true,
+    "same_quality": true
+  },
+  "disposition": "RETAIN_MEMORY_LATENCY_GET_BYTE_PARETO_ON_DEVELOPMENT_PANEL",
+  "lifecycle_billing_claim": false,
+  "population_claim": false,
+  "provider_cache_eviction_claim": false,
+  "ratios": {
+    "external_CPU_ns": 0.5747413679778139,
+    "external_wall_ns": 0.5722409057008099,
+    "query_CPU_ns": 0.5559043895811763,
+    "query_wall_ns": 0.5542391203021937
+  },
+  "schema": "borsuk-source-cache-fp32-root-verification-v1",
+  "truth_recount": true,
+  "vendor_claim": false
+}
