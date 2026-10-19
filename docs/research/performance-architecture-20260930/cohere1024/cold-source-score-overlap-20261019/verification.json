@@ -1,0 +1,29 @@
+{
+  "S3_archive": {
+    "bytes": 8746250,
+    "key": "research/semantic-router/20261019/cold-source-score-overlap-screen68-a0002/evidence.tar.gz",
+    "sha256": "929998c2591c92b60d7da65f5513b34bbd04f6ba47e78a884e99119dbbcf82d2"
+  },
+  "all_272_scores_plans_shortlists_charges_match_closed_reference": true,
+  "all_cells_hits": 674,
+  "denominator": 680,
+  "eight_S3_cell_checkpoints_and_archive_checksum_verified": true,
+  "next_falsifier": "prospective unchanged-source full1000 cache-off paired confirmation, same tail gates; preserve failed panel",
+  "no_retries_or_transport_errors_in_queries": true,
+  "original_panel_fail_preserved": true,
+  "p95_paired_B_over_A": [
+    0.8804205994120508,
+    1.004068835556197
+  ],
+  "panel_disposition": "RETAIN_RESEARCH_CANDIDATE_MEAN_GAIN_MIXED_TAILS_NO_DEFAULT_PROMOTION",
+  "physical_query_GETs_per_cell": 11678,
+  "production_ready_or_vendor_win_claim": false,
+  "query_CPU_B_over_A": 0.9776987651578767,
+  "report_sha256": "2682c9f1869d033495492cbca22261f4bba3226369534c7959af6e3c6fb45d1d",
+  "schema": "borsuk-cold-overlap-independent-screen-verification-v1",
+  "screen_all_gates_pass": false,
+  "source_cache_bytes": 0,
+  "valid": true,
+  "verified_payload_bytes_per_cell": 3481321088,
+  "wall_B_over_A": 0.8555351789715899
+}
