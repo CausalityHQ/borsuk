@@ -1,0 +1,41 @@
+{
+  "S3_operations": false,
+  "checked_at_utc": "2026-10-19T11:47:04.267341+00:00",
+  "checks": [
+    "Python syntax compilation",
+    "bash -n launch-root.sh aws-bounded.sh",
+    "8 pure config cases with per-arm headers/caller/model and reference metadata",
+    "qualified cd8 and base9902 HEAD:crates equal ab73789",
+    "single causal semantic limit difference after cache zero normalization"
+  ],
+  "earlier_failed_ssm": "69bf1170-f4f1-4908-a5b3-c2248a189591",
+  "failure_fixed": "qualified tree identifies HEAD:crates, not entire repository tree; verified with c2339e74-3ba2-43c2-9c3d-a8cfb5baa746",
+  "files_sha256": {
+    "README.md": "271f5a5f63b486b7219649f9c7fc7db18b6925440920c2464c897851eff3d7c6",
+    "authorities.json": "e49837cb803419420183c71fd38303d5449c4d64cd5ed2a1e628ca2cbbea0cfc",
+    "aws-bounded.sh": "9c423af68ee51ec2b6ae6129b2945e48014c022d0fb838baea27861b79bd5926",
+    "closed-references.json": "8552cbcdb4c39806ee84199fb3fad278916318586033e05ecae70efac9b8b176",
+    "frozeninputs/A-config.json": "222192350aaf17f4550a6fd4517564786c0eb07efaec22723ab91fab40b44424",
+    "frozeninputs/A-expected.json": "b63bf6cc7ba46a57cdd3ba4908204dfd022fd839e7f3d3c395039ba504431730",
+    "frozeninputs/B-config.json": "3d156e09054121356e82b33db6fc1d0b0480f63dc91e80505d52f5139720c8a4",
+    "frozeninputs/B-expected.json": "db3a7b240bf4eff637a01de5d13039ca8b8200af8bb25d366c18035509c64558",
+    "frozeninputs/pins.json": "c7b64eb8700c71b217d948f123c505d94e467ff7a47a4adb18d320d2f27c938e",
+    "launch-root.sh": "4f39246ce91a4fc16cf32047259a6282ecff20b1e1bbebb3b622b215a32e0880",
+    "model-pins.json": "08d89d584e265c63c756d912341cfdc17ded810584b4b958da0ffde25a2a65a8",
+    "protocol.json": "f540a16c4cf05224719ee7493456a8077880a06bd0e5d9f3621f60118531333e",
+    "run-prepared.py": "a0616845bff5c358a395fe0797ded312e4482d16f34acca105201dc9a4a40e4e"
+  },
+  "infra_changes": false,
+  "native_execution": false,
+  "payload_reads": false,
+  "resource_limits": {
+    "cpu": 1,
+    "memory_bytes": 536870912,
+    "seconds": 120,
+    "swap_bytes": 0,
+    "tasks": 128
+  },
+  "schema": "borsuk-cold-breadth48-static-checks-v1",
+  "status": "PASS",
+  "successful_ssm": "77a53b98-6f7d-4849-ac02-84a44902593f"
+}

@@ -1,0 +1,33 @@
+{
+  "48": {
+    "caller_pinned_bytes": 6942450,
+    "diagnostic_pinned_bytes": 262144,
+    "fp32_modeled_memory_bytes": 470249621
+  },
+  "64": {
+    "caller_pinned_bytes": 7010842,
+    "diagnostic_pinned_bytes": 524288,
+    "fp32_modeled_memory_bytes": 471434981
+  },
+  "evidence": {
+    "closed64_screen68_model": 471959813,
+    "current_caller_delta": 160,
+    "formula": "Q1 tracefalse: add arm diagnostic bytes +8*n to caller AND model",
+    "old48_full_caller": 6942290,
+    "old48_full_model": 468017695,
+    "parent_messages": [
+      "immediate-1792410189347546932-2287866",
+      "1792410215819465498-2287866",
+      "immediate-1792410239032832466-2287866",
+      "1792410258775842920-2287866"
+    ],
+    "source_lines": "runner40 LINE_CAP=256*1024;62 PANEL_LINE_CAP=128*1024;1693 shared authcharge;1705 per-arm linecap;1760-1765 caller+runtime+diagnostic*Q;1779 already_pinned_bytes;4399 full64/full48 delta",
+    "source_receipts": {
+      "7f1179a4": "constants/pinned_bytes source read succeeded; command exit1 is trailing absent-name grep, NOT whole-command PASS",
+      "83986825": "Success0 full source read; diagnostic_bytes=2*panel_line_cap; source_authentication_bytes independent of semantic limit",
+      "e5c2baad": "source-qualified full caller64 minus caller48=68392"
+    },
+    "source_score_overlap_bytes": 2231766,
+    "verification": "metadata/source-derived; actual root admission must match exactly"
+  }
+}
