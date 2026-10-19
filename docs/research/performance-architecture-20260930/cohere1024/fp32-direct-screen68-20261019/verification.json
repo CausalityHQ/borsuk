@@ -1,0 +1,194 @@
+{
+  "CPU_B_over_A": 2.595468985279803,
+  "all_eight_native_reader_exits_zero": true,
+  "all_returned_ID_changes_including_net_zero": [],
+  "arms": {
+    "A1": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "cpu_ns": 9951565115,
+      "denominator": 680,
+      "hits": 674,
+      "modeled_bytes": 469727911,
+      "p_ns": {
+        "0.5": 255356197,
+        "0.9": 479554492,
+        "0.95": 487963260,
+        "0.99": 501044241
+      },
+      "raw_sha256": "dc1c09a5d3fc6ec1a4bf491b983e4818f1bcf4b0cdbf248f075bb254b34055a3",
+      "rss_bytes": 144941056,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11678,
+        "verified_bytes": 3481321088
+      },
+      "wall_ns": 20468750509
+    },
+    "A2": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "cpu_ns": 9895579808,
+      "denominator": 680,
+      "hits": 674,
+      "modeled_bytes": 469727911,
+      "p_ns": {
+        "0.5": 234122498,
+        "0.9": 446075181,
+        "0.95": 459795677,
+        "0.99": 551417536
+      },
+      "raw_sha256": "4259090bb045adcd627f71b3a31b452f930fddabcc6bfcc688e00945ed507218",
+      "rss_bytes": 149311488,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11678,
+        "verified_bytes": 3481321088
+      },
+      "wall_ns": 19033176325
+    },
+    "B1": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 10669109248
+        }
+      },
+      "cpu_ns": 25215404581,
+      "denominator": 680,
+      "hits": 674,
+      "modeled_bytes": 1348145447,
+      "p_ns": {
+        "0.5": 445456994,
+        "0.9": 534302974,
+        "0.95": 550743092,
+        "0.99": 604546393
+      },
+      "raw_sha256": "9e84892b5178dd4f326dc832ecc41896ea3fded2608cd52e959f7c698e333b2c",
+      "rss_bytes": 295542784,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 9656,
+        "verified_bytes": 10673574400
+      },
+      "wall_ns": 30827604242
+    },
+    "B2": {
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 10669109248
+        }
+      },
+      "cpu_ns": 26297244513,
+      "denominator": 680,
+      "hits": 674,
+      "modeled_bytes": 1348145447,
+      "p_ns": {
+        "0.5": 458416989,
+        "0.9": 538018925,
+        "0.95": 564267267,
+        "0.99": 595740504
+      },
+      "raw_sha256": "5febecd10a29b48b384f99c7b81bdd84e17611b319ebca46e2da6eb82e7666c9",
+      "rss_bytes": 296099840,
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 9656,
+        "verified_bytes": 10673574400
+      },
+      "wall_ns": 31514638756
+    }
+  },
+  "checks": {
+    "no_net_recall_loss": true,
+    "no_query_CPU_regression": false,
+    "no_query_wall_regression": false,
+    "p95_AB1": false,
+    "p95_AB2": false
+  },
+  "disposition": "VALID_LATENCY_NEGATIVE_GET_BYTE_PARETO_ON_PANEL",
+  "original_controller_independent_f64_oracle_passed": true,
+  "per_query_hit_count_changes": [],
+  "population_claim": false,
+  "provider_eviction_claim": false,
+  "root_truth_recount": true,
+  "same_arm_repetitions_identical_results_plans_charges": true,
+  "schema": "borsuk-fp32-direct-root-independent-verification-v1",
+  "source_semantic_population_equal": true,
+  "truth_ID_swaps_including_net_zero": [],
+  "vendor_claim": false,
+  "wall_B_over_A": 1.5782076469328312
+}
