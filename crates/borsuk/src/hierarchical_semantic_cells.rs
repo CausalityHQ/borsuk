@@ -4593,6 +4593,11 @@ mod tests {
                 sq8.extend(vector.iter().map(|&v| v as u8));
             }
         }
+        let row_digests = artifact(
+            &dir.join("canonical_row_digests.bin"),
+            &canonical.chunks_exact(8 + dimensions * 4)
+                .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+        );
         let canonical = artifact(&dir.join("canonical"), &canonical);
         let records = artifact(&dir.join("codes"), &codes);
         let sq8 = artifact(&dir.join("sq8"), &sq8);
@@ -4638,7 +4643,8 @@ mod tests {
                 "diverse_graph_sha256":"0".repeat(64), "diverse_graph_resident_bytes":1},
             "sq8_object_sha256": sq8.sha256, "sq8_object_key":format!("objects/{}",sq8.sha256), "sq8_etag":"fixture",
             "canonical": {"rows":rows,"dimensions":dimensions,"bytes":canonical.bytes,
-                "sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256)},
+                "sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256),
+                "row_digests_bytes":row_digests.bytes,"row_digests_sha256":row_digests.sha256},
             "low":vec![0_f32;dimensions],
             "step":vec![if quantized_sq8 { 1_f32 / 255. } else { 1. };dimensions]
         })).unwrap());

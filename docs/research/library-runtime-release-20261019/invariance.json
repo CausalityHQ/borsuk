@@ -1,0 +1,138 @@
+{
+  "base": "1ef54ea35c112467611fe8693f5225a65c144b94",
+  "checks": {
+    "crates/borsuk/src/fine_sq8_groups.rs": {
+      "production_source_bytes_identical": true,
+      "production_source_sha256": "cd0c2089513874874a776fa19cdeac6a743d4f7829cfe15252e1412c3544352b",
+      "existing_assertions_unchanged": true,
+      "changed_ranges": [
+        {
+          "old_start_1based": 5360,
+          "old_line_count": 0,
+          "new_start_1based": 5360,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 5388,
+          "old_line_count": 1,
+          "new_start_1based": 5393,
+          "new_line_count": 1
+        }
+      ],
+      "source_sha256": "8abca95550e4ea4e3e8c43c72373bf06be87f842e93a3292145a2671a6fd64a7"
+    },
+    "crates/borsuk/src/hierarchical_semantic_cells.rs": {
+      "production_source_bytes_identical": true,
+      "production_source_sha256": "f1ab8a1d87043275e20db8add44411daf6e1a8e5347043ab00a09f5334187c69",
+      "existing_assertions_unchanged": true,
+      "changed_ranges": [
+        {
+          "old_start_1based": 4596,
+          "old_line_count": 0,
+          "new_start_1based": 4596,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 4641,
+          "old_line_count": 1,
+          "new_start_1based": 4646,
+          "new_line_count": 2
+        }
+      ],
+      "source_sha256": "a0d931717a4fb48815d81f7a2bcd6ba22f5bd5b57010c6104d4837c1da74b956"
+    },
+    "crates/borsuk/src/bin/hierarchical_semantic_cells.rs": {
+      "production_source_bytes_identical": true,
+      "production_source_sha256": "e8490ca930739e3bd484847f51dc5951c59972c9a5826290116716b971f04a9d",
+      "existing_assertions_unchanged": true,
+      "changed_ranges": [
+        {
+          "old_start_1based": 1920,
+          "old_line_count": 0,
+          "new_start_1based": 1920,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 1945,
+          "old_line_count": 1,
+          "new_start_1based": 1950,
+          "new_line_count": 1
+        },
+        {
+          "old_start_1based": 1952,
+          "old_line_count": 1,
+          "new_start_1based": 1957,
+          "new_line_count": 2
+        },
+        {
+          "old_start_1based": 2865,
+          "old_line_count": 0,
+          "new_start_1based": 2871,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 2890,
+          "old_line_count": 1,
+          "new_start_1based": 2901,
+          "new_line_count": 1
+        },
+        {
+          "old_start_1based": 2897,
+          "old_line_count": 1,
+          "new_start_1based": 2908,
+          "new_line_count": 2
+        },
+        {
+          "old_start_1based": 3331,
+          "old_line_count": 0,
+          "new_start_1based": 3343,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 3343,
+          "old_line_count": 1,
+          "new_start_1based": 3360,
+          "new_line_count": 1
+        },
+        {
+          "old_start_1based": 3350,
+          "old_line_count": 1,
+          "new_start_1based": 3367,
+          "new_line_count": 2
+        },
+        {
+          "old_start_1based": 3660,
+          "old_line_count": 0,
+          "new_start_1based": 3678,
+          "new_line_count": 5
+        },
+        {
+          "old_start_1based": 3672,
+          "old_line_count": 1,
+          "new_start_1based": 3695,
+          "new_line_count": 1
+        },
+        {
+          "old_start_1based": 3679,
+          "old_line_count": 1,
+          "new_start_1based": 3702,
+          "new_line_count": 2
+        }
+      ],
+      "source_sha256": "5ec28d2a31ae6f767b1c81242d3191388f0cfab460106ce1430c6c1ba47d81dd"
+    }
+  },
+  "constructors_audited": 6,
+  "production_schema_api_changes": false,
+  "all_changes_inside_cfg_test": true,
+  "reuse_prior_passes": {
+    "original_passes": 2049,
+    "affected_original_passes_rerun": 45,
+    "unaffected_passes_reused": 2004,
+    "original_failures": 28,
+    "ignored": 9
+  },
+  "release_build_required": false,
+  "release_reason": "No new production executable/measurement delivered. Existing baseline/replay source fingerprints bind unchanged files; full-source fine/hierarchical diagnostic identity values change and old receipts retain original bindings.",
+  "qualification_scope": "Synthetic native fixture repair; not new scientific performance evidence; original0cddd/Full1000 evidence immutable."
+}

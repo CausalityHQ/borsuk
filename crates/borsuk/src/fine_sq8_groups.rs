@@ -5357,6 +5357,11 @@ pub mod pack_diagnostic {
                         sq8.extend(codes);
                         order.extend((id as u64).to_le_bytes());
                     }
+                    let row_digests = pin(
+                        &dir.join("canonical_row_digests.bin"),
+                        &canonical.chunks_exact(8 + 3 * 4)
+                            .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+                    );
                     let canonical = pin(&dir.join("canonical"), &canonical);
                     let records = pin(&dir.join("codes"), &records);
                     let sq8 = pin(&dir.join("sq8"), &sq8);
@@ -5385,7 +5390,7 @@ pub mod pack_diagnostic {
                         "schema":crate::two_bit_generation::SCHEMA,"source_layout":crate::two_bit_generation::SourceLayout::FlatRecords,"generation":1,"base_epoch":0,"plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
                         "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),"graph_resident_bytes":1,
                         "diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},"sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
-                        "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step
+                        "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,"object_key":format!("objects/{}",canonical.sha256),"row_digests_bytes":row_digests.bytes,"row_digests_sha256":row_digests.sha256},"low":low,"step":step
                     })).unwrap());
                     let primary = dir.join("primary");
                     let receipt = crate::hierarchical_semantic_cells::build(

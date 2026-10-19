@@ -1,0 +1,8 @@
+{
+  "source_qualification_commit": "0cddd79569db2f92bf2079f1d9bbc3b90759a895",
+  "crates_tree": "ab0730bfc49fe9587705275a464cb54f3813c1d2",
+  "test_elf_sha256": "9d6faf7d0f713241540c5531e9164f4d2ed0350c448ce4931745a2140ff1b89d",
+  "elf_bytes": 291110816,
+  "provenance_log": "/mnt/borsuk-workspace/evidence/fp32-concurrent-native-a0001/library-fp32.log",
+  "science_collected_terminal_success": true
+}

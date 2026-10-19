@@ -1,0 +1,89 @@
+{
+  "status": "QUALIFIED_NATIVE_FIXTURE_REPAIR",
+  "commit": "5cee36af5a11b1dd80352cce39e8c58dc6af9f61",
+  "crates_tree": "0f73631f67df77e20f186ffcdeaa27958c5aa3a1",
+  "checks": {
+    "affected-compile": {
+      "native_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib --bin hierarchical_semantic_cells --no-run",
+      "started": "Mon Oct 19 21:39:21 UTC 2026",
+      "terminal": "Mon Oct 19 21:40:39 UTC 2026",
+      "summaries": [],
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "3f6ee6c49f84270945696c66a1f05e655cd5b0aebbbbd89727e6807303447fb1"
+    },
+    "fine-library": {
+      "native_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib fine_sq8_groups:: -- --test-threads=2",
+      "started": "Mon Oct 19 21:40:39 UTC 2026",
+      "terminal": "Mon Oct 19 21:41:03 UTC 2026",
+      "summaries": [
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 2055 filtered out; finished in 23.98s"
+      ],
+      "stdout_sha256": "91c3042a0da40f8f6a2be30876deaca54054607c3d33930dfdecdd64c7031dec",
+      "stderr_sha256": "d867cb8a3f40a23cb7b256089e38dcc268d277c6772ffce583ef591cef65398e"
+    },
+    "hierarchical-library": {
+      "native_exit": 0,
+      "command": "cargo test --locked -p borsuk --lib hierarchical_semantic_cells:: -- --test-threads=2",
+      "started": "Mon Oct 19 21:41:03 UTC 2026",
+      "terminal": "Mon Oct 19 21:41:05 UTC 2026",
+      "summaries": [
+        "test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 2044 filtered out; finished in 1.65s"
+      ],
+      "stdout_sha256": "38da017544613ded409fe53567c109a157687d338ff83dae0dff93ba6ac203fa",
+      "stderr_sha256": "ca8afbe1cb861756c58ff701673d34a52cf27394504a1566ab0b83b9a7532206"
+    },
+    "hierarchical-bin": {
+      "native_exit": 0,
+      "command": "cargo test --locked -p borsuk --bin hierarchical_semantic_cells -- --test-threads=2",
+      "started": "Mon Oct 19 21:41:05 UTC 2026",
+      "terminal": "Mon Oct 19 21:41:27 UTC 2026",
+      "summaries": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.01s"
+      ],
+      "stdout_sha256": "3a928616ca5299704409edf84f17c79730feb25155d0e3170eb3706496a89b74",
+      "stderr_sha256": "9b622c8b2dcf3b57629e0dcf366771cf78e6591aecd8fcb91f4f0f4737c398e1"
+    },
+    "clippy": {
+      "native_exit": 0,
+      "command": "cargo clippy --locked --workspace --all-targets -- -D clippy::correctness -D clippy::suspicious",
+      "started": "Mon Oct 19 21:41:27 UTC 2026",
+      "terminal": "Mon Oct 19 21:42:21 UTC 2026",
+      "summaries": [],
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "4b743509e07d175cba0f4fc1ee61ea98ca6dd8133f425def747104cb443794d2"
+    },
+    "test-build": {
+      "native_exit": 0,
+      "command": "env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh",
+      "started": "Mon Oct 19 21:42:21 UTC 2026",
+      "terminal": "Mon Oct 19 21:44:10 UTC 2026",
+      "summaries": [],
+      "stdout_sha256": "23bb63860588886e0e4d6377c2f30c17e909a2ac6e6b2d93df82ede089b1c9d1",
+      "stderr_sha256": "dd5c76ac9b9638b0a4337a42cb26c07c2827274be3507cf067c527a71292673c"
+    }
+  },
+  "original_28_failures_all_now_pass": true,
+  "fresh_library_passes": 73,
+  "fresh_binary_passes": 20,
+  "unaffected_library_passes_reused": 2004,
+  "original_library_passes": 2049,
+  "original_library_ignored": 9,
+  "production_and_assertion_invariance": "final-invariance.json",
+  "controller_exit": 0,
+  "main_pid": 0,
+  "cgroup_has_processes": false,
+  "attempt1_preserved": true,
+  "native_resources": {
+    "affinity": "0-7",
+    "cpu_percent": 800,
+    "memory_gib": 24,
+    "swap_bytes": 0,
+    "tasks": 1024,
+    "build_jobs": 6,
+    "runtime_limit_seconds": 1050
+  },
+  "release_build": "not required; baseline/replay pinned files unchanged, no new production executable or measurement",
+  "qualification": "Synthetic native fixture-runtime repair only. Historical production0cddd and Full1000 evidence remain immutable; changed full-source diagnostic fingerprints do not rebind old receipts."
+}

@@ -1,0 +1,119 @@
+{
+  "native_exit": "101",
+  "controller_exit": "101",
+  "stdout_sha256": "bf1d1a48e4442be7051a0091230a68623ebf532acb9980b9ddb458ea341c2336",
+  "failures": [
+    {
+      "test": "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount",
+      "panic_excerpt": "\nthread 'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_actual_native_pipeline_selection_no_gt_and_sealed_recount' (9326) panicked at crates/borsuk/src/fine_sq8_groups.rs:5409:22:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "test": "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_admission_underflow_and_same_size_bindings",
+      "panic_excerpt": "\nthread 'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_admission_underflow_and_same_size_bindings' (9327) panicked at crates/borsuk/src/fine_sq8_groups.rs:5409:22:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid",
+      "panic_excerpt": "\nthread 'fine_sq8_groups::pack_diagnostic::sq4_diagnostic::pq_residual_source::tests::pq_residual_pipeline_pass_mutation_eof_partial_sync_seal_and_late_invalid' (9330) panicked at crates/borsuk/src/fine_sq8_groups.rs:5409:22:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::balanced_and_identical_builder_memberships_are_unchanged",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::balanced_and_identical_builder_memberships_are_unchanged' (9684) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4789:49:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::cell_local_block_nomination_omits_other_blocks_even_for_tied_codes' (9686) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5675:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::identical_geometry_is_bounded_and_reproducible_without_truth' (9687) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5548:40:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::identical_sample_fallback_preserves_projected_child_sum_order",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::identical_sample_fallback_preserves_projected_child_sum_order' (9688) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4836:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 230)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::nomination_global_finds_leaf_hidden_by_hierarchy_pruning",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::nomination_global_finds_leaf_hidden_by_hierarchy_pruning' (9690) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5177:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::nomination_unpruned_parity_caps_source_binding_and_failure_charges",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::nomination_unpruned_parity_caps_source_binding_and_failure_charges' (9691) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5236:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 230)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::nonunit_query_nonzero_mean_preserves_native_sq2_scoring_and_nomination' (9692) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5328:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_authenticated_open_and_selected_fetch_refuse_corruption",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_authenticated_open_and_selected_fetch_refuse_corruption' (9693) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4086:48:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_builder_captures_actual_capacity_last_left_key",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_builder_captures_actual_capacity_last_left_key' (9694) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4053:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 234)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_delete_all_underfill_and_capacity_refusal",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_delete_all_underfill_and_capacity_refusal' (9696) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4086:48:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_full_scanner_matches_independent_sq8",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_full_scanner_matches_independent_sq8' (9697) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4276:65:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_metadata_cap_refuses_before_missing_heavy_files",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_metadata_cap_refuses_before_missing_heavy_files' (9698) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4086:48:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_pair_individually_fit_combined_overcap_has_zero_heavy_opens",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_pair_individually_fit_combined_overcap_has_zero_heavy_opens' (9699) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4086:48:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_pinned_replace_owner_absent_replica_present",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_pinned_replace_owner_absent_replica_present' (9700) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4086:48:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 231)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::overlap_replay_primary_parity_and_mismatch",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::overlap_replay_primary_parity_and_mismatch' (9701) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4036:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 230)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::partition_format_and_receipt_reject_obsolete_or_incomplete_artifacts' (9703) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5158:33:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 228)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::resident_directory_preload_is_admitted_charged_and_has_no_query_reads' (9704) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5735:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::resident_preload_rejects_corrupt_unused_interior_page' (9705) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5773:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 232)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::semantic_cells_do_not_close_over_old_pages_and_keep_unchanged_ranking' (9706) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5471:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 236)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::skewed_builder_is_lossless_deterministic_and_preserves_sq2_sq8_tail_ranking' (9707) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:4864:40:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 234)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::source_id_binding_budgets_and_corruption_fail_closed_with_charges' (9708) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5591:9:\nassertion failed: build(&config,\n                &temp.path().join(\"wrong-seed\")).unwrap_err().to_string().contains(\"current fixed SQ2 seed\")\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::source_probe_cap_binding_tamper_missing_id_fifo_and_symlink_fail_closed' (9709) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:3455:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 234)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::source_probe_raw_identity_native_score_top24_and_no_query_io",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::source_probe_raw_identity_native_score_top24_and_no_query_io' (9711) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:3455:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 234)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::source_probe_shortcell_builder_and_original_span_tamper",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::source_probe_shortcell_builder_and_original_span_tamper' (9712) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:3455:45:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 228)\n"
+    },
+    {
+      "test": "hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges",
+      "panic_excerpt": "\nthread 'hierarchical_semantic_cells::tests::whole_cell_matches_two_stage_with_one_wave_and_full_payload_charges' (9713) panicked at crates/borsuk/src/hierarchical_semantic_cells.rs:5416:47:\ncalled `Result::unwrap()` on an `Err` value: Error(\"missing field `row_digests_bytes`\", line: 1, column: 236)\n\n"
+    }
+  ]
+}

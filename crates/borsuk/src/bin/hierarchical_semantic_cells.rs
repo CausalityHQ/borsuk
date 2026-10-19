@@ -1917,6 +1917,11 @@ mod tests {
             sq8_body.extend(codes);
             order.extend((id as u64).to_le_bytes());
         }
+        let row_digests = probe_artifact(
+            &dispersed.join("canonical_row_digests.bin"),
+            &canonical.chunks_exact(8 + 3 * 4)
+                .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+        );
         let canonical = probe_artifact(&dispersed.join("canonical"), &canonical);
         let records = probe_artifact(&dispersed.join("codes"), &records);
         let sq8_source = probe_artifact(&dispersed.join("sq8"), &sq8_body);
@@ -1942,14 +1947,15 @@ mod tests {
             .unwrap(),
         );
         let generation = probe_artifact(&dispersed.join("generation"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v13","generation":1,"base_epoch":0,
             "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
             "sq8_object_sha256":sq8_source.sha256,"sq8_object_key":format!("objects/{}",sq8_source.sha256),"sq8_etag":"fixture",
             "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,
-                "object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step
+                "object_key":format!("objects/{}",canonical.sha256),"row_digests_bytes":row_digests.bytes,
+                "row_digests_sha256":row_digests.sha256},"low":low,"step":step
         })).unwrap());
         let primary_path = dispersed.join("primary");
         let receipt = borsuk::hierarchical_semantic_cells::build(
@@ -2862,6 +2868,11 @@ mod tests {
             sq8_body.extend(codes);
             order.extend((id as u64).to_le_bytes());
         }
+        let row_digests = probe_artifact(
+            &dispersed.join("canonical_row_digests.bin"),
+            &canonical.chunks_exact(8 + 3 * 4)
+                .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+        );
         let canonical = probe_artifact(&dispersed.join("canonical"), &canonical);
         let records = probe_artifact(&dispersed.join("codes"), &records);
         let sq8_source = probe_artifact(&dispersed.join("sq8"), &sq8_body);
@@ -2887,14 +2898,15 @@ mod tests {
             .unwrap(),
         );
         let generation = probe_artifact(&dispersed.join("generation"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v13","generation":1,"base_epoch":0,
             "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
             "sq8_object_sha256":sq8_source.sha256,"sq8_object_key":format!("objects/{}",sq8_source.sha256),"sq8_etag":"fixture",
             "canonical":{"rows":n,"dimensions":3,"bytes":canonical.bytes,"sha256":canonical.sha256,
-                "object_key":format!("objects/{}",canonical.sha256)},"low":low,"step":step
+                "object_key":format!("objects/{}",canonical.sha256),"row_digests_bytes":row_digests.bytes,
+                "row_digests_sha256":row_digests.sha256},"low":low,"step":step
         })).unwrap());
         let primary_path = dispersed.join("primary");
         let receipt = borsuk::hierarchical_semantic_cells::build(
@@ -3328,6 +3340,11 @@ mod tests {
             sq8.extend_from_slice(&id.to_le_bytes()); sq8.extend_from_slice(&1_f32.to_le_bytes());
             sq8.extend(vector.map(|value| value as u8)); order.extend_from_slice(&(id as u64).to_le_bytes());
         }
+        let row_digests = probe_artifact(
+            &dir.join("canonical_row_digests.bin"),
+            &canonical.chunks_exact(8 + 2 * 4)
+                .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+        );
         let canonical = probe_artifact(&dir.join("pair-canonical"), &canonical);
         let records = probe_artifact(&dir.join("pair-codes"), &records);
         let sq8 = probe_artifact(&dir.join("pair-sq8"), &sq8);
@@ -3340,14 +3357,15 @@ mod tests {
             page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
         }).unwrap());
         let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v13","generation":1,"base_epoch":0,
             "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
             "sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
             "canonical":{"rows":135,"dimensions":2,"bytes":canonical.bytes,"sha256":canonical.sha256,
-                "object_key":format!("objects/{}",canonical.sha256)},"low":[0.,0.],"step":[1.,1.]
+                "object_key":format!("objects/{}",canonical.sha256),"row_digests_bytes":row_digests.bytes,
+                "row_digests_sha256":row_digests.sha256},"low":[0.,0.],"step":[1.,1.]
         })).unwrap());
         let original = BuildConfig { schema:borsuk::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
             generation, plane, canonical, order, records, mean, sq8, cell_rows:32, sample_rows:32, max_depth:24,
@@ -3657,6 +3675,11 @@ mod tests {
             sq8.extend_from_slice(&id.to_le_bytes()); sq8.extend_from_slice(&1_f32.to_le_bytes());
             sq8.extend(vector.map(|value| value as u8)); order.extend_from_slice(&(id as u64).to_le_bytes());
         }
+        let row_digests = probe_artifact(
+            &dir.join("canonical_row_digests.bin"),
+            &canonical.chunks_exact(8 + 2 * 4)
+                .flat_map(|record| Sha256::digest(record)).collect::<Vec<_>>(),
+        );
         let canonical = probe_artifact(&dir.join("pair-canonical"), &canonical);
         let records = probe_artifact(&dir.join("pair-codes"), &records);
         let sq8 = probe_artifact(&dir.join("pair-sq8"), &sq8);
@@ -3669,14 +3692,15 @@ mod tests {
             page_digest_sha256:"0".repeat(64), query_or_truth_used:false,
         }).unwrap());
         let generation = probe_artifact(&dir.join("pair-generation.json"), &serde_json::to_vec(&json!({
-            "schema":"borsuk-two-bit-generation-v12","generation":1,"base_epoch":0,
+            "schema":"borsuk-two-bit-generation-v13","generation":1,"base_epoch":0,
             "source_layout":borsuk::two_bit_generation::SourceLayout::FlatRecords,
             "plane_manifest_sha256":plane.sha256,"page_manifest_sha256":"0".repeat(64),
             "discovery":{"mode":"graph","centroids_sha256":"0".repeat(64),"graph_sha256":"0".repeat(64),
                 "graph_resident_bytes":1,"diverse_graph_sha256":"0".repeat(64),"diverse_graph_resident_bytes":1},
             "sq8_object_sha256":sq8.sha256,"sq8_object_key":format!("objects/{}",sq8.sha256),"sq8_etag":"fixture",
             "canonical":{"rows":128,"dimensions":2,"bytes":canonical.bytes,"sha256":canonical.sha256,
-                "object_key":format!("objects/{}",canonical.sha256)},"low":[0.,0.],"step":[1.,1.]
+                "object_key":format!("objects/{}",canonical.sha256),"row_digests_bytes":row_digests.bytes,
+                "row_digests_sha256":row_digests.sha256},"low":[0.,0.],"step":[1.,1.]
         })).unwrap());
         let original = BuildConfig { schema:borsuk::hierarchical_semantic_cells::BUILD_SCHEMA.into(),
             generation, plane, canonical, order, records, mean, sq8, cell_rows:32, sample_rows:32, max_depth:24,
