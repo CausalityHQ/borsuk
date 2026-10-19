@@ -3855,7 +3855,11 @@ impl TwoBitGeneration {
         if self
             .byte_window
             .as_ref()
-            .is_some_and(|window| !window.admits_record(self.pages.dimensions() * 4 + 8))
+            .is_some_and(|window| !window.admits_record(if limits.coalesce {
+                    limits.max_bytes
+                } else {
+                    self.pages.dimensions() * 4 + 8
+                }))
         {
             return Err(bad("FP32 byte window"));
         }
@@ -3892,13 +3896,15 @@ impl TwoBitGeneration {
             router: base.router_stats,
             failure,
         };
-        let width = self.pages.dimensions() * 4 + 8;
         let mut nominees = base.ranked.candidates.clone();
         nominees.sort_unstable_by_key(|h| h.ordinal);
-        let ranges = nominees
-            .iter()
-            .map(|h| h.ordinal * width..(h.ordinal + 1) * width)
-            .collect::<Vec<_>>();
+        let ordinals = nominees.iter().map(|h| h.ordinal).collect::<Vec<_>>();
+        let ranges = crate::fp32_rerank::plan_ranges(
+            &ordinals, self.rows(), self.pages.dimensions(), limits,
+        ).ok_or_else(|| charged(RankedSq8Failure {
+            error: crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata,
+            stats: Sq8ReadStats::default(),
+        }))?;
         let (exact, canonical_stats) = if ranges.is_empty() {
             (Vec::new(), Sq8ReadStats::default())
         } else {
@@ -3915,14 +3921,11 @@ impl TwoBitGeneration {
                 self.byte_window.as_ref(),
                 None,
                 |offset, bytes| {
-                    let ordinal = offset / width;
-                    let expected = nominees
-                        .binary_search_by_key(&ordinal, |h| h.ordinal)
-                        .map_err(|_| crate::sq8_s3_range::RangeFetchError::UnexpectedMetadata)?;
-                    crate::fp32_rerank::authenticate(
+                    crate::fp32_rerank::authenticate_range(
+                        offset,
                         &bytes,
-                        &nominees[expected],
-                        &self.canonical_row_digests[ordinal * 32..(ordinal + 1) * 32],
+                        &nominees,
+                        &self.canonical_row_digests,
                         normalized.as_ref(),
                     )
                 },
@@ -3930,7 +3933,11 @@ impl TwoBitGeneration {
             .await
             .map_err(charged)?
         };
-        let candidates = crate::fp32_rerank::merge(exact, normalized.as_ref(), top_k, mutations)
+        let mut flattened = Vec::with_capacity(nominees.len());
+        for group in exact {
+            flattened.extend(group);
+        }
+        let candidates = crate::fp32_rerank::merge(flattened, normalized.as_ref(), top_k, mutations)
             .map_err(|error| {
                 charged(RankedSq8Failure {
                     error,
@@ -3941,6 +3948,7 @@ impl TwoBitGeneration {
             base,
             candidates,
             canonical_stats,
+            canonical_ranges: ranges,
             rerank_wall_ns: started.elapsed().as_nanos(),
         })
     }
@@ -12966,6 +12974,13 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_http_control_plan_scalar_oracle_and_failure_charges() {
+        fp32_http_case(false).await;
+    }
+    #[tokio::test]
+    async fn fp32_http_coalescing_plan_scalar_oracle_and_failure_charges() {
+        fp32_http_case(true).await;
+    }
+    async fn fp32_http_case(coalesce: bool) {
         use crate::fp32_rerank::Fp32RerankLimits;
         use futures_util::TryStreamExt;
         use sha2::{Digest, Sha256};
@@ -13016,8 +13031,9 @@ mod source_walk_tests {
             .await
             .unwrap();
         let limits = Fp32RerankLimits {
+            coalesce,
             shortlist: 16,
-            max_bytes: 16 * 36,
+            max_bytes: (if coalesce {33} else {16}) * 36,
             max_gets: 16,
             max_parallel_gets: 3,
         };
@@ -13039,11 +13055,14 @@ mod source_walk_tests {
             .iter()
             .filter(|r| r.0 == canonical_key)
             .collect::<Vec<_>>();
-        assert_eq!(rows.len(), 16);
+        let planned_gets = exact.canonical_ranges.len();
+        assert_eq!(rows.len(), planned_gets);
+        assert_eq!(planned_gets, if coalesce {1} else {16});
         for r in rows {
             assert!(!r.1);
             let (start, end) = r.2.unwrap();
-            assert_eq!(end - start, 36);
+            assert_eq!((end - start) % 36, 0);
+            assert!(exact.canonical_ranges.contains(&(start..end)));
             assert_eq!(start % 36, 0);
             assert_eq!(r.3.as_deref(), Some(DIRECT_ETAG));
             assert!(
@@ -13078,6 +13097,58 @@ mod source_walk_tests {
         for (hit, want) in exact.candidates.iter().zip(oracle) {
             assert_eq!((hit.id, hit.score.to_bits()), (want.0, want.1.to_bits()));
         }
+        let window_limits = Fp32RerankLimits {
+            coalesce: true,
+            max_bytes: 16 * 1024,
+            ..limits
+        };
+        generation = generation
+            .with_byte_window_limits(window_limits.max_bytes - 1, 128, 16384)
+            .unwrap();
+        let before = fixture.snapshot().requests.len();
+        assert!(matches!(
+            generation
+                .search_fp32_with_store(fixture.reader.store(), &query, 10, None, window_limits)
+                .await,
+            Err(TwoBitGenerationError::Invalid("FP32 byte window"))
+        ));
+        assert_eq!(
+            fixture.snapshot().requests.len(),
+            before,
+            "reject before SOURCE/SQ8"
+        );
+        generation
+            .search_fp32_with_store(
+                fixture.reader.store(),
+                &query,
+                10,
+                None,
+                Fp32RerankLimits {
+                    coalesce: false,
+                    ..window_limits
+                },
+            )
+            .await
+            .unwrap();
+        generation = generation
+            .with_byte_window_limits(window_limits.max_bytes, 128, 16384)
+            .unwrap();
+        let boundary = generation
+            .search_fp32_with_store(fixture.reader.store(), &query, 10, None, window_limits)
+            .await
+            .unwrap();
+        assert_eq!(
+            boundary
+                .candidates
+                .iter()
+                .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                .collect::<Vec<_>>(),
+            exact
+                .candidates
+                .iter()
+                .map(|h| (h.id, h.ordinal, h.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
         let model = generation.fp32_rerank_memory(limits).unwrap();
         generation.limits.max_memory_bytes = model - 1;
         let before = fixture.snapshot().requests.len();
@@ -13088,6 +13159,8 @@ mod source_walk_tests {
             Err(TwoBitGenerationError::Invalid("FP32 rerank memory cap"))
         ));
         assert_eq!(fixture.snapshot().requests.len(), before);
+        generation.limits.max_memory_bytes = model;
+        generation.search_fp32_with_store(fixture.reader.store(), &query, 10, None, limits).await.unwrap();
         generation.limits.max_memory_bytes = tiny.limits.max_memory_bytes;
         for shortlist in [1, 3, 16, 33] {
             let limits = Fp32RerankLimits {
@@ -13106,7 +13179,7 @@ mod source_walk_tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(result.canonical_stats.submitted_gets, shortlist);
+            assert_eq!(result.canonical_stats.submitted_gets, result.canonical_ranges.len());
             assert_eq!(result.candidates.len(), shortlist.min(10));
         }
 
@@ -13122,8 +13195,8 @@ mod source_walk_tests {
                 (control.source_stats, control.ranked.stats),
                 "{fault}"
             );
-            assert_eq!(error.canonical_stats().submitted_gets, 16, "{fault}");
-            assert_eq!(error.canonical_stats().failed_gets, 16, "{fault}");
+            assert_eq!(error.canonical_stats().submitted_gets, planned_gets, "{fault}");
+            assert_eq!(error.canonical_stats().failed_gets, planned_gets, "{fault}");
             assert_eq!(generation.slots.available_permits(), 1);
         }
         fixture.response_fault(None);
@@ -13163,10 +13236,29 @@ mod source_walk_tests {
             .search_fp32_with_store(fixture.reader.store(), &nonunit, 10, None, limits)
             .await
             .unwrap();
-        assert_eq!(recovered.canonical_stats.submitted_gets, 16);
+        assert_eq!(recovered.canonical_stats.submitted_gets, planned_gets);
         assert!(FP32_NORMALIZED_BYTES.with(|n| n.get()) > allocations);
         assert_eq!(generation.slots.available_permits(), 1);
         fixture.finish();
+        if coalesce {
+            let selected = exact.base.ranked.candidates[0].ordinal;
+            let bridge = (exact.canonical_ranges[0].start/36..exact.canonical_ranges[0].end/36)
+                .find(|o| !exact.base.ranked.candidates.iter().any(|h|h.ordinal==*o)).unwrap();
+            for ordinal in [selected, bridge] {
+                let mut corrupt = objects.clone();
+                corrupt.get_mut(&canonical_key).unwrap()[ordinal*36+8] ^= 1;
+                let fixture = DirectHttp::new(corrupt, Instant::now()+Duration::from_secs(90));
+                let mut generation = TwoBitGeneration::open_remote(fixture.reader.store(),
+                    &tiny.prefix,&root_sha,tiny.limits,tiny.temp.path()).await.unwrap();
+                generation.enable_fp32_rerank(fixture.reader.store()).await.unwrap();
+                let failure=generation.search_fp32_with_store(fixture.reader.store(),&query,10,None,limits)
+                    .await.err().unwrap();
+                assert_eq!(failure.canonical_stats().failed_gets,1);
+                assert_eq!(failure.canonical_stats().verified_bytes,0);
+                assert_eq!(generation.slots.available_permits(),1);
+                fixture.finish();
+            }
+        }
         // Authenticated root and ETag are unchanged while every canonical body row is corrupted.
         for row in objects
             .get_mut(&canonical_key)
@@ -13197,9 +13289,9 @@ mod source_walk_tests {
         assert_eq!(
             error.canonical_stats(),
             Sq8ReadStats {
-                submitted_gets: 16,
+                submitted_gets: planned_gets,
                 verified_bytes: 0,
-                failed_gets: 16
+                failed_gets: planned_gets
             }
         );
         assert_eq!(
@@ -13319,6 +13411,15 @@ mod source_walk_tests {
 
     #[tokio::test]
     async fn fp32_mutation_visibility_and_canonical_transport_refusals() {
+        fp32_mutation_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn fp32_coalescing_mutation_visibility_and_canonical_transport_refusals() {
+        fp32_mutation_case(true).await;
+    }
+
+    async fn fp32_mutation_case(coalesce: bool) {
         use crate::fp32_rerank::Fp32RerankLimits;
         use crate::two_bit_mutations::{
             TwoBitMutation, TwoBitMutationLimits, apply_two_bit_mutations,
@@ -13338,8 +13439,9 @@ mod source_walk_tests {
         generation.enable_fp32_rerank(&tiny.store).await.unwrap();
         let query = tiny_query(7);
         let exact = Fp32RerankLimits {
+            coalesce,
             shortlist: 16,
-            max_bytes: 576,
+            max_bytes: if coalesce { 33 * 36 } else { 16 * 36 },
             max_gets: 16,
             max_parallel_gets: 3,
         };
@@ -13347,8 +13449,12 @@ mod source_walk_tests {
             .search_fp32_with_store(&tiny.store, &query, 10, None, exact)
             .await
             .unwrap();
-        let delete = baseline.candidates[0].id;
-        let update = baseline.candidates[1].id;
+        let mut physical = baseline.base.ranked.candidates.clone();
+        physical.sort_by_key(|r| r.ordinal);
+        let deleted_ordinal = physical[7].ordinal;
+        let updated_ordinal = physical[8].ordinal;
+        let delete = physical[7].id;
+        let update = physical[8].id;
         let head =
             crate::two_bit_store::read_two_bit_head(&tiny.store, &ObjectPath::from("tiny/index"))
                 .await
@@ -13417,6 +13523,126 @@ mod source_walk_tests {
             assert_eq!(hit.score.to_bits(), exact_pending.to_bits());
         }
         assert!(result.candidates.windows(2).all(|w| w[0] <= w[1]));
+        let individual = Fp32RerankLimits {
+            coalesce: false,
+            ..exact
+        };
+        let control = generation
+            .search_fp32_with_store(&tiny.store, &query, 10, Some(&snapshot), individual)
+            .await
+            .unwrap();
+        assert_eq!(result.base.plan, control.base.plan);
+        assert_eq!(result.base.source_stats, control.base.source_stats);
+        assert_eq!(result.base.ranked.stats, control.base.ranked.stats);
+        assert_eq!(
+            result
+                .base
+                .ranked
+                .candidates
+                .iter()
+                .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                .collect::<Vec<_>>(),
+            control
+                .base
+                .ranked
+                .candidates
+                .iter()
+                .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            result
+                .candidates
+                .iter()
+                .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                .collect::<Vec<_>>(),
+            control
+                .candidates
+                .iter()
+                .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                .collect::<Vec<_>>()
+        );
+        if coalesce {
+            for ordinal in [deleted_ordinal, updated_ordinal] {
+                assert!(
+                    result
+                        .canonical_ranges
+                        .iter()
+                        .any(|range| range.contains(&(ordinal as usize * 36)))
+                );
+                assert!(
+                    result
+                        .base
+                        .ranked
+                        .candidates
+                        .iter()
+                        .all(|r| r.ordinal != ordinal)
+                );
+            }
+        }
+
+        let keepers = result.base.ranked.candidates[..2]
+            .iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>();
+        let mut previous = snapshot;
+        for keep in [2, 0] {
+            let changes = tiny
+                .sq8
+                .chunks_exact(19)
+                .map(|row| i64::from_le_bytes(row[..8].try_into().unwrap()))
+                .filter(|id| !keepers[..keep].contains(id))
+                .map(|id| TwoBitMutation { id, vector: None })
+                .collect::<Vec<_>>();
+            let mut changes = changes;
+            changes.sort_by_key(|r| r.id);
+            previous = apply_two_bit_mutations(
+                &tiny.store,
+                &head,
+                7,
+                Some(&previous),
+                &changes,
+                TwoBitMutationLimits {
+                    max_snapshot_bytes: 16384,
+                    max_memory_bytes: 1_000_000,
+                },
+            )
+            .await
+            .unwrap();
+            let result = generation
+                .search_fp32_with_store(&tiny.store, &query, 10, Some(&previous), exact)
+                .await
+                .unwrap();
+            let control = generation
+                .search_fp32_with_store(&tiny.store, &query, 10, Some(&previous), individual)
+                .await
+                .unwrap();
+            assert_eq!(result.base.ranked.candidates.len(), keep);
+            assert_eq!(result.candidates.len(), keep + 1);
+            assert_eq!(result.base.plan, control.base.plan);
+            assert_eq!(result.base.source_stats, control.base.source_stats);
+            assert_eq!(result.base.ranked.stats, control.base.ranked.stats);
+            assert_eq!(
+                result
+                    .candidates
+                    .iter()
+                    .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                control
+                    .candidates
+                    .iter()
+                    .map(|r| (r.id, r.ordinal, r.score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            let pending = result.candidates.iter().find(|r| r.id == -91).unwrap();
+            assert_eq!(pending.ordinal, None);
+            assert_eq!(pending.score.to_bits(), exact_pending.to_bits());
+            if keep == 0 {
+                assert!(result.canonical_ranges.is_empty());
+                assert_eq!(result.canonical_stats, Sq8ReadStats::default());
+            }
+        }
+
         tiny.store.sq8_path = generation.manifest.canonical.object_key.clone();
         for fault in [
             "precondition",
@@ -13438,8 +13664,16 @@ mod source_walk_tests {
                 (baseline.base.source_stats, baseline.base.ranked.stats),
                 "{fault}"
             );
-            assert_eq!(failure.canonical_stats().submitted_gets, 16, "{fault}");
-            assert_eq!(failure.canonical_stats().failed_gets, 16, "{fault}");
+            assert_eq!(
+                failure.canonical_stats().submitted_gets,
+                baseline.canonical_ranges.len(),
+                "{fault}"
+            );
+            assert_eq!(
+                failure.canonical_stats().failed_gets,
+                baseline.canonical_ranges.len(),
+                "{fault}"
+            );
             assert_eq!(generation.slots.available_permits(), 1);
         }
     }
@@ -13527,6 +13761,7 @@ mod source_walk_tests {
         .unwrap();
         generation.enable_fp32_rerank(store.as_ref()).await.unwrap();
         let exact = Fp32RerankLimits {
+            coalesce: false,
             shortlist: 33,
             max_bytes: 33 * 36,
             max_gets: 33,

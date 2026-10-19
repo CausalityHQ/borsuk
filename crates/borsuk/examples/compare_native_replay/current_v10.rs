@@ -19,7 +19,7 @@ pub(super) const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline
 pub(super) const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v17";
 
 pub(super) const FRAMED_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v19";
-pub(super) const FRAMED_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v20";
+pub(super) const FRAMED_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v21";
 pub(super) const FRAMED_CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v21";
 pub(super) const FRAMED_CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v22";
 fn framed_config(schema: &Value) -> bool {

@@ -1,0 +1,399 @@
+{
+  "bruteforce_cases": 969,
+  "budgets": [
+    {
+      "bridge_bytes": {
+        "max": 0,
+        "median": 0.0,
+        "p95": 0,
+        "total": 0
+      },
+      "bridge_records": {
+        "max": 0,
+        "median": 0.0,
+        "p95": 0,
+        "total": 0
+      },
+      "covered_bytes": {
+        "max": 65664,
+        "median": 65664.0,
+        "p95": 65664,
+        "total": 65664000
+      },
+      "covered_record_budget": 16,
+      "covered_records": {
+        "max": 16,
+        "median": 16.0,
+        "p95": 16,
+        "total": 16000
+      },
+      "gets": {
+        "max": 16,
+        "median": 16.0,
+        "p95": 16,
+        "total": 15471
+      },
+      "queries_with_savings": 314,
+      "saved_gets": {
+        "max": 12,
+        "median": 0.0,
+        "p95": 2,
+        "total": 529
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 65664,
+        "median": 45144.0,
+        "p95": 65664,
+        "total": 40210992
+      },
+      "bridge_records": {
+        "max": 16,
+        "median": 11.0,
+        "p95": 16,
+        "total": 9798
+      },
+      "covered_bytes": {
+        "max": 131328,
+        "median": 110808.0,
+        "p95": 131328,
+        "total": 105874992
+      },
+      "covered_record_budget": 32,
+      "covered_records": {
+        "max": 32,
+        "median": 27.0,
+        "p95": 32,
+        "total": 25798
+      },
+      "gets": {
+        "max": 16,
+        "median": 14.0,
+        "p95": 16,
+        "total": 13170
+      },
+      "queries_with_savings": 909,
+      "saved_gets": {
+        "max": 15,
+        "median": 2.0,
+        "p95": 7,
+        "total": 2830
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 196992,
+        "median": 151848.0,
+        "p95": 192888,
+        "total": 142971048
+      },
+      "bridge_records": {
+        "max": 48,
+        "median": 37.0,
+        "p95": 47,
+        "total": 34837
+      },
+      "covered_bytes": {
+        "max": 262656,
+        "median": 217512.0,
+        "p95": 258552,
+        "total": 208635048
+      },
+      "covered_record_budget": 64,
+      "covered_records": {
+        "max": 64,
+        "median": 53.0,
+        "p95": 63,
+        "total": 50837
+      },
+      "gets": {
+        "max": 16,
+        "median": 12.0,
+        "p95": 15,
+        "total": 11383
+      },
+      "queries_with_savings": 980,
+      "saved_gets": {
+        "max": 15,
+        "median": 4.0,
+        "p95": 10,
+        "total": 4617
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 459648,
+        "median": 365256.0,
+        "p95": 451440,
+        "total": 349857792
+      },
+      "bridge_records": {
+        "max": 112,
+        "median": 89.0,
+        "p95": 110,
+        "total": 85248
+      },
+      "covered_bytes": {
+        "max": 525312,
+        "median": 430920.0,
+        "p95": 517104,
+        "total": 415521792
+      },
+      "covered_record_budget": 128,
+      "covered_records": {
+        "max": 128,
+        "median": 105.0,
+        "p95": 126,
+        "total": 101248
+      },
+      "gets": {
+        "max": 16,
+        "median": 10.0,
+        "p95": 14,
+        "total": 9574
+      },
+      "queries_with_savings": 996,
+      "saved_gets": {
+        "max": 15,
+        "median": 6.0,
+        "p95": 13,
+        "total": 6426
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 984960,
+        "median": 792072.0,
+        "p95": 964440,
+        "total": 757068984
+      },
+      "bridge_records": {
+        "max": 240,
+        "median": 193.0,
+        "p95": 235,
+        "total": 184471
+      },
+      "covered_bytes": {
+        "max": 1050624,
+        "median": 857736.0,
+        "p95": 1030104,
+        "total": 822732984
+      },
+      "covered_record_budget": 256,
+      "covered_records": {
+        "max": 256,
+        "median": 209.0,
+        "p95": 251,
+        "total": 200471
+      },
+      "gets": {
+        "max": 15,
+        "median": 8.0,
+        "p95": 13,
+        "total": 7789
+      },
+      "queries_with_savings": 1000,
+      "saved_gets": {
+        "max": 15,
+        "median": 8.0,
+        "p95": 14,
+        "total": 8211
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 2035584,
+        "median": 1555416.0,
+        "p95": 1986336,
+        "total": 1465821576
+      },
+      "bridge_records": {
+        "max": 496,
+        "median": 379.0,
+        "p95": 484,
+        "total": 357169
+      },
+      "covered_bytes": {
+        "max": 2101248,
+        "median": 1621080.0,
+        "p95": 2052000,
+        "total": 1531485576
+      },
+      "covered_record_budget": 512,
+      "covered_records": {
+        "max": 512,
+        "median": 395.0,
+        "p95": 500,
+        "total": 373169
+      },
+      "gets": {
+        "max": 15,
+        "median": 6.0,
+        "p95": 12,
+        "total": 6321
+      },
+      "queries_with_savings": 1000,
+      "saved_gets": {
+        "max": 15,
+        "median": 10.0,
+        "p95": 15,
+        "total": 9679
+      }
+    },
+    {
+      "bridge_bytes": {
+        "max": 4136832,
+        "median": 2807136.0,
+        "p95": 4009608,
+        "total": 2624290488
+      },
+      "bridge_records": {
+        "max": 1008,
+        "median": 684.0,
+        "p95": 977,
+        "total": 639447
+      },
+      "covered_bytes": {
+        "max": 4202496,
+        "median": 2872800.0,
+        "p95": 4075272,
+        "total": 2689954488
+      },
+      "covered_record_budget": 1024,
+      "covered_records": {
+        "max": 1024,
+        "median": 700.0,
+        "p95": 993,
+        "total": 655447
+      },
+      "gets": {
+        "max": 13,
+        "median": 5.0,
+        "p95": 11,
+        "total": 5257
+      },
+      "queries_with_savings": 1000,
+      "saved_gets": {
+        "max": 15,
+        "median": 11.0,
+        "p95": 15,
+        "total": 10743
+      }
+    }
+  ],
+  "continue_implementation": true,
+  "evidence_sha256": "2bda08997e598964b556ced9b5993271696045855bf9026b736d84c3ef260407",
+  "geometry": {
+    "bytes": 4104000000,
+    "dimensions": 1024,
+    "rows": 1000000
+  },
+  "get_cap": 16,
+  "manifest_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+  "minimum_covered_records_by_get_count": {
+    "1": {
+      "max": 976220,
+      "median": 491776.5,
+      "p95": 876664,
+      "total": 449738712
+    },
+    "2": {
+      "max": 716799,
+      "median": 130161.5,
+      "p95": 543201,
+      "total": 179344657
+    },
+    "3": {
+      "max": 541368,
+      "median": 6196.5,
+      "p95": 336835,
+      "total": 83504955
+    },
+    "4": {
+      "max": 406623,
+      "median": 1402.0,
+      "p95": 208057,
+      "total": 40782091
+    },
+    "5": {
+      "max": 323954,
+      "median": 688.0,
+      "p95": 125778,
+      "total": 18949160
+    },
+    "6": {
+      "max": 259024,
+      "median": 427.5,
+      "p95": 59623,
+      "total": 8534513
+    },
+    "7": {
+      "max": 195869,
+      "median": 294.5,
+      "p95": 14763,
+      "total": 3768923
+    },
+    "8": {
+      "max": 137562,
+      "median": 207.0,
+      "p95": 4687,
+      "total": 1692041
+    },
+    "9": {
+      "max": 83228,
+      "median": 144.0,
+      "p95": 2038,
+      "total": 845652
+    },
+    "10": {
+      "max": 35242,
+      "median": 104.0,
+      "p95": 1041,
+      "total": 382323
+    },
+    "11": {
+      "max": 7410,
+      "median": 73.0,
+      "p95": 629,
+      "total": 184666
+    },
+    "12": {
+      "max": 3900,
+      "median": 51.0,
+      "p95": 373,
+      "total": 108852
+    },
+    "13": {
+      "max": 1013,
+      "median": 35.0,
+      "p95": 194,
+      "total": 63600
+    },
+    "14": {
+      "max": 537,
+      "median": 23.0,
+      "p95": 92,
+      "total": 36759
+    },
+    "15": {
+      "max": 198,
+      "median": 18.0,
+      "p95": 40,
+      "total": 21928
+    },
+    "16": {
+      "max": 16,
+      "median": 16.0,
+      "p95": 16,
+      "total": 16000
+    }
+  },
+  "optimality": "Each joined adjacent gap removes one GET and adds its missing records. Choosing smallest gaps minimizes covered records for each GET count; ties use lower physical ordinal.",
+  "quantiles": "median; nearest-rank p95",
+  "queries": 1000,
+  "record_bytes": 4104,
+  "schema": "fp32-coalescing-metadata-frontier-v1",
+  "scope": "cost counterfactual only; no speed claim",
+  "selected_rows_per_query": 16
+}

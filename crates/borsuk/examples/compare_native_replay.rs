@@ -16510,6 +16510,112 @@ mod tests {
     }
 
     #[test]
+    fn fp32_coalescing_native_producer_strict_reader_and_actual_writer_refusals() {
+        let (dir, result) = scale_native_runner::fp32_reducer_native_fixture_with(true).unwrap();
+        let rows = std::fs::read_to_string(&result)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let (config, pin) = scale_config(dir.path(), &result, &rows);
+        let report = fp32_serving::reduce(&config, &pin).unwrap();
+        let output = dir.path().join("coalesced-writer-success.json");
+        assert!(
+            execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+                fp32_serving::reduce(&config, &pin)
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(output).unwrap()).unwrap(),
+            report
+        );
+        let q = rows.iter().position(|r| r["phase"] == "query").unwrap();
+        assert!(
+            rows[q]["charges"]["canonical"]["submitted_gets"]
+                .as_u64()
+                .unwrap()
+                < 16
+        );
+        assert!(
+            rows[q]["canonical_stage"]["bridge_records"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        let startup = rows.iter().position(|r| r["phase"] == "startup").unwrap();
+        assert_eq!(
+            rows[0]["schema"],
+            "borsuk-cohere-native-baseline-result-v21"
+        );
+        for case in [
+            "old-version",
+            "missing-ranges",
+            "missing-covered",
+            "missing-bridges",
+        ] {
+            let mut bad = rows.clone();
+            if case == "old-version" {
+                bad[0]["schema"] = json!("borsuk-cohere-native-baseline-result-v20");
+            } else {
+                let field = match case {
+                    "missing-ranges" => "ranges",
+                    "missing-covered" => "covered_records",
+                    _ => "bridge_records",
+                };
+                bad[q]["canonical_stage"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(field);
+            }
+            let (path, _) = write_fixture(
+                dir.path(),
+                &format!("coalesced-schema-{case}.jsonl"),
+                bad.clone(),
+            );
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let output = dir
+                .path()
+                .join(format!("coalesced-schema-refusal-{case}.json"));
+            assert!(
+                !execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+                    fp32_serving::reduce(&config, &pin)
+                })
+                .unwrap()
+            );
+            let written: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(written["status"], "INVALID");
+            assert_eq!(written["complete"], false);
+        }
+        for (case, index, pointer) in [
+            ("range", q, "/canonical_stage/ranges/0/1"),
+            ("bridge", q, "/canonical_stage/bridge_records"),
+            ("covered", q, "/canonical_stage/covered_records"),
+            ("bytes", q, "/charges/canonical/verified_bytes"),
+            ("gets", q, "/charges/canonical/submitted_gets"),
+            ("shortlist", q, "/canonical_stage/shortlist/0/ordinal"),
+            ("model", startup, "/fp32_rerank/modeled_memory_bytes"),
+        ] {
+            let mut bad = rows.clone();
+            *bad[index].pointer_mut(pointer).unwrap() = json!(u64::MAX);
+            let (path, _) =
+                write_fixture(dir.path(), &format!("coalesced-{case}.jsonl"), bad.clone());
+            let (config, pin) = scale_config(dir.path(), &path, &bad);
+            let output = dir.path().join(format!("coalesced-refused-{case}.json"));
+            assert!(
+                !execute_report(&output, fp32_serving::REPORT_SCHEMA, || {
+                    fp32_serving::reduce(&config, &pin)
+                })
+                .unwrap(),
+                "{case}"
+            );
+            let written: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(written["status"], "INVALID", "{case}");
+            assert_eq!(written["complete"], false, "{case}");
+        }
+    }
+
+    #[test]
     fn fp32_actual_native_runner_strict_replay_writer_and_falsifiers() {
         let (dir, result) = scale_native_runner::fp32_reducer_native_fixture().unwrap();
         let body = std::fs::read_to_string(&result).unwrap();

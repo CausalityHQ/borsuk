@@ -20,9 +20,14 @@ pub(super) fn limits(v: &Value) -> Result<borsuk::fp32_rerank::Fp32RerankLimits>
     let v = &v["serving"];
     fields(
         v,
-        "mode shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets",
+        if v.get("coalesce").is_some() {
+            "mode coalesce shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets"
+        } else {
+            "mode shortlist max_fp32_bytes max_fp32_gets max_parallel_fp32_gets"
+        },
     )?;
     let limits = borsuk::fp32_rerank::Fp32RerankLimits {
+        coalesce: v.get("coalesce").map(|v| v.as_bool().ok_or("FP32 coalesce boolean")).transpose()?.unwrap_or(false),
         shortlist: usize::try_from(number(&v["shortlist"])?)?,
         max_bytes: usize::try_from(number(&v["max_fp32_bytes"])?)?,
         max_gets: usize::try_from(number(&v["max_fp32_gets"])?)?,
@@ -32,7 +37,8 @@ pub(super) fn limits(v: &Value) -> Result<borsuk::fp32_rerank::Fp32RerankLimits>
         v["mode"] == "fp32_rerank"
             && limits.shortlist >= super::K
             && limits.shortlist <= 256
-            && limits.max_gets >= limits.shortlist
+            && limits.max_gets > 0
+            && (limits.coalesce || limits.max_gets >= limits.shortlist)
             && limits.max_parallel_gets > 0,
         "FP32 explicit limits",
     )?;
@@ -47,10 +53,11 @@ pub(super) fn validate_query(raw: &Value, inputs: &Value) -> Result<()> {
     let d = usize::try_from(number(&inputs["dimensions"])?)?;
     let rows = number(&inputs["rows"])?;
     let stage = &raw["canonical_stage"];
-    fields(stage, "score_precision wall_ns record_bytes shortlist")?;
+    fields(stage, "score_precision wall_ns record_bytes shortlist ranges covered_records bridge_records")?;
+    let width = d.checked_mul(4).and_then(|n| n.checked_add(8)).ok_or("FP32 record overflow")?;
     require(
         stage["score_precision"] == "f64"
-            && stage["record_bytes"] == d * 4 + 8
+            && stage["record_bytes"] == width
             && number(&stage["wall_ns"])? > 0
             && number(&stage["wall_ns"])? <= number(&raw["query_wall_ns"])?,
         "FP32 stage scalar/geometry/time",
@@ -120,17 +127,19 @@ pub(super) fn validate_query(raw: &Value, inputs: &Value) -> Result<()> {
     }
     let charge = &raw["charges"]["canonical"];
     fields(charge, "submitted_gets verified_bytes failed_gets")?;
-    let bytes = shortlist
-        .len()
-        .checked_mul(d * 4 + 8)
+    let ordinals = ordinals.into_iter().map(usize::try_from).collect::<std::result::Result<Vec<_>,_>>()?;
+    let ranges = borsuk::fp32_rerank::plan_ranges(&ordinals, usize::try_from(rows)?, d, limits)
+        .ok_or("FP32 canonical plan caps/geometry")?;
+    let bytes = ranges.iter().try_fold(0_usize, |n,r| n.checked_add(r.len()))
         .ok_or("FP32 byte overflow")?;
     require(
-        charge["submitted_gets"] == shortlist.len()
+        stage["ranges"] == json!(ranges.iter().map(|r| [r.start,r.end]).collect::<Vec<_>>())
+            && stage["covered_records"] == bytes / width
+            && stage["bridge_records"] == bytes / width - shortlist.len()
+            && charge["submitted_gets"] == ranges.len()
             && charge["verified_bytes"] == bytes
-            && charge["failed_gets"] == 0
-            && bytes <= limits.max_bytes
-            && shortlist.len() <= limits.max_gets,
-        "FP32 exact record charge binding",
+            && charge["failed_gets"] == 0,
+        "FP32 exact covered record/range charge binding",
     )?;
     Ok(())
 }

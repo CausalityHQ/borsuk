@@ -47,7 +47,7 @@ const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
 // CPU-profile admission and diagnostics have their own config/result protocol.
 const CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v19";
-const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v20";
+const RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v21";
 const CONCURRENT_CONFIG_SCHEMA: &str = "borsuk-cohere-native-baseline-config-v21";
 const CONCURRENT_RESULT_SCHEMA: &str = "borsuk-cohere-native-baseline-result-v22";
 // Checked against each unpolled future, plus bounded join/result bookkeeping.
@@ -82,6 +82,8 @@ enum Serving {
     Baseline {},
     /// Exact canonical refinement of the unchanged baseline fetch.
     Fp32Rerank {
+        #[serde(default)]
+        coalesce: bool,
         shortlist: usize,
         max_fp32_bytes: usize,
         max_fp32_gets: usize,
@@ -98,11 +100,13 @@ impl Serving {
     fn fp32(self) -> Option<borsuk::fp32_rerank::Fp32RerankLimits> {
         match self {
             Self::Fp32Rerank {
+                coalesce,
                 shortlist,
                 max_fp32_bytes,
                 max_fp32_gets,
                 max_parallel_fp32_gets,
             } => Some(borsuk::fp32_rerank::Fp32RerankLimits {
+                coalesce,
                 shortlist,
                 max_bytes: max_fp32_bytes,
                 max_gets: max_fp32_gets,
@@ -990,7 +994,8 @@ fn validate_config(c: &Config, shape: Shape) -> Result<()> {
             !concurrent_config(c)
                 && !c.execution.trace()
                 && (K..=256).contains(&limits.shortlist)
-                && limits.max_gets >= limits.shortlist
+                && limits.max_gets > 0
+                && (limits.coalesce || limits.max_gets >= limits.shortlist)
                 && limits.max_parallel_gets > 0
                 && limits
                     .shortlist
@@ -2799,6 +2804,7 @@ async fn query_and_seal_with(
                         result.candidates,
                         result.canonical_stats,
                         result.rerank_wall_ns,
+                        result.canonical_ranges,
                     ));
                     (result.base, trace)
                 })
@@ -2916,7 +2922,7 @@ async fn query_and_seal_with(
         )?;
         let mut returned = Vec::with_capacity(K);
         let mut returned_physical_ordinals = [0; K];
-        if let Some((hits, _, _)) = &fp32_result {
+        if let Some((hits, _, _, _)) = &fp32_result {
             for (rank, hit) in hits.iter().enumerate() {
                 let ordinal = hit.ordinal.ok_or("FP32 runner base ordinal")?;
                 require(
@@ -2953,12 +2959,15 @@ async fn query_and_seal_with(
             result.source_stats,
             result.ranked.stats,
         )?;
-        if let Some((_, stats, _)) = &fp32_result {
+        if let Some((_, stats, _, _)) = &fp32_result {
             charges.add_canonical(*stats)?;
             p.charges.add_canonical(*stats)?;
         }
-        let canonical_stage = fp32_result.as_ref().map(|(_,_,wall)| json!({
+        let canonical_stage = fp32_result.as_ref().map(|(_,_,wall,ranges)| json!({
             "score_precision":"f64","wall_ns":wall,"record_bytes":D*4+8,
+            "ranges":ranges.iter().map(|r| [r.start,r.end]).collect::<Vec<_>>(),
+            "covered_records":ranges.iter().map(|r|r.len()/(D*4+8)).sum::<usize>(),
+            "bridge_records":ranges.iter().map(|r|r.len()/(D*4+8)).sum::<usize>()-result.ranked.candidates.len(),
             "shortlist":result.ranked.candidates.iter().map(|h| json!({"id":h.id,"ordinal":h.ordinal,"sq8_score_bits":h.score.to_bits()})).collect::<Vec<_>>()
         }));
         // Full ordered range identity, not just totals: `selected_pages` is the required
@@ -3646,11 +3655,15 @@ pub(crate) fn scale_reducer_native_fixture_count(
 
 #[cfg(test)]
 pub(crate) fn fp32_reducer_native_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+    fp32_reducer_native_fixture_with(false)
+}
+#[cfg(test)]
+pub(crate) fn fp32_reducer_native_fixture_with(coalesce: bool) -> Result<(tempfile::TempDir, PathBuf)> {
     let shape = Shape::tiny(33);
     let (dir, mut value) = query_runtime(default_fetch_parallelism())?
         .block_on(tests::fixture_with_profile(shape, SemanticProfile::Scale1m));
     value["reserved_query_interval"] = json!({"start":33,"end":35});
-    value["serving"] = json!({"mode":"fp32_rerank","shortlist":16,"max_fp32_bytes":16*(D*4+8),
+    value["serving"] = json!({"mode":"fp32_rerank","coalesce":coalesce,"shortlist":16,"max_fp32_bytes":(if coalesce {33} else {16})*(D*4+8),
         "max_fp32_gets":16,"max_parallel_fp32_gets":3});
     let (config, sha) = tests::write_config(dir.path(), &value);
     let result = dir.path().join("fp32-native-result.jsonl");
@@ -5118,7 +5131,7 @@ mod tests {
         let c: Config = serde_json::from_value(good.clone()).unwrap();
         validate_config(&c, shape).unwrap();
         assert_eq!(CONFIG_SCHEMA, "borsuk-cohere-native-baseline-config-v19");
-        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v20");
+        assert_eq!(RESULT_SCHEMA, "borsuk-cohere-native-baseline-result-v21");
         assert_eq!(
             SOURCE_CAPSULE_VERIFICATION_POLICY,
             "directory_page_ranges_original_units_v2"

@@ -226,6 +226,7 @@ impl TwoBitIndex {
                 source_nomination_skipped: false,
             },
             candidates,
+            canonical_ranges: Vec::new(),
             canonical_stats: Default::default(),
             rerank_wall_ns: started.elapsed().as_nanos(),
         })

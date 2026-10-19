@@ -3737,6 +3737,84 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    #[tokio::test]
+    async fn fp32_coalescing_http_ordered_error_drain_cancel_and_retry_caps() {
+        use crate::fp32_rerank::{Fp32RerankLimits, plan_ranges, authenticate_range};
+        use crate::exact_sq8_nominee::ScoredNominee;
+        use cold_http_fixture::{Fixture, ETAG};
+        let blob = (0..27_i64).flat_map(|id| id.to_le_bytes().into_iter()
+            .chain(1_f32.to_le_bytes())).collect::<Vec<_>>();
+        let digests = blob.chunks_exact(12).flat_map(|row|Sha256::digest(row)).collect::<Vec<_>>();
+        let ordinals = [0,2,6,8,12,14,18,20,24,26];
+        let nominees = ordinals.iter().map(|&ordinal| ScoredNominee{id:ordinal as i64,ordinal,score:0.})
+            .collect::<Vec<_>>();
+        let limits = Fp32RerankLimits {coalesce:true,shortlist:10,max_bytes:15*12,max_gets:5,max_parallel_gets:2};
+        let ranges = plan_ranges(&ordinals,27,1,limits).unwrap();
+        assert_eq!(ranges,vec![0..36,72..108,144..180,216..252,288..324]);
+        let key="coalescing/objects/canonical";
+        let location=Path::from(key);
+        let fixture=Fixture::new(std::collections::BTreeMap::from([(key.to_owned(),blob.clone())]),
+            Instant::now()+Duration::from_secs(30));
+        let too_small=InFlightBytes::new(35);
+        let before=fixture.snapshot().requests.len();
+        assert!(fetch_capsule_ranges(fixture.reader.store(),&location,blob.len(),&ranges,ETAG,
+            5,180,2,Some(&too_small),|offset,bytes|authenticate_range(offset,&bytes,&nominees,&digests,&[1.]))
+            .await.is_err());
+        assert_eq!(fixture.snapshot().requests.len(),before);
+        let window=InFlightBytes::new(72);
+        fixture.arm(Some((1,[ranges[0].start,ranges[1].start,ranges[2].start])));
+        let mut work=Box::pin(fetch_capsule_ranges(fixture.reader.store(),&location,blob.len(),&ranges,
+            ETAG,5,180,2,Some(&window),|offset,bytes|authenticate_range(offset,&bytes,&nominees,&digests,&[1.])));
+        tokio::select! {
+            _=&mut work=>panic!("returned before earliest body"),
+            ()=fixture.wait(|s|s.finished[1].contains(&ranges[1].start))=>{}
+        }
+        fixture.release_error();
+        tokio::select! {
+            _=&mut work=>panic!("returned before full drain"),
+            ()=fixture.wait(|s|s.finished[1].contains(&ranges[3].start)&&s.finished[1].contains(&ranges[4].start))=>{}
+        }
+        assert!(!fixture.snapshot().finished[1].contains(&ranges[2].start));
+        fixture.release_sibling();
+        let failure=work.await.err().unwrap();
+        assert!(matches!(failure.error,RangeFetchError::Store(_)));
+        assert_eq!(failure.stats,Sq8ReadStats{submitted_gets:5,failed_gets:2,verified_bytes:108});
+        assert_eq!(*window.available.lock().unwrap(),72);
+        assert_eq!(fixture.snapshot().finished[1].len(),5);
+
+        fixture.arm(None);
+        let mut work=Box::pin(fetch_capsule_ranges(fixture.reader.store(),&location,blob.len(),&ranges,
+            ETAG,5,180,2,Some(&window),|offset,bytes|authenticate_range(offset,&bytes,&nominees,&digests,&[1.])));
+        tokio::select! {
+            _=&mut work=>panic!("completed before body release"),
+            ()=fixture.wait(|s|s.active[1]==2)=>{}
+        }
+        let before=fixture.snapshot().requests.len();
+        drop(work);
+        assert_eq!(*window.available.lock().unwrap(),72);
+        assert_eq!(fixture.snapshot().requests.len(),before);
+        fixture.release(1);
+        fixture.wait(|s|s.active[1]==0).await;
+
+        let retry=fixture.retry_reader();
+        fixture.arm_retry_status([ranges[0].start,usize::MAX,usize::MAX]);
+        let attempts=retry.transport_stats().attempts;
+        let mut work=Box::pin(fetch_capsule_ranges(retry.store(),&location,blob.len(),&ranges,
+            ETAG,5,180,2,Some(&window),|offset,bytes|authenticate_range(offset,&bytes,&nominees,&digests,&[1.])));
+        fixture.release(1);
+        tokio::select! {
+            _=&mut work=>panic!("completed before retry release"),
+            ()=fixture.wait(|s|s.finished[1].contains(&ranges[4].start))=>{}
+        }
+        fixture.release_error();
+        let failure=work.await.err().unwrap();
+        assert_eq!(failure.stats.submitted_gets,5);
+        assert_eq!(failure.stats.failed_gets,1);
+        assert_eq!(retry.transport_stats().attempts-attempts,6);
+        assert_eq!(*window.available.lock().unwrap(),72);
+        fixture.finish();
+    }
+
     #[test]
     fn bounded_range_query_future_is_send() {
         fn require_send<T: Send>(_: T) {}
