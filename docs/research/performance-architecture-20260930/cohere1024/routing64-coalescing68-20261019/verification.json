@@ -1,0 +1,181 @@
+{
+  "annotation_erratum": {
+    "applicable_value": false,
+    "note": {
+      "action": "Preserve original script and results unchanged; clarify this annotation in independent derived verification. No native/config/gate/model mutation or rerun.",
+      "applicable_value": false,
+      "controller_sha256": "1a17bf435f8a5487f8a822505001e4ba9c98d817c60144bf8fc1ba6dd1969abb",
+      "identified_before_result_inspection": true,
+      "inherited_result_field": "upstream_plan_change_is_intervention",
+      "inherited_value": true,
+      "reason": "Copied legacy scalar-verification annotation; this controller explicitly asserts exact SOURCE/SQ8 plan/trace/charge equality with closed leaf64 for every query. Canonical coalescing/maxbytes is sole intervention.",
+      "schema": "borsuk-controller-annotation-scope-note-v1"
+    },
+    "original_artifacts_unchanged": true,
+    "original_field": "upstream_plan_change_is_intervention",
+    "original_value": true
+  },
+  "arms": {
+    "A1": {
+      "bytes": 3488554,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "hits": 674,
+      "p95_ns": 497195813,
+      "queries": 68,
+      "query_cpu_ns": 10157551148,
+      "query_wall_ns": 20741259679,
+      "raw_sha256": "76f19159228ed2f4bda4b41a2237642cabf4728aa4cb11dc8ea408e7ba659407",
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11678,
+        "verified_bytes": 3481321088
+      }
+    },
+    "A2": {
+      "bytes": 3488522,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 1088,
+          "verified_bytes": 4465152
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "hits": 674,
+      "p95_ns": 452806289,
+      "queries": 68,
+      "query_cpu_ns": 9989764636,
+      "query_wall_ns": 18137521199,
+      "raw_sha256": "11f87c946ebf0c156974dafe9cf0829ac9a093f679f367c863e5ef434ce83118",
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11678,
+        "verified_bytes": 3481321088
+      }
+    },
+    "B1": {
+      "bytes": 3474300,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 467,
+          "verified_bytes": 54882792
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "hits": 674,
+      "p95_ns": 483390024,
+      "queries": 68,
+      "query_cpu_ns": 10088495478,
+      "query_wall_ns": 19636574118,
+      "raw_sha256": "3e3f683be67d1b4a8608a3eee04caedc6ca8f22293703088bf90400131be1ac6",
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11057,
+        "verified_bytes": 3531738728
+      }
+    },
+    "B2": {
+      "bytes": 3474258,
+      "charges": {
+        "canonical": {
+          "failed_gets": 0,
+          "submitted_gets": 467,
+          "verified_bytes": 54882792
+        },
+        "router": {
+          "failed_gets": 0,
+          "submitted_gets": 0,
+          "verified_bytes": 0
+        },
+        "source": {
+          "failed_gets": 0,
+          "submitted_gets": 8568,
+          "verified_bytes": 2718769152
+        },
+        "sq8": {
+          "failed_gets": 0,
+          "submitted_gets": 2022,
+          "verified_bytes": 758086784
+        }
+      },
+      "hits": 674,
+      "p95_ns": 486292915,
+      "queries": 68,
+      "query_cpu_ns": 9962973156,
+      "query_wall_ns": 18301692954,
+      "raw_sha256": "b6a593e4d8b907c8d468d8ae1f2daba8a5715eb548679fbc48a090517dae5051",
+      "sum": {
+        "failed_gets": 0,
+        "submitted_gets": 11057,
+        "verified_bytes": 3531738728
+      }
+    }
+  },
+  "checks": {
+    "canonical_get_saving40": true,
+    "p95_AB1": false,
+    "p95_AB2": false,
+    "query_CPU_le5pct": true,
+    "query_wall_no_regression": true
+  },
+  "default_promotion": false,
+  "disposition": "VALID_NEGATIVE_ON_PANEL",
+  "exact_upstream_plan_trace_charge_and_return_parity": true,
+  "header_and_config_pins_verified": true,
+  "independent_f64_oracle": "original controller performed; this recount verifies exact returned bit/ordinal parity against authenticated closed full64 baseline, does not repeat scalar arithmetic",
+  "population_claim": false,
+  "schema": "borsuk-coalescing68-root-independent-verification-v1",
+  "source_commit": "2906256b823754dd9ca1018cf6c6c3dd5ea3a6bb",
+  "truth_recounted": true,
+  "vendor_win_claim": false
+}
