@@ -1,0 +1,39 @@
+{
+  "schema": "borsuk-mode-safe-cleanup-root-verification-v1",
+  "parent_main": "bb306dfc49a4f908ee8eab4f50f3d1f2a9318a42",
+  "specialist_commit": "78296cea06573db4b6d449e196fce76de3e01cb6",
+  "source_sha256": "19a58e72727d286abaf9ec57317838e907a675848d63ff26ba47eb4d6410a398",
+  "test_elf_sha256": "2fcaeb1d5a1f5ccfce3514d2fa899280ba14c01dba8d31be9da1a7a2320c0264",
+  "instance": "i-0ed12f707fa99dca4",
+  "unit": "borsuk-mode-cleanup-root-a0001",
+  "invocation": "0c6a82a0793943acbd853e157c26dfee",
+  "launch_ssm": "325bf18b-e981-478b-bcfc-3bfe917485c5",
+  "terminal_ssm": "65cc2017-edf9-46cb-8a3a-c75f8b1732a2",
+  "hash_and_gate_read_ssm": "a5d66486-614c-4710-9dc8-a6ec79bb87bf",
+  "native_tests_passed": 29,
+  "native_tests_seconds": 90.57,
+  "clippy_exit": 0,
+  "feature_clippy_exit": 0,
+  "workspace_test_build_exit": 0,
+  "workspace_test_build_seconds": 5,
+  "workspace_tests_all_executed": false,
+  "source_hash_check": "PASS",
+  "regression_red_ssm": "fd165c11-95a1-4dfe-8bad-74403b294f70",
+  "regression_native_exit": 101,
+  "decision": "RETAIN_MOCKED_MODE_CLEANUP_FIX",
+  "live_service_guard": "UNCHANGED_BLOCKED",
+  "service_calls": 0,
+  "claims_quality": false,
+  "claims_performance": false,
+  "next_action": "command deadline/admission stop plus ordered drain falsifier before disposable live canary",
+  "worker_evidence": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/mode-safe-cleanup-root-a0001/worker-evidence.tar.gz",
+    "sha256": "ef2b1ebe1c06910a8a4e208f140499759a46aa0a0cb48c7e3ed3be3d82065f23"
+  },
+  "evidence_archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/mode-safe-cleanup-root-a0001/evidence.tar.gz",
+    "sha256": "f9da59e2e887db333a4ad10780af9061eee35eb4135eb4ebb55050ab4e306570",
+    "bytes": 188230,
+    "conditional_put_checksum_head": true
+  }
+}

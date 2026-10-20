@@ -1324,7 +1324,7 @@ fn check_bucket(c: &Config, v: &Value) -> Result<()> {
         "bucket ARN/name/creation identity",
     )
 }
-fn check_index(c: &Config, v: &Value) -> Result<()> {
+fn check_index_identity(c: &Config, v: &Value) -> Result<()> {
     require(
         v["indexArn"] == index_arn(c)
             && v["indexName"] == c.index
@@ -1332,11 +1332,17 @@ fn check_index(c: &Config, v: &Value) -> Result<()> {
             && v["dimension"] == D
             && v["dataType"] == "float32"
             && v["distanceMetric"] == "cosine"
-            && v["indexMode"] == c.service_mode
             && v["creationTime"]
                 .as_f64()
                 .is_some_and(|x| x.is_finite() && x > 0.0),
         "index ARN/name/creation/shape",
+    )
+}
+fn check_index(c: &Config, v: &Value) -> Result<()> {
+    check_index_identity(c, v)?;
+    require(
+        v["indexMode"] == c.service_mode,
+        "observed index service mode",
     )
 }
 // All futures are polled by this task: file reads, SDK encoding, capture and
@@ -1628,8 +1634,9 @@ async fn publish_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
         s.client.get_index().index_arn(index_arn(c))
     );
     let index = s.body()?["index"].clone();
+    check_index_identity(c, &index)?;
+    ctx.save("index-identity.json", index.clone())?;
     check_index(c, &index)?;
-    ctx.save("index-identity.json", index)?;
     let mut corpus = open_artifact(&c.corpus)?;
     // Authenticate the exact upload descriptor before publishing any payload.
     let bound = scan_descriptor(&c.corpus, &mut corpus, false, c.rows)?;
@@ -2212,7 +2219,7 @@ async fn cleanup_inner(ctx: &Context, s: &Service, out: &mut Output) -> Result<(
             "cleanup index ownership",
         )?;
         let i = ctx.receipt("index-identity.json")?;
-        check_index(c, &i)?;
+        check_index_identity(c, &i)?;
         Some(i)
     } else {
         None
@@ -2635,6 +2642,8 @@ mod tests {
         pagination_fault: &'static str,
         list_calls: AtomicUsize,
         foreign_index: bool,
+        index_mode: &'static str,
+        missing_index_creation: bool,
         replace_index: AtomicBool,
         replace_bucket: AtomicBool,
         delete_calls: AtomicUsize,
@@ -2718,12 +2727,30 @@ mod tests {
                 if let Some((replacement, target)) = s.replace_corpus.lock().unwrap().take() {
                     std::fs::rename(replacement, target).unwrap();
                 }
-                json!({"index":{
+                let mut response = json!({"index":{
                     "indexName":fixture_config(Path::new("/tmp")).index,
                     "indexArn":index_arn(&fixture_config(Path::new("/tmp"))),
                     "vectorBucketName":fixture_config(Path::new("/tmp")).bucket,
                     "creationTime":if s.replace_index.load(Ordering::SeqCst) {1700000101.0} else {1700000001.0},
-                    "dataType":"float32","dimension":D,"distanceMetric":"cosine","indexMode":"ENHANCED"}})
+                    "dataType":"float32","dimension":D,"distanceMetric":"cosine","indexMode":"ENHANCED"}});
+                match s.index_mode {
+                    "missing" => {
+                        response["index"]
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("indexMode");
+                    }
+                    "null" => response["index"]["indexMode"] = Value::Null,
+                    "" => {}
+                    mode => response["index"]["indexMode"] = json!(mode),
+                }
+                if s.missing_index_creation {
+                    response["index"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("creationTime");
+                }
+                response
             }
             "/ListIndexes" => {
                 let mut indexes = if s.index_deleted.load(Ordering::SeqCst) {
@@ -3970,6 +3997,82 @@ mod tests {
             assert_eq!(TRUTH_OPENS.with(|n| n.get()), 0);
             assert!(!ctx.path("reduction.json").exists());
             server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn sdk_mode_rejection_preserves_cleanup_identity() {
+        for mode in ["missing", "null", "BASIC", "ENHANCED"] {
+            let (_dir, ctx) = fixture();
+            let mock = Arc::new(Mock {
+                index_mode: mode,
+                ..Mock::default()
+            });
+            let (service, server) = mock_service(mock.clone()).await;
+            admit(&ctx).unwrap();
+            let result = publish(&ctx, &service).await;
+            let enhanced = mode == "ENHANCED";
+            assert_eq!(result.is_ok(), enhanced, "{mode}: {result:?}");
+            assert_eq!(ctx.path("published.json").exists(), enhanced, "{mode}");
+            assert_eq!(mock.queries.load(Ordering::SeqCst), 0);
+            if !enhanced {
+                assert_eq!(mock.put_calls.load(Ordering::SeqCst), 0);
+                assert!(measure(&ctx, &service).await.is_err());
+                assert_eq!(mock.queries.load(Ordering::SeqCst), 0);
+            }
+            let identity = ctx.receipt("index-identity.json").unwrap();
+            let log = std::fs::read_to_string(ctx.path("publish.jsonl")).unwrap();
+            let rows: Vec<Value> = log
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let get = rows.iter().find(|v| v["operation"] == "GetIndex").unwrap();
+            let raw = serde_json::to_vec(&json!({"index":identity})).unwrap();
+            assert_eq!(get["capture"]["body_sha256"], hash(&raw));
+            assert_eq!(get["capture"]["body_bytes"], raw.len());
+            assert_eq!(get["capture"]["attempts"], 1);
+            assert_eq!(
+                rows.last().unwrap()["status"],
+                if enhanced { "COMPLETE" } else { "INVALID" }
+            );
+            cleanup(&ctx, &service).await.unwrap();
+            assert_eq!(mock.delete_calls.load(Ordering::SeqCst), 2, "{mode}");
+            assert!(ctx.path("cleanup.json").exists());
+            server.abort();
+        }
+    }
+    #[tokio::test]
+    async fn sdk_mode_cleanup_refuses_foreign_replaced_or_unbound_indexes() {
+        for mode in ["missing", "null", "BASIC", "ENHANCED"] {
+            for fault in ["foreign", "replaced", "missing_creation"] {
+                let (_dir, ctx) = fixture();
+                let mock = Arc::new(Mock {
+                    index_mode: mode,
+                    foreign_index: fault == "foreign",
+                    missing_index_creation: fault == "missing_creation",
+                    ..Mock::default()
+                });
+                let (service, server) = mock_service(mock.clone()).await;
+                admit(&ctx).unwrap();
+                let result = publish(&ctx, &service).await;
+                assert_eq!(
+                    result.is_ok(),
+                    mode == "ENHANCED" && fault != "missing_creation"
+                );
+                if fault == "replaced" {
+                    mock.replace_index.store(true, Ordering::SeqCst);
+                }
+                if fault == "missing_creation" {
+                    assert!(!ctx.path("index-identity.json").exists());
+                }
+                assert!(cleanup(&ctx, &service).await.is_err(), "{mode}/{fault}");
+                assert_eq!(
+                    mock.delete_calls.load(Ordering::SeqCst),
+                    0,
+                    "{mode}/{fault}"
+                );
+                assert!(!ctx.path("cleanup.json").exists());
+                server.abort();
+            }
         }
     }
     #[tokio::test]

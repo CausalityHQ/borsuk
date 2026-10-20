@@ -36,5 +36,11 @@
   "setup_invalids": [
     "missing C linker, repaired and unchanged-source gates rerun",
     "inherited missing Git blob preserved without hydration"
-  ]
+  ],
+  "worker_qualification_archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/truth-first8-root-a0001/worker-qualification.tar.gz",
+    "sha256": "994ddf7b25f62230f0289a2e83e4211a840b7b2f2a7e9c697ac912beaabc7ab8",
+    "bytes": 513000,
+    "conditional_put_checksum_head": true
+  }
 }
