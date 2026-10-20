@@ -1,0 +1,78 @@
+{
+  "schema": "borsuk-centered-byte-lut-quality-decision-v1",
+  "source": "cbc354a81b6067ef5a8f592cd0926bd38f74ce4d",
+  "elf_sha256": "cfe6d6a94b5b9f9ee49c401d9b8c3284d2ab38043a3eedb6143c67678bc5c512",
+  "scope": "offline authenticated original nominations, not real planner/cold S3",
+  "phases": {
+    "development": {
+      "status": "VALID",
+      "phase": "development",
+      "scalar_controls_exact": true,
+      "scientific_sha256": "7b590a57fa8ccea1f2fd03cbe40160aa6d61c4f69d4e1abec1aaae06e5e9e27e",
+      "quality_gate_pass": true,
+      "truth_totals": {
+        "lut_truth": 636,
+        "scalar_truth": 636,
+        "baseline_truth": 636
+      },
+      "same_order_queries": 64,
+      "timings": {
+        "baseline_score_sort_seconds": 2.222092163000001,
+        "centered_score_sort_seconds": 41.73822530800001,
+        "encoding_seconds": 26.89599267,
+        "lut_score_sort_seconds": 1.214713244,
+        "lut_table_prepare_seconds": 0.016567185,
+        "onebit_score_sort_seconds": 42.830876728999996,
+        "wall_seconds": 115.692930483
+      },
+      "limits": "offline fixed original nominees; descriptive timings; no planner or cold S3 claim",
+      "prefix256_truth": 636,
+      "prefix256_losses": [],
+      "rss_kib": 763308
+    },
+    "validation": {
+      "status": "VALID",
+      "phase": "validation",
+      "scalar_controls_exact": true,
+      "scientific_sha256": "363732aa4f5b1eedef2e8a4f97833c36be7d730b49c1ecb3982bd926f919b32b",
+      "quality_gate_pass": true,
+      "truth_totals": {
+        "lut_truth": 633,
+        "scalar_truth": 633,
+        "baseline_truth": 633
+      },
+      "same_order_queries": 64,
+      "timings": {
+        "baseline_score_sort_seconds": 2.1855334189999995,
+        "centered_score_sort_seconds": 41.27245605200001,
+        "encoding_seconds": 27.802085561,
+        "lut_score_sort_seconds": 1.2034733690000003,
+        "lut_table_prepare_seconds": 0.015921555999999996,
+        "onebit_score_sort_seconds": 42.25571030400001,
+        "wall_seconds": 115.516379509
+      },
+      "limits": "offline fixed original nominees; descriptive timings; no planner or cold S3 claim",
+      "prefix256_truth": 633,
+      "prefix256_losses": [],
+      "rss_kib": 769680
+    }
+  },
+  "decision": "Prototype generic authenticated centered-onebit byte-LUT SOURCE format; keep shortlist256 if prefix check passes; rerun actual planner before cold measurement.",
+  "simulations": [
+    {
+      "perspective": "numerical analyst (simulated)",
+      "objection": "reassociation may change ties outside tested cohort",
+      "test": "scalar oracle and dynamic-plan quality test"
+    },
+    {
+      "perspective": "storage engineer (simulated)",
+      "objection": "logical code reduction does not prove S3 savings",
+      "test": "actual-layout admission and physical counters"
+    },
+    {
+      "perspective": "ANN evaluator (simulated)",
+      "objection": "fixed nominees exclude routing loss",
+      "test": "rerun planner, final exact truth, decomposed losses"
+    }
+  ]
+}
