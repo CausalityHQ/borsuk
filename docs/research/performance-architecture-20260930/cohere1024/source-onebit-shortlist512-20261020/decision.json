@@ -1,0 +1,102 @@
+{
+  "schema": "borsuk-onebit-shortlist512-decision-v1",
+  "status": "VALID",
+  "source": "71ee06e655acce425991700b5ea8f537685c8398",
+  "report_sha256": "60e99102a3b89d1e71d6890f1b12c665371dabe19d22a697eb6516afd0a46d6d",
+  "development": {
+    "queries": 64,
+    "truth_total": 640,
+    "truth_nominated": 636,
+    "two_bit256": 636,
+    "one_bit256": 633,
+    "one_bit512": 635,
+    "candidate_regressions": [
+      {
+        "ordinal": 57,
+        "lost": [
+          95612
+        ],
+        "gained": []
+      }
+    ],
+    "per_query_nonregression": false
+  },
+  "heldout": {
+    "queries": 64,
+    "truth_total": 640,
+    "truth_nominated": 631,
+    "two_bit256": 631,
+    "one_bit256": 631,
+    "one_bit512": 631,
+    "candidate_regressions": [],
+    "per_query_nonregression": true
+  },
+  "development_control_exact_reproduction": true,
+  "measurements": {
+    "authority_sha256": "93de02423f4ab40382517ded5fa7d4a96c7de1190eebcaf885fca0d3a4d8c4f2",
+    "baseline_score_sort_seconds": 4.583356852000001,
+    "baseline_union_code_factor_bytes": 236070912,
+    "candidate_shortlist_rows": 512,
+    "canonical_full_hash_scanned": false,
+    "canonical_nominated_rows_verified": 894208,
+    "dimensions": 1024,
+    "encoding_seconds": 14.693336383,
+    "estimator": "dot(sign(T normalize(x)), T normalize(q)) * norm(T normalize(x))/L1(T normalize(x))",
+    "fixed_nomination_counterfactual": true,
+    "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+    "memory": {
+      "cap": 2147483648,
+      "code_capacity": 114458624,
+      "excludes": "allocator/runtime and filesystem cache; external cgroup bounds RSS",
+      "factor_capacity_bytes": 7153664,
+      "id_capacity_bytes": 7153664,
+      "map_capacity_bytes": 8000000,
+      "modeled_nonplane_bytes": 1209503648,
+      "modeled_plane_bytes": 266262144,
+      "modeled_total_bytes": 1475765792,
+      "onebit_transform_capacity_bytes": 8192,
+      "plane_allowance": 937980000,
+      "report_allowance_bytes": 536870912,
+      "requests_capacity": 4096000,
+      "sidecar_capacity": 32000000,
+      "truth_capacity": 80000,
+      "two_bit_query_scratch_bytes": 532480
+    },
+    "mode": "fixed_nomination_counterfactual",
+    "onebit_code_bytes": 114458624,
+    "onebit_code_factor_bytes": 121612288,
+    "onebit_factor_bytes": 7153664,
+    "onebit_score_sort_scope": "shared onebit_top256 and candidate_topk; population scored and sorted once",
+    "onebit_score_sort_seconds": 85.32090552900002,
+    "origin_centered": true,
+    "padded_dimensions": 1024,
+    "physical_io_gain_claim": false,
+    "planner_replayed": false,
+    "process_end": {
+      "peak_rss_kib": 581104,
+      "system_cpu_us": 1098944,
+      "user_cpu_us": 104322560
+    },
+    "process_start": {
+      "peak_rss_kib": 2532,
+      "system_cpu_us": 0,
+      "user_cpu_us": 603
+    },
+    "query_quantized": false,
+    "schema": "borsuk-source-onebit-falsifier-v2",
+    "status": "VALID",
+    "tie_order": "descending score, ascending physical row",
+    "transform": "normalized signed Hadamard, zero padded to next power of two; NON-HAAR HEURISTIC; no RaBitQ theory claim",
+    "transform_seed": 5927091467310923777,
+    "union_rows": 894208,
+    "wall_seconds": 105.426559323
+  },
+  "limitations": [
+    "Offline fixed original nominations, planner not replayed",
+    "No cold latency, QPS, physical IO or vendor comparison established",
+    "Origin-centered structured Hadamard heuristic; no Haar guarantee",
+    "One-bit scalar timing includes one shared population score/sort"
+  ],
+  "quality_gate_pass": false,
+  "whole_process_time_rss": "admitted explicit non-plane bytes=1209503648; plane bytes=266262144; cap=2147483648; union_rows=894208; padded_dim=1024\n\tCommand being timed: \"/mnt/borsuk-workspace/evidence/onebit-shortlist-rows-a0001/source_onebit_falsifier-c85c9075d8d8424a8fe3b085f9200ca8d360e32890fd687f358ea65d88abaeae.elf /mnt/borsuk-workspace/evidence/source-onebit-shortlist512-root-a0001/authority.json 93de02423f4ab40382517ded5fa7d4a96c7de1190eebcaf885fca0d3a4d8c4f2 /mnt/borsuk-workspace/evidence/source-onebit-shortlist512-root-a0001/run-a0001/scientific.json 2147483648\"\n\tUser time (seconds): 107.38\n\tSystem time (seconds): 8.01\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 1:55.43\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 693488\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 175580\n\tVoluntary context switches: 344\n\tInvoluntary context switches: 566\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 56152\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n"
+}
