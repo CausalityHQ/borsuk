@@ -1,4 +1,5 @@
 //! Offline fixed-nomination diagnostic. Inputs must remain immutable for the run.
+#![recursion_limit = "256"]
 #[path = "source_onebit_falsifier/onebit.rs"]
 mod onebit;
 use borsuk::{rotated_two_bit::RotatedTwoBitCodec, two_bit_source::TwoBitPlane};
@@ -76,15 +77,23 @@ fn model(
         .and_then(|n| n.checked_add(CONTROL))
         .ok_or_else(|| "memory overflow".into())
 }
+fn report_memory(rows: usize, queries: usize, shortlist: usize) -> Result<usize> {
+    rows.min(256)
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(rows.min(shortlist)))
+        .and_then(|n| n.checked_mul(queries))
+        .and_then(|n| n.checked_mul(4096))
+        .ok_or_else(|| "report memory overflow".into())
+}
 #[derive(Clone, Copy, Default)]
 struct Hit {
     row: usize,
     id: i64,
     score: f64,
 }
-fn top(h: &mut Vec<Hit>) {
+fn top(h: &mut Vec<Hit>, limit: usize) {
     h.sort_unstable_by(|a, b| b.score.total_cmp(&a.score).then(a.row.cmp(&b.row)));
-    h.truncate(256);
+    h.truncate(limit);
 }
 fn selected(
     s: &onebit::Shape,
@@ -183,9 +192,16 @@ fn run(args: &[String]) -> Result<()> {
     )?;
     let a: Value = serde_json::from_slice(&ab)?;
     require(
-        a["schema"] == "borsuk-progressive-bound-root-authority-v1"
-            && a["original_result"]["native_exit"] == 0
-            && a["original_result"]["reader_exit"] == 0,
+        a["schema"] == "borsuk-source-onebit-falsifier-authority-v2",
+        "authority schema borsuk-source-onebit-falsifier-authority-v2 required; old markers unsupported",
+    )?;
+    let shortlist = a["candidate_shortlist_rows"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| (1..=4096).contains(n))
+        .ok_or("candidate_shortlist_rows integer in 1..4096 required")?;
+    require(
+        a["original_result"]["native_exit"] == 0 && a["original_result"]["reader_exit"] == 0,
         "root authority",
     )?;
     let rows = num(&a["rows"])?;
@@ -207,11 +223,7 @@ fn run(args: &[String]) -> Result<()> {
         "request/truth geometry",
     )?;
     let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(d)?;
-    let report_allowance = queries
-        .len()
-        .checked_mul(rows.min(256))
-        .and_then(|n| n.checked_mul(4096))
-        .ok_or("report memory overflow")?;
+    let report_allowance = report_memory(rows, queries.len(), shortlist)?;
     let other = model(rows, &s, req_bytes, truth_bytes, ab.len())?
         .checked_add(report_allowance)
         .ok_or("report memory overflow")?
@@ -428,7 +440,7 @@ fn run(args: &[String]) -> Result<()> {
             )?;
             let truth_nominated = truth_retained(&truth_ids, &baseline);
             let sorting = Instant::now();
-            top(&mut baseline);
+            top(&mut baseline, 256);
             baseline_seconds += sorting.elapsed().as_secs_f64();
             let reproduced = parity(&q["baseline_top256"], &baseline)?;
             let scoring = Instant::now();
@@ -447,10 +459,23 @@ fn run(args: &[String]) -> Result<()> {
                     });
                 }
             }
-            top(&mut candidate);
+            top(&mut candidate, shortlist.max(256));
             onebit_seconds += scoring.elapsed().as_secs_f64();
             let bt = truth_retained(&truth_ids, &baseline);
-            let ot = truth_retained(&truth_ids, &candidate);
+            let control = &candidate[..candidate.len().min(256)];
+            let candidate_topk = &candidate[..candidate.len().min(shortlist)];
+            let ot = truth_retained(&truth_ids, control);
+            let ct = truth_retained(&truth_ids, candidate_topk);
+            let candidate_lost = bt
+                .iter()
+                .filter(|id| !ct.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            let candidate_gained = ct
+                .iter()
+                .filter(|id| !bt.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
             let retained = bt
                 .iter()
                 .filter(|id| ot.contains(id))
@@ -467,7 +492,8 @@ fn run(args: &[String]) -> Result<()> {
                 .copied()
                 .collect::<Vec<_>>();
             results.push(json!({"ordinal":ordinal,"nominated_units":q["nominated_units"],"nominated_rows":nominees,
-                "baseline_top256":hits(&baseline),"onebit_top256":hits(&candidate),
+                "baseline_top256":hits(&baseline),"onebit_top256":hits(control),"candidate_topk":hits(candidate_topk),
+                "candidate_truth_retained":ct,"candidate_truth_lost":candidate_lost,"candidate_truth_gained":candidate_gained,
                 "baseline_reproduction_verified":reproduced,"baseline_reproduction_authority":if reproduced {"verified"} else {"unavailable"},
                 "truth_ids":truth_ids,"truth_nominated":truth_nominated,"baseline_truth_retained":bt,"onebit_truth_retained":ot,
                 "truth_retained":retained,"truth_lost":lost,"truth_gained":gained,
@@ -476,7 +502,7 @@ fn run(args: &[String]) -> Result<()> {
     }
     save(
         Path::new(&args[start + 2]),
-        &json!({"schema":"borsuk-source-onebit-falsifier-v1","status":"VALID",
+        &json!({"schema":"borsuk-source-onebit-falsifier-v2","status":"VALID",
         "mode":if admit {"admission"} else {"fixed_nomination_counterfactual"},
         "fixed_nomination_counterfactual":true,"planner_replayed":false,"physical_io_gain_claim":false,
         "authority_sha256":args[start+1],"generation_root_sha256":a["generation_root_sha256"],
@@ -485,6 +511,8 @@ fn run(args: &[String]) -> Result<()> {
         "query_quantized":false,"estimator":"dot(sign(T normalize(x)), T normalize(q)) * norm(T normalize(x))/L1(T normalize(x))",
         "tie_order":"descending score, ascending physical row","union_rows":count,
         "canonical_full_hash_scanned":false,"canonical_nominated_rows_verified":count,"canonical":canonical,
+        "candidate_shortlist_rows":shortlist,
+        "onebit_score_sort_scope":"shared onebit_top256 and candidate_topk; population scored and sorted once",
         "onebit_code_bytes":codes.len(),"onebit_factor_bytes":factors.len()*8,
         "onebit_code_factor_bytes":codes.len()+factors.len()*8,
         "baseline_union_code_factor_bytes":count*plane.receipt().record_bytes,
@@ -528,7 +556,7 @@ mod tests {
                 score: 1.,
             },
         ];
-        top(&mut h);
+        top(&mut h, 256);
         assert_eq!(h[0].row, 1);
         let mut zeros = vec![
             Hit {
@@ -542,7 +570,7 @@ mod tests {
                 score: -0.,
             },
         ];
-        top(&mut zeros);
+        top(&mut zeros, 256);
         assert_eq!(zeros[0].row, 2);
         let mut cutoff = (0..255)
             .map(|row| Hit {
@@ -561,7 +589,7 @@ mod tests {
             id: 256,
             score: 0.,
         });
-        top(&mut cutoff);
+        top(&mut cutoff, 256);
         assert!(cutoff.iter().any(|h| h.row == 256));
         assert!(!cutoff.iter().any(|h| h.row == 255));
         assert!(parity(&json!([{"row":2,"score_bits":1}]), &h).is_err());
@@ -584,7 +612,7 @@ mod tests {
     fn low_memory_rejects_before_payload_paths_are_needed() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("authority");
-        let a = json!({"schema":"borsuk-progressive-bound-root-authority-v1",
+        let a = json!({"schema":"borsuk-source-onebit-falsifier-authority-v2","candidate_shortlist_rows":256,
             "original_result":{"native_exit":0,"reader_exit":0},"rows":1000000,"dimensions":3,
             "requests":{"bytes":12},"truth":{"bytes":8,"k":1},
             "queries":[{"ordinal":0,"nominated_units":[0]}]});
@@ -613,6 +641,9 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            Self::with_rows(33)
+        }
+        fn with_rows(rows: usize) -> Self {
             use borsuk::two_bit_source::TwoBitSource;
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path();
@@ -622,7 +653,7 @@ mod tests {
             let mut sq8_bytes = Vec::new();
             let mut canonical = Vec::new();
             let mut digests = Vec::new();
-            for id in 0..33i64 {
+            for id in 0..rows as i64 {
                 let vector = [1f32, 0., 0.].map(f32::to_le_bytes).concat();
                 raw_bytes.extend_from_slice(&vector);
                 sq8_bytes.extend_from_slice(&id.to_le_bytes());
@@ -640,7 +671,7 @@ mod tests {
                 raw_sha256: &sha(&raw_bytes),
                 sq8: &sq8,
                 sq8_sha256: &sq8_sha,
-                rows: 33,
+                rows,
                 dimensions: 3,
             }
             .build(&root.join("plane"), 1024 * 1024)
@@ -649,7 +680,7 @@ mod tests {
             std::fs::write(root.join("canonical_row_digests.bin"), &digests).unwrap();
             let plane_sha = sha(&std::fs::read(root.join("plane/manifest.json")).unwrap());
             let generation = json!({"plane_manifest_sha256":plane_sha,"sq8_object_sha256":sq8_sha,
-                "canonical":{"rows":33,"dimensions":3,"bytes":canonical.len(),
+                "canonical":{"rows":rows,"dimensions":3,"bytes":canonical.len(),
                 "row_digests_bytes":digests.len(),"row_digests_sha256":sha(&digests)}});
             let generation = serde_json::to_vec(&generation).unwrap();
             std::fs::write(root.join("manifest.json"), &generation).unwrap();
@@ -657,13 +688,13 @@ mod tests {
             let truth = [0u64, 1].map(u64::to_le_bytes).concat();
             std::fs::write(root.join("requests"), &requests).unwrap();
             std::fs::write(root.join("truth"), &truth).unwrap();
-            let authority = json!({"schema":"borsuk-progressive-bound-root-authority-v1",
-                "original_result":{"native_exit":0,"reader_exit":0},"rows":33,"dimensions":3,
+            let authority = json!({"schema":"borsuk-source-onebit-falsifier-authority-v2","candidate_shortlist_rows":256,
+                "original_result":{"native_exit":0,"reader_exit":0},"rows":rows,"dimensions":3,
                 "generation_dir":root,"generation_root_sha256":sha(&generation),
                 "plane_manifest_sha256":plane_sha,"sq8_sha256":sq8_sha,
                 "requests":{"path":root.join("requests"),"bytes":requests.len(),"sha256":sha(&requests)},
                 "truth":{"path":root.join("truth"),"bytes":truth.len(),"sha256":sha(&truth),"k":2},
-                "queries":[{"ordinal":0,"nominated_units":[1,0]}]});
+                "queries":[{"ordinal":0,"nominated_units":(0..rows.div_ceil(32)).rev().collect::<Vec<_>>()}]});
             Self { dir, authority }
         }
         fn run(&self, admit: bool, size: usize, cap: usize) -> Result<()> {
@@ -700,6 +731,139 @@ mod tests {
         }
     }
     #[test]
+    fn candidate_shortlist_small_population_and_score_bits() {
+        let mut f = Fixture::new();
+        f.authority["candidate_shortlist_rows"] = json!(512);
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let q = &report["queries"][0];
+        assert_eq!(q["candidate_topk"], q["onebit_top256"]);
+        assert_eq!(q["candidate_topk"].as_array().unwrap().len(), 33);
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.authority["candidate_shortlist_rows"] = json!(1);
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let narrow: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let narrow = &narrow["queries"][0];
+        assert_eq!(narrow["onebit_top256"], q["onebit_top256"]);
+        assert_eq!(narrow["baseline_top256"], q["baseline_top256"]);
+        assert_eq!(narrow["candidate_topk"].as_array().unwrap().len(), 1);
+        assert_eq!(narrow["candidate_truth_retained"], json!([0]));
+        assert_eq!(narrow["candidate_truth_lost"], json!([1]));
+        assert_eq!(narrow["candidate_truth_gained"], json!([]));
+    }
+
+    #[test]
+    fn candidate_256_control_parity_and_512_extra_truth() {
+        let mut f = Fixture::with_rows(513);
+        let truth = [0u64, 300].map(u64::to_le_bytes).concat();
+        std::fs::write(f.dir.path().join("truth"), &truth).unwrap();
+        f.authority["truth"]["sha256"] = json!(sha(&truth));
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let first: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let q = &first["queries"][0];
+        assert_eq!(first["schema"], "borsuk-source-onebit-falsifier-v2");
+        assert_eq!(q["candidate_topk"], q["onebit_top256"]);
+        assert_eq!(q["candidate_topk"].as_array().unwrap().len(), 256);
+        assert_eq!(q["candidate_truth_retained"], json!([0]));
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.authority["candidate_shortlist_rows"] = json!(512);
+        f.authority["queries"][0]["baseline_top256"] = q["baseline_top256"].clone();
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let second: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let next = &second["queries"][0];
+        assert_eq!(next["baseline_top256"], q["baseline_top256"]);
+        assert_eq!(next["onebit_top256"], q["onebit_top256"]);
+        assert_eq!(
+            &next["candidate_topk"].as_array().unwrap()[..256],
+            q["onebit_top256"].as_array().unwrap()
+        );
+        assert_eq!(next["candidate_topk"].as_array().unwrap().len(), 512);
+        assert_eq!(next["candidate_truth_retained"], json!([0, 300]));
+        assert_eq!(next["candidate_truth_gained"], json!([300]));
+        assert_eq!(next["candidate_truth_lost"], json!([]));
+        assert_eq!(next["baseline_reproduction_verified"], true);
+    }
+
+    #[test]
+    fn invalid_shortlist_and_old_schema_refused_before_payload() {
+        for admit in [false, true] {
+            for value in [
+                Value::Null,
+                json!(0),
+                json!(4097),
+                json!("512"),
+                json!(512.0),
+                json!(-1),
+                json!(true),
+            ] {
+                let mut f = Fixture::new();
+                f.remove_payload();
+                std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+                std::fs::remove_file(f.dir.path().join("truth")).unwrap();
+                if value.is_null() {
+                    f.authority
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("candidate_shortlist_rows");
+                } else {
+                    f.authority["candidate_shortlist_rows"] = value;
+                }
+                assert_eq!(
+                    f.run(admit, 0, usize::MAX).unwrap_err().to_string(),
+                    "candidate_shortlist_rows integer in 1..4096 required"
+                );
+                f.no_report();
+            }
+            for marker in [
+                "borsuk-progressive-bound-root-authority-v1",
+                "borsuk-source-onebit-falsifier-authority-v1",
+            ] {
+                let mut f = Fixture::new();
+                f.remove_payload();
+                f.authority["schema"] = json!(marker);
+                assert!(
+                    f.run(admit, 0, usize::MAX)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("old markers unsupported")
+                );
+                f.no_report();
+            }
+        }
+    }
+
+    #[test]
+    fn report_memory_checked_and_model_minus_one_has_no_payload_io() {
+        assert_eq!(
+            report_memory(513, 2, 512).unwrap(),
+            2 * (2 * 256 + 512) * 4096
+        );
+        assert_eq!(report_memory(33, 1, 512).unwrap(), 3 * 33 * 4096);
+        assert!(report_memory(513, usize::MAX, 512).is_err());
+        let mut f = Fixture::new();
+        f.authority["candidate_shortlist_rows"] = json!(4096);
+        f.run(true, 0, 512 * 1024 * 1024).unwrap();
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let cap = num(&report["memory"]["modeled_total_bytes"]).unwrap() - 1;
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.remove_payload();
+        std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+        std::fs::remove_file(f.dir.path().join("truth")).unwrap();
+        for admit in [false, true] {
+            assert_eq!(
+                f.run(admit, 0, cap).unwrap_err().to_string(),
+                "full working model admission before payload"
+            );
+            f.no_report();
+        }
+    }
+
+    #[test]
     fn wider_authority_cap_and_admission() {
         let f = Fixture::new();
         let size = 1_563_062;
@@ -708,7 +872,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
         let s = onebit::Shape::new(3).unwrap();
         let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(3).unwrap();
-        let expected = model(33, &s, 12, 16, size).unwrap() + 33 * 4096 + 3 * scratch;
+        let expected = model(33, &s, 12, 16, size).unwrap() + 3 * 33 * 4096 + 3 * scratch;
         assert_eq!(report["memory"]["modeled_nonplane_bytes"], expected);
         assert_eq!(
             model(33, &s, 12, 16, 8 * 1024 * 1024).unwrap() - model(33, &s, 12, 16, 0).unwrap(),

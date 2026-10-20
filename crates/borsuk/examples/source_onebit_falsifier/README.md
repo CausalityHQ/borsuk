@@ -19,7 +19,10 @@ checks pass. Keep inputs immutable through process exit and use an external
 <=5 minute, <=8 GiB, <=2 worker cgroup (this binary uses one worker). Preserve
 failed attempts. OS caches are not a cold benchmark.
 
-Authority: existing borsuk-progressive-bound-root-authority-v1, bounded to 8 MiB (8,388,608 bytes).
+Authority: borsuk-source-onebit-falsifier-authority-v2, bounded to 8 MiB (8,388,608 bytes).
+Report: borsuk-source-onebit-falsifier-v2. Old authority markers are rejected;
+there is no compatibility mode. Mandatory candidate_shortlist_rows is an integer
+in 1..4096, chosen globally by root before execution.
 The finite cap admits wider cohorts, including 1,563,062-byte authorities;
 authority bytes still cost 96x in the working model (at most 768 MiB).
 The caller memory cap must admit that cost plus all other modeled allocations
@@ -47,7 +50,7 @@ then normalized Walsh-Hadamard. Store signs (>0 is bit1, zero bit0), LSB-first,
 and f64 factor norm(Tx)/L1(Tx). Score is sum(sign(Tx)*Tq)*factor; q remains full
 precision. Scores are not clamped. This is an asymmetric estimator, not Hamming.
 The transform is structured NON-HAAR HEURISTIC, with NO RaBitQ unbiasedness or
-error-bound claim. No seed, shortlist, centroid or transform tuning.
+error-bound claim. No seed, centroid or transform tuning; the authority pins the candidate shortlist.
 
 Derivation checked against RaBitQ v1 sections 3.1-3.2, the ratio
 <quantized_x,q>/<quantized_x,x>, and the official origin-centered IP factors:
@@ -61,14 +64,24 @@ code is copied and no new dependency is added.
 Memory is admitted before payload: conservative full-population one-bit/ID/map/
 sidecar/score-vector capacities plus authority*96, request/truth duplication,
 padded transform scratch, three existing two-bit query scratch allowances,
-96 MiB control allowance, queries*min(rows,256)*4096 report allowance, and the authenticated plane reader's full
+96 MiB control allowance, queries*(2*min(rows,256)+min(rows,candidate_shortlist_rows))*4096 report allowance, and the authenticated plane reader's full
 records/mean/sidecar working model. The nominated union is encoded once; its
 code is ceil(M/8) bytes and factor eight bytes per row. Report logical code and
 factor bytes separately from resident plane bytes and all measured capacities.
 External cgroup bounds allocator/runtime and filesystem cache not in the
 explicit model. Report process CPU and peak RSS plus encode/score wall times.
-Top256 ties use ascending physical row. Reports retain both row/ID rankings,
-nominees, truth nominated/retained/lost/gained, and explicit planner flags.
+Ranking uses descending f64 total_cmp score, then ascending physical row.
+The two-bit top256 and one-bit top256 controls remain fixed. One-bit scores
+and sort are computed once; candidate_topk takes the first min(S,N) nominated
+rows from that same order. onebit_score_sort_seconds charges this shared work
+once, including sorting; truth calculations are outside score/sort timers.
+Reports retain all three row/ID/score/score_bits lists, original nomination
+order, nominees, truth and explicit planner flags. candidate_truth_retained
+contains truth IDs in candidate_topk, in truth-file order; candidate_truth_gained
+and candidate_truth_lost compare it with baseline_truth_retained. Existing
+onebit_top256 and truth_retained/lost/gained fields retain their control meaning.
+All three retained ranking lists are charged with checked arithmetic before
+payload reads; the two full score-vector capacities are also charged.
 
 Synthetic tests cover independent dense f64 Hadamard oracle across padded and
 non-padded dimensions, same-sign/different-direction collision, full precision
@@ -91,3 +104,7 @@ The generation binds both artifacts under one authenticated root. Root must
 verify the producer/preparation receipt (fp32-serving-real-prep-a0001) before
 real quality execution. This standalone reader authenticates selected bytes;
 it does not independently reconstruct their correspondence.
+
+Additional synthetic checks cover S256 prefix/score-bit equality, S512 extra
+truth, N<S and tailed rows/dimensions, malformed/missing S in both modes, old
+schema rejection, report overflow and model-minus-one rejection before payload.
