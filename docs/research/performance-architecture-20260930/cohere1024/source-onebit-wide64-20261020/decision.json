@@ -1,0 +1,586 @@
+{
+  "schema": "borsuk-source-onebit-wide64-decision-v1",
+  "source": "b5efa9cd8b30ad40c8cd033409884eae1f1d9d47",
+  "authority_sha256": "8aaebf97bf4cf57469e5fde6321ad95197ab6d268cef0702c8e8e1a063eb3614",
+  "queries": [
+    {
+      "ordinal": 0,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 1,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 2,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 3,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 4,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 5,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 6,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 7,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 8,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 9,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 10,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 11,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 12,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 13,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 14,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 15,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 16,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 17,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 18,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 19,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 20,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 21,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 22,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 23,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 24,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 25,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 26,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 27,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 28,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 29,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 30,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 31,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 32,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 33,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 34,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 35,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 36,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 37,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 38,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 39,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 40,
+      "truth_nominated": 9,
+      "baseline_truth_retained": 9,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 41,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 42,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 43,
+      "truth_nominated": 9,
+      "baseline_truth_retained": 9,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 44,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 45,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 46,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 47,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 48,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 49,
+      "truth_nominated": 8,
+      "baseline_truth_retained": 8,
+      "onebit_truth_retained": 8,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 50,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 51,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    },
+    {
+      "ordinal": 52,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 53,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    },
+    {
+      "ordinal": 54,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 55,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 56,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 57,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    },
+    {
+      "ordinal": 58,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 59,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 60,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 61,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 62,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    },
+    {
+      "ordinal": 63,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0
+    }
+  ],
+  "baseline_retained": 636,
+  "onebit_retained": 633,
+  "nominated_truth": 636,
+  "logical_bytes_ratio": 0.5151515151515151,
+  "score_sort_ratio": 19.219902090913738,
+  "baseline_score_sort_seconds": 2.2293959459999995,
+  "onebit_score_sort_seconds": 42.848771804,
+  "encoding_seconds": 12.299541138,
+  "logical_onebit_bytes": 101314560,
+  "logical_baseline_bytes": 196669440,
+  "union_rows": 744960,
+  "memory": {
+    "cap": 2147483648,
+    "code_capacity": 95354880,
+    "excludes": "allocator/runtime and filesystem cache; external cgroup bounds RSS",
+    "factor_capacity_bytes": 5959680,
+    "id_capacity_bytes": 5959680,
+    "map_capacity_bytes": 8000000,
+    "modeled_nonplane_bytes": 575841088,
+    "modeled_plane_bytes": 266262144,
+    "modeled_total_bytes": 842103232,
+    "onebit_transform_capacity_bytes": 8192,
+    "plane_allowance": 1571642560,
+    "report_allowance_bytes": 67108864,
+    "requests_capacity": 4096000,
+    "sidecar_capacity": 32000000,
+    "truth_capacity": 80000,
+    "two_bit_query_scratch_bytes": 532480
+  },
+  "process_end": {
+    "peak_rss_kib": 462264,
+    "system_cpu_us": 842947,
+    "user_cpu_us": 57182344
+  },
+  "wall_seconds": 58.028879285,
+  "first8_internal_scalar_replay_exact": true,
+  "historical_production_baseline_reproduced": false,
+  "cold_latency_evidence": false,
+  "planner_replayed": false,
+  "per_query_quality_gate": false,
+  "decision": "FROZEN_ESTIMATOR_MISSES_PER_QUERY_GATE_RETAIN_ANY_PARETO",
+  "quality_regressions": [
+    {
+      "ordinal": 51,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    },
+    {
+      "ordinal": 53,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    },
+    {
+      "ordinal": 57,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 9,
+      "truth_gained": 0,
+      "truth_lost": 1
+    }
+  ]
+}

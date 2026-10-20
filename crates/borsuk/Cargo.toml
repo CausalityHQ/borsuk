@@ -142,3 +142,6 @@ name = "source_capsule_geometry"
 
 [[example]]
 name = "check_source_frame"
+
+[[example]]
+name = "source_onebit_falsifier"
