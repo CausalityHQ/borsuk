@@ -1,0 +1,17 @@
+{
+  "head": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+  "base": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+  "frozen_at": "2026-10-19T23:28:49.881310+00:00",
+  "files": {
+    "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "0f977c470a4b0f535078d9e5b15bc684004f89574ba6674fe167b0bba7b5ae95",
+    "crates/borsuk/src/rotated_two_bit.rs": "9a320d9e05d4ab63d1b6f3a44b287189f366a5e07bbd99d080f77b03b28c3fde",
+    "crates/borsuk/src/two_bit_generation.rs": "62eaad1eaab4eacdc260a2743523b3f2415e24dc05477fee652b89eeb7699a75"
+  },
+  "patch": {
+    "path": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/source-prefix68.patch",
+    "sha256": "dd618764b99d08017fcbd8076aa186f47ca9825d1c310bfad8bb426c94e5449b"
+  },
+  "git_author": "Roman Bartusiak <riomus@gmail.com>",
+  "status": "CLEAN; qualification PENDING; originalgreen2 INTERRUPTED/INVALID",
+  "missing_inherited_objects": "preserved; git commit failed validating unrelated .impeccable.md7e43b81...; write-tree --missing-ok + commit-tree retains all inherited refs exactly"
+}

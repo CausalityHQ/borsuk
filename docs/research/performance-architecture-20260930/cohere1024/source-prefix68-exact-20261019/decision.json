@@ -1,0 +1,45 @@
+{
+  "decision": "KEEP_ORIGINAL256_DEFAULT_RETAIN68_MEMORY_TRADEOFF_NO_COLD_RUN",
+  "candidate": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+  "evaluation": "Fixed synthetic generic codec workloads; no corpus or ANN execution",
+  "source_dimensions": [
+    1,
+    2,
+    3,
+    7,
+    257,
+    768,
+    1024,
+    1025
+  ],
+  "rows": [
+    1,
+    7,
+    32
+  ],
+  "cases": 48,
+  "repetitions": 8,
+  "single_query_D1024_rows32": {
+    "old_score_ns_per_unit": 4364.336669921875,
+    "candidate_score_ns_per_unit": 5980.58642578125,
+    "paired_speedup_median": 0.7305801472675787,
+    "paired_speedup_min": 0.7119503967058302,
+    "paired_speedup_max": 0.7524781681929578,
+    "old_amortized_prepare_score_ns_per_unit": 4977.552734375,
+    "candidate_amortized_prepare_score_ns_per_unit": 6156.482421875,
+    "paired_amortized_speedup_median": 0.8069667150691133,
+    "prepare_speedup_median": 4.371402304108955,
+    "score_time_increase_percent": 37.033113577104196,
+    "amortized_time_increase_percent": 23.68492611556492
+  },
+  "D1024_payload_bytes_not_RSS": {
+    "old_prepare_peak": 532480,
+    "candidate_prepare_peak": 147456,
+    "old_retained_table": 524288,
+    "candidate_retained_table": 139264
+  },
+  "candidate_native_checks": "43 debug +9 release passes, locked workspace Clippy correctness/suspicious, real shim-unset workspace test build, candidate release runner/reader; inherited broader historical-v15 fixture101 not rerun or fixed; no full-suite claim",
+  "control_cache_incident": "Initial71aad control build reused candidate artifact (Cargo fresh:true). Preserved INVALID. Package-only clean +identical command rebuilt lib/BIN fresh:false, distinct SHA b854ca6fd068855a87be2be326c3979a9ef3336e26f8a0096d64e7dd9be1ed50. No source edits or compiler-flag changes. Not used in this same-ELF primitive.",
+  "next_intervention": "Reconcile closed source-stage profiles. Existing process-global2-worker pool is already shared across queries. Its one-permit semaphore protects initialization only. A future explicit4-worker policy needs Q1/full-stack charge, per-query bounds, mixed-policy safety and native saturation evidence; no implementation or speed claim yet.",
+  "initial_query_serialization_hypothesis": "REFUTED by full source inspection: SourceAuthPool Weak upgrade returns shared Arc; initialization guard is not a query gate. Current native held-SOURCE/shared-pool tests are baseline confirmation, not RED."
+}

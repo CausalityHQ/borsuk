@@ -1,0 +1,1005 @@
+{
+  "source": {
+    "head": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+    "base": "396b293d3376dd80913c2e5bad9a9256405c4f4d",
+    "frozen_at": "2026-10-19T23:28:49.881310+00:00",
+    "files": {
+      "crates/borsuk/src/bin/check_cohere_native_baseline.rs": "0f977c470a4b0f535078d9e5b15bc684004f89574ba6674fe167b0bba7b5ae95",
+      "crates/borsuk/src/rotated_two_bit.rs": "9a320d9e05d4ab63d1b6f3a44b287189f366a5e07bbd99d080f77b03b28c3fde",
+      "crates/borsuk/src/two_bit_generation.rs": "62eaad1eaab4eacdc260a2743523b3f2415e24dc05477fee652b89eeb7699a75"
+    },
+    "patch": {
+      "path": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/source-prefix68.patch",
+      "sha256": "dd618764b99d08017fcbd8076aa186f47ca9825d1c310bfad8bb426c94e5449b"
+    },
+    "git_author": "Roman Bartusiak <riomus@gmail.com>",
+    "status": "CLEAN; qualification PENDING; originalgreen2 INTERRUPTED/INVALID",
+    "missing_inherited_objects": "preserved; git commit failed validating unrelated .impeccable.md7e43b81...; write-tree --missing-ok + commit-tree retains all inherited refs exactly"
+  },
+  "bundle": {
+    "path": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/source-prefix68.bundle",
+    "sha256": "a3f22be9ec7ac32964cec82cbffb406693bf2713c1d6559aad3eab338c367f75",
+    "verify_exit": 0
+  },
+  "unit": "source-prefix68-recovery-qualification-a0001",
+  "original_recovery_launch": "c04c8151-8cb4-48f8-9b82-f8b9deebe35b",
+  "terminal": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainStartTimestamp=\nExecMainExitTimestamp=\nExecMainCode=0\nExecMainStatus=0\nMemoryPeak=[not set]\nCPUUsageNSec=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=34583\nActiveState=inactive\nSubState=dead",
+  "actual_runtime_guard_seconds": 1450,
+  "gates": {
+    "head": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+    "started": "2026-10-19T23:29:42.605943+00:00",
+    "instance": "i-00ab8447977a3e14d",
+    "unit": "source-prefix68-recovery-qualification-a0001",
+    "guard": "bothlocks; CPU0-7/800%;24GiB;swap0;tasks1024;jobs6;runtime1500s",
+    "steps": [
+      {
+        "name": "recovery-semantic-green",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--lib",
+          "semantic_d768_diagnostic_scratch_preserves_production_search",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:29:43.129280+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:29:46.567416+00:00"
+      },
+      {
+        "name": "recovery-codec",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--lib",
+          "rotated_two_bit::tests::",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:29:46.567580+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:29:50.655218+00:00"
+      },
+      {
+        "name": "workspace-clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "clippy::correctness",
+          "-D",
+          "clippy::suspicious"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:29:50.655403+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:30:49.139535+00:00"
+      },
+      {
+        "name": "real-testbuild",
+        "argv": [
+          "env",
+          "-u",
+          "BORSUK_TEST_BUILD_COMMAND",
+          "bash",
+          "scripts/check_rust_test_build.sh"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:30:49.139726+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:32:52.607771+00:00"
+      },
+      {
+        "name": "model-preio",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--lib",
+          "source_block32_modeled_minus_one_refuses_before_source_or_sq8_io",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:32:52.615237+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:32:53.038846+00:00"
+      },
+      {
+        "name": "runner-scratch",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--bin",
+          "check_cohere_native_baseline",
+          "scratch_formula_keeps_codec_and_trace_separate",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:32:53.041286+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:33:53.235306+00:00"
+      },
+      {
+        "name": "semantic-fixtures",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--bin",
+          "check_semantic_router_scorer",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:33:53.235512+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:33:55.013559+00:00"
+      },
+      {
+        "name": "current-reader-fixtures",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--example",
+          "compare_native_replay",
+          "current_v10::tests::",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:33:55.013775+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:34:35.208384+00:00"
+      },
+      {
+        "name": "split-reader-fixtures",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--example",
+          "compare_native_replay",
+          "sq8_split_panel::tests::",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:34:35.208620+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:35:32.775393+00:00"
+      },
+      {
+        "name": "current-producer-strict-reader",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--example",
+          "compare_native_replay",
+          "cold_source_profile_actual_producer_strict_reader_and_parity",
+          "--",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:35:32.775653+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:35:40.057831+00:00"
+      },
+      {
+        "name": "release-lib-build",
+        "argv": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--lib",
+          "--release",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:35:40.058086+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:39:16.808180+00:00",
+        "pin": {
+          "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+          "input_record": "candidate-inputs.json",
+          "built_executable": "/mnt/borsuk-workspace/target/release/deps/borsuk-5cf8b5378fd2bfbb",
+          "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/borsuk-release",
+          "sha256": "683ec86a7c4f59bdb37c6bd2b22951f78d0662b53056df6f42ab6bdf821c314a",
+          "size": 96016568,
+          "command": [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "borsuk",
+            "--lib",
+            "--release",
+            "--no-run",
+            "--message-format=json"
+          ]
+        }
+      },
+      {
+        "name": "release-codec",
+        "argv": [
+          "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/borsuk-release",
+          "rotated_two_bit::tests::",
+          "--test-threads=1"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:39:16.959948+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:39:17.202519+00:00"
+      },
+      {
+        "name": "release-candidate-bin",
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--bin",
+          "check_cohere_native_baseline",
+          "--message-format=json"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:39:17.202792+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:41:34.918370+00:00",
+        "pin": {
+          "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+          "input_record": "candidate-inputs.json",
+          "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/candidate-baseline",
+          "sha256": "ae916b0bda75d2ff8cf8b45a7ea14c5a24987325e9b96848309073007b9ab53e",
+          "size": 19622896,
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "borsuk",
+            "--release",
+            "--bin",
+            "check_cohere_native_baseline",
+            "--message-format=json"
+          ]
+        }
+      },
+      {
+        "name": "release-replay-example",
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--example",
+          "compare_native_replay",
+          "--message-format=json"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-a0001",
+        "started": "2026-10-19T23:41:34.958333+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:44:06.049607+00:00",
+        "pin": {
+          "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+          "input_record": "candidate-inputs.json",
+          "built_executable": "/mnt/borsuk-workspace/target/release/examples/compare_native_replay",
+          "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/compare-native-replay",
+          "sha256": "d603bb037ea43b593dea352e9d38d7ee27277260a04342fe4416850d478d581f",
+          "size": 17709792,
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "borsuk",
+            "--release",
+            "--example",
+            "compare_native_replay",
+            "--message-format=json"
+          ]
+        }
+      },
+      {
+        "name": "release-incumbent-bin",
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--bin",
+          "check_cohere_native_baseline",
+          "--message-format=json"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-control-a0001",
+        "started": "2026-10-19T23:44:06.084278+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:44:06.321249+00:00",
+        "pin": {
+          "source_commit": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+          "input_record": "control-inputs.json",
+          "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/incumbent256-baseline",
+          "sha256": "ae916b0bda75d2ff8cf8b45a7ea14c5a24987325e9b96848309073007b9ab53e",
+          "size": 19622896,
+          "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "borsuk",
+            "--release",
+            "--bin",
+            "check_cohere_native_baseline",
+            "--message-format=json"
+          ]
+        }
+      }
+    ],
+    "known_failure": "historical broader cpu_profile_current_producer_reader_and_resealed_refusals v15 roster fixture101 inherited; NOT rerun/repaired",
+    "timing_executions": 0,
+    "compiler_inputs_match": true,
+    "finished": "2026-10-19T23:44:06.422750+00:00",
+    "status": "PASS"
+  },
+  "artifacts": {
+    "borsuk-release": {
+      "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+      "input_record": "candidate-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/deps/borsuk-5cf8b5378fd2bfbb",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/borsuk-release",
+      "sha256": "683ec86a7c4f59bdb37c6bd2b22951f78d0662b53056df6f42ab6bdf821c314a",
+      "size": 96016568,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--lib",
+        "--release",
+        "--no-run",
+        "--message-format=json"
+      ]
+    },
+    "candidate-baseline": {
+      "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+      "input_record": "candidate-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/candidate-baseline",
+      "sha256": "ae916b0bda75d2ff8cf8b45a7ea14c5a24987325e9b96848309073007b9ab53e",
+      "size": 19622896,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--message-format=json"
+      ]
+    },
+    "compare-native-replay": {
+      "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+      "input_record": "candidate-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/examples/compare_native_replay",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/compare-native-replay",
+      "sha256": "d603bb037ea43b593dea352e9d38d7ee27277260a04342fe4416850d478d581f",
+      "size": 17709792,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--example",
+        "compare_native_replay",
+        "--message-format=json"
+      ]
+    },
+    "incumbent256-baseline-INVALID": {
+      "source_commit": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+      "input_record": "control-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/incumbent256-baseline",
+      "sha256": "ae916b0bda75d2ff8cf8b45a7ea14c5a24987325e9b96848309073007b9ab53e",
+      "size": 19622896,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--message-format=json"
+      ],
+      "status": "INVALID: original Cargo reused candidate artifacts; retained unchanged"
+    },
+    "incumbent256-baseline-corrected": {
+      "source_commit": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+      "input_record": "control-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/incumbent256-baseline-corrected",
+      "sha256": "b854ca6fd068855a87be2be326c3979a9ef3336e26f8a0096d64e7dd9be1ed50",
+      "size": 19600944,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--message-format=json"
+      ],
+      "compiler_artifacts": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "borsuk",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rlib",
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rmeta"
+          ],
+          "executable": null,
+          "fresh": false
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "check_cohere_native_baseline",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline"
+          ],
+          "executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "fresh": false
+        }
+      ],
+      "source_blob": "f018b5678cdacc3f86f72b416b7a7a9b206e1583",
+      "source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+      "status": "VERIFIED corrected; fresh=false lib+BIN"
+    }
+  },
+  "test_counts": {
+    "red-exact.stdout": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 0.00s"
+    ],
+    "current-producer-strict-reader.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 413 filtered out; finished in 7.04s"
+    ],
+    "green-rotated_two_bit__tests__.stdout": [
+      "test result: ok. 9 passed; 0 failed; 2 ignored; 0 measured; 2080 filtered out; finished in 2.95s"
+    ],
+    "green-semantic_d768_diagnostic_scratch_preserves_production_search.stdout": [
+      "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 0.26s"
+    ],
+    "recovery-semantic-green.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 1.08s"
+    ],
+    "split-reader-fixtures.stdout": [
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 408 filtered out; finished in 57.34s"
+    ],
+    "recovery-codec.stdout": [
+      "test result: ok. 9 passed; 0 failed; 2 ignored; 0 measured; 2080 filtered out; finished in 3.88s"
+    ],
+    "green2-semantic.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 0.28s"
+    ],
+    "release-codec.stdout": [
+      "test result: ok. 9 passed; 0 failed; 2 ignored; 0 measured; 2080 filtered out; finished in 0.24s"
+    ],
+    "current-reader-fixtures.stdout": [
+      "test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 395 filtered out; finished in 22.13s"
+    ],
+    "semantic-fixtures.stdout": [
+      "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s"
+    ],
+    "green-source_block32_exact_scratch_admission_precedes_callbacks.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 0.00s"
+    ],
+    "runner-scratch.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 88 filtered out; finished in 0.01s"
+    ],
+    "red.stdout": [
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2091 filtered out; finished in 0.00s"
+    ],
+    "model-preio.stdout": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2090 filtered out; finished in 0.19s"
+    ]
+  },
+  "control_status": "VERIFIED corrected fresh exact71aad256 BIN",
+  "control_correction": {
+    "authority": "1792453566351109292-3521810",
+    "original_terminal": "MainPID=0\nExecMainStatus=0\nActiveState=inactive",
+    "source_head": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+    "source_blob": "f018b5678cdacc3f86f72b416b7a7a9b206e1583",
+    "working_blob": "f018b5678cdacc3f86f72b416b7a7a9b206e1583",
+    "source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+    "original_artifact_status": "INVALID cache reuse; original control artifact equals candidate despite original256 source",
+    "cargo_records": {
+      "release-candidate-bin": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "borsuk",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rlib",
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rmeta"
+          ],
+          "executable": null,
+          "fresh": false
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "check_cohere_native_baseline",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-a0001/crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline"
+          ],
+          "executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "fresh": false
+        }
+      ],
+      "release-incumbent-bin": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "borsuk",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rlib",
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rmeta"
+          ],
+          "executable": null,
+          "fresh": true
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "check_cohere_native_baseline",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline"
+          ],
+          "executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "fresh": true
+        }
+      ]
+    },
+    "protected_candidate_pins": {
+      "borsuk-release": {
+        "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+        "input_record": "candidate-inputs.json",
+        "built_executable": "/mnt/borsuk-workspace/target/release/deps/borsuk-5cf8b5378fd2bfbb",
+        "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/borsuk-release",
+        "sha256": "683ec86a7c4f59bdb37c6bd2b22951f78d0662b53056df6f42ab6bdf821c314a",
+        "size": 96016568,
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--lib",
+          "--release",
+          "--no-run",
+          "--message-format=json"
+        ]
+      },
+      "candidate-baseline": {
+        "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+        "input_record": "candidate-inputs.json",
+        "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+        "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/candidate-baseline",
+        "sha256": "ae916b0bda75d2ff8cf8b45a7ea14c5a24987325e9b96848309073007b9ab53e",
+        "size": 19622896,
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--bin",
+          "check_cohere_native_baseline",
+          "--message-format=json"
+        ]
+      },
+      "compare-native-replay": {
+        "source_commit": "46f8af8e8e9b3fa7340c238881614b380f5d5202",
+        "input_record": "candidate-inputs.json",
+        "built_executable": "/mnt/borsuk-workspace/target/release/examples/compare_native_replay",
+        "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/compare-native-replay",
+        "sha256": "d603bb037ea43b593dea352e9d38d7ee27277260a04342fe4416850d478d581f",
+        "size": 17709792,
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--example",
+          "compare_native_replay",
+          "--message-format=json"
+        ]
+      }
+    },
+    "started": "2026-10-19T23:46:54.445486+00:00",
+    "steps": [
+      {
+        "name": "control-package-clean",
+        "argv": [
+          "cargo",
+          "clean",
+          "--release",
+          "-p",
+          "borsuk",
+          "-v"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-control-a0001",
+        "started": "2026-10-19T23:46:54.445809+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:46:54.685496+00:00"
+      },
+      {
+        "name": "control-corrected-build",
+        "argv": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "borsuk",
+          "--release",
+          "--bin",
+          "check_cohere_native_baseline",
+          "--message-format=json"
+        ],
+        "cwd": "/mnt/borsuk-workspace/source-prefix68-control-a0001",
+        "started": "2026-10-19T23:46:54.685792+00:00",
+        "status": "PASS",
+        "exit": 0,
+        "finished": "2026-10-19T23:49:04.526380+00:00"
+      }
+    ],
+    "status": "PASS",
+    "finished": "2026-10-19T23:49:04.672611+00:00",
+    "corrected_pin": {
+      "source_commit": "71aad360946da53f28e11aa8fc4da0b4712823a4",
+      "input_record": "control-inputs.json",
+      "built_executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+      "immutable_copy": "/mnt/borsuk-workspace/evidence/source-prefix68-a0001/elf/incumbent256-baseline-corrected",
+      "sha256": "b854ca6fd068855a87be2be326c3979a9ef3336e26f8a0096d64e7dd9be1ed50",
+      "size": 19600944,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "borsuk",
+        "--release",
+        "--bin",
+        "check_cohere_native_baseline",
+        "--message-format=json"
+      ],
+      "compiler_artifacts": [
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "lib"
+            ],
+            "crate_types": [
+              "lib"
+            ],
+            "name": "borsuk",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/lib.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": true,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rlib",
+            "/mnt/borsuk-workspace/target/release/deps/libborsuk-2ba863c068f150b8.rmeta"
+          ],
+          "executable": null,
+          "fresh": false
+        },
+        {
+          "reason": "compiler-artifact",
+          "package_id": "path+file:///mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk#0.1.0",
+          "manifest_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/Cargo.toml",
+          "target": {
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "check_cohere_native_baseline",
+            "src_path": "/mnt/borsuk-workspace/source-prefix68-control-a0001/crates/borsuk/src/bin/check_cohere_native_baseline.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "default"
+          ],
+          "filenames": [
+            "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline"
+          ],
+          "executable": "/mnt/borsuk-workspace/target/release/check_cohere_native_baseline",
+          "fresh": false
+        }
+      ],
+      "source_blob": "f018b5678cdacc3f86f72b416b7a7a9b206e1583",
+      "source_sha256": "19fa10d17f52297a5547c54c4545a12937f1ccfc04219b8fbbfcd9fe7524b1e2",
+      "status": "VERIFIED corrected; fresh=false lib+BIN"
+    }
+  },
+  "control_correction_terminal": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainStartTimestamp=\nExecMainExitTimestamp=\nExecMainCode=0\nExecMainStatus=0\nMemoryPeak=[not set]\nCPUUsageNSec=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=34583\nActiveState=inactive\nSubState=dead",
+  "corrective_launch": "8f57e4aa-af1f-4257-aae7-5117e6c6bf97",
+  "corrective_runtime_guard_seconds": 510,
+  "original_control_status": "INVALID cache reuse despite command0; originalartifact retained",
+  "timing_executions": 0,
+  "performance_verdict": "UNMEASURED; root alone owns timing/data/promotion",
+  "known_failure": "historical broader cpu_profile_current_producer_reader_and_resealed_refusals v15 startup-roster fixture101 inherited; not rerun/repaired; do not claim full suite PASS",
+  "interruption": {
+    "old_instance": "i-0af00f45cacfb4bb7",
+    "old_job_launch": "1b21d622-8146-4a70-b729-e18dbaa68273",
+    "old_unit": "source-prefix68-green2-a0001",
+    "old_last_PID": 14102,
+    "old_last_observed": "2026-10-19T23:24:16Z",
+    "old_termination": "2026-10-19T23:24:59Z Spot NO_CAPACITY",
+    "old_status": "INTERRUPTED/INVALID; no code verdict",
+    "new_instance": "i-00ab8447977a3e14d",
+    "root_recovery_audit": "fb8512e2",
+    "authority": "1792452446438997410-3521810",
+    "note": "same EBS retained, no live compiler in root recovered audit; one new sequential qualification explicitly authorized; no source changes"
+  },
+  "reuse_ledger": "reuse-ledger.json",
+  "recipe": "final-root-primitive-recipe.json",
+  "collected_at": "2026-10-19T23:50:26.543198+00:00",
+  "qualification_status": "PASS: candidate gates plus corrected fresh original256 control",
+  "compiler_features_and_profiles_match": true,
+  "terminal_journal_binding": {
+    "source-prefix68-recovery-qualification-a0001.service": {
+      "terminal_success": "2026-10-19T23:44:06+00:00 ip-172-31-45-232 systemd[1]: source-prefix68-recovery-qualification-a0001.service: Deactivated successfully.",
+      "resource_summary": "2026-10-19T23:44:06+00:00 ip-172-31-45-232 systemd[1]: source-prefix68-recovery-qualification-a0001.service: Consumed 43min 52.958s CPU time, 19.0G memory peak, 0B memory swap peak.",
+      "journal": "recovery.journal"
+    },
+    "source-prefix68-control-correction-a0001.service": {
+      "terminal_success": "2026-10-19T23:49:04+00:00 ip-172-31-45-232 systemd[1]: source-prefix68-control-correction-a0001.service: Deactivated successfully.",
+      "resource_summary": "2026-10-19T23:49:04+00:00 ip-172-31-45-232 systemd[1]: source-prefix68-control-correction-a0001.service: Consumed 7min 20.457s CPU time, 5.0G memory peak, 0B memory swap peak.",
+      "journal": "control-correction.journal"
+    }
+  },
+  "post_unload_property_interpretation": "Transient units were unloaded after terminal success. Raw infinity/default values in post-unload systemctl show are NOT running resource guards; submitted launch guards1450s/510s and bounded journal peaks apply.",
+  "source_pin_status_interpretation": "Source-pins PENDING is its immutable freeze-time label; final qualification is PASS here.",
+  "original_control_artifact_status": "INVALID and retained unchanged: shared-target reused candidate lib+BIN with fresh:true for original256 checkout. Exactly one authorized package-only cache clean+same-env build produced corrected lib+BIN fresh:false and distinct control ELF.",
+  "compiler_processes_at_final_collection": [],
+  "finalized_at": "2026-10-19T23:52:13.088165+00:00"
+}

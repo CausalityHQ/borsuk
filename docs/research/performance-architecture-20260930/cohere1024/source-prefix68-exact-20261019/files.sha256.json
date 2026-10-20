@@ -1,0 +1,30 @@
+{
+  "archive-publication.json": {
+    "bytes": 507,
+    "sha256": "ab9ca2eb9a4d6bff0865fb867edd27f14422de73daa9751a5800ebd42eca2ca8"
+  },
+  "candidate.patch.gz": {
+    "bytes": 10977,
+    "sha256": "eb7694476c54abaf2051f02d5ac00e25f00c2dbaa6130ada731cbb0b6e4f4f0e"
+  },
+  "decision.json": {
+    "bytes": 2436,
+    "sha256": "ec8f10650d83495f71f5d7c5a5f08c856cd3f941413aefd7d7d49c217e32b4b2"
+  },
+  "decision.md": {
+    "bytes": 4494,
+    "sha256": "4d71db3b57c41582590dd1549a6e075ecf38184806ecaaf48f0e407d4f75264d"
+  },
+  "native-qualification.json": {
+    "bytes": 37338,
+    "sha256": "6fc62d2e90b5c5562aac6c6be1a1acd3588661d1bc1f3ab84f1d3eec40667e4e"
+  },
+  "primitive-summary.json": {
+    "bytes": 52775,
+    "sha256": "294c43138034b846f2a3389b4ec6fb21748a273946caabb8e03937fcaff917a9"
+  },
+  "source-pins.json": {
+    "bytes": 1041,
+    "sha256": "83c5fd49a01c51784d95eec9eb40fe34fdc7ede3a0e4808a09b4c31dde5f19cd"
+  }
+}
