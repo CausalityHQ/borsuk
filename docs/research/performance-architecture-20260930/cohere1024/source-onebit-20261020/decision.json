@@ -1,0 +1,87 @@
+{
+  "schema": "borsuk-source-onebit-first8-decision-v1",
+  "source": "8bdd481c5f63b0c05236fa555fc2df9acf909d73",
+  "queries": [
+    {
+      "ordinal": 0,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 1,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 2,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 3,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 4,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 5,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 6,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    },
+    {
+      "ordinal": 7,
+      "truth_nominated": 10,
+      "baseline_truth_retained": 10,
+      "onebit_truth_retained": 10,
+      "truth_gained": 0,
+      "truth_lost": 0,
+      "truth_retained": 10
+    }
+  ],
+  "baseline_retained": 80,
+  "onebit_retained": 80,
+  "logical_bytes_ratio": 0.5151515151515151,
+  "score_sort_ratio": 19.137881989266848,
+  "historical_baseline_reproduced": false,
+  "cold_latency_evidence": false,
+  "planner_replayed": false,
+  "per_query_quality_gate": true,
+  "decision": "RETAIN_OFFLINE_CANDIDATE"
+}

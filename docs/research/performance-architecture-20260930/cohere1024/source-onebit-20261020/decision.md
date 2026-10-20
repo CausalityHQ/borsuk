@@ -1,0 +1,12 @@
+# One-bit SOURCE fixed-nomination falsifier
+Source: 8bdd481c5f63b0c05236fa555fc2df9acf909d73. Diagnostic example only; production library unchanged.
+
+The first eight authenticated Cohere1M D1024 query nominations retained 80/80 truth neighbors in both recomputed current-two-bit and one-bit top256. Per-query non-regression passed. This does not reproduce historical baseline score bits: that oracle was unavailable. The planner was not replayed, canonical full-object hashing was not repeated, and selected canonical records were authenticated against root-bound row digests. Root verified the original preparation receipt and upstream physical-order invariant.
+
+One-bit code+factors: 46,096,384 bytes versus 89,481,216 baseline logical bytes, ratio 0.5151515. Scalar score+sort: 5.417540 seconds versus 0.283079 seconds, ratio 19.137882. Encoding 5.605459 seconds. Scientific process peak RSS 365128 KiB. These are offline diagnostic timings with filesystem caches, not cold latency, transport savings, or an end-to-end ANN/vendor win.
+
+The fixed signed Hadamard estimator is a NON-HAAR heuristic; no RaBitQ unbiasedness or error-bound claim. Keep it as a quality/representation candidate. Keep original production SOURCE unchanged. Next cheapest falsifier: expand the same frozen estimator's offline held-out cohort before implementing a serving layout; then isolate packed-code dot/scoring cost. Do not tune the seed or reinterpret an offline logical-byte saving as physical S3 savings. Generic dimensions/padding/resource limits remain explicit; Cohere is only this evaluation fixture.
+
+Verification: corrected example focused tests8/8; root exact workspace Clippy correctness+suspicious, real override-unset workspace testbuild, release example all exit0. Actual-input admission exit0; separate self-check and k257 INVALID/no-output canary; scientific exit0. Original child controller timed out during Clippy; retained, subsequently qualified nonoverlapping by root. Source edit missed authorized cutoff by15 seconds; preserved as an operating-limit failure. Missing exhaustive malformed-input regressions remain explicit; no production integration.
+
+Evidence: s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/source-onebit-falsifier-a0001/study-closure.tar.gz . Source bundle and all review, gates, original failures, admission and terminal reports are retained there. Current measured cold production baseline remains 99.02% recall on full1000; this experiment changes no production default.
