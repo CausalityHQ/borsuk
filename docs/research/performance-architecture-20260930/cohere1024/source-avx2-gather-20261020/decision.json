@@ -1,0 +1,18 @@
+{
+  "schema": "borsuk-source-avx2-gather-decision-v1",
+  "disposition": "NEGATIVE",
+  "production_scorer": "unchanged original256 table portable/SSE block kernel",
+  "candidate_commit": "ff98dc3b96e099745630cc966aa1e9466b382c6d",
+  "candidate_patch_sha256": "7bf2e6f3a8a82a26bbfe25f3d0c8502fd053c51c745c00857b51bab6e5072ab4",
+  "primitive_elf_sha256": "29b163913b2d632429a52f6ed8b79a93c8410eb6c63680baf1ed4f3a87a34cea",
+  "scope": "same-ELF fixed-work CPU primitive; no ANN or vendor claim",
+  "cases": 27,
+  "D1024_full32_ratio": 1.5725293233978177,
+  "correctness": "27 fixed-work cases completed; exact per-record bits and paired fingerprints; 8 alternating reps; all qualified affected/Clippy/real testbuild/release checks passed",
+  "next": "Do not run cold ANN or matching-recipe control rebuild for this losing kernel. Preserve original production scorer; reconcile existing byte-reduction evidence before next source/layout hypothesis.",
+  "limits": [
+    "Kernel CPU primitive, not cold ANN or vendor measurement.",
+    "Logical scratch2191B is not whole physical frame/RSS bound.",
+    "Candidate combined bin+example and historical bin-only control differ in dependency feature sets; no causal cold comparison used."
+  ]
+}

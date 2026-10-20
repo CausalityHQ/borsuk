@@ -1,0 +1,92 @@
+{
+  "base": "edad92fb5d59995df2184e65a7b300739fe1648c",
+  "base_crates": "0f73631f67df77e20f186ffcdeaa27958c5aa3a1",
+  "patch_sha256": "7bf2e6f3a8a82a26bbfe25f3d0c8502fd053c51c745c00857b51bab6e5072ab4",
+  "source_files": {
+    "crates/borsuk/src/rotated_two_bit.rs": "234ecc1117b012ec6d088968d0be1e85c4b0fd4c8376de12bbec459d9f9918ee",
+    "crates/borsuk-fma/src/lib.rs": "4cf0c155b2bd01099ef074e016d025e2345c7912c290536f963045e4355e66d8"
+  },
+  "checks": {
+    "012-corrected-checks": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/012-corrected-checks.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/012-corrected-checks.stderr"
+    },
+    "012z-terminal-checkpoint": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/012z-terminal-checkpoint.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/012z-terminal-checkpoint.stderr"
+    },
+    "013-final-clippy": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/013-final-clippy.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/013-final-clippy.stderr"
+    },
+    "014-final-real-gate": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/014-final-real-gate.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/014-final-real-gate.stderr"
+    },
+    "015-final-release": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/015-final-release.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/015-final-release.stderr"
+    },
+    "016-final-codegen": {
+      "exit": 0,
+      "stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/016-final-codegen.stdout",
+      "stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/jobs/016-final-codegen.stderr"
+    }
+  },
+  "artifacts": {
+    "final-borsuk-release": {
+      "path": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/elf/final-borsuk-release",
+      "sha256": "29b163913b2d632429a52f6ed8b79a93c8410eb6c63680baf1ed4f3a87a34cea",
+      "size": 95839424,
+      "pin": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-borsuk-release-pin.json"
+    },
+    "final-candidate-baseline": {
+      "path": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/elf/final-candidate-baseline",
+      "sha256": "9033f812b919567d62989bb277ec2be97d1fdfebd6eaea918fa5e4686dcbfb1c",
+      "size": 19873520,
+      "pin": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-candidate-baseline-pin.json"
+    },
+    "final-compare-native-replay": {
+      "path": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/elf/final-compare-native-replay",
+      "sha256": "cdaa5e7a94df3cba3e93e72f9681fd4542d63a77d2bc9abc7bd19b81b86d29e6",
+      "size": 17720712,
+      "pin": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-compare-native-replay-pin.json"
+    }
+  },
+  "codegen": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-codegen.json",
+  "memory": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-memory-evidence.json",
+  "root_review_sha256": "0df2e8218764a69e13f00097ebcbc77778a114ae81d8ed03de7e84496d4854f6",
+  "controllers": {
+    "original": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/original-controller-terminal.txt",
+    "continuation": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-controller-terminal.txt"
+  },
+  "limitations": [
+    "No timing/actual data/S3/ANN run by child. Root owns performance and integration decision.",
+    "Logical payload2191B excludes compiler/RSS overhead; exact emitted-frame evidence is separate.",
+    "Global formatter baseline failure preserved; changed files individually rustfmt checked.",
+    "Cold BIN candidate compiled together with example: ten shared dependency feature sets and26 dev packages differ from old control --bin-only recipe. Same-ELF primitive ready; cold causal comparison needs root reconciliation. No further native stage run."
+  ],
+  "original_control_sha256": "b854ca6fd068855a87be2be326c3979a9ef3336e26f8a0096d64e7dd9be1ed50",
+  "commit": "ff98dc3b96e099745630cc966aa1e9466b382c6d",
+  "branch": "source-avx2-gather-a0001",
+  "commit_method": "write-tree --missing-ok + commit-tree + guarded update-ref: retained base lacks unrelated .github blob; exact two-file diff and identities verified; no hooks/AI trailers",
+  "bundle": {
+    "path": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final.bundle",
+    "sha256": "873fd1ac27dfb7bd1c4537239f75699d1b6b13b0def235a0fe19ab33068f39b9",
+    "objects": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/bundle-objects.json",
+    "verify_stdout": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/bundle-verify.stdout",
+    "verify_stderr": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/bundle-verify.stderr"
+  },
+  "commit_patch": {
+    "path": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-commit.patch",
+    "sha256": "7bf2e6f3a8a82a26bbfe25f3d0c8502fd053c51c745c00857b51bab6e5072ab4"
+  },
+  "dependency_recipe_comparison": "/mnt/borsuk-workspace/evidence/source-avx2-gather-a0001/final-dependency-recipe-comparison.json",
+  "source_checkpoint": "corrected source frozen before01:00; no subsequent source edits",
+  "locks": "Both build/benchmark locks successfully acquired/released after final PID0; no native/compiler stage remains"
+}
