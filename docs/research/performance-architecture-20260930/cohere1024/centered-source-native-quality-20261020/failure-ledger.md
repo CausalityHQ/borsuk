@@ -60,3 +60,7 @@ Authenticated original terminal SHA256s:
 - V150:c00e15182688a17b94f2182c30f3144d6cb9c2a5e57ecfa0235eb842790a7e07; decision reject; summary6cba22618ffd2208039e275b34b50575e1638e4aaa61411069aac614a05574d9.
 
 Owned reconciliation evidence: EBS evidence/s3-canonical-root-prep-a0001/prior-closeouts/. Original source documents transferred as an exact Git archive, SHA15229044878ee2f043a5fba848f589241fcbe1ef0b0db5a9ffde4bb422d0a90a, under the same S3 campaign prefix as decision.md. No old benchmark or new dataset campaign was rerun.
+
+## Native canonical truth prefix (2026-10-20)
+
+The exhaustive f64 cosine diagnostic on the authenticated logical export matched all 80 IDs and exact order for queries 0..7. Original root invocation `71b67b700b314475a8332b385b95ce95` exited zero in 41.2835 seconds; child max RSS was 17,216 KiB. This retains a prefix validation result only: full1000 truth equivalence and matched vendor performance remain unverified. See [the source-bound receipt](../s3-vectors-canonical-input-a0001/actual-native-truth-first8.json) for source, ELF, inputs and immutable archive pins. Next qualify observed service mode, command deadline/drain and ownership-safe cleanup before a disposable canary; retain the full-measurement block.

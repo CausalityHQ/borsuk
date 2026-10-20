@@ -1,0 +1,40 @@
+{
+  "schema": "borsuk-first8-truth-decision-v1",
+  "decision": "RETAIN_PREFIX_TRUTH_VALIDATION",
+  "matched_ids": 80,
+  "positions": 80,
+  "all_eight_orders_equal": true,
+  "full1000_equivalence": "UNVERIFIED",
+  "vendor_comparison": "NOT_RUN",
+  "latency_benchmark_claim": false,
+  "wall_seconds": 41.28348880699991,
+  "child_maxrss_kib": 17216,
+  "cgroup_peak": "UNAVAILABLE_AFTER_UNIT_GC",
+  "original_invocation": "71b67b700b314475a8332b385b95ce95",
+  "launch_ssm": "25941e30-de5a-456e-a8bb-16ee5660f9f4",
+  "terminal_ssm": "92cc3632-910a-4094-adab-9b0fb6e40c57",
+  "next_action": "runner-only observed mode, cooperative command deadline/drain and ownership-safe cleanup qualification; disposable257-row canary only, retain full measurement block",
+  "source_commit": "af5570d2dfd69613626c04d6918203c8c309eff1",
+  "parent_main": "c874710500776fd66c3d63620064620d0722f033",
+  "source_sha256": "5b266f6265db8716bf7ab08ac5d3cf9daa943e4f22e192dddbcd14b9eca09fa9",
+  "executable_sha256": "e18412b8602575e2925f14739219f37401c01ce1ccbca2ec4584e5dc27580aa9",
+  "config_sha256": "f055c78fd126a6ef310c4e5c48fc04a69a5e3c405abd07f246c32e398dde1555",
+  "result_sha256": "460dbeaa8017f41883027d7c91d15be465ab8cf6cce99741597ec45c22aff981",
+  "artifact_validation": "PASS; reused existing admission without repeating",
+  "native_tests": "3/3 PASS",
+  "clippy_exit": 0,
+  "workspace_test_build_exit": 0,
+  "workspace_test_build_seconds": 154,
+  "workspace_tests_all_executed": false,
+  "evidence_archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/truth-first8-root-a0001/evidence.tar.gz",
+    "sha256": "768de10442d31b7af7fcb602f1442f480943a065f990caab3988ac618059d8d6",
+    "bytes": 354165,
+    "conditional_put_checksum_head": true
+  },
+  "worker_handoff_sha256": "a6a86bfb04764a953f8be276250c8c84804af074c73755178ad00653f3b08cb0",
+  "setup_invalids": [
+    "missing C linker, repaired and unchanged-source gates rerun",
+    "inherited missing Git blob preserved without hydration"
+  ]
+}
