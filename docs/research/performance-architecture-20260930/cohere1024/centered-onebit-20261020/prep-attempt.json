@@ -1,0 +1,10 @@
+{
+  "predecessor": "canonical-global-center-prep-a0001",
+  "predecessor_exit": 124,
+  "predecessor_cpu_seconds": 121.825388,
+  "source_unchanged_sha256": "1cdcefaae699341110a78841bbb377c6a761249425f6c873914c3bfdf4543e55",
+  "change": "build recipe uses optimized release dependency rlibs instead of debug dependency rlibs; same frontend -O, algorithm, inputs, source,120s native timeout,caller/host limits",
+  "purpose": "correct demonstrated debug-library build setup; no quality conclusion from incomplete predecessor",
+  "authority_sha256": "fb70eb54202812d8cdf1385894f460d642e5d1e97dbb9f10d1ea4ba719104561",
+  "receipt_field_note": "query_truth_nominees_opened=false refers to separate payload files. Authority JSON nomination metadata is parsed but not used for corpus mean; every canonical physical row is processed."
+}

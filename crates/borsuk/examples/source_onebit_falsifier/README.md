@@ -108,3 +108,38 @@ it does not independently reconstruct their correspondence.
 Additional synthetic checks cover S256 prefix/score-bit equality, S512 extra
 truth, N<S and tailed rows/dimensions, malformed/missing S in both modes, old
 schema rejection, report overflow and model-minus-one rejection before payload.
+
+Opt-in fixed-center diagnostic (v3 authority/report)
+--------------------------------------------------
+The unchanged CLI accepts authority schema borsuk-source-onebit-falsifier-authority-v3
+only with centroid_mode:"fixed" and center:{path,bytes,sha256}. The absolute regular
+file is exactly D little-endian f64 values (D*8 bytes), authenticated before score
+or request/canonical/plane payload. Values and transformed values must be finite.
+V2 is explicitly origin-only; center injection is rejected. Every v3 input x/q
+may be any finite nonzero f32 vector; normalization in f64
+matches the immutable origin control. The fixed center need not have unit norm.
+
+For x,q normalized about the origin, r=x-c, z=sign(T r), and
+alpha=||r||^2/L1(T r), estimate q.c+r.c+alpha*z.T(q-c).
+By linearity of T this equals q.c+[r.c-alpha*z.Tc]+alpha*z.Tq.
+The bracketed additive factor depends on the row and cannot be discarded.
+For r=0, alpha and additive are zero, so the score is q.c.
+The same signed Hadamard seed remains NON-HAAR; no theory/speed/IO claim follows.
+The official centroid-dependent IP factors are described at
+https://vectordb-ntu.github.io/RaBitQ-Library/rabitq/estimator/
+and https://arxiv.org/html/2405.12497v1 .
+
+All existing origin candidate/control lists retain their arithmetic and names.
+V3 adds centered_topk and centered_truth_retained/lost/gained (relative to the
+two-bit baseline), plus separate code/factor/additive bytes and scoring time.
+It charges an extra packed code and two f64 factors per full-population row,
+one full Hit vector, center file+decoded center (16D), transformed center (8M),
+and queries*min(rows,S)*4096 report allowance before payload. Ranking capacities
+are reserved before payload. V3 still emits the original fixed 256 controls.
+All center dimensions, paths, lengths and SHA pins are root authority.
+
+This example does not prepare or infer a center from nominees or queries.
+Root owns full-corpus center preparation, its provenance receipt, and execution.
+No native --prepare-center command is included in this example; the root must
+provide a separately verified corpus preparation seam. Synthetic qualification
+alone leaves real quality, runtime and memory feasibility UNVERIFIED.

@@ -77,6 +77,28 @@ fn model(
         .and_then(|n| n.checked_add(CONTROL))
         .ok_or_else(|| "memory overflow".into())
 }
+fn centered_memory(
+    rows: usize,
+    s: &onebit::Shape,
+    queries: usize,
+    shortlist: usize,
+) -> Result<usize> {
+    rows.checked_mul(
+        s.width
+            .checked_add(16 + std::mem::size_of::<Hit>())
+            .ok_or("center memory overflow")?,
+    )
+    .and_then(|n| n.checked_add(s.d.checked_mul(16)?))
+    .and_then(|n| n.checked_add(s.m.checked_mul(8)?))
+    .and_then(|n| {
+        n.checked_add(
+            rows.min(shortlist)
+                .checked_mul(queries)?
+                .checked_mul(4096)?,
+        )
+    })
+    .ok_or_else(|| "center memory overflow".into())
+}
 fn report_memory(rows: usize, queries: usize, shortlist: usize) -> Result<usize> {
     rows.min(256)
         .checked_mul(2)
@@ -191,9 +213,19 @@ fn run(args: &[String]) -> Result<()> {
         false,
     )?;
     let a: Value = serde_json::from_slice(&ab)?;
+    let centered = a["schema"] == "borsuk-source-onebit-falsifier-authority-v3";
     require(
-        a["schema"] == "borsuk-source-onebit-falsifier-authority-v2",
-        "authority schema borsuk-source-onebit-falsifier-authority-v2 required; old markers unsupported",
+        centered || a["schema"] == "borsuk-source-onebit-falsifier-authority-v2",
+        "authority v2 or v3 required; old markers unsupported",
+    )?;
+    require(
+        if centered {
+            a["centroid_mode"] == "fixed" && a["center"].is_object()
+        } else {
+            a["center"].is_null()
+                && (a["centroid_mode"].is_null() || a["centroid_mode"] == "origin")
+        },
+        "authority centroid mode",
     )?;
     let shortlist = a["candidate_shortlist_rows"]
         .as_u64()
@@ -224,7 +256,14 @@ fn run(args: &[String]) -> Result<()> {
     )?;
     let scratch = RotatedTwoBitCodec::required_query_scratch_bytes(d)?;
     let report_allowance = report_memory(rows, queries.len(), shortlist)?;
+    let center_allowance = if centered {
+        centered_memory(rows, &s, queries.len(), shortlist)?
+    } else {
+        0
+    };
     let other = model(rows, &s, req_bytes, truth_bytes, ab.len())?
+        .checked_add(center_allowance)
+        .ok_or("center memory overflow")?
         .checked_add(report_allowance)
         .ok_or("report memory overflow")?
         .checked_add(scratch.checked_mul(3).ok_or("scratch overflow")?)
@@ -277,6 +316,39 @@ fn run(args: &[String]) -> Result<()> {
     let mut transformed = vec_exact::<f64>(s.m)?;
     let mut raw = vec_exact::<f32>(d)?;
     let mut record = vec_exact::<u8>(row_width)?;
+    // Center authentication and all ranking capacities precede payload reads.
+    let center = if centered {
+        let bytes = d.checked_mul(8).ok_or("center size overflow")?;
+        require(num(&a["center"]["bytes"])? == bytes, "center byte geometry")?;
+        let bytes = read_bound(
+            Path::new(string(&a["center"]["path"])?),
+            bytes,
+            string(&a["center"]["sha256"])?,
+            true,
+        )?;
+        let mut c = vec_exact::<f64>(d)?;
+        for (x, b) in c.iter_mut().zip(bytes.chunks_exact(8)) {
+            *x = f64::from_le_bytes(b.try_into()?);
+        }
+        let mut tc = vec_exact::<f64>(s.m)?;
+        s.linear(&c, &mut tc)?;
+        Some((c, tc))
+    } else {
+        None
+    };
+    let mut centered_codes = vec_exact::<u8>(if centered { codes_bytes } else { 0 })?;
+    let mut centered_factors = vec_exact::<f64>(if centered { count } else { 0 })?;
+    let mut centered_additives = vec_exact::<f64>(if centered { count } else { 0 })?;
+    let mut baseline = Vec::<Hit>::new();
+    baseline.try_reserve_exact(rows)?;
+    let mut candidate = Vec::<Hit>::new();
+    candidate.try_reserve_exact(rows)?;
+    let mut centered_hits = Vec::<Hit>::new();
+    if centered {
+        centered_hits.try_reserve_exact(rows)?;
+    }
+    let mut results = Vec::new();
+    results.try_reserve_exact(queries.len())?;
     let dir = Path::new(string(&a["generation_dir"])?);
     let root = read_bound(
         &dir.join("manifest.json"),
@@ -350,6 +422,9 @@ fn run(args: &[String]) -> Result<()> {
             &mut raw,
             &mut transformed,
         )?;
+        if centered {
+            onebit::vector_norm(&raw)?;
+        }
     }
     let sidecar = read_bound(
         &dir.join("canonical_row_digests.bin"),
@@ -396,11 +471,22 @@ fn run(args: &[String]) -> Result<()> {
             &transformed,
             &mut codes[slot * s.width..(slot + 1) * s.width],
         )?;
+        if let Some((c, tc)) = &center {
+            let (alpha, additive) = s.encode_centered(
+                &raw,
+                c,
+                tc,
+                &mut transformed,
+                &mut centered_codes[slot * s.width..(slot + 1) * s.width],
+            )?;
+            centered_factors[slot] = alpha;
+            centered_additives[slot] = additive;
+        }
     }
     let encoding_seconds = encoding_start.elapsed().as_secs_f64();
-    let mut results = Vec::new();
     let mut baseline_seconds = 0.;
     let mut onebit_seconds = 0.;
+    let mut centered_seconds = 0.;
     if !admit {
         for q in queries {
             let ordinal = num(&q["ordinal"])?;
@@ -413,10 +499,18 @@ fn run(args: &[String]) -> Result<()> {
             s.transform(&raw, &mut transformed)?;
             let prep = plane.prepare_query(&raw, scratch)?;
             let units = q["nominated_units"].as_array().ok_or("units")?;
-            let mut baseline = Vec::<Hit>::new();
-            baseline.try_reserve_exact(rows)?;
-            let mut candidate = Vec::<Hit>::new();
-            candidate.try_reserve_exact(rows)?;
+            baseline.clear();
+            candidate.clear();
+            centered_hits.clear();
+            let qc = if let Some((c, _)) = &center {
+                let norm = onebit::vector_norm(&raw)?;
+                raw.iter()
+                    .zip(c)
+                    .map(|(&x, c)| x as f64 / norm * c)
+                    .sum::<f64>()
+            } else {
+                0.
+            };
             let scoring = Instant::now();
             for u in units {
                 let lo = num(u)?.checked_mul(32).ok_or("unit overflow")?;
@@ -461,6 +555,28 @@ fn run(args: &[String]) -> Result<()> {
             }
             top(&mut candidate, shortlist.max(256));
             onebit_seconds += scoring.elapsed().as_secs_f64();
+            if centered {
+                let scoring = Instant::now();
+                for u in units {
+                    let lo = num(u)?.checked_mul(32).ok_or("unit overflow")?;
+                    for row in lo..rows.min(lo + 32) {
+                        let slot = map[row];
+                        centered_hits.push(Hit {
+                            row,
+                            id: ids[slot],
+                            score: s.score_centered(
+                                &centered_codes[slot * s.width..(slot + 1) * s.width],
+                                centered_factors[slot],
+                                centered_additives[slot],
+                                &transformed,
+                                qc,
+                            )?,
+                        });
+                    }
+                }
+                top(&mut centered_hits, shortlist);
+                centered_seconds += scoring.elapsed().as_secs_f64();
+            }
             let bt = truth_retained(&truth_ids, &baseline);
             let control = &candidate[..candidate.len().min(256)];
             let candidate_topk = &candidate[..candidate.len().min(shortlist)];
@@ -491,18 +607,36 @@ fn run(args: &[String]) -> Result<()> {
                 .filter(|id| !bt.contains(id))
                 .copied()
                 .collect::<Vec<_>>();
-            results.push(json!({"ordinal":ordinal,"nominated_units":q["nominated_units"],"nominated_rows":nominees,
+            let c_retained = truth_retained(&truth_ids, &centered_hits);
+            let c_lost = bt
+                .iter()
+                .filter(|id| !c_retained.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            let c_gained = c_retained
+                .iter()
+                .filter(|id| !bt.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            results.push(json!({"centered_topk":if centered { hits(&centered_hits) } else { Value::Null },
+                "centered_truth_retained":if centered { json!(c_retained) } else { Value::Null },
+                "centered_truth_lost":if centered { json!(c_lost) } else { Value::Null },
+                "centered_truth_gained":if centered { json!(c_gained) } else { Value::Null },"ordinal":ordinal,"nominated_units":q["nominated_units"],"nominated_rows":nominees,
                 "baseline_top256":hits(&baseline),"onebit_top256":hits(control),"candidate_topk":hits(candidate_topk),
                 "candidate_truth_retained":ct,"candidate_truth_lost":candidate_lost,"candidate_truth_gained":candidate_gained,
                 "baseline_reproduction_verified":reproduced,"baseline_reproduction_authority":if reproduced {"verified"} else {"unavailable"},
                 "truth_ids":truth_ids,"truth_nominated":truth_nominated,"baseline_truth_retained":bt,"onebit_truth_retained":ot,
                 "truth_retained":retained,"truth_lost":lost,"truth_gained":gained,
-                "score_vector_capacity_bytes":(baseline.capacity()+candidate.capacity())*std::mem::size_of::<Hit>()}));
+                "score_vector_capacity_bytes":(baseline.capacity()+candidate.capacity()+centered_hits.capacity())*std::mem::size_of::<Hit>()}));
         }
     }
     save(
         Path::new(&args[start + 2]),
-        &json!({"schema":"borsuk-source-onebit-falsifier-v2","status":"VALID",
+        &json!({"schema":if centered { "borsuk-source-onebit-falsifier-v3" } else { "borsuk-source-onebit-falsifier-v2" },"status":"VALID",
+        "centroid_mode":if centered { "fixed" } else { "origin" }, "origin_control":true,
+        "center":a["center"], "centered_estimator":"q.c + r.c + (norm(r)^2/L1(Tr))*sign(Tr).T(q-c); r=normalize(x)-c",
+        "centered_code_bytes":centered_codes.len(),"centered_factor_bytes":centered_factors.len()*8,
+        "centered_additive_bytes":centered_additives.len()*8,"centered_score_sort_seconds":centered_seconds,
         "mode":if admit {"admission"} else {"fixed_nomination_counterfactual"},
         "fixed_nomination_counterfactual":true,"planner_replayed":false,"physical_io_gain_claim":false,
         "authority_sha256":args[start+1],"generation_root_sha256":a["generation_root_sha256"],
@@ -516,7 +650,7 @@ fn run(args: &[String]) -> Result<()> {
         "onebit_code_bytes":codes.len(),"onebit_factor_bytes":factors.len()*8,
         "onebit_code_factor_bytes":codes.len()+factors.len()*8,
         "baseline_union_code_factor_bytes":count*plane.receipt().record_bytes,
-        "memory":{"cap":cap,"report_allowance_bytes":report_allowance,"modeled_nonplane_bytes":other,"modeled_plane_bytes":plane_required,"modeled_total_bytes":other+plane_required,"plane_allowance":plane_cap,
+        "memory":{"cap":cap,"center_allowance_bytes":center_allowance,"report_allowance_bytes":report_allowance,"modeled_nonplane_bytes":other,"modeled_plane_bytes":plane_required,"modeled_total_bytes":other+plane_required,"plane_allowance":plane_cap,
             "two_bit_query_scratch_bytes":scratch,"onebit_transform_capacity_bytes":transformed.capacity()*8,
             "code_capacity":codes.capacity(),"factor_capacity_bytes":factors.capacity()*8,
             "id_capacity_bytes":ids.capacity()*8,"map_capacity_bytes":map.capacity()*std::mem::size_of::<usize>(),
@@ -993,6 +1127,133 @@ mod tests {
                 );
                 f.no_report();
             }
+        }
+    }
+    #[test]
+    fn centered_fixed_file_retains_origin_control() {
+        let mut f = Fixture::new();
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let old: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        let center = [0.25f64, 0.125, 0.];
+        let bytes = center.map(f64::to_le_bytes).concat();
+        let path = f.dir.path().join("center");
+        std::fs::write(&path, &bytes).unwrap();
+        f.authority["schema"] = json!("borsuk-source-onebit-falsifier-authority-v3");
+        f.authority["centroid_mode"] = json!("fixed");
+        f.authority["center"] = json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)});
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let new: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        assert_eq!(new["schema"], "borsuk-source-onebit-falsifier-v3");
+        for name in ["baseline_top256", "onebit_top256", "candidate_topk"] {
+            assert_eq!(new["queries"][0][name], old["queries"][0][name]);
+        }
+        assert_eq!(
+            new["queries"][0]["centered_topk"].as_array().unwrap().len(),
+            33
+        );
+    }
+
+    fn fixed_center(f: &mut Fixture, values: &[f64]) {
+        let bytes = values
+            .iter()
+            .flat_map(|x| x.to_le_bytes())
+            .collect::<Vec<_>>();
+        let path = f.dir.path().join("center");
+        std::fs::write(&path, &bytes).unwrap();
+        f.authority["schema"] = json!("borsuk-source-onebit-falsifier-authority-v3");
+        f.authority["centroid_mode"] = json!("fixed");
+        f.authority["center"] = json!({"path":path,"bytes":bytes.len(),"sha256":sha(&bytes)});
+    }
+    #[test]
+    fn centered_authentication_geometry_modes_and_scaled_query_parity() {
+        for admit in [false, true] {
+            for case in 0..8 {
+                let mut f = Fixture::new();
+                fixed_center(&mut f, &[0.25, 0.125, 0.]);
+                f.remove_payload();
+                std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+                let expected = match case {
+                    0 => {
+                        f.authority["center"]["bytes"] = json!(16);
+                        "center byte geometry"
+                    }
+                    1 => {
+                        f.authority["center"]["sha256"] = json!("0".repeat(64));
+                        "input SHA/length"
+                    }
+                    2 => {
+                        fixed_center(&mut f, &[f64::NAN, 0., 0.]);
+                        "center shape/nonfinite"
+                    }
+                    3 => {
+                        f.authority["centroid_mode"] = json!("origin");
+                        "authority centroid mode"
+                    }
+                    4 => {
+                        f.authority["schema"] =
+                            json!("borsuk-source-onebit-falsifier-authority-v2");
+                        "authority centroid mode"
+                    }
+                    5 => {
+                        f.authority["center"] = Value::Null;
+                        "authority centroid mode"
+                    }
+                    6 => {
+                        std::fs::write(f.dir.path().join("center"), [0u8; 23]).unwrap();
+                        "input size"
+                    }
+                    _ => {
+                        fixed_center(&mut f, &[f64::INFINITY, 0., 0.]);
+                        "center shape/nonfinite"
+                    }
+                };
+                assert_eq!(
+                    f.run(admit, 0, 512 * 1024 * 1024).unwrap_err().to_string(),
+                    expected
+                );
+                f.no_report();
+            }
+            let mut f = Fixture::new();
+            fixed_center(&mut f, &[0.25, 0.125, 0.]);
+            f.run(admit, 0, 512 * 1024 * 1024).unwrap();
+            let first: Value =
+                serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+            std::fs::remove_file(f.dir.path().join("out")).unwrap();
+            let bytes = [2f32, 0., 0.].map(f32::to_le_bytes).concat();
+            std::fs::write(f.dir.path().join("requests"), &bytes).unwrap();
+            f.authority["requests"]["sha256"] = json!(sha(&bytes));
+            f.run(admit, 0, 512 * 1024 * 1024).unwrap();
+            let scaled: Value =
+                serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+            assert_eq!(scaled["queries"], first["queries"]);
+        }
+    }
+    #[test]
+    fn centered_exact_memory_boundary() {
+        let mut f = Fixture::new();
+        fixed_center(&mut f, &[0.25, 0.125, 0.]);
+        f.run(true, 0, 512 * 1024 * 1024).unwrap();
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap();
+        let total = num(&report["memory"]["modeled_total_bytes"]).unwrap();
+        assert_eq!(
+            report["memory"]["center_allowance_bytes"],
+            centered_memory(33, &onebit::Shape::new(3).unwrap(), 1, 256).unwrap()
+        );
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.run(false, 0, total).unwrap();
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.remove_payload();
+        std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+        for admit in [false, true] {
+            assert_eq!(
+                f.run(admit, 0, total - 1).unwrap_err().to_string(),
+                "full working model admission before payload"
+            );
+            f.no_report();
         }
     }
 }

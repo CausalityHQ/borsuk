@@ -1,0 +1,72 @@
+use serde_json::{json,Value};
+use sha2::{Digest,Sha256};
+use std::{fs::{self,File,OpenOptions},io::{Read,Write,BufReader},path::{Path,PathBuf}};
+type R<T> = Result<T,Box<dyn std::error::Error>>;
+fn need(b:bool,s:&str)->R<()> {if b {Ok(())}else{Err(s.into())}}
+fn hash(b:&[u8])->String {format!("{:x}",Sha256::digest(b))}
+fn n(v:&Value)->R<usize>{Ok(usize::try_from(v.as_u64().ok_or("integer")?)?)}
+fn text(v:&Value)->R<&str>{v.as_str().ok_or_else(||"string".into())}
+fn read(p:&Path,cap:usize)->R<Vec<u8>> {let len=usize::try_from(fs::metadata(p)?.len())?;need(len<=cap,"file cap")?;let b=fs::read(p)?;need(b.len()==len,"length changed")?;Ok(b)}
+fn publish(p:&Path,b:&[u8])->R<()> {let mut f=OpenOptions::new().write(true).create_new(true).open(p)?;f.write_all(b)?;f.sync_all()?;Ok(())}
+fn prepare(authority:&Path,authority_sha:&str,out:&Path,receipt:&Path,cap:usize)->R<()> {
+ need(!out.exists()&&!receipt.exists(),"output exists")?;
+ let alen=usize::try_from(fs::metadata(authority)?.len())?;
+ need(alen<=8*1024*1024,"authority cap")?;
+ need(alen.checked_mul(96).ok_or("overflow")?<=cap,"metadata admission")?;
+ let ab=read(authority,8*1024*1024)?;need(hash(&ab)==authority_sha,"authority SHA")?;
+ let a:Value=serde_json::from_slice(&ab)?;
+ need(a["schema"]=="borsuk-source-onebit-falsifier-authority-v2","authority schema")?;
+ let dir=PathBuf::from(text(&a["generation_dir"])?);
+ let mp=dir.join("manifest.json");let mlen=usize::try_from(fs::metadata(&mp)?.len())?;
+ need(mlen<=16*1024*1024,"manifest cap")?;
+ need(alen.checked_add(mlen).and_then(|v|v.checked_mul(96)).ok_or("overflow")?<=cap,"metadata admission")?;
+ let mb=read(&mp,16*1024*1024)?;need(hash(&mb)==text(&a["generation_root_sha256"])?,"root SHA")?;
+ let m:Value=serde_json::from_slice(&mb)?;
+ need(m["schema"]=="borsuk-two-bit-generation-v13","generation schema")?;
+ let c=&m["canonical"];let rows=n(&c["rows"])?;let d=n(&c["dimensions"])?;
+ need(rows>0&&d>0&&rows==n(&a["rows"])?&&d==n(&a["dimensions"])?,"geometry")?;
+ let record=d.checked_mul(4).and_then(|v|v.checked_add(8)).ok_or("overflow")?;
+ let total=rows.checked_mul(record).ok_or("overflow")?;
+ let side=rows.checked_mul(32).ok_or("overflow")?;
+ need(total==n(&c["bytes"])?&&side==n(&c["row_digests_bytes"])?,"canonical lengths")?;
+ let modeled=alen.checked_add(mlen).and_then(|v|v.checked_mul(96)).and_then(|v|v.checked_add(side)).and_then(|v|v.checked_add(record)).and_then(|v|d.checked_mul(48).and_then(|q|v.checked_add(q))).and_then(|v|v.checked_add(2*1024*1024)).ok_or("overflow")?;
+ need(modeled<=cap,"working memory before canonical/sidecar")?;
+ let sb=read(&dir.join("canonical_row_digests.bin"),side)?;
+ need(sb.len()==side&&hash(&sb)==text(&c["row_digests_sha256"])?,"sidecar SHA")?;
+ let cp=dir.join("canonical.bin");need(fs::metadata(&cp)?.len()==u64::try_from(total)?,"canonical length")?;
+ let mut input=BufReader::with_capacity(262144,File::open(cp)?);
+ let mut row=vec![0u8;record];let mut mean=vec![0f64;d];let mut full=Sha256::new();
+ for i in 0..rows {
+  input.read_exact(&mut row)?;full.update(&row);
+  need(Sha256::digest(&row).as_slice()==&sb[i*32..i*32+32],"row SHA")?;
+  let id=i64::from_le_bytes(row[..8].try_into()?);need(id>=0,"negative ID")?;
+  let mut norm2=0f64;
+  for chunk in row[8..].chunks_exact(4) {let x=f32::from_le_bytes(chunk.try_into()?) as f64;need(x.is_finite(),"finite vector")?;norm2+=x*x;}
+  need(norm2.is_finite()&&norm2>0.0,"positive norm")?;
+  let norm=norm2.sqrt();
+  for (j,chunk) in row[8..].chunks_exact(4).enumerate() {let x=f32::from_le_bytes(chunk.try_into()?) as f64;mean[j]+=x/norm;need(mean[j].is_finite(),"finite sum")?;}
+ }
+ let mut trailing=[0u8;1];need(input.read(&mut trailing)?==0,"canonical tail")?;
+ need(format!("{:x}",full.finalize())==text(&c["sha256"])?,"canonical SHA")?;
+ for x in &mut mean {*x/=rows as f64;need(x.is_finite(),"finite center")?;}
+ let bytes:Vec<u8>=mean.iter().flat_map(|x|x.to_le_bytes()).collect();
+ let report=json!({"schema":"borsuk-canonical-normalized-mean-preparation-v1","status":"VALID","authority_sha256":authority_sha,"generation_root_sha256":a["generation_root_sha256"],"canonical_sha256":c["sha256"],"row_digests_sha256":c["row_digests_sha256"],"rows":rows,"dimensions":d,"center":{"path":out,"bytes":bytes.len(),"sha256":hash(&bytes)},"algorithm":"full physical corpus; sequential f64 sum of each canonical f32 row normalized in f64, divided by row count","query_truth_nominees_opened":false,"modeled_memory_bytes":modeled,"cap":cap,"full_canonical_hash_verified":true,"every_row_digest_verified":true});
+ publish(out,&bytes)?;
+ publish(receipt,&serde_json::to_vec_pretty(&report)?)?;
+ Ok(())
+}
+fn main(){let a:Vec<String>=std::env::args().collect();let r=(||->R<()>{need(a.len()==6,"AUTH SHA NEW_CENTER NEW_RECEIPT MEMORY")?;prepare(Path::new(&a[1]),&a[2],Path::new(&a[3]),Path::new(&a[4]),a[5].parse()?)})();if let Err(e)=r {eprintln!("INVALID: {e}");std::process::exit(2)}}
+#[cfg(test)]mod tests{
+ use super::*;
+ fn fixture()->(PathBuf,PathBuf,String){
+ let p=std::env::temp_dir().join(format!("borsuk-mean-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir(&p).unwrap();
+ let mut body=Vec::new();let mut side=Vec::new();
+ for (id,v) in [(7i64,[3f32,4.]),(19,[0.,2.])] {let mut b=id.to_le_bytes().to_vec();for x in v {b.extend(x.to_le_bytes())}side.extend(Sha256::digest(&b));body.extend(b);}
+ fs::write(p.join("canonical.bin"),&body).unwrap();fs::write(p.join("canonical_row_digests.bin"),&side).unwrap();
+ let m=serde_json::to_vec(&json!({"schema":"borsuk-two-bit-generation-v13","canonical":{"rows":2,"dimensions":2,"bytes":body.len(),"sha256":hash(&body),"row_digests_bytes":side.len(),"row_digests_sha256":hash(&side)}})).unwrap();fs::write(p.join("manifest.json"),&m).unwrap();
+ let a=serde_json::to_vec(&json!({"schema":"borsuk-source-onebit-falsifier-authority-v2","generation_dir":p,"generation_root_sha256":hash(&m),"rows":2,"dimensions":2,"requests":{"path":"MUST_NOT_OPEN"},"truth":{"path":"MUST_NOT_OPEN"}})).unwrap();let ap=p.join("authority.json");fs::write(&ap,&a).unwrap();(p,ap,hash(&a))
+ }
+ #[test]fn normalized_global_mean_and_no_query_reads(){let(p,a,h)=fixture();let out=p.join("center");let rec=p.join("receipt");prepare(&a,&h,&out,&rec,16*1024*1024).unwrap();let b=fs::read(&out).unwrap();assert_eq!(f64::from_le_bytes(b[..8].try_into().unwrap()),0.3);assert_eq!(f64::from_le_bytes(b[8..].try_into().unwrap()),0.9);assert!(prepare(&a,&h,&out,&rec,16*1024*1024).is_err());fs::remove_dir_all(p).unwrap();}
+ #[test]fn corrupt_row_refused_before_publish(){let(p,a,h)=fixture();let mut b=fs::read(p.join("canonical.bin")).unwrap();b[9]^=1;fs::write(p.join("canonical.bin"),b).unwrap();let e=prepare(&a,&h,&p.join("center"),&p.join("receipt"),16*1024*1024).unwrap_err();assert_eq!(e.to_string(),"row SHA");assert!(!p.join("center").exists());fs::remove_dir_all(p).unwrap();}
+ #[test]fn cap_before_payload(){let(p,a,h)=fixture();fs::remove_file(p.join("canonical.bin")).unwrap();fs::remove_file(p.join("canonical_row_digests.bin")).unwrap();let e=prepare(&a,&h,&p.join("center"),&p.join("receipt"),1).unwrap_err();assert_eq!(e.to_string(),"metadata admission");fs::remove_dir_all(p).unwrap();}
+}

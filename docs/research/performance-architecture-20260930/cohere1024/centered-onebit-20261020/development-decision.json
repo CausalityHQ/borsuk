@@ -1,0 +1,62 @@
+{
+  "schema": "borsuk-centered-onebit-cohort-decision-v1",
+  "phase": "development",
+  "status": "VALID",
+  "source": "34a23c7709b37d4b87db4d7f215d687a17033edd",
+  "queries": 64,
+  "truth_total": 640,
+  "truth_nominated": 636,
+  "two_bit256": 636,
+  "origin_onebit256": 633,
+  "origin_onebit512": 635,
+  "centered_onebit512": 636,
+  "candidate_regressions": [],
+  "quality_gate_pass": true,
+  "development_control_exact_reproduction": true,
+  "scientific_sha256": "bd1d4f2e366e5b8fc6eb9fd8bd2eac56d7c5dc6a3c07b8b6b444d4b74c722379",
+  "measurements": {
+    "baseline_score_sort_seconds": 2.231838715,
+    "baseline_union_code_factor_bytes": 196669440,
+    "center": {
+      "bytes": 8192,
+      "path": "/mnt/borsuk-workspace/evidence/canonical-global-center-prep-a0002/center.f64",
+      "sha256": "022d40ae6cee11ed0dc1d24147f9d50b3578df82209a713bac999b7a823d839a"
+    },
+    "centered_additive_bytes": 5959680,
+    "centered_code_bytes": 95354880,
+    "centered_factor_bytes": 5959680,
+    "centered_score_sort_seconds": 42.136344598,
+    "encoding_seconds": 26.756655675,
+    "memory": {
+      "cap": 2147483648,
+      "center_allowance_bytes": 302242304,
+      "code_capacity": 95354880,
+      "excludes": "allocator/runtime and filesystem cache; external cgroup bounds RSS",
+      "factor_capacity_bytes": 5959680,
+      "id_capacity_bytes": 5959680,
+      "map_capacity_bytes": 8000000,
+      "modeled_nonplane_bytes": 1079456640,
+      "modeled_plane_bytes": 266262144,
+      "modeled_total_bytes": 1345718784,
+      "onebit_transform_capacity_bytes": 8192,
+      "plane_allowance": 1068027008,
+      "report_allowance_bytes": 268435456,
+      "requests_capacity": 4096000,
+      "sidecar_capacity": 32000000,
+      "truth_capacity": 80000,
+      "two_bit_query_scratch_bytes": 532480
+    },
+    "onebit_code_bytes": 95354880,
+    "onebit_code_factor_bytes": 101314560,
+    "onebit_factor_bytes": 5959680,
+    "onebit_score_sort_seconds": 41.633450331,
+    "union_rows": 744960,
+    "wall_seconds": 113.552555631
+  },
+  "whole_process_time_rss": "admitted explicit non-plane bytes=1079456640; plane bytes=266262144; cap=2147483648; union_rows=744960; padded_dim=1024\n\tCommand being timed: \"/mnt/borsuk-workspace/evidence/centered-onebit-a0001/correction/source-onebit-5dbdf42b04093cfba59d02f9d8df26ed9304b4a8bf5dcbdd1760b99d17364701.elf /mnt/borsuk-workspace/evidence/centered-onebit-root-a0001/development-run-a0001/authority.json 692503b8ccd394f99e0a3c1011a3d97af7a4840ff0bafc50e35c5ee2eb6e2da7 /mnt/borsuk-workspace/evidence/centered-onebit-root-a0001/development-run-a0001/scientific.json 2147483648\"\n\tUser time (seconds): 114.51\n\tSystem time (seconds): 5.73\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 2:00.27\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 707600\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 177133\n\tVoluntary context switches: 121\n\tInvoluntary context switches: 557\n\tSwaps: 0\n\tFile system inputs: 0\n\tFile system outputs: 37608\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+  "limitations": [
+    "Offline original fixed nominations only; no planner replay/cold latency/physical IO/vendor win",
+    "Structured signed Hadamard heuristic, no Haar theory guarantee",
+    "Center derived from full canonical corpus without query/truth payload access; authority nomination metadata parsed but not used in mean"
+  ]
+}
