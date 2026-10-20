@@ -145,3 +145,6 @@ name = "check_source_frame"
 
 [[example]]
 name = "source_onebit_falsifier"
+
+[[example]]
+name = "exhaustive_f64_cosine"
