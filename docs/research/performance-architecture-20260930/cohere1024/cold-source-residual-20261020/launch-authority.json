@@ -1,0 +1,18 @@
+{
+  "launch_ssm": "ae5dfb32-0424-4d95-aeda-a0dbd2016fb2",
+  "unit": "borsuk-csr-diagnostic-a0001",
+  "invocation": "6e3e576d06f740b0966161222fe8d5fc",
+  "initial_main_pid": 1542,
+  "active_limits_readback": {
+    "CPUQuotaPerSecUSec": "8s",
+    "AllowedCPUs": "0-7",
+    "MemoryMax": 8589934592,
+    "MemorySwapMax": 0,
+    "TasksMax": 1024,
+    "RuntimeMaxUSec": "20min"
+  },
+  "terminal_collected": true,
+  "terminal_controller_exit": 0,
+  "instance": "i-0a91ae83b36498ae1",
+  "notes": "No source changes or Rust compilation; exact qualified old executable source bound. Root coarse passive study supersedes broad instrumentation proposal for this first falsifier."
+}

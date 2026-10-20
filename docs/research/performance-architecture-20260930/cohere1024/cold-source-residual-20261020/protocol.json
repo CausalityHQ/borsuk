@@ -1,0 +1,55 @@
+{
+  "callgraph": "dwarf,4096",
+  "claims": "application cache0; provider eviction unproven; no population p95 or vendor comparison",
+  "cpu": "0-7/800%",
+  "instance": "i-0a91ae83b36498ae1",
+  "limit": "whole-process sampled user CPU, NOT exclusive SOURCE residual or latency. No new Rust instrumentation.",
+  "main": "edad92fb5d59995df2184e65a7b300739fe1648c",
+  "max_perf_bytes_per_file": 67108864,
+  "measurement_source": "0cddd79569db2f92bf2079f1d9bbc3b90759a895",
+  "memory": 8589934592,
+  "native_seconds": 90,
+  "negative_control": "same executable/config semantics, external sampling off/on",
+  "order": [
+    "admit",
+    "canary",
+    "A1",
+    "B1",
+    "B2",
+    "A2"
+  ],
+  "outer_seconds": 1200,
+  "perf_event": "cpu-clock:u",
+  "pins": {
+    "A1": {
+      "config_sha256": "f44fdbe84a21a86aa92407b899ba699e87c17998a27292723660a76c7f3ac993",
+      "expected_sha256": "94a2873875e8dfec4288e5da5121b05e7596733832a633e4a040627d8bac3a9e"
+    },
+    "A2": {
+      "config_sha256": "ecaf6e599d7013e88722a5a646aba340ac990bdce797f755fa882276a4292e28",
+      "expected_sha256": "37fc990c3166b872a35145bac582f7c58b7cd7aa78a1298bedc718c329c9abef"
+    },
+    "B1": {
+      "config_sha256": "aebbfe3beb3ad352b1b291a607bfd458a3bfb1ae4e88a165c9d98830c7cc2032",
+      "expected_sha256": "55fe2083de08014864f285ae0e5b42777284f87309c5a3248deee6396edd04bf"
+    },
+    "B2": {
+      "config_sha256": "77784d9d2ea2cec4c67cf9a7df92d0c074a4f5e069d01c6724dc7798bf43ea4b",
+      "expected_sha256": "ea570d84bf6fb126aa20a49f30a5d96b5d98a2a73890d9d32a91b2b970210923"
+    },
+    "admit": {
+      "config_sha256": "6f67790c2cb38e16961cbf076d2eef487f0d08cbbdc317d6fad10b7fb3d55c9f",
+      "expected_sha256": "55bb8b539c81975856c8c2c46d17b122a33fed101ecf1cbbbcb766e02950be56"
+    },
+    "canary": {
+      "config_sha256": "06491a11e36dd0aa3a6b31d739d18a1d0ef83bc4568f7c6efa422a7fadef99bf",
+      "expected_sha256": "736dffd65e29d8e06059971bee13114233e0caddc7ae980299061cba19ae9857"
+    }
+  },
+  "reader_seconds": 45,
+  "sample_hz": 199,
+  "schema": "borsuk-cold-source-passive-profile-v1",
+  "semantic": "exact gold IDs, physical ordinals, scorebits, plans, traces, charges, canonical shortlist and independent f64 oracle",
+  "sequence": "runtime native admission8 then separate canary2 then ABBA8",
+  "swap": 0
+}

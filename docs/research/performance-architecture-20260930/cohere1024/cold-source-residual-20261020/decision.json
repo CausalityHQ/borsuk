@@ -1,0 +1,70 @@
+{
+  "cohort_cpu_ns": {
+    "A1": 1066093749,
+    "A2": 1127626939,
+    "B1": 1101942796,
+    "B2": 1096887632
+  },
+  "decision": "Use original256-table indexed-gather primitive falsifier; no table compression, no worker-count change, no default promotion. Root original residual hypothesis not proved by this coarse sample.",
+  "exact_semantics_all_cells": true,
+  "hits_per_measured_cell": 80,
+  "limitations": [
+    "167/157 samples only",
+    "startup included",
+    "provider cache eviction unproven",
+    "selected first8 differs old diagnostic selected8",
+    "no duplicated hash pass proved",
+    "no population tail or vendor claim"
+  ],
+  "native_controller_exit": 0,
+  "queries_per_measured_cell": 8,
+  "sampled_to_unsampled_cohort_cpu_ratio": 1.0023292573334204,
+  "scope": "whole-process user CPU, not exclusive SOURCE residual or latency",
+  "status": "VALID_CURRENT_SELECTED8_PASSIVE_DIAGNOSTIC",
+  "top_self_cpu": {
+    "B1": [
+      "17.37% borsuk-source-a check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "11.38% borsuk-source-a check_cohere_native_baseline [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::score - -",
+      "10.18% tokio-rt-worker check_cohere_native_baseline [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::score - -",
+      "4.79% check_cohere_na check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "4.19% tokio-rt-worker check_cohere_native_baseline [.] aws_lc_0_45_0_aes_gcm_decrypt_avx512 - -",
+      "4.19% tokio-rt-worker check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "2.40% tokio-rt-worker libc.so.6 [.] 0x00000000001a186f - -",
+      "1.80% tokio-rt-worker check_cohere_native_baseline [.] <futures_channel::mpsc::BoundedSenderInner<core::result::Result<bytes::bytes::Bytes, hyper::error::Error>>>::try_send - -",
+      "1.80% tokio-rt-worker check_cohere_native_baseline [.] <rustls::msgs::deframer::buffers::DeframerVecBuffer>::read - -",
+      "1.80% tokio-rt-worker libc.so.6 [.] 0x00000000001a1876 - -",
+      "1.20% check_cohere_na check_cohere_native_baseline [.] jent_keccakp_rho - -",
+      "1.20% tokio-rt-worker check_cohere_native_baseline [.] <futures_util::stream::futures_unordered::FuturesUnordered<borsuk::sq8_s3_range::fetch_source_pages_offloaded<<borsuk::two_bit_generation::TwoBitGeneration>::plan_paged_measured::{closure#0}::{closure#11}::{closure#3}>::{closure#0}> as futures_core::stream::Stream>::poll_next - -",
+      "1.20% tokio-rt-worker check_cohere_native_baseline [.] <futures_util::stream::try_stream::try_unfold::TryUnfold<(object_store::client::get::GetContext<object_store::aws::client::S3Client>, object_store::client::http::body::HttpResponseBody, core::option::Option<alloc::string::String>, core::ops::range::Range<u64>), <object_store::client::get::GetContext<object_store::aws::client::S3Client>>::retry_stream::{closure#0}, <object_store::client::get::GetContext<object_store::aws::client::S3Client>>::retry_stream::{closure#0}::{closure#0}> as futures_core::stream::Stream>::poll_next - -",
+      "1.20% tokio-rt-worker check_cohere_native_baseline [.] borsuk::exact_sq8_nominee::score_block::<8> - -",
+      "1.20% tokio-rt-worker check_cohere_native_baseline [.] chacha20_poly1305_open_avx2 - -",
+      "1.20% tokio-rt-worker check_cohere_native_baseline [.] object_store::aws::credential::canonicalize_headers - -",
+      "1.20% tokio-rt-worker libc.so.6 [.] recv - -",
+      "1.20% tokio-rt-worker libc.so.6 [.] 0x00000000001a1846 - -"
+    ],
+    "B2": [
+      "19.75% borsuk-source-a check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "12.74% borsuk-source-a check_cohere_native_baseline [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::score - -",
+      "8.28% tokio-rt-worker check_cohere_native_baseline [.] <borsuk::rotated_two_bit::TwoBitScoreBlock>::score - -",
+      "3.82% tokio-rt-worker check_cohere_native_baseline [.] aws_lc_0_45_0_aes_gcm_decrypt_avx512 - -",
+      "3.18% check_cohere_na check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "2.55% tokio-rt-worker check_cohere_native_baseline [.] <borsuk::two_bit_generation::TwoBitGeneration>::source_walks - -",
+      "1.91% tokio-rt-worker check_cohere_native_baseline [.] sha2::sha256::x86::digest_blocks - -",
+      "1.91% tokio-rt-worker libc.so.6 [.] 0x00000000001a15c7 - -",
+      "1.27% check_cohere_na check_cohere_native_baseline [.] rol64 - -",
+      "1.27% tokio-rt-worker [vdso] [.] 0x000000000000099a - -",
+      "1.27% tokio-rt-worker check_cohere_native_baseline [.] <borsuk::rotated_two_bit::RotatedTwoBitCodec>::prepare_query - -",
+      "1.27% tokio-rt-worker check_cohere_native_baseline [.] <borsuk::two_bit_generation::SourceScores>::get - -",
+      "1.27% tokio-rt-worker check_cohere_native_baseline [.] <futures_channel::mpsc::Receiver<core::result::Result<bytes::bytes::Bytes, hyper::error::Error>>>::next_message - -",
+      "1.27% tokio-rt-worker check_cohere_native_baseline [.] borsuk::exact_sq8_nominee::score_block::<8> - -",
+      "1.27% tokio-rt-worker libc.so.6 [.] recv - -",
+      "1.27% tokio-rt-worker libc.so.6 [.] 0x00000000001a184d - -",
+      "0.64% borsuk-source-a libc.so.6 [.] __madvise - -",
+      "0.64% borsuk-source-a libc.so.6 [.] 0x00000000001a1774 - -"
+    ]
+  },
+  "total_samples": {
+    "B1": "# Samples: 167  of event 'cpu-clock:u'",
+    "B2": "# Samples: 157  of event 'cpu-clock:u'"
+  }
+}
