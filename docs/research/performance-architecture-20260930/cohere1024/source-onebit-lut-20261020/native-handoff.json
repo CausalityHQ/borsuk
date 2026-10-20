@@ -1,0 +1,72 @@
+{
+  "status": "QUALIFIED_PRODUCTION_DIAGNOSTIC_WITH_TEST_FIXTURE_LIMITATIONS",
+  "commit": "cbc354a81b6067ef5a8f592cd0926bd38f74ce4d",
+  "base": "b415a4ceb9f834286167c8cdb993a90df74ba3b8",
+  "tree": "1762dc691b45ced6d8ba8d43f6ae90cd417e76a3",
+  "branch": "source-onebit-lut-a0001",
+  "author": "Roman Bartusiak <riomus@gmail.com>",
+  "source_host": "i-016f33b3358ba4e5a",
+  "region": "eu-central-1",
+  "profile": "causality",
+  "source_dir": "/mnt/borsuk-workspace/source-onebit-lut-a0001",
+  "evidence_dir": "/mnt/borsuk-workspace/evidence/source-onebit-lut-a0001",
+  "source_sha256": {
+    "crates/borsuk/examples/source_onebit_falsifier.rs": "0687d2eeeefd44192f82311a25c3fac28003be30709a63658da5910628c20315",
+    "crates/borsuk/examples/source_onebit_falsifier/onebit.rs": "90cf05db56da42249fa8e2ef8e8eb54464f28f550408d2ca51d538241d3829a9",
+    "crates/borsuk/examples/source_onebit_falsifier/README.md": "146e8508f9f26c3c86adc6145d5f54bba40a19f0c48a53af1e2791db55fe876e"
+  },
+  "source_frozen_at": "Tue Oct 20 03:23:04 UTC 2026",
+  "root_review_message": "1792466657219912091-3521810",
+  "root_final_direction_message": "1792466828035233520-3521810",
+  "original_controller_ssm": "f22cdb07-8815-451a-80a9-375d98037556",
+  "original_unit": "borsuk-source-onebit-lut-a0001",
+  "original_terminal": "RuntimeMaxUSec=infinity\nMainPID=0\nResult=success\nExecMainStatus=0\nMemoryPeak=[not set]\nCPUUsageNSec=[not set]\nCPUQuotaPerSecUSec=infinity\nAllowedCPUs=\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=34583\nActiveState=inactive\n",
+  "stage_exits": {
+    "affected": 0,
+    "clippy": 0,
+    "testbuild": 0,
+    "release": 0,
+    "affected-final": 0,
+    "clippy-final": 0,
+    "cli": 0,
+    "controller": 0
+  },
+  "affected_tests": {
+    "passed": 26,
+    "failed": 0,
+    "ignored": 2
+  },
+  "actual_cli_process_tests": {
+    "passed": 1,
+    "failed": 0
+  },
+  "cli_elf": "/mnt/borsuk-workspace/evidence/source-onebit-lut-a0001/source_onebit_falsifier.elf",
+  "cli_elf_sha256": "cfe6d6a94b5b9f9ee49c401d9b8c3284d2ab38043a3eedb6143c67678bc5c512",
+  "bundle": "/mnt/borsuk-workspace/evidence/source-onebit-lut-a0001/source-onebit-lut-a0001.bundle",
+  "bundle_sha256": "aeb8931368a9f783dd80b6aef23e24eeb9c250373e8387ad27d37057f890524b",
+  "full_outside_scope_tree_identity": {
+    "base": "b415a4ceb9f834286167c8cdb993a90df74ba3b8",
+    "proposed_tree": "1762dc691b45ced6d8ba8d43f6ae90cd417e76a3",
+    "changed": [
+      "crates/borsuk/examples/source_onebit_falsifier.rs",
+      "crates/borsuk/examples/source_onebit_falsifier/README.md",
+      "crates/borsuk/examples/source_onebit_falsifier/onebit.rs"
+    ],
+    "outside_scope_identical": true,
+    "base_missing_unrelated_blobs": true
+  },
+  "remaining_UNVERIFIED": [
+    "Root-owned fixed_work_scalar_lut primitive was never executed; do not time this fixture.",
+    "Root review strengthening not applied after source cutoff: per-unit first-byte uniqueness/all-mask coverage; consume fingerprint before clock read and assert per-arm/count repetition stability.",
+    "All-mask oracle query remains periodic31; nonperiodic position-sensitive strengthening not applied after source cutoff.",
+    "No optimized release TEST ELF; request withdrawn by root.",
+    "Real LUT quality/numerical error, latency, memory feasibility, cold/physical IO and speed are not measured by child."
+  ],
+  "controls": "Origin and centered scalar arithmetic, total_cmp/physical-row ranking, and production library/defaults unchanged.",
+  "local_source_or_build": false,
+  "timing_primitive_run": false,
+  "children_or_consults": false,
+  "merged_or_pushed": false,
+  "git_note": "Sparse base object store lacks unrelated historical blobs; committed via write-tree --missing-ok/commit-tree on own branch. Full ls-tree identity proves no outside-scope changes; bundle verify succeeded.",
+  "controller_note": "One original sequential lock-owning controller. Source-preserving control edits scheduled final affected/Clippy/CLI checks; an unused post-terminal deadline override was removed. No second controller or build copy."
+}

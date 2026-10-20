@@ -99,6 +99,18 @@ fn centered_memory(
     })
     .ok_or_else(|| "center memory overflow".into())
 }
+fn lut_memory(rows: usize, table_bytes: usize, queries: usize, shortlist: usize) -> Result<usize> {
+    rows.checked_mul(std::mem::size_of::<Hit>())
+        .and_then(|n| n.checked_add(table_bytes))
+        .and_then(|n| {
+            n.checked_add(
+                rows.min(shortlist)
+                    .checked_mul(queries)?
+                    .checked_mul(4096)?,
+            )
+        })
+        .ok_or_else(|| "LUT memory overflow".into())
+}
 fn report_memory(rows: usize, queries: usize, shortlist: usize) -> Result<usize> {
     rows.min(256)
         .checked_mul(2)
@@ -227,6 +239,11 @@ fn run(args: &[String]) -> Result<()> {
         },
         "authority centroid mode",
     )?;
+    let lut_enabled = match a.get("experimental_scorer") {
+        None => false,
+        Some(v) if centered && v == "centered-byte-lut-v1" => true,
+        _ => return Err("experimental scorer selector".into()),
+    };
     let shortlist = a["candidate_shortlist_rows"]
         .as_u64()
         .and_then(|n| usize::try_from(n).ok())
@@ -261,7 +278,19 @@ fn run(args: &[String]) -> Result<()> {
     } else {
         0
     };
+    let table_bytes = if lut_enabled {
+        s.width.checked_mul(256 * 8).ok_or("LUT memory overflow")?
+    } else {
+        0
+    };
+    let lut_allowance = if lut_enabled {
+        lut_memory(rows, table_bytes, queries.len(), shortlist)?
+    } else {
+        0
+    };
     let other = model(rows, &s, req_bytes, truth_bytes, ab.len())?
+        .checked_add(lut_allowance)
+        .ok_or("LUT memory overflow")?
         .checked_add(center_allowance)
         .ok_or("center memory overflow")?
         .checked_add(report_allowance)
@@ -346,6 +375,19 @@ fn run(args: &[String]) -> Result<()> {
     let mut centered_hits = Vec::<Hit>::new();
     if centered {
         centered_hits.try_reserve_exact(rows)?;
+    }
+    let mut lut = if lut_enabled {
+        Some(onebit::ByteLut::new(&s)?)
+    } else {
+        None
+    };
+    let mut lut_hits = Vec::<Hit>::new();
+    if lut_enabled {
+        lut_hits.try_reserve_exact(rows)?;
+        require(
+            lut_hits.capacity() == rows && lut.as_ref().unwrap().capacity_bytes()? == table_bytes,
+            "LUT actual capacity exceeds model",
+        )?;
     }
     let mut results = Vec::new();
     results.try_reserve_exact(queries.len())?;
@@ -487,6 +529,8 @@ fn run(args: &[String]) -> Result<()> {
     let mut baseline_seconds = 0.;
     let mut onebit_seconds = 0.;
     let mut centered_seconds = 0.;
+    let mut lut_prepare_seconds = 0.;
+    let mut lut_seconds = 0.;
     if !admit {
         for q in queries {
             let ordinal = num(&q["ordinal"])?;
@@ -577,6 +621,31 @@ fn run(args: &[String]) -> Result<()> {
                 top(&mut centered_hits, shortlist);
                 centered_seconds += scoring.elapsed().as_secs_f64();
             }
+            lut_hits.clear();
+            if let Some(table) = &mut lut {
+                let prep_start = Instant::now();
+                table.prepare(&transformed)?;
+                lut_prepare_seconds += prep_start.elapsed().as_secs_f64();
+                let scoring = Instant::now();
+                for u in units {
+                    let lo = num(u)?.checked_mul(32).ok_or("unit overflow")?;
+                    for row in lo..rows.min(lo + 32) {
+                        let slot = map[row];
+                        lut_hits.push(Hit {
+                            row,
+                            id: ids[slot],
+                            score: table.score_centered(
+                                &centered_codes[slot * s.width..(slot + 1) * s.width],
+                                centered_factors[slot],
+                                centered_additives[slot],
+                                qc,
+                            )?,
+                        });
+                    }
+                }
+                top(&mut lut_hits, shortlist);
+                lut_seconds += scoring.elapsed().as_secs_f64();
+            }
             let bt = truth_retained(&truth_ids, &baseline);
             let control = &candidate[..candidate.len().min(256)];
             let candidate_topk = &candidate[..candidate.len().min(shortlist)];
@@ -618,7 +687,24 @@ fn run(args: &[String]) -> Result<()> {
                 .filter(|id| !bt.contains(id))
                 .copied()
                 .collect::<Vec<_>>();
-            results.push(json!({"centered_topk":if centered { hits(&centered_hits) } else { Value::Null },
+            let lut_retained = truth_retained(&truth_ids, &lut_hits);
+            let lut_lost = bt
+                .iter()
+                .filter(|id| !lut_retained.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            let lut_gained = lut_retained
+                .iter()
+                .filter(|id| !bt.contains(id))
+                .copied()
+                .collect::<Vec<_>>();
+            results.push(json!({
+                "lut_topk":if lut_enabled { hits(&lut_hits) } else { Value::Null },
+                "lut_truth_retained":if lut_enabled { json!(lut_retained) } else { Value::Null },
+                "lut_truth_lost":if lut_enabled { json!(lut_lost) } else { Value::Null },
+                "lut_truth_gained":if lut_enabled { json!(lut_gained) } else { Value::Null },
+                "lut_score_vector_capacity_bytes":lut_hits.capacity()*std::mem::size_of::<Hit>(),
+                "centered_topk":if centered { hits(&centered_hits) } else { Value::Null },
                 "centered_truth_retained":if centered { json!(c_retained) } else { Value::Null },
                 "centered_truth_lost":if centered { json!(c_lost) } else { Value::Null },
                 "centered_truth_gained":if centered { json!(c_gained) } else { Value::Null },"ordinal":ordinal,"nominated_units":q["nominated_units"],"nominated_rows":nominees,
@@ -634,6 +720,10 @@ fn run(args: &[String]) -> Result<()> {
         Path::new(&args[start + 2]),
         &json!({"schema":if centered { "borsuk-source-onebit-falsifier-v3" } else { "borsuk-source-onebit-falsifier-v2" },"status":"VALID",
         "centroid_mode":if centered { "fixed" } else { "origin" }, "origin_control":true,
+        "experimental_scorer":a["experimental_scorer"],
+        "lut_arithmetic":"experimental byte-grouped f64 signed sums; reassociation can change score bits and ties",
+        "lut_table_prepare_seconds":lut_prepare_seconds,"lut_score_sort_seconds":lut_seconds,
+        "lut_table_capacity_bytes":table_bytes,"lut_allowance_bytes":lut_allowance,
         "center":a["center"], "centered_estimator":"q.c + r.c + (norm(r)^2/L1(Tr))*sign(Tr).T(q-c); r=normalize(x)-c",
         "centered_code_bytes":centered_codes.len(),"centered_factor_bytes":centered_factors.len()*8,
         "centered_additive_bytes":centered_additives.len()*8,"centered_score_sort_seconds":centered_seconds,
@@ -1255,5 +1345,143 @@ mod tests {
             );
             f.no_report();
         }
+    }
+    #[test]
+    fn lut_cli_controls_rankings_retention_and_exact_cap() {
+        let mut f = Fixture::with_rows(513);
+        fixed_center(&mut f, &[0.25, 0.125, 0.]);
+        f.authority["candidate_shortlist_rows"] = json!(512);
+        let truth = [0u64, 300].map(u64::to_le_bytes).concat();
+        std::fs::write(f.dir.path().join("truth"), &truth).unwrap();
+        f.authority["truth"]["sha256"] = json!(sha(&truth));
+        let read = |f: &Fixture| -> Value {
+            serde_json::from_slice(&std::fs::read(f.dir.path().join("out")).unwrap()).unwrap()
+        };
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let old = read(&f);
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.authority["experimental_scorer"] = json!("centered-byte-lut-v1");
+        f.run(false, 0, 512 * 1024 * 1024).unwrap();
+        let new = read(&f);
+        for name in [
+            "baseline_top256",
+            "onebit_top256",
+            "candidate_topk",
+            "centered_topk",
+        ] {
+            assert_eq!(old["queries"][0][name], new["queries"][0][name]);
+        }
+        assert_eq!(
+            new["queries"][0]["lut_topk"],
+            new["queries"][0]["centered_topk"]
+        );
+        assert_eq!(new["queries"][0]["lut_truth_retained"], json!([0, 300]));
+        assert_eq!(new["queries"][0]["lut_truth_gained"], json!([300]));
+        assert_eq!(new["queries"][0]["lut_truth_lost"], json!([]));
+        let total = num(&new["memory"]["modeled_total_bytes"]).unwrap();
+        assert_eq!(
+            num(&new["lut_allowance_bytes"]).unwrap(),
+            lut_memory(513, 2048, 1, 512).unwrap()
+        );
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.run(false, 0, total).unwrap();
+        std::fs::remove_file(f.dir.path().join("out")).unwrap();
+        f.remove_payload();
+        std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+        for admit in [false, true] {
+            assert_eq!(
+                f.run(admit, 0, total - 1).unwrap_err().to_string(),
+                "full working model admission before payload"
+            );
+            f.no_report();
+        }
+        assert!(lut_memory(usize::MAX, 2048, 1, 512).is_err());
+    }
+    #[test]
+    fn lut_bad_selectors_and_shape_before_payload() {
+        for admit in [false, true] {
+            for selector in [Value::Null, json!("scalar"), json!(1), json!(true)] {
+                let mut f = Fixture::new();
+                fixed_center(&mut f, &[0.25, 0.125, 0.]);
+                f.authority["experimental_scorer"] = selector;
+                f.remove_payload();
+                std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+                assert_eq!(
+                    f.run(admit, 0, 512 * 1024 * 1024).unwrap_err().to_string(),
+                    "experimental scorer selector"
+                );
+            }
+            let mut f = Fixture::new();
+            fixed_center(&mut f, &[0.25, 0.125, 0.]);
+            f.authority["experimental_scorer"] = json!("centered-byte-lut-v1");
+            f.authority["dimensions"] = json!(0);
+            f.remove_payload();
+            assert!(f.run(admit, 0, 512 * 1024 * 1024).is_err());
+        }
+    }
+    #[test]
+    #[ignore = "requires built example; controller runs with BORSUK_LUT_CLI_BIN after release"]
+    fn lut_process_cli() {
+        let executable = std::env::var("BORSUK_LUT_CLI_BIN").expect("CLI executable pin");
+        let mut f = Fixture::with_rows(513);
+        fixed_center(&mut f, &[0.25, 0.125, 0.]);
+        f.authority["candidate_shortlist_rows"] = json!(512);
+        let truth = [0u64, 300].map(u64::to_le_bytes).concat();
+        std::fs::write(f.dir.path().join("truth"), &truth).unwrap();
+        f.authority["truth"]["sha256"] = json!(sha(&truth));
+        let invoke = |f: &Fixture, name: &str, cap: usize| {
+            let bytes = serde_json::to_vec(&f.authority).unwrap();
+            let authority = f.dir.path().join(format!("{name}.authority"));
+            let report = f.dir.path().join(format!("{name}.report"));
+            std::fs::write(&authority, &bytes).unwrap();
+            let output = std::process::Command::new(&executable)
+                .arg(authority)
+                .arg(sha(&bytes))
+                .arg(&report)
+                .arg(cap.to_string())
+                .output()
+                .unwrap();
+            (output, report)
+        };
+        let (output, path) = invoke(&f, "scalar", 512 * 1024 * 1024);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let scalar: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        f.authority["experimental_scorer"] = json!("centered-byte-lut-v1");
+        let (output, path) = invoke(&f, "lut", 512 * 1024 * 1024);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lut: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        for name in [
+            "baseline_top256",
+            "onebit_top256",
+            "candidate_topk",
+            "centered_topk",
+        ] {
+            assert_eq!(scalar["queries"][0][name], lut["queries"][0][name]);
+        }
+        assert_eq!(
+            lut["queries"][0]["lut_topk"],
+            lut["queries"][0]["centered_topk"]
+        );
+        assert_eq!(lut["queries"][0]["lut_truth_retained"], json!([0, 300]));
+        assert_eq!(lut["queries"][0]["lut_truth_gained"], json!([300]));
+        let total = num(&lut["memory"]["modeled_total_bytes"]).unwrap();
+        assert!(invoke(&f, "exact", total).0.status.success());
+        f.remove_payload();
+        std::fs::remove_file(f.dir.path().join("requests")).unwrap();
+        let (output, path) = invoke(&f, "under", total - 1);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("full working model admission before payload")
+        );
+        assert!(!path.exists());
     }
 }

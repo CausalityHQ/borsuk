@@ -143,3 +143,23 @@ Root owns full-corpus center preparation, its provenance receipt, and execution.
 No native --prepare-center command is included in this example; the root must
 provide a separately verified corpus preparation seam. Synthetic qualification
 alone leaves real quality, runtime and memory feasibility UNVERIFIED.
+
+Experimental portable centered byte LUT
+--------------------------------------
+A newly authenticated v3 authority may set experimental_scorer to
+"centered-byte-lut-v1". Omit the field for scalar-only controls; unknown, null,
+or non-v3 selectors are rejected before payload. Root/center/query/body
+authentication remains mandatory. One 256-entry f64 signed-sum table per
+packed byte is prepared per query and reused for all nominated rows, followed
+by the unchanged qc + additive + dot * alpha finalizer. Byte grouping changes
+floating-point association: score bits, ties and rankings may change.
+There is no bit-exact, Haar-theory, cold-latency or physical-IO claim.
+lut_topk and lut_truth_retained/lost/gained are separate from scalar controls.
+lut_table_prepare_seconds and lut_score_sort_seconds charge preparation and
+scoring/sorting separately. The checked pre-payload model charges actual LUT
+capacity (rejecting unexpected allocator capacity), a full extra Hit vector,
+and queries*min(rows,S)*4096 retained report bytes.
+The ignored fixed_work_scalar_lut primitive is root-owned: same frozen query,
+codes and factors, 256 distinct 32-row units, counts 1/7/32, eight alternating
+repetitions, nonlinear consumed fingerprints; no adaptive timing threshold.
+The implementation worker compiles this primitive but does not run it.

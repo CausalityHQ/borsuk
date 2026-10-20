@@ -1,0 +1,29 @@
+{
+  "source_base": "b415a4ceb9f834286167c8cdb993a90df74ba3b8",
+  "ordinals": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "S": 512,
+  "center_sha256": "022d40ae6cee11ed0dc1d24147f9d50b3578df82209a713bac999b7a823d839a",
+  "quality": "LUT retains every truth ID in scalar-centered and two-bit256 controls; all four scalar control rankings/order/bits reproduce34a development report",
+  "numerical": "Report LUT vs scalar IDs/order and score-bit differences explicitly; reassociation allowed, no bit-exact claim",
+  "performance": "Descriptive score/sort+table preparation only; ignored primitive timing skipped due outstanding fixture/barrier checks",
+  "native_admission_seconds": 90,
+  "canary": "self-check + bad center SHA refuses2/no report",
+  "science_seconds": 90,
+  "outer_seconds": 240,
+  "latest_launch": "2026-10-20T03:30:30Z",
+  "guest_shutdown": "2026-10-20T03:35:00Z",
+  "host": 8589934592,
+  "caller": 2147483648,
+  "cpu": "0-1",
+  "swap": 0,
+  "no_cold_planner_io_vendor_claim": true
+}
