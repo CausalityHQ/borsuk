@@ -62,24 +62,92 @@ const CALL_CAP: usize = 4096;
 const LIST_PAGE_CAP: usize = 1024;
 const CLEANUP_ATTEMPT_CAP: usize = 8;
 const LEDGER_CAP: u64 = 4 * 1024 * 1024;
-const CONFIG_SCHEMA: &str = "borsuk-s3-vectors-config-v1";
-const RECEIPT_SCHEMA: &str = "borsuk-s3-vectors-receipt-v1";
+const CONFIG_SCHEMA: &str = "borsuk-s3-vectors-canonical-config-v3";
+const RECEIPT_SCHEMA: &str = "borsuk-s3-vectors-canonical-receipt-v3";
 const DATASET: &str = "CohereLabs/wikipedia-2023-11-embed-multilingual-v3";
 const REVISION: &str = "ade45fb52bd549f5e8c065636fe4160a43c2af36";
-const CORPUS_SHA: &str = "3c95fa49a7d3f9d4bf6178f5ac2493e700a30fbcfe91da97a5fcf16a1f5fc09c";
 const QUERY_SHA: &str = "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e";
-const TRUTH_SHA: &str = "479064239b698a2b8094c7838b1bb01af6eff5ea6eee4736692971849fdcfb2c";
-const SCALE_CONFIG_SCHEMA: &str = "borsuk-s3-vectors-scale-raw-config-v2";
-// Raw f32LE rows have implicit logical IDs 0..999999; no normalization or ID headers.
-const SCALE_CORPUS_SHA: &str = "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38";
 const SCALE_TRUTH_SHA: &str = "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f";
+const GENERATION_ROOT: &str = "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5";
+const CANONICAL_SHA: &str = "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c";
+const LOGICAL_EXPORT_SHA: &str = "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d";
+const ORDER_SHA: &str = "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413";
+const EXIT_SCHEMA: &str = "borsuk-canonical-verifier-exit-v1";
+const EXIT_REQUIREMENT: &str = "original_exit_zero_after_final_receipt_directory_sync";
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Artifact {
     path: PathBuf,
     bytes: u64,
     sha256: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifierProof {
+    receipt: Artifact,
+    terminal: Artifact,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalInput {
+    rows: usize,
+    generation_manifest: Artifact,
+    canonical: Artifact,
+    order: Artifact,
+    logical_export: Artifact,
+    export: VerifierProof,
+    recover_order: VerifierProof,
+    verifier_executable_sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifierExit {
+    schema: String,
+    operation: String,
+    original_job: String,
+    exit_code: i32,
+    receipt_sha256: String,
+    source_sha256: String,
+    executable_sha256: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportReceipt {
+    schema: String,
+    status: String,
+    success_requires: String,
+    source_sha256: String,
+    executable_sha256: String,
+    canonical_bytes: u64,
+    canonical_sha256: String,
+    raw_bytes: u64,
+    raw_sha256: String,
+    n: usize,
+    d: usize,
+    id_bijection: bool,
+    raw_bit_identity: bool,
+    memory_budget_bytes: u64,
+    admitted_bytes: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderReceipt {
+    schema: String,
+    status: String,
+    success_requires: String,
+    source_sha256: String,
+    executable_sha256: String,
+    canonical_bytes: u64,
+    canonical_sha256: String,
+    order_bytes: u64,
+    order_sha256: String,
+    n: usize,
+    d: usize,
+    id_bijection: bool,
+    order_bit_identity: bool,
+    memory_budget_bytes: u64,
+    admitted_bytes: u64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +162,10 @@ struct Config {
     k: usize,
     metric: String,
     corpus: Artifact,
+    canonical_input: CanonicalInput,
+    service_mode: String,
+    runtime_seconds: u64,
+    cleanup_owner: String,
     queries: Artifact,
     truth: Artifact,
     state_dir: PathBuf,
@@ -112,9 +184,6 @@ struct Context {
     sha: String,
 }
 impl Config {
-    fn scale(&self) -> bool {
-        self.mode == "scale-measurement" || self.mode == "scale-canary"
-    }
     fn call_cap(&self) -> usize {
         // 2000 puts + at most 8192 list pages + 10000 gets + 1000 queries,
         // leaving 808 reservations for identity, ownership and cleanup.
@@ -281,35 +350,27 @@ fn atomic_json(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 fn validate_config(c: &Config) -> Result<()> {
-    let full = c.mode == "measurement" || c.mode == "scale-measurement";
+    let full = c.mode == "scale-measurement";
     require(
-        full || c.mode == "canary" || c.mode == "scale-canary",
-        "mode measurement/canary/scale-measurement/scale-canary",
+        full || c.mode == "scale-canary",
+        "mode scale-measurement/scale-canary",
     )?;
     require(
-        c.schema
-            == if c.scale() {
-                SCALE_CONFIG_SCHEMA
-            } else {
-                CONFIG_SCHEMA
-            }
+        c.schema == CONFIG_SCHEMA
             && c.dataset == DATASET
             && c.revision == REVISION
             && c.dimensions == D
             && c.k == K
             && c.metric == "cosine",
-        "schema/dataset/metric/D/k",
+        "canonical schema/dataset/metric/D/k",
     )?;
     require(
-        (c.rows, c.count)
-            == if c.mode == "scale-measurement" {
-                (1_000_000, 1000)
-            } else if full {
-                (100_000, 1000)
-            } else {
-                (257, 2)
-            },
+        (c.rows, c.count) == if full { (1_000_000, 1000) } else { (257, 2) },
         "frozen geometry",
+    )?;
+    require(
+        c.service_mode == "ENHANCED",
+        "explicit ENHANCED service mode required",
     )?;
     require(
         c.profile == "causality" && c.region == "eu-central-1",
@@ -332,23 +393,62 @@ fn validate_config(c: &Config) -> Result<()> {
         "account_id",
     )?;
     require(
-        c.idle_seconds == if full { 3600 } else { 0 } && c.query_interval_ms == 0,
-        "frozen idle/cadence",
+        c.idle_seconds == 0 && c.query_interval_ms == 0,
+        "zero artificial idle/cadence; provider cache uncontrolled",
     )?;
     require(
-        !c.host_identity.is_empty() && c.host_identity.len() <= 1024,
-        "host/instance identity",
+        !c.host_identity.is_empty()
+            && c.host_identity.len() <= 1024
+            && !c.cleanup_owner.is_empty()
+            && c.cleanup_owner.len() <= 1024
+            && c.runtime_seconds > 0
+            && c.runtime_seconds <= 7200,
+        "host/cleanup owner/runtime bounds",
     )?;
-    for path in [&c.state_dir, &c.corpus.path, &c.queries.path, &c.truth.path] {
+    let b = &c.canonical_input;
+    require(
+        b.rows >= c.rows
+            && b.rows <= 1_000_000
+            && b.canonical.bytes == (b.rows * (8 + D * 4)) as u64
+            && b.order.bytes == (b.rows * 8) as u64
+            && b.logical_export.bytes == (b.rows * D * 4) as u64
+            && valid_sha(&b.verifier_executable_sha256),
+        "canonical source geometry/ELF",
+    )?;
+    let artifacts = [
+        &c.corpus,
+        &c.queries,
+        &c.truth,
+        &b.generation_manifest,
+        &b.canonical,
+        &b.order,
+        &b.logical_export,
+        &b.export.receipt,
+        &b.export.terminal,
+        &b.recover_order.receipt,
+        &b.recover_order.terminal,
+    ];
+    for a in artifacts {
+        require(a.bytes > 0 && valid_sha(&a.sha256), "artifact SHA/length")?;
         require(
-            path.is_absolute()
-                && path.as_os_str().len() <= 4096
-                && !path
+            a.path.is_absolute()
+                && a.path.as_os_str().len() <= 4096
+                && !a
+                    .path
                     .components()
                     .any(|p| matches!(p, std::path::Component::ParentDir)),
             "absolute bounded path without parent traversal",
         )?;
     }
+    require(
+        c.state_dir.is_absolute()
+            && c.state_dir.as_os_str().len() <= 4096
+            && !c
+                .state_dir
+                .components()
+                .any(|p| matches!(p, std::path::Component::ParentDir)),
+        "state path",
+    )?;
     require(
         c.corpus.path != c.queries.path
             && c.corpus.path != c.truth.path
@@ -360,31 +460,188 @@ fn validate_config(c: &Config) -> Result<()> {
         (&c.queries, c.count * D * 4),
         (&c.truth, c.count * K * 8),
     ] {
+        require(a.bytes == n as u64, "artifact geometry")?;
+    }
+    for a in [
+        &b.generation_manifest,
+        &b.export.receipt,
+        &b.export.terminal,
+        &b.recover_order.receipt,
+        &b.recover_order.terminal,
+    ] {
+        require(a.bytes <= CONFIG_CAP, "provenance metadata cap")?;
+    }
+    if full || b.rows == 1_000_000 {
         require(
-            a.bytes == n as u64 && valid_sha(&a.sha256),
-            "artifact SHA/length/geometry",
+            b.rows == 1_000_000
+                && b.generation_manifest.sha256 == GENERATION_ROOT
+                && b.canonical.bytes == 4_104_000_000
+                && b.canonical.sha256 == CANONICAL_SHA
+                && b.order.sha256 == ORDER_SHA
+                && b.logical_export.sha256 == LOGICAL_EXPORT_SHA,
+            "frozen current generation/canonical/order/expected logical export",
         )?;
     }
     if full {
         require(
-            c.corpus.sha256
-                == if c.scale() {
-                    SCALE_CORPUS_SHA
-                } else {
-                    CORPUS_SHA
-                }
+            c.corpus == b.logical_export
                 && c.queries.sha256 == QUERY_SHA
-                && c.truth.sha256
-                    == if c.scale() {
-                        SCALE_TRUTH_SHA
-                    } else {
-                        TRUTH_SHA
-                    },
-            "frozen original raw corpus/query/truth SHA",
+                && c.truth.sha256 == SCALE_TRUTH_SHA,
+            "frozen logical export/query/original truth",
         )?;
     }
     directory(&c.state_dir)?;
     Ok(())
+}
+fn authenticated_metadata(a: &Artifact) -> Result<Vec<u8>> {
+    require(a.bytes <= CONFIG_CAP, "metadata cap")?;
+    let bytes = read_small(&a.path, a.bytes)?;
+    require(
+        bytes.len() as u64 == a.bytes && hash(&bytes) == a.sha256,
+        "metadata digest/length",
+    )?;
+    Ok(bytes)
+}
+fn verifier_source_sha() -> String {
+    hash(include_bytes!("../../examples/verify_canonical_f32.rs"))
+}
+fn verifier_receipt(b: &CanonicalInput, proof: &VerifierProof, operation: &str) -> Result<Vec<u8>> {
+    require(
+        !proof
+            .receipt
+            .path
+            .as_os_str()
+            .to_string_lossy()
+            .ends_with(".pending"),
+        "pending verifier receipt is never valid",
+    )?;
+    let bytes = authenticated_metadata(&proof.receipt)?;
+    let terminal: VerifierExit = serde_json::from_slice(&authenticated_metadata(&proof.terminal)?)?;
+    require(
+        terminal.schema == EXIT_SCHEMA
+            && terminal.operation == operation
+            && !terminal.original_job.is_empty()
+            && terminal.original_job.len() <= 1024
+            && terminal.exit_code == 0
+            && terminal.receipt_sha256 == proof.receipt.sha256
+            && terminal.source_sha256 == verifier_source_sha()
+            && terminal.executable_sha256 == b.verifier_executable_sha256,
+        "original verifier terminal/source/ELF/receipt binding; provisional receipt alone is insufficient",
+    )?;
+    Ok(bytes)
+}
+fn canonical_inputs(c: &Config) -> Result<Value> {
+    let b = &c.canonical_input;
+    let manifest: Value = serde_json::from_slice(&authenticated_metadata(&b.generation_manifest)?)?;
+    require(
+        manifest["schema"] == "borsuk-two-bit-generation-v13"
+            && manifest["canonical"]["rows"] == b.rows
+            && manifest["canonical"]["dimensions"] == D
+            && manifest["canonical"]["bytes"] == b.canonical.bytes
+            && manifest["canonical"]["sha256"] == b.canonical.sha256,
+        "authenticated generation canonical binding",
+    )?;
+    let export: ExportReceipt = serde_json::from_slice(&verifier_receipt(b, &b.export, "export")?)?;
+    require(
+        export.schema == "borsuk-canonical-f32-provenance-v1"
+            && export.status == "provisional"
+            && export.success_requires == EXIT_REQUIREMENT
+            && export.source_sha256 == verifier_source_sha()
+            && export.executable_sha256 == b.verifier_executable_sha256
+            && export.canonical_bytes == b.canonical.bytes
+            && export.canonical_sha256 == b.canonical.sha256
+            && export.raw_bytes == b.logical_export.bytes
+            && export.raw_sha256 == b.logical_export.sha256
+            && export.n == b.rows
+            && export.d == D
+            && export.id_bijection
+            && export.raw_bit_identity
+            && export.admitted_bytes > 0
+            && export.admitted_bytes <= export.memory_budget_bytes,
+        "native export receipt identity",
+    )?;
+    let order: OrderReceipt =
+        serde_json::from_slice(&verifier_receipt(b, &b.recover_order, "recover-order")?)?;
+    require(
+        order.schema == "borsuk-canonical-order-provenance-v1"
+            && order.status == "provisional"
+            && order.success_requires == EXIT_REQUIREMENT
+            && order.source_sha256 == verifier_source_sha()
+            && order.executable_sha256 == b.verifier_executable_sha256
+            && order.canonical_bytes == b.canonical.bytes
+            && order.canonical_sha256 == b.canonical.sha256
+            && order.order_bytes == b.order.bytes
+            && order.order_sha256 == b.order.sha256
+            && order.n == b.rows
+            && order.d == D
+            && order.id_bijection
+            && order.order_bit_identity
+            && order.admitted_bytes > 0
+            && order.admitted_bytes <= order.memory_budget_bytes,
+        "native recovered-order receipt identity",
+    )?;
+    let mut canonical = open_artifact(&b.canonical)?;
+    let mut ids = open_artifact(&b.order)?;
+    let before = identity(&canonical)?;
+    let ids_before = identity(&ids)?;
+    let mut canonical_digest = Sha256::new();
+    let mut order_digest = Sha256::new();
+    let mut seen = vec![false; b.rows];
+    let mut row = [0; D * 4];
+    for _ in 0..b.rows {
+        let mut id = [0; 8];
+        let mut recovered = [0; 8];
+        canonical.read_exact(&mut id)?;
+        ids.read_exact(&mut recovered)?;
+        require(
+            id == recovered,
+            "canonical/recovered physical order mismatch",
+        )?;
+        let ordinal = usize::try_from(u64::from_le_bytes(id))?;
+        require(
+            ordinal < b.rows && !seen[ordinal],
+            "logical ID range/duplicate/missing",
+        )?;
+        seen[ordinal] = true;
+        canonical.read_exact(&mut row)?;
+        vector(&row)?;
+        canonical_digest.update(id);
+        canonical_digest.update(row);
+        order_digest.update(recovered);
+    }
+    require(
+        canonical.read(&mut [0])? == 0
+            && ids.read(&mut [0])? == 0
+            && identity(&canonical)? == before
+            && identity(&ids)? == ids_before
+            && format!("{:x}", canonical_digest.finalize()) == b.canonical.sha256
+            && format!("{:x}", order_digest.finalize()) == b.order.sha256,
+        "canonical/order digest/EOF/identity",
+    )?;
+    let logical = scan(&b.logical_export, false, b.rows)?;
+    if c.mode != "scale-measurement" {
+        require(
+            hash(&authenticated_raw_prefix(
+                &b.logical_export,
+                c.rows,
+                b.rows,
+            )?) == c.corpus.sha256,
+            "canary logical-ID prefix derivation",
+        )?;
+    }
+    Ok(
+        json!({"generation_root_sha256":b.generation_manifest.sha256,"canonical":before,
+        "order":ids_before,"logical_export":logical,"export_receipt_sha256":b.export.receipt.sha256,
+        "order_receipt_sha256":b.recover_order.receipt.sha256,"complete_logical_ids":true,
+        "verifier_source_sha256":verifier_source_sha(),"verifier_executable_sha256":b.verifier_executable_sha256}),
+    )
+}
+fn live_service_qualified(c: &Config) -> Result<()> {
+    require(
+        c.service_mode == "ENHANCED",
+        "explicit ENHANCED service mode required",
+    )?;
+    Err("live service path is unqualified for this preparation; typed Index omits indexMode, but existing raw GetIndex capture may observe it; no SDK upgrade is established as necessary".into())
 }
 fn load(path: &Path, sha: &str) -> Result<Context> {
     require(valid_sha(sha), "config SHA")?;
@@ -457,6 +714,7 @@ fn truth_row(bytes: &[u8], rows: usize) -> Result<Vec<u64>> {
     Ok(ids)
 }
 fn input_identities(c: &Config, include_truth: bool) -> Result<Value> {
+    let canonical = canonical_inputs(c)?;
     let corpus = scan(&c.corpus, false, c.rows)?;
     let queries = scan(&c.queries, false, c.rows)?;
     require(
@@ -475,11 +733,11 @@ fn input_identities(c: &Config, include_truth: bool) -> Result<Value> {
             "truth aliases vectors",
         )?;
     }
-    Ok(json!({"corpus":corpus,"queries":queries,"truth":truth}))
+    Ok(json!({"corpus":corpus,"queries":queries,"truth":truth,"canonical":canonical}))
 }
 fn admit(ctx: &Context) -> Result<()> {
     validate_config(&ctx.c)?;
-    ctx.save("admission.json",json!({"inputs":input_identities(&ctx.c,true)?,"corpus_sha256":ctx.c.corpus.sha256,"queries_sha256":ctx.c.queries.sha256,"truth_sha256":ctx.c.truth.sha256,"truth_validated":true,"ordinal_keys":"six_digit_zero_based","at_ms":now_ms()?}))
+    ctx.save("admission.json",json!({"inputs":input_identities(&ctx.c,true)?,"corpus_sha256":ctx.c.corpus.sha256,"queries_sha256":ctx.c.queries.sha256,"truth_sha256":ctx.c.truth.sha256,"truth_validated":true,"ordinal_keys":"six_digit_logical_id_from_verified_logical_order_export","at_ms":now_ms()?}))
 }
 fn prepare_scale_canary(ctx: &Context) -> Result<()> {
     require(
@@ -588,6 +846,15 @@ fn admitted(ctx: &Context, truth: bool) -> Result<()> {
         "admission pins",
     )?;
     let current = input_identities(&ctx.c, truth)?;
+    require(
+        current["canonical"]["generation_root_sha256"]
+            == a["inputs"]["canonical"]["generation_root_sha256"]
+            && current["canonical"]["export_receipt_sha256"]
+                == a["inputs"]["canonical"]["export_receipt_sha256"]
+            && current["canonical"]["order_receipt_sha256"]
+                == a["inputs"]["canonical"]["order_receipt_sha256"],
+        "admitted canonical proof changed",
+    )?;
     for key in if truth {
         &["corpus", "queries", "truth"][..]
     } else {
@@ -735,6 +1002,7 @@ struct Service {
 }
 impl Service {
     fn new(c: &Config) -> Result<Self> {
+        live_service_qualified(c)?;
         // A named profile is the only credential source; environment credentials
         // and endpoint overrides cannot silently change the registered identity.
         for (key, _) in std::env::vars_os() {
@@ -1064,6 +1332,7 @@ fn check_index(c: &Config, v: &Value) -> Result<()> {
             && v["dimension"] == D
             && v["dataType"] == "float32"
             && v["distanceMetric"] == "cosine"
+            && v["indexMode"] == c.service_mode
             && v["creationTime"]
                 .as_f64()
                 .is_some_and(|x| x.is_finite() && x > 0.0),
@@ -1562,7 +1831,7 @@ async fn measure(ctx: &Context, s: &Service) -> Result<()> {
     ctx.save("measure-started.json",json!({"index_arn":index_arn(&ctx.c),"at_ms":now_ms()?,"observed_inactivity_ms":idle_ms,"resume_allowed":false}))?;
     let mut header = json!({"schema":RECEIPT_SCHEMA,"phase":"measurement","config_sha256":ctx.sha,"index_arn":index_arn(&ctx.c),
         "query_count":ctx.c.count,"queries_sha256":ctx.c.queries.sha256,"observed_inactivity_ms":idle_ms,"host_identity":ctx.c.host_identity,
-        "mode":ctx.c.mode,"cache_conditions":"cache-uncontrolled first pass; inactivity is not proof of eviction",
+        "mode":ctx.c.mode,"service_mode":ctx.c.service_mode,"cache_conditions":"cache-uncontrolled first pass; inactivity is not proof of eviction",
         "inactivity_basis":"elapsed wall time since this run's full readback; external index activity is unobservable",
         "client_reuse":true,"concurrency":1,"query_interval_ms":0,"max_attempts":1,"operation_timeout_seconds":30,"pass_timeout_seconds":1800,
         "response_retention_cap_bytes":RESPONSE_CAP,"transport_response_byte_limit":null,
@@ -1812,7 +2081,10 @@ fn reduce(ctx: &Context) -> Result<Value> {
     let mut summary = json!({"schema":"borsuk-s3-vectors-reduction-v1","status":"VALID","mode":ctx.c.mode,"config_sha256":ctx.sha,
         "index_arn":index_arn(&ctx.c),"response_sha256":seal["sha256"],"query_count":ctx.c.count,
         "hits":hits,"recall_denominator":ctx.c.count*K,"recall_at_10":hits as f64/(ctx.c.count*K) as f64,"underfilled_queries":underfills,
-        "first_query_ns":samples[0],"pooled_condition":"cache-uncontrolled first pass; backend cache state unknown",
+        "first_query_ns":samples[0],"truth_interpretation":"recall against the frozen original fixture truth; exact canonical truth equivalence unproven",
+        "service_mode":ctx.c.service_mode,
+        "generation_root_sha256":ctx.c.canonical_input.generation_manifest.sha256,
+        "pooled_condition":"provider cache uncontrolled; first pass",
         "percentile_method":"integer nearest rank","pooled_p50_ns":p50,"pooled_p90_ns":p90,"pooled_p95_ns":p95,"pooled_p99_ns":p99,
         "serial_reciprocal_qps":ctx.c.count as f64*1e9/sum as f64,"whole_pass_qps":ctx.c.count as f64*1e9/wall_ns as f64,
         "sum_query_ns":sum,"whole_pass_ns":wall_ns,"concurrent_service_capacity_claim":false,"guaranteed_cold_claim":false,
@@ -1820,6 +2092,10 @@ fn reduce(ctx: &Context) -> Result<Value> {
         "calls_at_measurement_seal":seal["calls"],"billed_requests":null,"billed_bytes":null,"cost_usd":null});
     if ctx.c.mode == "scale-canary" {
         let object = summary.as_object_mut().ok_or("canary summary object")?;
+        object.insert(
+            "truth_interpretation".into(),
+            json!("synthetic ID-validation fixture only; no quality claim"),
+        );
         let mut diagnostics = serde_json::Map::new();
         for (old, new) in [
             ("hits", "fixture_overlap_hits"),
@@ -2066,6 +2342,24 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_contract_refuses_old_schema() {
+        let (_dir, mut ctx) = fixture();
+        ctx.c.schema = "borsuk-s3-vectors-config-v1".into();
+        assert!(validate_config(&ctx.c).is_err());
+    }
+    #[test]
+    fn canonical_contract_requires_observed_service_mode() {
+        let c = fixture_config(Path::new("/tmp"));
+        let mut index = json!({"indexArn":index_arn(&c),"indexName":c.index,
+            "vectorBucketName":c.bucket,"dimension":D,"dataType":"float32",
+            "distanceMetric":"cosine","creationTime":1.0});
+        assert!(check_index(&c, &index).is_err());
+        index["indexMode"] = json!("BASIC");
+        assert!(check_index(&c, &index).is_err());
+        index["indexMode"] = json!("ENHANCED");
+        check_index(&c, &index).unwrap();
+    }
     use super::*;
     #[test]
     fn scale_raw_prefix_preserves_ordinal_ids_and_f32_bits_through_row_256() {
@@ -2150,74 +2444,63 @@ mod tests {
         assert!(authenticated_raw_prefix(&a, 1, 1_000_000).is_err());
     }
     #[test]
-    fn scale_config_binds_exact_original_raw_workload_and_operation_envelope() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut c = fixture_config(dir.path());
+    fn scale_config_binds_canonical_workload_and_operation_envelope() {
+        let (dir, ctx) = fixture();
+        let mut c = ctx.c.clone();
         c.mode = "scale-measurement".into();
-        c.schema = "borsuk-s3-vectors-scale-raw-config-v2".into();
         c.rows = 1_000_000;
         c.count = 1000;
-        c.idle_seconds = 3600;
         c.corpus.bytes = 4_096_000_000;
-        c.corpus.sha256 = "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38".into();
+        c.corpus.sha256 = LOGICAL_EXPORT_SHA.into();
         c.queries.bytes = 4_096_000;
-        c.queries.sha256 =
-            "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e".into();
+        c.queries.sha256 = QUERY_SHA.into();
         c.truth.bytes = 80_000;
-        c.truth.sha256 = "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f".into();
-        std::fs::create_dir(&c.state_dir).unwrap();
+        c.truth.sha256 = SCALE_TRUTH_SHA.into();
+        let b = &mut c.canonical_input;
+        b.rows = 1_000_000;
+        b.generation_manifest.sha256 = GENERATION_ROOT.into();
+        b.canonical.bytes = 4_104_000_000;
+        b.canonical.sha256 = CANONICAL_SHA.into();
+        b.order.bytes = 8_000_000;
+        b.order.sha256 = ORDER_SHA.into();
+        b.logical_export = c.corpus.clone();
         validate_config(&c).unwrap();
-        assert_eq!(c.call_cap(), 22_000);
+        assert_eq!(c.call_cap(), 22000);
         assert_eq!(c.list_page_cap(), 8192);
         assert_eq!(c.ledger_cap(), 16 * 1024 * 1024);
         assert_eq!(c.output_cap(), 128 * 1024 * 1024);
-        assert!(
-            c.call_cap()
-                >= c.rows.div_ceil(500) + c.list_page_cap() + c.rows.div_ceil(100) + c.count + 32
-        );
-        for marker in [CONFIG_SCHEMA, "borsuk-s3-vectors-scale-config-v1"] {
-            let mut bad = c.clone();
-            bad.schema = marker.into();
-            assert!(validate_config(&bad).is_err(), "{marker}");
-        }
-        for sha in [
-            CORPUS_SHA,
-            "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
-            "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
-        ] {
-            let mut bad = c.clone();
-            bad.corpus.sha256 = sha.into();
-            assert!(validate_config(&bad).is_err(), "{sha}");
-        }
-        let mutations: [fn(&mut Config); 13] = [
-            |c| c.corpus.bytes = 4_104_000_000,
-            |c| c.corpus.bytes -= 1,
-            |c| c.rows = 100_000,
-            |c| c.count = 2,
-            |c| c.dimensions -= 1,
-            |c| c.k -= 1,
-            |c| c.metric = "euclidean".into(),
-            |c| c.idle_seconds = 0,
-            |c| c.query_interval_ms = 1,
+        let mutations: [fn(&mut Config); 12] = [
+            |c| c.schema = "borsuk-s3-vectors-scale-raw-config-v2".into(),
+            |c| {
+                c.corpus.sha256 =
+                    "1a491c060ec8b668b4983042dc1ac3971456327f41f28fd6fd2449df24cf3e38".into()
+            },
+            |c| c.canonical_input.generation_manifest.sha256 = "0".repeat(64),
+            |c| c.canonical_input.canonical.sha256 = "0".repeat(64),
+            |c| c.canonical_input.order.sha256 = "0".repeat(64),
+            |c| c.canonical_input.logical_export.sha256 = "0".repeat(64),
+            |c| c.idle_seconds = 3600,
+            |c| c.service_mode = "BASIC".into(),
             |c| c.queries.sha256 = "0".repeat(64),
-            |c| c.queries.bytes -= 1,
-            |c| c.truth.sha256 = TRUTH_SHA.into(),
-            |c| c.truth.bytes -= 1,
+            |c| c.truth.sha256 = "0".repeat(64),
+            |c| c.runtime_seconds = 0,
+            |c| c.cleanup_owner.clear(),
         ];
-        for (id, mutate) in mutations.iter().enumerate() {
+        for mutate in mutations {
             let mut bad = c.clone();
             mutate(&mut bad);
-            assert!(validate_config(&bad).is_err(), "mutation {id}");
+            assert!(validate_config(&bad).is_err());
         }
-        let (_dir, mut canary) = scale_fixture();
-        validate_config(&canary.c).unwrap();
-        canary.c.schema = "borsuk-s3-vectors-scale-config-v1".into();
-        assert!(validate_config(&canary.c).is_err());
-        let historical = fixture_config(dir.path());
-        assert_eq!(historical.call_cap(), CALL_CAP);
-        assert_eq!(historical.list_page_cap(), LIST_PAGE_CAP);
-        assert_eq!(historical.ledger_cap(), LEDGER_CAP);
-        assert_eq!(historical.output_cap(), OUTPUT_CAP);
+        let mut value = serde_json::to_value(&ctx.c).unwrap();
+        value.as_object_mut().unwrap().remove("service_mode");
+        assert!(serde_json::from_value::<Config>(value).is_err());
+        assert!(
+            live_service_qualified(&c)
+                .unwrap_err()
+                .to_string()
+                .contains("unqualified")
+        );
+        drop(dir);
     }
     use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
     use std::{
@@ -2440,7 +2723,7 @@ mod tests {
                     "indexArn":index_arn(&fixture_config(Path::new("/tmp"))),
                     "vectorBucketName":fixture_config(Path::new("/tmp")).bucket,
                     "creationTime":if s.replace_index.load(Ordering::SeqCst) {1700000101.0} else {1700000001.0},
-                    "dataType":"float32","dimension":D,"distanceMetric":"cosine"}})
+                    "dataType":"float32","dimension":D,"distanceMetric":"cosine","indexMode":"ENHANCED"}})
             }
             "/ListIndexes" => {
                 let mut indexes = if s.index_deleted.load(Ordering::SeqCst) {
@@ -2683,7 +2966,7 @@ mod tests {
         let run_id = "0123456789abcdef0123456789abcdef".to_string();
         Config {
             schema: CONFIG_SCHEMA.into(),
-            mode: "canary".into(),
+            mode: "scale-canary".into(),
             dataset: DATASET.into(),
             revision: REVISION.into(),
             rows: 257,
@@ -2692,6 +2975,25 @@ mod tests {
             k: K,
             metric: "cosine".into(),
             corpus: artifact("corpus.f32"),
+            canonical_input: CanonicalInput {
+                rows: 257,
+                generation_manifest: artifact("generation.json"),
+                canonical: artifact("canonical.bin"),
+                order: artifact("order.u64"),
+                logical_export: artifact("corpus.f32"),
+                export: VerifierProof {
+                    receipt: artifact("export.json"),
+                    terminal: artifact("export-exit.json"),
+                },
+                recover_order: VerifierProof {
+                    receipt: artifact("order.json"),
+                    terminal: artifact("order-exit.json"),
+                },
+                verifier_executable_sha256: "e".repeat(64),
+            },
+            service_mode: "ENHANCED".into(),
+            runtime_seconds: 1800,
+            cleanup_owner: "synthetic-native-test".into(),
             queries: artifact("queries.f32"),
             truth: artifact("truth.u64"),
             state_dir: root.join("state"),
@@ -2750,11 +3052,247 @@ mod tests {
             a.sha256 = hash(&body);
             std::fs::write(&a.path, body).unwrap();
         }
+        install_synthetic_provenance(&mut c);
         let bytes = serde_json::to_vec(&c).unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, &bytes).unwrap();
         let ctx = load(&path, &hash(&bytes)).unwrap();
         (dir, ctx)
+    }
+    #[test]
+    fn canary_authenticates_full_source_and_selects_logical_prefix() {
+        let (dir, mut ctx) = fixture();
+        let prefix = std::fs::read(&ctx.c.corpus.path).unwrap();
+        let mut full = prefix.clone();
+        for _ in 257..300 {
+            full.extend_from_slice(&prefix[..D * 4]);
+        }
+        ctx.c.rows = 300;
+        ctx.c.corpus = fixture_artifact(dir.path().join("full-export.f32"), &full);
+        install_synthetic_provenance(&mut ctx.c);
+        ctx.c.rows = 257;
+        ctx.c.corpus = fixture_artifact(dir.path().join("derived-canary.f32"), &prefix);
+        validate_config(&ctx.c).unwrap();
+        canonical_inputs(&ctx.c).unwrap();
+        let b = &ctx.c.canonical_input;
+        assert_eq!(
+            u64::from_le_bytes(
+                std::fs::read(&b.order.path).unwrap()[..8]
+                    .try_into()
+                    .unwrap()
+            ),
+            299
+        );
+        assert_eq!(
+            authenticated_raw_prefix(&b.logical_export, 257, b.rows).unwrap(),
+            prefix
+        );
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&b.logical_export.path)
+            .unwrap();
+        file.seek(SeekFrom::End(-4)).unwrap();
+        file.write_all(&1.0f32.to_le_bytes()).unwrap();
+        assert!(canonical_inputs(&ctx.c).is_err());
+    }
+    fn rewrite_fixture_json(a: &mut Artifact, change: impl FnOnce(&mut Value)) {
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&a.path).unwrap()).unwrap();
+        change(&mut value);
+        *a = fixture_artifact(a.path.clone(), &serde_json::to_vec(&value).unwrap());
+    }
+    fn reseal_synthetic_inputs(b: &mut CanonicalInput) {
+        b.canonical.sha256 = hash(&std::fs::read(&b.canonical.path).unwrap());
+        b.order.sha256 = hash(&std::fs::read(&b.order.path).unwrap());
+        rewrite_fixture_json(&mut b.generation_manifest, |v| {
+            v["canonical"]["sha256"] = json!(b.canonical.sha256)
+        });
+        for (proof, order) in [(&mut b.export, false), (&mut b.recover_order, true)] {
+            rewrite_fixture_json(&mut proof.receipt, |v| {
+                v["canonical_sha256"] = json!(b.canonical.sha256);
+                if order {
+                    v["order_sha256"] = json!(b.order.sha256);
+                }
+            });
+            rewrite_fixture_json(&mut proof.terminal, |v| {
+                v["receipt_sha256"] = json!(proof.receipt.sha256)
+            });
+        }
+    }
+    #[test]
+    fn canonical_provenance_rejects_digests_order_ids_and_receipt_mismatches() {
+        for fault in [
+            "canonical_digest",
+            "order_digest",
+            "duplicate_id",
+            "out_of_range",
+            "negative_id",
+            "physical_order",
+            "export_source",
+            "order_source",
+            "export_elf",
+            "exit_nonzero",
+            "exit_receipt",
+            "exit_source",
+            "missing_exit",
+            "pending",
+            "receipt_unknown",
+            "raw_bit_identity",
+            "order_bit_identity",
+            "manifest_binding",
+            "canary_derivation",
+        ] {
+            let (_dir, mut ctx) = fixture();
+            canonical_inputs(&ctx.c).unwrap();
+            let b = &mut ctx.c.canonical_input;
+            match fault {
+                "canonical_digest" => b.canonical.sha256 = "0".repeat(64),
+                "order_digest" => b.order.sha256 = "0".repeat(64),
+                "duplicate_id" | "out_of_range" | "negative_id" | "physical_order" => {
+                    let id = match fault {
+                        "duplicate_id" => (b.rows - 2) as u64,
+                        "out_of_range" => b.rows as u64,
+                        "negative_id" => u64::MAX,
+                        _ => 0,
+                    }
+                    .to_le_bytes();
+                    if fault != "physical_order" {
+                        let mut f = OpenOptions::new()
+                            .write(true)
+                            .open(&b.canonical.path)
+                            .unwrap();
+                        f.write_all(&id).unwrap();
+                    }
+                    let mut f = OpenOptions::new().write(true).open(&b.order.path).unwrap();
+                    f.write_all(&id).unwrap();
+                    reseal_synthetic_inputs(b);
+                }
+                "export_source" | "order_source" | "export_elf" | "receipt_unknown"
+                | "raw_bit_identity" | "order_bit_identity" => {
+                    let proof = if fault.starts_with("order") {
+                        &mut b.recover_order
+                    } else {
+                        &mut b.export
+                    };
+                    rewrite_fixture_json(&mut proof.receipt, |v| match fault {
+                        "export_source" | "order_source" => {
+                            v["source_sha256"] = json!("0".repeat(64))
+                        }
+                        "export_elf" => v["executable_sha256"] = json!("0".repeat(64)),
+                        "receipt_unknown" => v["unrecognized"] = json!(true),
+                        "raw_bit_identity" => v["raw_bit_identity"] = json!(false),
+                        _ => v["order_bit_identity"] = json!(false),
+                    });
+                    rewrite_fixture_json(&mut proof.terminal, |v| {
+                        v["receipt_sha256"] = json!(proof.receipt.sha256)
+                    });
+                }
+                "exit_nonzero" | "exit_receipt" | "exit_source" => {
+                    rewrite_fixture_json(&mut b.export.terminal, |v| match fault {
+                        "exit_nonzero" => v["exit_code"] = json!(1),
+                        "exit_receipt" => v["receipt_sha256"] = json!("0".repeat(64)),
+                        _ => v["source_sha256"] = json!("0".repeat(64)),
+                    })
+                }
+                "missing_exit" => std::fs::remove_file(&b.export.terminal.path).unwrap(),
+                "pending" => {
+                    let path = b.export.receipt.path.with_extension("pending");
+                    std::fs::rename(&b.export.receipt.path, &path).unwrap();
+                    b.export.receipt.path = path;
+                }
+                "manifest_binding" => rewrite_fixture_json(&mut b.generation_manifest, |v| {
+                    v["canonical"]["rows"] = json!(256)
+                }),
+                "canary_derivation" => ctx.c.corpus.sha256 = "0".repeat(64),
+                _ => unreachable!(),
+            }
+            assert!(canonical_inputs(&ctx.c).is_err(), "{fault}");
+        }
+    }
+    #[test]
+    fn canonical_export_uses_logical_ids_and_preserves_f32_bits() {
+        let (_dir, ctx) = fixture();
+        canonical_inputs(&ctx.c).unwrap();
+        let b = &ctx.c.canonical_input;
+        let physical = std::fs::read(&b.canonical.path).unwrap();
+        let logical = std::fs::read(&ctx.c.corpus.path).unwrap();
+        assert_eq!(u64::from_le_bytes(physical[..8].try_into().unwrap()), 256);
+        for row in physical.chunks_exact(8 + D * 4) {
+            let id = u64::from_le_bytes(row[..8].try_into().unwrap()) as usize;
+            assert_eq!(&row[8..], &logical[id * D * 4..(id + 1) * D * 4]);
+            assert_eq!(ordinal(&key(id), ctx.c.rows).unwrap(), id);
+        }
+        assert_eq!(
+            authenticated_raw_prefix(&b.logical_export, 257, b.rows).unwrap(),
+            logical
+        );
+    }
+    fn fixture_artifact(path: PathBuf, bytes: &[u8]) -> Artifact {
+        std::fs::write(&path, bytes).unwrap();
+        Artifact {
+            path,
+            bytes: bytes.len() as u64,
+            sha256: hash(bytes),
+        }
+    }
+    fn install_synthetic_provenance(c: &mut Config) {
+        let raw = std::fs::read(&c.corpus.path).unwrap();
+        let b = &mut c.canonical_input;
+        b.rows = c.rows;
+        b.logical_export = c.corpus.clone();
+        let mut canonical = Vec::new();
+        let mut order = Vec::new();
+        for id in (0..c.rows).rev() {
+            canonical.extend_from_slice(&(id as u64).to_le_bytes());
+            canonical.extend_from_slice(&raw[id * D * 4..(id + 1) * D * 4]);
+            order.extend_from_slice(&(id as u64).to_le_bytes());
+        }
+        b.canonical = fixture_artifact(b.canonical.path.clone(), &canonical);
+        b.order = fixture_artifact(b.order.path.clone(), &order);
+        b.generation_manifest = fixture_artifact(b.generation_manifest.path.clone(),
+            &serde_json::to_vec(&json!({"schema":"borsuk-two-bit-generation-v13",
+                "canonical":{"rows":c.rows,"dimensions":D,"bytes":b.canonical.bytes,"sha256":b.canonical.sha256}})).unwrap());
+        let common = json!({"status":"provisional","success_requires":EXIT_REQUIREMENT,
+            "source_sha256":verifier_source_sha(),"executable_sha256":b.verifier_executable_sha256,
+            "canonical_bytes":b.canonical.bytes,"canonical_sha256":b.canonical.sha256,
+            "n":b.rows,"d":D,"id_bijection":true,"memory_budget_bytes":1048576,"admitted_bytes":262144});
+        for (proof, operation, schema, bytes_key, sha_key, identity_key, artifact) in [
+            (
+                &mut b.export,
+                "export",
+                "borsuk-canonical-f32-provenance-v1",
+                "raw_bytes",
+                "raw_sha256",
+                "raw_bit_identity",
+                &b.logical_export,
+            ),
+            (
+                &mut b.recover_order,
+                "recover-order",
+                "borsuk-canonical-order-provenance-v1",
+                "order_bytes",
+                "order_sha256",
+                "order_bit_identity",
+                &b.order,
+            ),
+        ] {
+            let mut receipt = common.clone();
+            receipt["schema"] = json!(schema);
+            receipt[bytes_key] = json!(artifact.bytes);
+            receipt[sha_key] = json!(artifact.sha256);
+            receipt[identity_key] = json!(true);
+            proof.receipt = fixture_artifact(
+                proof.receipt.path.clone(),
+                &serde_json::to_vec(&receipt).unwrap(),
+            );
+            let terminal = json!({"schema":EXIT_SCHEMA,"operation":operation,
+                "original_job":format!("synthetic-mock-{operation}"),"exit_code":0,
+                "receipt_sha256":proof.receipt.sha256,"source_sha256":verifier_source_sha(),
+                "executable_sha256":b.verifier_executable_sha256});
+            proof.terminal = fixture_artifact(
+                proof.terminal.path.clone(),
+                &serde_json::to_vec(&terminal).unwrap(),
+            );
+        }
     }
     fn scale_fixture() -> (tempfile::TempDir, Context) {
         let (dir, mut ctx) = fixture();
@@ -2773,7 +3311,7 @@ mod tests {
             std::fs::write(&a.path, &bytes).unwrap();
         }
         ctx.c.mode = "scale-canary".into();
-        ctx.c.schema = "borsuk-s3-vectors-scale-raw-config-v2".into();
+        ctx.c.schema = CONFIG_SCHEMA.into();
         ctx.sha = hash(&serde_json::to_vec(&ctx.c).unwrap());
         (dir, ctx)
     }
@@ -3229,9 +3767,15 @@ mod tests {
             std::fs::rename(truth_hidden, &ctx.c.truth.path).unwrap();
             let summary = reduce(&ctx).unwrap();
             assert!(TRUTH_OPENS.with(|n| n.get()) > 0);
-            assert_eq!(summary["hits"], expected);
-            assert_eq!(summary["recall_denominator"], 20);
-            assert_eq!(summary["recall_at_10"], expected as f64 / 20.0);
+            assert_eq!(summary["diagnostics"]["fixture_overlap_hits"], expected);
+            assert_eq!(summary["diagnostics"]["fixture_overlap_denominator"], 20);
+            assert_eq!(
+                summary["diagnostics"]["fixture_overlap_at_10"],
+                expected as f64 / 20.0
+            );
+            assert!(summary.get("recall_at_10").is_none());
+            assert_eq!(summary["claims_quality"], false);
+            assert_eq!(summary["claims_performance"], false);
             assert!(measure(&ctx, &service).await.is_err());
             assert_eq!(mock.queries.load(Ordering::SeqCst), 2);
             cleanup(&ctx, &service).await.unwrap();

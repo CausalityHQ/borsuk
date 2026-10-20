@@ -1,0 +1,51 @@
+{
+  "schema": "borsuk-s3-vectors-canonical-preparation-a0001",
+  "status": "PREPARATION_ONLY; real inputs/export/service NOT OBSERVED",
+  "config_schema": "borsuk-s3-vectors-canonical-config-v3",
+  "generation_root_sha256": "14c8cbba54b3299ad681a40ce0455caac78f46c316dd1714da6b475733c5fde5",
+  "canonical": {
+    "rows": 1000000,
+    "dimensions": 1024,
+    "bytes": 4104000000,
+    "sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c"
+  },
+  "physical_order": {
+    "bytes": 8000000,
+    "sha256": "1060c919e34e93cc9a3d88b93eda226a8635bba41bfc60e5ba47caafb711d413"
+  },
+  "expected_logical_export": {
+    "bytes": 4096000000,
+    "sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+    "observed": false
+  },
+  "queries": {
+    "count": 1000,
+    "bytes": 4096000,
+    "sha256": "8460a81ff2f979deff7d82bede874a1301f47dfd3e4589305c9f53e020920d5e"
+  },
+  "truth": {
+    "bytes": 80000,
+    "sha256": "0e38d943adaf62f197b98fe8b01b2edec2008010df760717ababfa5054693b7f",
+    "interpretation": "frozen original fixture truth; exact canonical equivalence unproven"
+  },
+  "service": {
+    "mode": "ENHANCED",
+    "sdk": "aws-sdk-s3vectors 1.21.0",
+    "status": "UNQUALIFIED live path; typed Index omits mode, existing raw GetIndex capture may observe it; SDK upgrade not established as necessary"
+  },
+  "protocol": {
+    "metric": "cosine",
+    "k": 10,
+    "query_concurrency": 1,
+    "attempts": 1,
+    "query_interval_ms": 0,
+    "idle_seconds": 0,
+    "provider_cache": "uncontrolled",
+    "put_in_flight": 8,
+    "put_spacing_ms": 250,
+    "seal_all_before_truth": true,
+    "resume": false
+  },
+  "execution_authority": "root only; no service or real payload execution authorized by this packet",
+  "billing_numeric_cap": "UNESTABLISHED; root approval required"
+}

@@ -1,0 +1,99 @@
+{
+  "schema": "borsuk-s3-canonical-native-qualification-v1",
+  "status": "QUALIFIED_NATIVE_PREPARATION_ONLY",
+  "tested_commit": "6f57960a28ac0cdb3dce1d85d95390cbd4e63d80",
+  "tested_base": "999b3ff79098d7297b75b5f865f93e76bbbb1471",
+  "source_frozen_at": "2026-10-20T07:20:06Z",
+  "tested_patch_sha256": "00746af4700ed96192eaf723561a5fddbef4b9c9a990d7b332fcecfff65506aa",
+  "native_tests": {
+    "runner": 27,
+    "verifier": 19
+  },
+  "receipt_races": {
+    "original_red_failed": 2,
+    "fixed_green": true
+  },
+  "clippy": "cargo clippy --locked --workspace --all-targets --features borsuk/s3-vectors-bench -- -D clippy::correctness -D clippy::suspicious",
+  "test_builds": [
+    "env -u BORSUK_TEST_BUILD_COMMAND bash scripts/check_rust_test_build.sh",
+    "cargo test --locked --workspace --all-targets --no-run --features borsuk/s3-vectors-bench"
+  ],
+  "release": "cargo build -vv --locked -p borsuk --features s3-vectors-bench --release --bin check_s3_vectors_baseline --example verify_canonical_f32 --message-format=json-render-diagnostics",
+  "all_exit_zero": true,
+  "real_file_cli": [
+    "recover-order:exit0",
+    "export:exit0",
+    "admit:exit0",
+    "live publish guard:expected exit1,zero transport",
+    "old config refusal:expected exit1"
+  ],
+  "release_elf_pins": {
+    "verify_canonical_f32": {
+      "path": "/mnt/borsuk-workspace/evidence/s3-canonical-runner-a0001/repair-release/verify_canonical_f32.elf",
+      "bytes": 625040,
+      "sha256": "43ef9ef17529d000f537a99bb56b1dcec9a7f900f78c731faab77757c5c0ab59",
+      "features": [
+        "default",
+        "s3-vectors-bench"
+      ],
+      "fresh": false,
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      }
+    },
+    "check_s3_vectors_baseline": {
+      "path": "/mnt/borsuk-workspace/evidence/s3-canonical-runner-a0001/repair-release/check_s3_vectors_baseline.elf",
+      "bytes": 18032256,
+      "sha256": "509c6e8dfdcafbcd12e8bf4b85f3ba999c7b7ec690111a3e73974bbc6f36825a",
+      "features": [
+        "default",
+        "s3-vectors-bench"
+      ],
+      "fresh": false,
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      }
+    }
+  },
+  "terminal_handoff_sha256": "4dbaecc9a78f75afd2a1e7c0c45af7593909cbd1b59065771a0966253e785c97",
+  "artifact_manifest_sha256": "6a51e09fc25593b8d1fa00087b02262c43f08d6fc90f3540405e8c7dd40a1b47",
+  "archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/s3-canonical-runner-a0001/qualification.tar.gz",
+    "bytes": 14593770,
+    "sha256": "a8772f6a8c8092932fafd46c288aeb59ef29886458b627e02f4f003e26ac312b",
+    "verified_manifest_files": 121,
+    "head": {
+      "AcceptRanges": "bytes",
+      "LastModified": "2026-10-20T07:28:15+00:00",
+      "ContentLength": 14593770,
+      "ChecksumSHA256": "qHcvaoyAkpMvr9RsKIrrWe8piGRYtifgL08APiasMSs=",
+      "ChecksumType": "FULL_OBJECT",
+      "ETag": "\"15f2edea8f6019e6c8a30a590caaf9c4\"",
+      "ContentType": "binary/octet-stream",
+      "ServerSideEncryption": "AES256",
+      "Metadata": {}
+    }
+  },
+  "root_verification": [
+    "9fdf42b8-7d5e-4f3f-baf8-0c159dc7a55f",
+    "fb5ec04b-546e-4c08-91a2-1dabead76e9e",
+    "925c161f-70ae-434f-8251-0b575dcdca5b",
+    "79da4157-549e-41f6-b107-16a6f5fde3f7",
+    "49ddd03b-a445-437b-9770-05fefc64e0a5"
+  ],
+  "skipped": [
+    "actual corpus/query/truth reads",
+    "real export/truth equivalence",
+    "service credentials/mutations/requests",
+    "performance/lifecycle billing"
+  ],
+  "next_gate": "Separately qualify raw observed service mode, bounded timeout/drain and receipt-bound recovery; then real-input admission/export, disposable canary and matched comparison. No live execution authority from this receipt."
+}

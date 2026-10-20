@@ -8,9 +8,7 @@
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use rustix::fs::{
-        AtFlags, CWD, Mode, OFlags, RenameFlags, openat, renameat_with, statat, unlinkat,
-    };
+    use rustix::fs::{AtFlags, CWD, Mode, OFlags, RenameFlags, openat, renameat_with, statat};
     use serde::Serialize;
     use sha2::{Digest, Sha256};
     use std::{
@@ -562,14 +560,10 @@ mod linux {
         serde_json::to_writer(&mut cursor, &receipt)?;
         cursor.write_all(b"\n")?;
         let length = usize::try_from(cursor.position())?;
-        let _receipt_file = stage_receipt(&receipt_entry, &receipt_buffer[..length], || {
+        publish_receipt(&receipt_entry, &receipt_buffer[..length], || {
             input_entry.check(&input, &input_meta)?;
             order_entry.check(&order, &order_meta)?;
             executable_entry.check(&executable, &executable_meta)
-        })?;
-        // Never unlink by name after publication: a concurrent owner may have replaced it.
-        receipt_entry.parent.sync_all().map_err(|error| {
-            format!("order receipt directory sync failed: {error}; receipt remains provisional; original exit zero is required").into()
         })
     }
 
@@ -579,7 +573,7 @@ mod linux {
         final_check: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let file = stage_receipt(entry, bytes, final_check)?;
-        finish_publication(entry, &file, entry.parent.sync_all())
+        finish_publication(entry, &file, bytes, entry.parent.sync_all())
     }
 
     fn stage_receipt(
@@ -616,16 +610,25 @@ mod linux {
         Ok(file)
     }
 
-    fn finish_publication(entry: &Entry, file: &File, synced: io::Result<()>) -> Result<()> {
-        if let Err(error) = synced {
-            // Best effort only: an I/O failure can also prevent invalidation or unlink.
-            let truncate = file.set_len(0);
-            let flush = file.sync_all();
-            let unlink = unlinkat(&entry.parent, &entry.name, AtFlags::empty());
-            let directory_sync = entry.parent.sync_all();
-            return Err(format!("receipt directory sync failed: {error}; rollback truncate={truncate:?}, sync={flush:?}, unlink={unlink:?}, directory_sync={directory_sync:?}").into());
+    fn finish_publication(
+        entry: &Entry,
+        file: &File,
+        bytes: &[u8],
+        synced: io::Result<()>,
+    ) -> Result<()> {
+        // Keep provisional evidence; rollback by pathname could delete another writer's file.
+        synced.map_err(|error| format!("receipt directory sync failed: {error}; receipt remains provisional; original exit zero is required"))?;
+        let meta = file.metadata()?;
+        entry.check(file, &meta)?;
+        if bytes.len() > RECEIPT_BYTES || meta.len() != bytes.len() as u64 {
+            return Err("published receipt length mismatch".into());
         }
-        Ok(())
+        let mut actual = [0; RECEIPT_BYTES];
+        file.read_exact_at(&mut actual[..bytes.len()], 0)?;
+        if &actual[..bytes.len()] != bytes {
+            return Err("published receipt bytes changed".into());
+        }
+        entry.check(file, &meta)
     }
 
     #[cfg(test)]
@@ -1024,11 +1027,58 @@ mod linux {
             let mut file = entry.open(true).unwrap();
             file.write_all(b"{\"status\":\"provisional\"}").unwrap();
             let failure = io::Error::other("injected parent sync failure");
-            assert!(finish_publication(&entry, &file, Err(failure)).is_err());
-            assert!(!fixture.config.receipt.exists());
-            assert_eq!(file.metadata().unwrap().len(), 0);
+            assert!(
+                finish_publication(&entry, &file, b"{\"status\":\"provisional\"}", Err(failure))
+                    .is_err()
+            );
+            assert_eq!(
+                fs::read(&fixture.config.receipt).unwrap(),
+                b"{\"status\":\"provisional\"}"
+            );
+            assert!(file.metadata().unwrap().len() > 0);
         }
 
+        #[test]
+        fn receipt_pending_substitution_cannot_attest_zero() {
+            let fixture = fixture();
+            let entry = Entry::new(&fixture.config.receipt).unwrap();
+            let pending = fixture.config.receipt.with_extension("json.pending");
+            let foreign = fixture._dir.path().join("foreign");
+            fs::write(&foreign, b"foreign receipt").unwrap();
+            let result = publish_receipt(&entry, b"expected receipt", || {
+                fs::rename(&foreign, &pending)?;
+                Ok(())
+            });
+            assert!(result.is_err());
+            assert_eq!(
+                fs::read(&fixture.config.receipt).unwrap(),
+                b"foreign receipt"
+            );
+        }
+        #[test]
+        fn receipt_sync_failure_preserves_foreign_replacement() {
+            let fixture = fixture();
+            let entry = Entry::new(&fixture.config.receipt).unwrap();
+            let mut file = entry.open(true).unwrap();
+            file.write_all(b"original provisional").unwrap();
+            let foreign = fixture._dir.path().join("foreign");
+            fs::write(&foreign, b"foreign receipt").unwrap();
+            fs::rename(&foreign, &fixture.config.receipt).unwrap();
+            assert!(
+                finish_publication(
+                    &entry,
+                    &file,
+                    b"original provisional",
+                    Err(io::Error::other("injected sync failure"))
+                )
+                .is_err()
+            );
+            assert_eq!(
+                fs::read(&fixture.config.receipt).unwrap(),
+                b"foreign receipt"
+            );
+            assert_eq!(file.metadata().unwrap().len(), 20);
+        }
         #[test]
         fn receipt_final_check_and_publish_race_fail_closed() {
             let fixture = fixture();
