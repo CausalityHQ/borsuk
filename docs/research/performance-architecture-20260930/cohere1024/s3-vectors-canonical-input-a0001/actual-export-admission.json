@@ -1,0 +1,42 @@
+{
+  "schema": "borsuk-canonical-export-root-terminal-v1",
+  "root": "borsuk/prod-ready-v9",
+  "instance": "084ecd0e-0134-4712-b9af-9adb26b5eb25",
+  "ec2_instance": "i-000361dee1a104002",
+  "unit": "borsuk-canonical-real-export-admit-a0002",
+  "invocation": "97e925a0964a4fa38cbe2adf042c1d62",
+  "original_launch_ssm": "10d533a4-4664-4253-a21c-e45c7ef3f7ea",
+  "terminal_readback_ssm": "06186463-0280-4b88-811e-007d81a930b9",
+  "native_exit": 0,
+  "receipt_sha256": "64506e288537456986d8e389f268195d2ea848eaf833a1c1f2fb187890ef43dd",
+  "source_sha256": "a4eb3c8d834d4a4b6eaa6f14f57003c25532fefb7090ba5b9290b509d35a0911",
+  "executable_sha256": "43ef9ef17529d000f537a99bb56b1dcec9a7f900f78c731faab77757c5c0ab59",
+  "canonical_sha256": "72d58c8e733415c6354ab7f8f28c5b50a816cf6f6aa7bce62d30c1bd9449c93c",
+  "export_sha256": "31f28fa211f9237f0f7e41f569773cd207cefcdce22d4932ec96aee01ff2c40d",
+  "export_bytes": 4096000000,
+  "n": 1000000,
+  "d": 1024,
+  "native_budget_bytes": 1048576,
+  "supervisor_memory_max_bytes": 8589934592,
+  "query_truth_equivalence": "UNVERIFIED",
+  "service_calls": 0,
+  "first_attempt": "a0001 supervisor timeout; preserved",
+  "archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/s3-canonical-real-export-admit-a0002/admission-receipts.tar.gz",
+    "bytes": 1934,
+    "sha256": "74e8b7121669f1fbfa7209d36c3f965bb3796a9e5a3f101f3a614379f969f74e",
+    "conditional_put": true,
+    "checksum_head": true
+  },
+  "first_attempt_detail": {
+    "unit": "borsuk-canonical-real-export-admit-a0001",
+    "native_exit": null,
+    "supervisor_result": "timeout",
+    "supervisor_exit": 15,
+    "memory_max_bytes": 1073741824,
+    "memory_peak_bytes": 1073741824,
+    "cpu_nanoseconds": 10226479000,
+    "disposition": "execution INVALID, underlying cause unclassified; no hash mismatch verdict"
+  },
+  "scope": "Native canonical-to-logical FP32 export and complete ID bijection only; no query/truth equivalence, vendor service, or performance claim."
+}
