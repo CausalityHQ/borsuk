@@ -1,0 +1,28 @@
+{
+  "schema": "borsuk-root-native-canonical-input-admission-v1",
+  "source_commit": "6f57960a28ac0cdb3dce1d85d95390cbd4e63d80",
+  "root": "borsuk/prod-ready-v9",
+  "ec2": "i-000361dee1a104002",
+  "unit": "borsuk-canonical-real-input-admit-a0001",
+  "invocation": "bf2d892cf1eb4b98b566aa9a9bd04157",
+  "launch_ssm": "fa6786e9-8a87-4c75-acf3-2cd566efa501",
+  "terminal_ssm": "8aa184f3-91b6-4b33-8475-47eb81487ca2",
+  "native_exit": 0,
+  "config_sha256": "f055c78fd126a6ef310c4e5c48fc04a69a5e3c405abd07f246c32e398dde1555",
+  "admission_sha256": "6a089da349a35bf41bd35f573fd0686fcdf67ad35ed51279da72a4f44357d697",
+  "rows": 1000000,
+  "dimensions": 1024,
+  "queries": 1000,
+  "k": 10,
+  "input_artifact_validation": "PASS",
+  "exhaustive_canonical_truth_equivalence": "UNVERIFIED",
+  "service_calls": 0,
+  "performance_claim": false,
+  "source_files_unchanged": true,
+  "archive": {
+    "uri": "s3://borsuk-bench-453182569524-euc1/research/semantic-router/20261020/s3-canonical-real-input-admit-a0001/input-admission-receipts.tar.gz",
+    "sha256": "1adda3bd3c9a2e2f3a1e2149ca1f38865d5587cb2762f62d8e92af7c04dbcb5f",
+    "bytes": 6446,
+    "conditional_put_and_checksum_head": true
+  }
+}
